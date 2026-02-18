@@ -262,6 +262,7 @@
         --prefix PATH : ${lib.makeBinPath scripts} \
         --prefix XDG_CONFIG_DIRS : ${nerdFontConfigDir}
     '';
+    meta.mainProgram = "tmux";
   };
 in {
   inherit tmux-wrapped tmuxConf;
