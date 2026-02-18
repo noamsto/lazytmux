@@ -1,16 +1,19 @@
-{pkgs, lib}: let
+{
+  pkgs,
+  lib,
+}: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
-    session = ""; # nf-md-monitor
-    branch = ""; # nf-md-source_branch
-    dir = ""; # nf-md-folder
-    window-last = "󰖰"; # nf-md-clock_check
-    window-current = "󰖯"; # nf-md-clock
-    window-zoom = "󰁌"; # nf-md-arrow_expand_all
-    window-mark = "󰃀"; # nf-md-bookmark
-    window-silent = "󰂛"; # nf-md-bell_off
-    window-activity = "󱅫"; # nf-md-bell_ring
-    window-bell = "󰂞"; # nf-md-bell
+    session = "";
+    branch = "";
+    dir = "";
+    window-last = "󰖰";
+    window-current = "󰖯";
+    window-zoom = "󰁌";
+    window-mark = "󰃀";
+    window-silent = "󰂛";
+    window-activity = "󱅫";
+    window-bell = "󰂞";
   };
   # --- Custom plugins (pinned versions) ---
   catppuccin = pkgs.tmuxPlugins.mkTmuxPlugin rec {
@@ -51,13 +54,12 @@
       icon-position = "left";
     };
     icons = {
-      claude = "🤖";
-      ".claude-wrapper_" = "🤖";
+      claude = "🧠";
       nh = "❄️";
       nix = "❄️";
       fish = "🐟";
       process-compose = "⚙️";
-      amp = "🧠";
+      amp = "⚡";
     };
   };
 
