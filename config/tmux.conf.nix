@@ -1,4 +1,17 @@
 {pkgs, lib}: let
+  # --- Nerd font icons (edit these if they don't render in your terminal) ---
+  icons = {
+    session = ""; # nf-md-monitor
+    branch = ""; # nf-md-source_branch
+    dir = ""; # nf-md-folder
+    window-last = "󰖰"; # nf-md-clock_check
+    window-current = "󰖯"; # nf-md-clock
+    window-zoom = "󰁌"; # nf-md-arrow_expand_all
+    window-mark = "󰃀"; # nf-md-bookmark
+    window-silent = "󰂛"; # nf-md-bell_off
+    window-activity = "󱅫"; # nf-md-bell_ring
+    window-bell = "󰂞"; # nf-md-bell
+  };
   # --- Custom plugins (pinned versions) ---
   catppuccin = pkgs.tmuxPlugins.mkTmuxPlugin rec {
     pluginName = "catppuccin";
@@ -71,13 +84,13 @@
     set -g @catppuccin_status_background 'none'
     set -g @catppuccin_window_status_style 'none'
     set -g @catppuccin_window_flags 'icon'
-    set -g @catppuccin_window_flags_icon_last " 󰖰"
-    set -g @catppuccin_window_flags_icon_current " 󰖯"
-    set -g @catppuccin_window_flags_icon_zoom " 󰁌"
-    set -g @catppuccin_window_flags_icon_mark " 󰃀"
-    set -g @catppuccin_window_flags_icon_silent " 󰂛"
-    set -g @catppuccin_window_flags_icon_activity " 󱅫"
-    set -g @catppuccin_window_flags_icon_bell " 󰂞"
+    set -g @catppuccin_window_flags_icon_last " ${icons.window-last}"
+    set -g @catppuccin_window_flags_icon_current " ${icons.window-current}"
+    set -g @catppuccin_window_flags_icon_zoom " ${icons.window-zoom}"
+    set -g @catppuccin_window_flags_icon_mark " ${icons.window-mark}"
+    set -g @catppuccin_window_flags_icon_silent " ${icons.window-silent}"
+    set -g @catppuccin_window_flags_icon_activity " ${icons.window-activity}"
+    set -g @catppuccin_window_flags_icon_bell " ${icons.window-bell}"
     set -g @catppuccin_pane_status_enabled 'off'
     set -g @catppuccin_pane_border_status 'off'
 
@@ -121,16 +134,59 @@
     set -g mouse on
     set -g window-size smallest
     set -g aggressive-resize on
+    set-option -g renumber-window on
+    set -g focus-events on
+    set -g allow-passthrough on
+    set -g visual-activity off
 
-    # Vi mode
-    set-window-option -g mode-keys vi
-    bind-key -T copy-mode-vi v send-keys -X begin-selection
-    bind-key -T copy-mode-vi C-v send-keys -X rectangle-toggle
-    bind-key -T copy-mode-vi y send-keys -X copy-selection-and-cancel
+    # Preserve terminal environment variables
+    set -ga update-environment TERM
+    set -ga update-environment TERM_PROGRAM
+    set -ga update-environment COLORTERM
+    set -ga update-environment TERMINFO
+    set -ga update-environment TERMINFO_DIRS
 
-    # Smart pane splitting (inherit current path)
-    bind '"' split-window -v -c "#{pane_current_path}"
-    bind % split-window -h -c "#{pane_current_path}"
+    # Timing
+    set -s escape-time 0
+    set -g repeat-time 300
+    set -g initial-repeat-time 600
+
+    # Extended keyboard + clipboard
+    set -g extended-keys on
+    set -as terminal-features 'xterm-kitty*:extkeys'
+    set -s set-clipboard on
+    set -s copy-command 'wl-copy'
+
+    # Prefix: backtick
+    unbind C-b
+    set-option -g prefix `
+    bind ` send-prefix
+
+    # Config reload
+    bind r source-file @tmuxConfPath@ \; display "Config reloaded!"
+
+    # Vi copy mode
+    setw -g mode-keys vi
+    unbind-key -T copy-mode-vi v
+    bind-key -T copy-mode-vi v send -X begin-selection
+    bind-key -T copy-mode-vi C-v send -X rectangle-toggle
+    bind-key -T copy-mode-vi 'y' send -X copy-selection
+
+    # Copy mode styling (tmux 3.6+)
+    set -g copy-mode-position-style "bg=#{@thm_surface_0},fg=#{@thm_mauve}"
+    set -g copy-mode-selection-style "bg=#{@thm_mauve},fg=#{@thm_bg}"
+
+    # Clear screen
+    bind -n M-l send-keys 'C-l'
+
+    # Shift+Enter: process-aware newline for Claude Code / Amp
+    bind -n S-Enter if-shell "ps -o comm= -t '#{pane_tty}' | grep -qE '^(amp|bun)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
+
+    # Pane splitting (| and _)
+    unbind %
+    bind | split-window -h -c "#{pane_current_path}"
+    unbind '"'
+    bind _ split-window -v -c "#{pane_current_path}"
     bind c new-window -c "#{pane_current_path}"
 
     # Resize panes
@@ -177,9 +233,9 @@
     set -g @window_split2 999
 
     # Icon variables
-    set -g @icon_session ""
-    set -g @icon_branch ""
-    set -g @icon_dir ""
+    set -g @icon_session "${icons.session}"
+    set -g @icon_branch "${icons.branch}"
+    set -g @icon_dir "${icons.dir}"
 
     # Line 0: Session / Branch / Dir (left) | Claude status (right)
     set -g status-format[0] "#(${tmuxPlugins.continuum}/share/tmux-plugins/continuum/scripts/continuum_save.sh)#[align=left,bg=#{@thm_bg}]#{?client_prefix,#[fg=#{@thm_red}#,bold],#[fg=#{@thm_mauve}]} #{@icon_session} #S  #[fg=#{@thm_blue},bold]#{@icon_branch} #(tmux-branch-display '#{@branch}' '#{pane_current_path}')  #[fg=#{@thm_subtext_0},nobold]#{@icon_dir} #(tmux-dir-display '#{@branch}' '#{pane_current_path}') #[align=right,fg=#{@thm_overlay_1}]#(claude-status --session '#{session_name}' --format icon-color) "
