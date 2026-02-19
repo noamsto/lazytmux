@@ -70,9 +70,18 @@ in {
     # Plugin hardcodes ~/.config/tmux/tmux-nerd-font-window-name.yml
     xdg.configFile."tmux/tmux-nerd-font-window-name.yml".source = tmuxConfig.nerdFontConfig;
 
+    # Stable config path so theme-toggle and prefix+r can source it.
+    # The actual config is in /nix/store; this symlink always points to the latest.
+    xdg.configFile."tmux/tmux.conf".source = tmuxConfig.tmuxConf;
+
     # Auto-reload tmux config after profile switch (nh home switch / nh os switch).
     # The config embeds full /nix/store paths for all scripts, so reloading it
     # makes the running server use the new script versions without a restart.
+    # Uses the stable ~/.config/tmux/tmux.conf symlink.
+    # Reload tmux config after profile switch. Uses the stable
+    # ~/.config/tmux/tmux.conf symlink path (updated by writeBoundary).
+    # If theme-toggle's restoreTheme also runs, it sources the same config —
+    # the duplicate reload is harmless.
     home.activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary"] ''
       if ${pkgs.tmux}/bin/tmux info &>/dev/null 2>&1; then
         ${pkgs.tmux}/bin/tmux source-file ${tmuxConfig.tmuxConf} || true

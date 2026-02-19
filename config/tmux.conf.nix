@@ -143,8 +143,7 @@
   '';
 
   # --- Generated tmux.conf ---
-  # Use a placeholder for the self-reference, then substitute it in a runCommand.
-  tmuxConfText = pkgs.writeText "tmux.conf.in" ''
+  tmuxConfText = pkgs.writeText "tmux.conf" ''
     # === Base Settings ===
     set -g default-terminal "tmux-256color"
     set -g history-limit 1500000
@@ -190,7 +189,7 @@
     bind ` send-prefix
 
     # Config reload
-    bind r source-file @tmuxConfPath@ \; display "Config reloaded!"
+    bind r source-file ~/.config/tmux/tmux.conf \; display "Config reloaded!"
 
     # Vi copy mode
     setw -g mode-keys vi
@@ -319,16 +318,15 @@
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Reload config on first attach (workaround for tmux-fingers colors)
-    set-hook -g client-attached[99] 'source-file @tmuxConfPath@'
+    set-hook -g client-attached[99] 'source-file ~/.config/tmux/tmux.conf'
 
     # Set pane-border-format with expanded colors (must run after catppuccin loads)
     run-shell "${script.tmux-set-pane-border}/bin/tmux-set-pane-border"
   '';
 
-  # Substitute the self-reference placeholder with the actual output path
-  tmuxConf = pkgs.runCommand "tmux.conf" {} ''
-    substitute ${tmuxConfText} $out --replace-fail '@tmuxConfPath@' "$out"
-  '';
+  # Config references ~/.config/tmux/tmux.conf (stable symlink managed by HM module)
+  # so no self-referential substitution needed
+  tmuxConf = tmuxConfText;
 
   # --- XDG config for nerd font YAML ---
   nerdFontConfigDir = pkgs.runCommand "tmux-nerd-font-config" {} ''
