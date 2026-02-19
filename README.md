@@ -1,25 +1,42 @@
-# tmux-config
+<div align="center">
 
-Opinionated tmux configuration with Claude Code integration.
+# lazytmux
+
+**Opinionated tmux configuration with Claude Code integration.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
-`nix run github:noamsto/tmux-config` drops you into a ready-to-use tmux environment.
+
+`nix run github:noamsto/lazytmux` drops you into a ready-to-use tmux environment.
+
+[![Nix Flake](https://img.shields.io/badge/nix-flake-blue?logo=nixos)](https://nixos.org)
+[![tmux 3.6](https://img.shields.io/badge/tmux-3.6a-green)](https://github.com/tmux/tmux)
+[![Catppuccin Mocha](https://img.shields.io/badge/theme-catppuccin%20mocha-mauve?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMiIgZmlsbD0iI2NiYTZmNyIvPjwvc3ZnPg==)](https://github.com/catppuccin/tmux)
+
+</div>
+
+---
+
+<!-- TODO: Add a showcase screenshot/gif of the full tmux setup in action -->
 
 ## Quick Start
 
 ```bash
 # Run directly (no install)
-nix run github:noamsto/tmux-config
+nix run github:noamsto/lazytmux
 
 # If a tmux server is already running with your old config, kill it first:
-tmux kill-server && nix run github:noamsto/tmux-config
+tmux kill-server && nix run github:noamsto/lazytmux
 ```
+
+> **First run:** Nix needs to fetch and evaluate nixpkgs on first use, which can
+> download a few hundred MB. The actual package closure is only ~67 MiB
+> (44 store paths). Subsequent runs use the local cache and start instantly.
 
 ## Installation
 
 ```bash
 # Install to your Nix profile
-nix profile install github:noamsto/tmux-config
+nix profile install github:noamsto/lazytmux
 ```
 
 This installs a `tmux` wrapper that automatically loads the configuration. Your existing
@@ -27,37 +44,41 @@ This installs a `tmux` wrapper that automatically loads the configuration. Your 
 
 ## Features
 
-- **Catppuccin Mocha theme** — consistent colors across status bar and pane borders
-- **Multi-line status bar** — windows auto-reflow across multiple lines when the terminal is narrow
-- **Nerd font window icons** — per-process icons (fish, nvim, nix, Claude Code, etc.)
-- **Claude Code status integration** — real-time spinner/icon in status bar and session/window pickers
-- **Git branch display** — current branch in the top status line
-- **Session and window pickers** — fzf-powered pickers with Claude status shown per session/window
-- **vim-tmux-navigator** — seamless `Ctrl-h/j/k/l` navigation between vim splits and tmux panes
-- **tmux-fingers** — smart copy mode with hints for URLs, hashes, file paths, JIRA tickets
-- **tmux-resurrect + continuum** — automatic session save every 10 minutes with restore on start
-- **Mouse support**, vi copy mode, pane dimming for inactive panes
+| Feature | Description |
+|---------|-------------|
+| **Catppuccin Mocha theme** | Consistent colors across status bar and pane borders |
+| **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
+| **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, etc.) |
+| **Claude Code status** | Real-time spinner/icon in status bar and session/window pickers |
+| **Git branch display** | Current branch shown in the top status line |
+| **fzf pickers** | Session and window pickers with Claude status per entry |
+| **vim-tmux-navigator** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes |
+| **tmux-fingers** | Smart copy with hints for URLs, hashes, file paths, JIRA tickets |
+| **resurrect + continuum** | Auto-save every 10 min with restore on start |
+| **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |
 
 ## Requirements
 
 - **Nerd Font terminal** — any terminal with a Nerd Font renders window icons correctly (Kitty, Alacritty, WezTerm, etc.)
 - **tmux 3.4+** — multi-line status bar requires 3.4; the Nix package provides a compatible version automatically
 
-## wt — Git Worktree Manager
+---
+
+## `wt` — Git Worktree Manager
 
 A separate package for managing git worktrees with tmux window integration.
 Each worktree gets its own tmux window; sessions map to repositories.
 
 ```bash
 # Run directly
-nix run github:noamsto/tmux-config#wt -- <branch>
+nix run github:noamsto/lazytmux#wt -- <branch>
 
 # Or install alongside tmux
-nix profile install github:noamsto/tmux-config
+nix profile install github:noamsto/lazytmux
 wt <branch>
 ```
 
-### wt Usage
+### Usage
 
 ```
 wt <branch>           Smart switch/create (prompts before creating)
@@ -83,6 +104,8 @@ cd "$(wt -yqn feature-branch)"
 
 **Worktrees are created at** `.worktrees/<branch-name>` inside the repo root.
 
+---
+
 ## Claude Code Integration
 
 The status bar and pickers show the Claude Code state for each pane, window, and session
@@ -91,13 +114,15 @@ to write state files that the status bar reads every second.
 
 ### Status Indicators
 
+<!-- TODO: Replace this table with a screenshot showing the actual status icons -->
+
 | Indicator | Meaning |
 |-----------|---------|
-| Spinner animation (󰪞 󰪟 󰪠 …) | Processing — Claude is actively working |
-| 󰔟 | Waiting — permission prompt needs your input |
-|  | Compacting — context compaction in progress |
-| 󰸞 | Done — Claude finished the last task |
-| 󰒲 | Idle — waiting for your next prompt |
+| Spinner animation | **Processing** — Claude is actively working |
+| Clock icon | **Waiting** — permission prompt needs your input |
+| Compress icon | **Compacting** — context compaction in progress |
+| Checkmark | **Done** — Claude finished the last task |
+| Sleep icon | **Idle** — waiting for your next prompt |
 
 When multiple panes have Claude running, the window and session indicators show the
 highest-priority state (waiting > compacting > processing > done > idle).
@@ -106,6 +131,9 @@ highest-priority state (waiting > compacting > processing > done > idle).
 
 Paste this into `~/.claude/settings.json` (merge with existing `hooks` if present).
 The commands use bare names (`claude-status-update`) because they are on PATH via the tmux wrapper.
+
+<details>
+<summary><b>Click to expand hooks JSON</b></summary>
 
 ```json
 {
@@ -199,6 +227,8 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
   }
 }
 ```
+
+</details>
 
 State files are written to `/tmp/claude-status/` and cleaned up automatically.
 Stale states (e.g. a `processing` state older than 15 seconds) are resolved automatically
