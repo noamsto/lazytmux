@@ -74,17 +74,19 @@ in {
     # The actual config is in /nix/store; this symlink always points to the latest.
     xdg.configFile."tmux/tmux.conf".source = tmuxConfig.tmuxConf;
 
-    # Auto-reload tmux config after profile switch (nh home switch / nh os switch).
-    # The config embeds full /nix/store paths for all scripts, so reloading it
-    # makes the running server use the new script versions without a restart.
-    # Uses the stable ~/.config/tmux/tmux.conf symlink.
-    # Reload tmux config after profile switch. Uses the stable
-    # ~/.config/tmux/tmux.conf symlink path (updated by writeBoundary).
-    # If theme-toggle's restoreTheme also runs, it sources the same config —
-    # the duplicate reload is harmless.
+    # Reload tmux config + reflow all sessions after profile switch.
+    # The config embeds full /nix/store paths, so reloading makes the running
+    # server use new script versions without restart. Reflow regenerates
+    # status-format lines for all sessions with the new reflow script.
     home.activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary"] ''
-      if ${pkgs.tmux}/bin/tmux info &>/dev/null 2>&1; then
-        ${pkgs.tmux}/bin/tmux source-file ${tmuxConfig.tmuxConf} || true
+      TMUX=${pkgs.tmux}/bin/tmux
+      REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
+      if $TMUX info &>/dev/null 2>&1; then
+        $TMUX source-file ${tmuxConfig.tmuxConf} || true
+        # Trigger reflow for all sessions so status lines use new scripts
+        while IFS=$'\t' read -r sess width; do
+          [ -n "$sess" ] && "$REFLOW" "$sess" "$width" || true
+        done < <($TMUX list-clients -F '#{session_name}	#{client_width}' 2>/dev/null)
       fi
     '';
 

@@ -26,9 +26,9 @@ tmux set -g @picker_icon_dir "$icon_dir"
 tmux set -g @picker_icon_session "$icon_session"
 
 # Open choose-tree with windows expanded
-# Colors match status bar: mauve=session, blue=branch, subtext_0=dir/index, overlay_1=claude
-# Session rows: [session icon] name  [dir icon] path
-# Window rows:  index: [app icon] name [zoomed] [branch icon] branch [claude status]
+# Note: choose-tree -F does NOT support #[style] sequences — only plain text + #{} vars
+# Session rows: [dir icon] path
+# Window rows:  [app icon] name [zoomed] [branch icon] branch [claude status]
 tmux choose-tree -Zw -O name \
-  -F '#{?window_format,#[fg=#{@thm_fg}]#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #[fg=#{@thm_blue}]#{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#[fg=#{@thm_subtext_0}]#{@picker_icon_dir} #{=30:@picker_path}}' \
+  -F '#{?window_format,#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icon_dir} #{=30:@picker_path}}' \
   'switch-client -t "%1"'
