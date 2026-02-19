@@ -60,15 +60,27 @@ for ((j = 0; j < total; j++)); do
 done
 
 # Compute split points
-# Single-line uses full window_name (icon + uncapped text), so slot width must
-# reflect the raw (uncapped) text length to decide when to wrap.
 # Each slot: "N: " (idx_width+2) + icon (2) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 13
 # Note: nerd font icons are 1 display col each; emoji icons (🤖🐟) are 2 cols
 # Zoom indicator not reserved — appended only when zoomed (rare, minor overflow OK)
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-slot_width=$((max_text_len_raw + idx_width + 13))
 available=$((WIDTH - PREFIX_WIDTH))
+
+# Two-pass approach:
+# 1. Check if single-line fits using raw (uncapped) text widths, since single-line
+#    renders full #{window_name} without truncation.
+# 2. If not, compute multi-line split points using capped widths (multi-line
+#    truncates text to 20 chars with #{=20:...}).
+slot_width_raw=$((max_text_len_raw + idx_width + 13))
+slot_width_capped=$((max_text_len + idx_width + 13))
+
+# Check if everything fits on one line (conservative: uses max-width slot for all)
+if ((slot_width_raw * total <= available)); then
+  needs_multiline=0
+else
+  needs_multiline=1
+fi
 
 cumulative=0
 current_line=0
@@ -76,21 +88,24 @@ split1=999
 split2=999
 prev_idx=
 
-for ((j = 0; j < total; j++)); do
-  if ((cumulative + slot_width > available && cumulative > 0)); then
-    ((current_line++))
-    if ((current_line == 1)); then
-      split1=$prev_idx
-    elif ((current_line == 2)); then
-      split2=$prev_idx
-      break
+if ((needs_multiline)); then
+  # Use capped slot width for multi-line split points
+  for ((j = 0; j < total; j++)); do
+    if ((cumulative + slot_width_capped > available && cumulative > 0)); then
+      ((current_line++))
+      if ((current_line == 1)); then
+        split1=$prev_idx
+      elif ((current_line == 2)); then
+        split2=$prev_idx
+        break
+      fi
+      cumulative=$slot_width_capped
+    else
+      cumulative=$((cumulative + slot_width_capped))
     fi
-    cumulative=$slot_width
-  else
-    cumulative=$((cumulative + slot_width))
-  fi
-  prev_idx=${indices[$j]}
-done
+    prev_idx=${indices[$j]}
+  done
+fi
 
 tmux set -t "$SESSION" @window_split "$split1"
 tmux set -t "$SESSION" @window_split2 "$split2"
