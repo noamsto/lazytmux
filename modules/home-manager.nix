@@ -67,6 +67,9 @@ in {
       [tmuxConfig.tmux-wrapped]
       ++ lib.optionals cfg.wt.enable [wtPkg];
 
+    # Plugin hardcodes ~/.config/tmux/tmux-nerd-font-window-name.yml
+    xdg.configFile."tmux/tmux-nerd-font-window-name.yml".source = tmuxConfig.nerdFontConfig;
+
     # Never restart on switch — killing the tmux server destroys all sessions and history.
     # The startup script is a stable wrapper that resolves tmux via ~/.nix-profile/bin,
     # so the unit file doesn't change when lazytmux is updated (preventing sd-switch restart).

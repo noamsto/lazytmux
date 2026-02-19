@@ -36,6 +36,8 @@ while IFS='|' read -r idx branch pane_path cmd panes; do
     dirname=${pane_path##*/}
     text_len=${#dirname}
   fi
+  # Cap at 20 to match the #{=20:...} truncation in format strings
+  ((text_len > 20)) && text_len=20
   ((text_len > max_text_len)) && max_text_len=$text_len
   ((total++))
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
@@ -105,7 +107,7 @@ FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
 
 # Common format fragments
 ICON='#{@window_icon_display}'
-TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}'
+TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{=20:#{b:pane_current_path}}#{?#{==:#{=20:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
 CLAUDE='#(claude-status --window '"'"'#{session_name}:#{window_index}'"'"')'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 

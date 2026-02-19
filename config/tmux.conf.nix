@@ -325,5 +325,5 @@
     meta.mainProgram = "tmux";
   };
 in {
-  inherit tmux-wrapped tmuxConf;
+  inherit tmux-wrapped tmuxConf nerdFontConfig;
 }
