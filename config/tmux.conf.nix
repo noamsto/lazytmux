@@ -271,13 +271,23 @@
     set -g status-format[2] ""
     set -g status-format[3] ""
 
+    # Reflow hooks: clear stale hooks first so source-file is idempotent.
+    # Without this, hooks from previous configs or manual testing persist across reloads.
+    set-hook -gu after-new-window
+    set-hook -gu session-window-changed
+    set-hook -gu client-resized
+    set-hook -gu after-new-session
+    set-hook -gu client-session-changed
+    # Also clear hooks from older config versions that may linger
+    set-hook -gu window-linked
+    set-hook -gu window-unlinked
+    set-hook -gu after-resize-pane
+    set-hook -gu after-kill-pane
+
     # Hooks to reflow windows across status lines
-    # Note: window-linked/unlinked only fire for link-window/unlink-window commands,
-    # NOT for new-window/kill-window. window-renamed is not a valid hook.
-    # Use after-* command hooks instead.
     set-hook -g after-new-window        'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g client-resized           'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
 
