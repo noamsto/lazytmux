@@ -108,7 +108,7 @@ FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
 # Common format fragments
 ICON='#{@window_icon_display}'
 TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{=20:#{b:pane_current_path}}#{?#{==:#{=20:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
-CLAUDE='#(claude-status --window '"'"'#{session_name}:#{window_index}'"'"')'
+CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"')'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((current_line == 0)); then
