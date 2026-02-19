@@ -17,7 +17,8 @@ PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 # Collect window data and compute max TEXT length (without icon)
 # Use | delimiter (not tab) because IFS whitespace chars collapse empty fields
 declare -a indices commands pane_counts
-max_text_len=0
+max_text_len=0      # capped at 20, for multi-line padded column width
+max_text_len_raw=0  # uncapped, for split-point calculation (single-line uses full names)
 total=0
 FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{pane_current_command}|#{window_panes}'
 while IFS='|' read -r idx branch pane_path cmd panes; do
@@ -25,20 +26,18 @@ while IFS='|' read -r idx branch pane_path cmd panes; do
   commands+=("$cmd")
   pane_counts+=("$panes")
 
-  # Compute text length for padding (branch name or dir basename, no icon)
+  # Compute text length (branch name or dir basename, no icon)
   if [[ -n $branch ]]; then
-    if ((${#branch} > 20)); then
-      text_len=21 # 20 chars + …
-    else
-      text_len=${#branch}
-    fi
+    text_len=${#branch}
   else
     dirname=${pane_path##*/}
     text_len=${#dirname}
   fi
-  # Cap at 20 to match the #{=20:...} truncation in format strings
-  ((text_len > 20)) && text_len=20
-  ((text_len > max_text_len)) && max_text_len=$text_len
+  ((text_len > max_text_len_raw)) && max_text_len_raw=$text_len
+  # Cap at 20 for multi-line padding (matches #{=20:...} truncation)
+  capped=$text_len
+  ((capped > 20)) && capped=20
+  ((capped > max_text_len)) && max_text_len=$capped
   ((total++))
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
@@ -60,13 +59,15 @@ for ((j = 0; j < total; j++)); do
   tmux set -w -t "$SESSION:${indices[$j]}" @window_icon_display "$icon"
 done
 
-# Compute split points using padded slot width
-# Each slot: "N: " (idx_width+2) + icon (2) + space (1) + padded_text (max_text_len) + claude_status (5) + " │ " (3) = max_text_len + idx_width + 13
+# Compute split points
+# Single-line uses full window_name (icon + uncapped text), so slot width must
+# reflect the raw (uncapped) text length to decide when to wrap.
+# Each slot: "N: " (idx_width+2) + icon (2) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 13
 # Note: nerd font icons are 1 display col each; emoji icons (🤖🐟) are 2 cols
 # Zoom indicator not reserved — appended only when zoomed (rare, minor overflow OK)
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-slot_width=$((max_text_len + idx_width + 13))
+slot_width=$((max_text_len_raw + idx_width + 13))
 available=$((WIDTH - PREFIX_WIDTH))
 
 cumulative=0
