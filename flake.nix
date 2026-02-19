@@ -18,5 +18,9 @@
           wt = import ./wt {inherit pkgs;};
         };
       };
+
+      flake = {
+        homeManagerModules.default = import ./modules/home-manager.nix;
+      };
     };
 }
