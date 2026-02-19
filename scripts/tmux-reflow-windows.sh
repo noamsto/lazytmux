@@ -105,6 +105,9 @@ if ((needs_multiline)); then
     fi
     prev_idx=${indices[$j]}
   done
+  # Even if all capped slots fit on one row, force multi-line format
+  # (single-line renders full #{window_name} which would overflow)
+  ((current_line == 0)) && current_line=1
 fi
 
 tmux set -t "$SESSION" @window_split "$split1"
