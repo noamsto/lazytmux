@@ -61,10 +61,12 @@ for ((j = 0; j < total; j++)); do
 done
 
 # Compute split points using padded slot width
-# Each slot: "N: " (3) + icon (2) + space (1) + padded_text (max_text_len) + claude_status (5) + " │ " (3) = max_text_len + 14
+# Each slot: "N: " (idx_width+2) + icon (2) + space (1) + padded_text (max_text_len) + claude_status (5) + " │ " (3) = max_text_len + idx_width + 13
 # Note: nerd font icons are 1 display col each; emoji icons (🤖🐟) are 2 cols
 # Zoom indicator not reserved — appended only when zoomed (rare, minor overflow OK)
-slot_width=$((max_text_len + 14))
+last_idx=${indices[$((total - 1))]}
+idx_width=${#last_idx}
+slot_width=$((max_text_len + idx_width + 13))
 available=$((WIDTH - PREFIX_WIDTH))
 
 cumulative=0
@@ -124,7 +126,9 @@ else
   # +2 for " 󰁌" (space + 1-char icon) when zoomed
   P=$((max_text_len + 2))
   TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
-  ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
+  # Right-pad index to consistent width using tmux's padding: #{pN:window_index}
+  IDX="#{p${idx_width}:window_index}"
+  ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
 
   # Line 1: windows 1..split1
   PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
