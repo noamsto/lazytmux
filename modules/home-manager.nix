@@ -83,7 +83,10 @@ in {
       REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
       if $TMUX info &>/dev/null 2>&1; then
         $TMUX source-file ${tmuxConfig.tmuxConf} || true
-        # Brief pause to let run-shell commands within the config finish
+        # Plugin run-shell commands are async; wait for them to finish,
+        # then re-source to ensure hooks (set after plugins) are registered
+        sleep 1
+        $TMUX source-file ${tmuxConfig.tmuxConf} || true
         sleep 0.5
         # Reflow ALL sessions (use client width from any attached client, or default 200)
         WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
