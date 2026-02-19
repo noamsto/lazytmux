@@ -105,9 +105,6 @@ if ((needs_multiline)); then
     fi
     prev_idx=${indices[$j]}
   done
-  # Even if all capped slots fit on one row, force multi-line format
-  # (single-line renders full #{window_name} which would overflow)
-  ((current_line == 0)) && current_line=1
 fi
 
 tmux set -t "$SESSION" @window_split "$split1"
@@ -115,9 +112,10 @@ tmux set -t "$SESSION" @window_split2 "$split2"
 
 if ((current_line >= 2)); then
   tmux set -t "$SESSION" status 4
-elif ((current_line == 1)); then
+elif ((current_line >= 1)); then
   tmux set -t "$SESSION" status 3
 else
+  # needs_multiline with no splits still uses status 2 (truncated one-row format)
   tmux set -t "$SESSION" status 2
 fi
 
@@ -132,9 +130,20 @@ TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{=20
 CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"')'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
-if ((current_line == 0)); then
+if ((!needs_multiline && current_line == 0)); then
   # Single line: compact, no padding — just use window_name directly
   ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: #{window_name},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]#{window_name}}#{?window_zoomed_flag, 󰁌,}${CLAUDE}#[norange]"
+  tmux set -t "$SESSION" status-format[1] \
+    "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
+  tmux set -t "$SESSION" status-format[2] ""
+  tmux set -t "$SESSION" status-format[3] ""
+elif ((current_line == 0)); then
+  # Truncated single row: names too long for single-line format but capped text
+  # fits on one row. Uses padded/truncated entry on a single ╰─ line.
+  P=$((max_text_len + 2))
+  TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
+  IDX="#{p${idx_width}:window_index}"
+  ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
   tmux set -t "$SESSION" status-format[1] \
     "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
   tmux set -t "$SESSION" status-format[2] ""
