@@ -4,6 +4,11 @@
 
 set -euo pipefail
 
+# Read icon variables from tmux
+icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
+icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
+icon_session=$(tmux show -gv @icon_session 2>/dev/null || echo "")
+
 # Pre-compute claude status for each window into @claude_win_status user variable
 while IFS=$'\t' read -r sess_name win_idx; do
   [[ -n $win_idx ]] || continue
@@ -12,9 +17,14 @@ while IFS=$'\t' read -r sess_name win_idx; do
   tmux set -w -t "$target" @claude_win_status "$status"
 done < <(tmux list-windows -a -F '#{session_name}	#{window_index}')
 
+# Store icons as tmux vars for format strings
+tmux set -g @picker_icon_branch "$icon_branch"
+tmux set -g @picker_icon_dir "$icon_dir"
+tmux set -g @picker_icon_session "$icon_session"
+
 # Open choose-tree with windows expanded
-# window_format rows: "index: icon+dirname [zoomed] [branch] [claude]"
-# session_format rows: "session_name (Nw)"
+# Session rows: [session icon] name  [dir icon] path
+# Window rows:  index: [app icon] name [zoomed] [branch icon] branch [claude status]
 tmux choose-tree -Zw -O name \
-  -F '#{?window_format,#{window_index}: #{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{=30:@branch},} #{@claude_win_status},#{session_name} (#{session_windows}w)}' \
+  -F '#{?window_format,#{window_index}: #{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icon_session} #{session_name}  #{@picker_icon_dir} #{=30:session_path}}' \
   'switch-client -t "%1"'
