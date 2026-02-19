@@ -10,7 +10,6 @@ set -euo pipefail
 # Read theme colors and icons from tmux
 thm_blue=$(tmux show -gv @thm_blue 2>/dev/null || echo "blue")
 thm_green=$(tmux show -gv @thm_green 2>/dev/null || echo "green")
-thm_subtext_0=$(tmux show -gv @thm_subtext_0 2>/dev/null || echo "white")
 icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 
@@ -18,18 +17,29 @@ icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 tmux set -g @picker_icon_dir "#[fg=${thm_blue}]${icon_dir}#[fg=default]"
 tmux set -g @picker_icon_branch "#[fg=${thm_green}]${icon_branch}#[fg=default]"
 
-# Pre-compute claude status and shortened path for each session
+# First pass: collect session data and find max path width for column alignment
+declare -a sessions=() paths=() statuses=()
+max_path=0
+
 while IFS=$'\t' read -r sess sess_path; do
   [[ -n $sess ]] || continue
   status=$(claude-status --session "$sess" --format icon-color 2>/dev/null || true)
-  tmux set -t "$sess" @claude_status "$status"
-  # Collapse $HOME to ~
   short_path="${sess_path/#$HOME/\~}"
-  tmux set -t "$sess" @picker_path "$short_path"
+  sessions+=("$sess")
+  paths+=("$short_path")
+  statuses+=("$status")
+  (( ${#short_path} > max_path )) && max_path=${#short_path}
 done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
 
-# Session rows: [dir icon] path  [claude status]
+# Second pass: set padded paths and status
+for i in "${!sessions[@]}"; do
+  padded=$(printf "%-${max_path}s" "${paths[$i]}")
+  tmux set -t "${sessions[$i]}" @picker_path "$padded"
+  tmux set -t "${sessions[$i]}" @claude_status "${statuses[$i]}"
+done
+
+# Session rows: [dir icon] path (padded)  [claude status]
 # Window rows:  [app icon] name  [branch icon] branch (when @branch is set)
 tmux choose-tree -Zs -O name \
-  -F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_icon_dir} #{=30:@picker_path}  #{@claude_status}}' \
+  -F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_icon_dir} #{@picker_path}  #{@claude_status}}' \
   'switch-client -t "%1"'
