@@ -278,6 +278,8 @@
     set -g automatic-rename-format "#{window_icon} #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
 
     # Nerd font window name plugin
+    # Set XDG_CONFIG_DIRS in server environment so the plugin finds its YAML config
+    set-environment -g XDG_CONFIG_DIRS "${nerdFontConfigDir}"
     run-shell ${nerd-font-wn}/share/tmux-plugins/tmux-nerd-font-window-name/tmux-nerd-font-window-name.tmux
 
     # tmux-fingers (smart copy)
