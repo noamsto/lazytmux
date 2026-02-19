@@ -70,6 +70,15 @@ in {
     # Plugin hardcodes ~/.config/tmux/tmux-nerd-font-window-name.yml
     xdg.configFile."tmux/tmux-nerd-font-window-name.yml".source = tmuxConfig.nerdFontConfig;
 
+    # Auto-reload tmux config after profile switch (nh home switch / nh os switch).
+    # The config embeds full /nix/store paths for all scripts, so reloading it
+    # makes the running server use the new script versions without a restart.
+    home.activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary"] ''
+      if ${pkgs.tmux}/bin/tmux info &>/dev/null 2>&1; then
+        ${pkgs.tmux}/bin/tmux source-file ${tmuxConfig.tmuxConf} || true
+      fi
+    '';
+
     # Never restart on switch — killing the tmux server destroys all sessions and history.
     # The startup script is a stable wrapper that resolves tmux via ~/.nix-profile/bin,
     # so the unit file doesn't change when lazytmux is updated (preventing sd-switch restart).
