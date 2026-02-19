@@ -146,17 +146,18 @@ in {
     # The config embeds full /nix/store paths, so reloading makes the running
     # server use new script versions without restart. Reflow regenerates
     # status-format lines for all sessions with the new reflow script.
-    home.activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    # Run after restoreTheme (which sources the config and sets theme vars).
+    # We only need to: ensure config is loaded, then reflow all sessions.
+    home.activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
       TMUX=${pkgs.tmux}/bin/tmux
       REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
       if $TMUX info &>/dev/null 2>&1; then
+        # Source config (restoreTheme may have already done this, but it's
+        # idempotent and handles the case where restoreTheme doesn't exist)
         $TMUX source-file ${tmuxConfig.tmuxConf} || true
-        # Plugin run-shell commands are async; wait for them to finish,
-        # then re-source to ensure hooks (set after plugins) are registered
+        # Wait for async run-shell plugin commands to finish
         sleep 1
-        $TMUX source-file ${tmuxConfig.tmuxConf} || true
-        sleep 0.5
-        # Reflow ALL sessions (use client width from any attached client, or default 200)
+        # Reflow ALL sessions
         WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
         WIDTH=''${WIDTH:-200}
         while read -r sess; do
