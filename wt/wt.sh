@@ -75,16 +75,26 @@ Worktree location: .worktrees/<branch-name>
 EOF
 }
 
-# Find window index by @worktree option
+# Find window index by @worktree option, falling back to pane working directory
 wt_find_window_by_worktree() {
   local session="$1"
   local worktree="$2"
-  tmux list-windows -t "$session" -F '#{window_index}:#{@worktree}' 2>/dev/null | while IFS=: read -r idx wt; do
+
+  # First: match by @worktree option (set by wt when creating windows)
+  while IFS=$'\t' read -r idx wt; do
     if [[ $wt == "$worktree" ]]; then
       echo "$idx"
       return 0
     fi
-  done
+  done < <(tmux list-windows -t "$session" -F '#{window_index}	#{@worktree}' 2>/dev/null)
+
+  # Fallback: match by pane's current working directory
+  while IFS=$'\t' read -r idx pane_path; do
+    if [[ $pane_path == "$worktree" ]]; then
+      echo "$idx"
+      return 0
+    fi
+  done < <(tmux list-windows -t "$session" -F '#{window_index}	#{pane_current_path}' 2>/dev/null)
 }
 
 # Switch to or create tmux session/window
