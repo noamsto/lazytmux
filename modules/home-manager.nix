@@ -83,10 +83,12 @@ in {
       REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
       if $TMUX info &>/dev/null 2>&1; then
         $TMUX source-file ${tmuxConfig.tmuxConf} || true
-        # Trigger reflow for all sessions so status lines use new scripts
-        while IFS=$'\t' read -r sess width; do
-          [ -n "$sess" ] && "$REFLOW" "$sess" "$width" || true
-        done < <($TMUX list-clients -F '#{session_name}	#{client_width}' 2>/dev/null)
+        # Reflow ALL sessions (use client width from any attached client, or default 200)
+        WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
+        WIDTH=''${WIDTH:-200}
+        while read -r sess; do
+          [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
+        done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
       fi
     '';
 
