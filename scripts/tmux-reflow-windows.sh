@@ -21,6 +21,7 @@ max_text_len=0      # capped at 20, for multi-line padded column width
 max_text_len_raw=0  # uncapped, for split-point calculation (single-line uses full names)
 total=0
 has_zoom=0          # whether any window is currently zoomed
+has_truncated=0     # whether any branch/dir name exceeds 20 chars (gets "…" suffix)
 FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{pane_current_command}|#{window_panes}|#{window_zoomed_flag}'
 while IFS='|' read -r idx branch pane_path cmd panes zoomed; do
   indices+=("$idx")
@@ -38,7 +39,7 @@ while IFS='|' read -r idx branch pane_path cmd panes zoomed; do
   ((text_len > max_text_len_raw)) && max_text_len_raw=$text_len
   # Cap at 20 for multi-line padding (matches #{=20:...} truncation)
   capped=$text_len
-  ((capped > 20)) && capped=20
+  ((capped > 20)) && { has_truncated=1; capped=20; }
   ((capped > max_text_len)) && max_text_len=$capped
   ((total++))
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
@@ -77,12 +78,14 @@ available=$((WIDTH - PREFIX_WIDTH))
 #    truncates text to 20 chars with #{=20:...}).
 #
 # Single-line: zoom adds 2 to one slot (only one window can be zoomed).
-# Multi-line: padding always reserves +2 for zoom (P = max_text_len + 2),
-#   so slot_width_capped uses +15 instead of +13.
+# Multi-line padding area (P) reserves: +2 for zoom icon, +1 for "…" ellipsis
+#   when any name is truncated. slot_width_capped = P + idx_width + 13.
 zoom_extra=0
 ((has_zoom)) && zoom_extra=2
+ellipsis_extra=0
+((has_truncated)) && ellipsis_extra=1
 slot_width_raw=$((max_text_len_raw + idx_width + 13))
-slot_width_capped=$((max_text_len + idx_width + 15))
+slot_width_capped=$((max_text_len + 2 + ellipsis_extra + idx_width + 13))
 
 # Check if everything fits on one line (conservative: uses max-width slot for all)
 # Add zoom_extra (2) if any window is zoomed — only one can be at a time.
@@ -150,7 +153,7 @@ if ((!needs_multiline && current_line == 0)); then
 elif ((current_line == 0)); then
   # Truncated single row: names too long for single-line format but capped text
   # fits on one row. Uses padded/truncated entry on a single ╰─ line.
-  P=$((max_text_len + 2))
+  P=$((max_text_len + 2 + ellipsis_extra))
   TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
   IDX="#{p${idx_width}:window_index}"
   ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
@@ -161,8 +164,8 @@ elif ((current_line == 0)); then
 else
   # Multi-line: padded columns with icon separated from text
   # Zoom indicator inside padded area so it consumes padding space, not extra width
-  # +2 for " 󰁌" (space + 1-char icon) when zoomed
-  P=$((max_text_len + 2))
+  # +2 for " 󰁌" (space + 1-char icon) when zoomed, +1 for "…" if any name truncated
+  P=$((max_text_len + 2 + ellipsis_extra))
   TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
   # Right-pad index to consistent width using tmux's padding: #{pN:window_index}
   IDX="#{p${idx_width}:window_index}"
