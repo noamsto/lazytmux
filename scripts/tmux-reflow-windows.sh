@@ -20,11 +20,13 @@ declare -a indices commands pane_counts
 max_text_len=0      # capped at 20, for multi-line padded column width
 max_text_len_raw=0  # uncapped, for split-point calculation (single-line uses full names)
 total=0
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{pane_current_command}|#{window_panes}'
-while IFS='|' read -r idx branch pane_path cmd panes; do
+has_zoom=0          # whether any window is currently zoomed
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{pane_current_command}|#{window_panes}|#{window_zoomed_flag}'
+while IFS='|' read -r idx branch pane_path cmd panes zoomed; do
   indices+=("$idx")
   commands+=("$cmd")
   pane_counts+=("$panes")
+  ((zoomed)) && has_zoom=1
 
   # Compute text length (branch name or dir basename, no icon)
   if [[ -n $branch ]]; then
@@ -62,7 +64,8 @@ done
 # Compute split points
 # Each slot: "N: " (idx_width+2) + icon (2) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 13
 # Note: nerd font icons are 1 display col each; emoji icons (🤖🐟) are 2 cols
-# Zoom indicator not reserved — appended only when zoomed (rare, minor overflow OK)
+# Zoom indicator: " 󰁌" = 2 display cols (space + 1-col nerd icon)
+# Only one window can be zoomed at a time.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
 available=$((WIDTH - PREFIX_WIDTH))
@@ -72,11 +75,18 @@ available=$((WIDTH - PREFIX_WIDTH))
 #    renders full #{window_name} without truncation.
 # 2. If not, compute multi-line split points using capped widths (multi-line
 #    truncates text to 20 chars with #{=20:...}).
+#
+# Single-line: zoom adds 2 to one slot (only one window can be zoomed).
+# Multi-line: padding always reserves +2 for zoom (P = max_text_len + 2),
+#   so slot_width_capped uses +15 instead of +13.
+zoom_extra=0
+((has_zoom)) && zoom_extra=2
 slot_width_raw=$((max_text_len_raw + idx_width + 13))
-slot_width_capped=$((max_text_len + idx_width + 13))
+slot_width_capped=$((max_text_len + idx_width + 15))
 
 # Check if everything fits on one line (conservative: uses max-width slot for all)
-if ((slot_width_raw * total <= available)); then
+# Add zoom_extra (2) if any window is zoomed — only one can be at a time.
+if ((slot_width_raw * total + zoom_extra <= available)); then
   needs_multiline=0
 else
   needs_multiline=1
