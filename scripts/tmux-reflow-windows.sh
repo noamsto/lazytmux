@@ -53,11 +53,21 @@ NERD_BIN=$(tmux show-option -gv automatic-rename-format 2>/dev/null |
 
 # Cache nerd font icon per window as @window_icon_display option
 # Runs only on hook events, not every status-interval
+# Pad single-width glyphs (nerd fonts, 3 UTF-8 bytes) with a trailing space
+# so they match double-width emoji (4 UTF-8 bytes) for column alignment.
 for ((j = 0; j < total; j++)); do
   if [[ -n $NERD_BIN && -x $NERD_BIN ]]; then
     icon=$("$NERD_BIN" "${commands[$j]}" "${pane_counts[$j]:-1}")
   else
     icon=""
+  fi
+  # Nerd font glyphs are 3 bytes (PUA, 1 display col); emoji are 4 bytes (2 display cols).
+  # Append a space to single-width icons for consistent 2-col alignment.
+  if [[ -n $icon && ${#icon} -eq 1 ]]; then
+    byte_len=$(printf '%s' "$icon" | wc -c)
+    if ((byte_len <= 3)); then
+      icon="$icon "
+    fi
   fi
   tmux set -w -t "$SESSION:${indices[$j]}" @window_icon_display "$icon"
 done
