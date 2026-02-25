@@ -74,7 +74,7 @@
     };
   };
 
-  whichKeyConfig = pkgs.writeText "which-key.json" (builtins.readFile ../config/which-key.json);
+  whichKeyConfig = pkgs.writeText "which-key.json" (builtins.readFile ./which-key.json);
 
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
