@@ -74,6 +74,8 @@
     };
   };
 
+  whichKeyConfig = pkgs.writeText "which-key.json" (builtins.readFile ../config/which-key.json);
+
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
 
@@ -140,6 +142,12 @@
     # continuum
     set -g @continuum-restore 'on'
     set -g @continuum-save-interval '10'
+
+    # which-key
+    set -g @which-key-trigger "Space"
+    set -g @which-key-config "${whichKeyConfig}"
+    set -g @which-key-popup-bg "#1e1e2e"
+    set -g @which-key-popup-fg "#cba6f7"
   '';
 
   # --- Plugin run-shell loading ---
@@ -151,6 +159,7 @@
     run-shell ${tmuxPlugins.vim-tmux-navigator}/share/tmux-plugins/vim-tmux-navigator/vim-tmux-navigator.tmux
     run-shell ${tmuxPlugins.tmux-fzf}/share/tmux-plugins/tmux-fzf/main.tmux
     run-shell ${tmuxPlugins.continuum}/share/tmux-plugins/continuum/continuum.tmux
+    run-shell ${which-key}/share/tmux-plugins/tmux-which-key/which-key.tmux
   '';
 
   # --- Generated tmux.conf ---
