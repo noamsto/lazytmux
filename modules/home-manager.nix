@@ -19,6 +19,14 @@ in {
       };
     };
 
+    skills = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether to install Claude Code skills into ~/.claude/skills";
+      };
+    };
+
     startupSession = {
       enable = lib.mkEnableOption "systemd service to start a tmux session on login";
 
@@ -66,6 +74,13 @@ in {
     home.packages =
       [tmuxConfig.tmux-wrapped]
       ++ lib.optionals cfg.wt.enable [wtPkg];
+
+    home.file = lib.mkIf cfg.skills.enable (
+      lib.mapAttrs' (name: _: {
+        name = ".claude/skills/${name}";
+        value.source = ../skills/${name};
+      }) (builtins.readDir ../skills)
+    );
 
     # Plugin hardcodes ~/.config/tmux/tmux-nerd-font-window-name.yml
     xdg.configFile."tmux/tmux-nerd-font-window-name.yml".source = tmuxConfig.nerdFontConfig;
