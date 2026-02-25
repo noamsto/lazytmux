@@ -358,7 +358,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath scripts} \
+        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh])} \
         --prefix XDG_CONFIG_DIRS : ${nerdFontConfigDir}
     '';
     meta.mainProgram = "tmux";
