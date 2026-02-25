@@ -1,0 +1,5 @@
+{
+  "items": [
+    { "key": "g", "type": "popup", "command": "lazygit", "description": "lazygit" }
+  ]
+}
