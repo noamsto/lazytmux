@@ -51,7 +51,7 @@
       owner = "Nucc";
       repo = "tmux-which-key";
       rev = "151227fe1ec40cd5e8a17b34a5d08dda9e1ef3fd";
-      sha256 = "1rrmp64j3sg0ygwazmakdvmr48nslk150g4jykv3lzs01r1bjvqa";
+      sha256 = "sha256-Cm+5Qg5Afzr29JI8UMKk2iKS625T1a/48+DpIYm5Nec=";
     };
   };
 
