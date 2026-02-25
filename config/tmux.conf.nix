@@ -44,6 +44,17 @@
     };
   };
 
+  which-key = pkgs.tmuxPlugins.mkTmuxPlugin {
+    pluginName = "tmux-which-key";
+    version = "2026-02-25";
+    src = pkgs.fetchFromGitHub {
+      owner = "Nucc";
+      repo = "tmux-which-key";
+      rev = "151227fe1ec40cd5e8a17b34a5d08dda9e1ef3fd";
+      sha256 = "1rrmp64j3sg0ygwazmakdvmr48nslk150g4jykv3lzs01r1bjvqa";
+    };
+  };
+
   # --- Nerd font icon mapping ---
   yamlFormat = pkgs.formats.yaml {};
   nerdFontConfig = yamlFormat.generate "tmux-nerd-font-window-name.yml" {
