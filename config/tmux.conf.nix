@@ -178,7 +178,7 @@
 
     # === Main Config ===
     set -g mouse on
-    set -g window-size smallest
+    set -g window-size latest
     set -g aggressive-resize on
     set-option -g renumber-window on
     set -g focus-events on
