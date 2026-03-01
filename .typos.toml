@@ -1,0 +1,3 @@
+[default.extend-words]
+# Catppuccin theme variable prefix (@thm_green, @thm_bg, etc.)
+thm = "thm"

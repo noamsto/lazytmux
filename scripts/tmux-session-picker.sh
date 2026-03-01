@@ -25,27 +25,27 @@ declare -a sessions=() paths=() statuses=()
 max_name=0
 
 while IFS=$'\t' read -r sess sess_path; do
-  [[ -n $sess ]] || continue
-  status=$(claude-status --session "$sess" --format icon-color 2>/dev/null || true)
-  short_path="${sess_path/#$HOME/\~}"
-  sessions+=("$sess")
-  paths+=("$short_path")
-  statuses+=("$status")
-  (( ${#sess} > max_name )) && max_name=${#sess}
+	[[ -n $sess ]] || continue
+	status=$(claude-status --session "$sess" --format icon-color 2>/dev/null || true)
+	short_path="${sess_path/#$HOME/\~}"
+	sessions+=("$sess")
+	paths+=("$short_path")
+	statuses+=("$status")
+	((${#sess} > max_name)) && max_name=${#sess}
 done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
 
 # Second pass: set alignment padding, path, and status per session
 for i in "${!sessions[@]}"; do
-  name="${sessions[$i]}"
-  pad_len=$(( max_name - ${#name} ))
-  padding=$(printf '%*s' "$pad_len" '')
-  tmux set -t "$name" @picker_pad "$padding"
-  tmux set -t "$name" @picker_path "${paths[$i]}"
-  tmux set -t "$name" @claude_status "${statuses[$i]}"
+	name="${sessions[$i]}"
+	pad_len=$((max_name - ${#name}))
+	padding=$(printf '%*s' "$pad_len" '')
+	tmux set -t "$name" @picker_pad "$padding"
+	tmux set -t "$name" @picker_path "${paths[$i]}"
+	tmux set -t "$name" @claude_status "${statuses[$i]}"
 done
 
 # Format: [padding] [dir icon] path  [claude status]
 # tmux's tree prefix shows "session_name:" before this, padding aligns the icon column
 tmux choose-tree -Zs -O name \
-  -F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
-  'switch-client -t "%1"'
+	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
+	'switch-client -t "%1"'

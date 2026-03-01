@@ -8,19 +8,19 @@ pane_path="$2"
 # Get git root
 git_root=""
 if [[ -n $pane_path ]] && [[ -d $pane_path ]]; then
-  git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null)
+	git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null)
 fi
 
 # Show relative path from git root
 if [[ -n $git_root ]]; then
-  if [[ $pane_path == "$git_root" ]]; then
-    echo "./"
-  else
-    # Get relative path and prefix with ./
-    rel_path="${pane_path#"$git_root"/}"
-    echo "./$rel_path"
-  fi
+	if [[ $pane_path == "$git_root" ]]; then
+		echo "./"
+	else
+		# Get relative path and prefix with ./
+		rel_path="${pane_path#"$git_root"/}"
+		echo "./$rel_path"
+	fi
 else
-  # Not in git repo, show basename
-  basename "$pane_path" 2>/dev/null
+	# Not in git repo, show basename
+	basename "$pane_path" 2>/dev/null
 fi

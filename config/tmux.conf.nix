@@ -86,7 +86,8 @@
   # Scripts that call claude-status get its full store path substituted in
   mkScriptWithDeps = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
-    patched = builtins.replaceStrings
+    patched =
+      builtins.replaceStrings
       ["claude-status " "@claude_status_bin@"]
       ["${claude-status-bin} " claude-status-bin]
       raw;
