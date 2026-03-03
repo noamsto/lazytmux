@@ -250,6 +250,9 @@
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
 
+    # Click session name in status bar to open session picker
+    bind -T root MouseDown1StatusLeft choose-tree -Zs
+
     # Sesh pickers (full store paths for gum/fzf so they work from tmux context)
     bind-key "K" display-popup -E -w 40% -k "sesh connect \"$(sesh list -i | ${pkgs.gum}/bin/gum filter --no-strip-ansi --limit 1 --no-sort --fuzzy --placeholder 'Pick a sesh' --height 50 --prompt='⚡')\""
     bind-key "S" run-shell "sesh connect \"$(sesh list --icons | ${pkgs.fzf}/bin/fzf-tmux -p 90%,85% --no-sort --ansi --border-label '  Sessions ' --prompt '⚡  ' --header '  ^a all ^t tmux ^g configs ^x zoxide ^d kill ^f find' --bind 'tab:down,btab:up' --bind 'ctrl-a:change-prompt(⚡  )+reload(sesh list --icons)' --bind 'ctrl-t:change-prompt(🪟  )+reload(sesh list -t --icons)' --bind 'ctrl-g:change-prompt(⚙️  )+reload(sesh list -c --icons)' --bind 'ctrl-x:change-prompt(📁  )+reload(sesh list -z --icons)' --bind 'ctrl-f:change-prompt(🔎  )+reload(${pkgs.fd}/bin/fd -H -d 2 -t d -E .Trash . ~)' --bind 'ctrl-d:execute(tmux kill-session -t {})' --preview-window 'right:60%:wrap' --preview 'sesh-preview {}')\""
