@@ -34,6 +34,7 @@ read_pane_state() {
 	if [[ -n $timestamp ]]; then
 		local age=$((CLAUDE_NOW - timestamp))
 		[[ $state == "waiting" && $age -gt 30 ]] && state="processing"
+		[[ $state == "compacting" && $age -gt 60 ]] && state="done"
 		[[ $state == "processing" && $age -gt 15 ]] && state="done"
 	fi
 
