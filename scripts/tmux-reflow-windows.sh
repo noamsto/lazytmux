@@ -4,7 +4,7 @@
 # Called by hooks on window add/remove/resize, NOT every status-interval.
 #
 # Key design: icon and text are separated for alignment.
-# Icons (🤖, 🐟, ⚙️) have variable char-to-display-width ratios,
+# Icons have variable char-to-display-width ratios,
 # so padding only the text portion (ASCII branch/dir names) gives
 # consistent column alignment regardless of icon encoding.
 
@@ -14,22 +14,28 @@ WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
 
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
-# Collect window data and compute max TEXT length (without icon)
-# Use | delimiter (not tab) because IFS whitespace chars collapse empty fields
-declare -a indices commands pane_counts
-max_text_len=0     # capped at 20, for multi-line padded column width
-max_text_len_raw=0 # uncapped, for split-point calculation (single-line uses full names)
+# Icon map (Nix-generated)
+# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
+declare -A ICON_MAP=(
+	@ICON_MAP@
+)
+FALLBACK="@FALLBACK_ICON@"
+MAX_ICONS=@MAX_ICONS@
+
+# --- Single pass: collect window data + pane processes ---
+declare -a indices
+declare -A win_procs # keyed by window_index, space-separated unique procs
+max_text_len=0       # capped at 20, for multi-line padded column width
+max_text_len_raw=0   # uncapped, for split-point calculation
 total=0
-has_zoom=0      # whether any window is currently zoomed
-has_truncated=0 # whether any branch/dir name exceeds 20 chars (gets "…" suffix)
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{pane_current_command}|#{window_panes}|#{window_zoomed_flag}'
-while IFS='|' read -r idx branch pane_path cmd panes zoomed; do
+has_zoom=0
+has_truncated=0
+
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}'
+while IFS='|' read -r idx branch pane_path zoomed; do
 	indices+=("$idx")
-	commands+=("$cmd")
-	pane_counts+=("$panes")
 	((zoomed)) && has_zoom=1
 
-	# Compute text length (branch name or dir basename, no icon)
 	if [[ -n $branch ]]; then
 		text_len=${#branch}
 	else
@@ -37,7 +43,6 @@ while IFS='|' read -r idx branch pane_path cmd panes zoomed; do
 		text_len=${#dirname}
 	fi
 	((text_len > max_text_len_raw)) && max_text_len_raw=$text_len
-	# Cap at 20 for multi-line padding (matches #{=20:...} truncation)
 	capped=$text_len
 	((capped > 20)) && {
 		has_truncated=1
@@ -49,80 +54,44 @@ done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 [[ $total -eq 0 ]] && exit 0
 
-# Cache multi-pane icons per window as @window_icon_display
-# Runs only on hook events, not every status-interval
-# Pad single-width glyphs (nerd fonts, 3 UTF-8 bytes) with a trailing space
-# so they match double-width emoji (4 UTF-8 bytes) for column alignment.
+# Collect all pane processes in one call, bucket by window index
+declare -A win_seen # keyed by "idx:proc"
+while IFS=$'\t' read -r win_idx proc; do
+	[[ -n $proc ]] || continue
+	if [[ -z ${win_seen["${win_idx}:${proc}"]+x} ]]; then
+		win_seen["${win_idx}:${proc}"]=1
+		win_procs[$win_idx]+="${win_procs[$win_idx]:+ }$proc"
+	fi
+done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
+unset win_seen
 
-# Icon map (Nix-generated)
-# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
-declare -A ICON_MAP=(
-	@ICON_MAP@
-)
-FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=@MAX_ICONS@
-
-# Track max icon display width across all windows for slot width calculation
+# --- Build icon strings and track max width ---
 max_icon_width=0
+declare -A win_icon_str
 
-for ((j = 0; j < total; j++)); do
-	target="${SESSION}:${indices[$j]}"
-
-	# Collect unique processes across all panes in this window
-	declare -A seen=()
-	declare -a unique_procs=()
-	while IFS= read -r proc; do
-		[[ -z $proc ]] && continue
-		if [[ -z ${seen[$proc]+x} ]]; then
-			seen[$proc]=1
-			unique_procs+=("$proc")
-		fi
-	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
-
-	# Map to icons, cap at MAX_ICONS (space-separated)
+for idx in "${indices[@]}"; do
 	icon=""
 	count=0
-	for proc in "${unique_procs[@]}"; do
+	# shellcheck disable=SC2086  # intentional word splitting
+	for proc in ${win_procs[$idx]:-}; do
 		((count >= MAX_ICONS)) && break
 		[[ -n $icon ]] && icon+=" "
 		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
 		((count++)) || true
 	done
-	unset seen unique_procs
-
-	# Nerd font glyphs are 3 bytes (PUA, 1 display col); emoji are 4 bytes (2 display cols).
-	# Append a space to single-width icons for consistent 2-col alignment.
-	if [[ -n $icon && ${#icon} -eq 1 ]]; then
-		byte_len=$(printf '%s' "$icon" | wc -c)
-		if ((byte_len <= 3)); then
-			icon="$icon "
-		fi
-	fi
 
 	# Estimate display width: each icon ~2 cols + spaces between
 	icon_width=$((count * 2 + (count > 1 ? count - 1 : 0)))
 	((icon_width > max_icon_width)) && max_icon_width=$icon_width
 
-	tmux set -w -t "$target" @window_icon_display "$icon"
+	win_icon_str[$idx]="$icon"
 done
 
-# Compute split points
-# Each slot: "N: " (idx_width+2) + icons (max_icon_width) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 11 + max_icon_width
-# Zoom indicator: " 󰁌" = 2 display cols (space + 1-col nerd icon)
-# Only one window can be zoomed at a time.
+# --- Compute split points ---
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
 available=$((WIDTH - PREFIX_WIDTH))
 
-# Two-pass approach:
-# 1. Check if single-line fits using raw (uncapped) text widths, since single-line
-#    renders full #{window_name} without truncation.
-# 2. If not, compute multi-line split points using capped widths (multi-line
-#    truncates text to 20 chars with #{=20:...}).
-#
-# Single-line: zoom adds 2 to one slot (only one window can be zoomed).
-# Multi-line padding area (P) reserves: +2 for zoom icon, +1 for "…" ellipsis
-#   when any name is truncated. slot_width_capped = P + idx_width + 13.
 zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 ellipsis_extra=0
@@ -130,8 +99,6 @@ ellipsis_extra=0
 slot_width_raw=$((max_text_len_raw + idx_width + 11 + max_icon_width))
 slot_width_capped=$((max_text_len + 2 + ellipsis_extra + idx_width + 11 + max_icon_width))
 
-# Check if everything fits on one line (conservative: uses max-width slot for all)
-# Add zoom_extra (2) if any window is zoomed — only one can be at a time.
 if ((slot_width_raw * total + zoom_extra <= available)); then
 	needs_multiline=0
 else
@@ -145,7 +112,6 @@ split2=999
 prev_idx=
 
 if ((needs_multiline)); then
-	# Use capped slot width for multi-line split points
 	for ((j = 0; j < total; j++)); do
 		if ((cumulative + slot_width_capped > available && cumulative > 0)); then
 			((current_line++))
@@ -163,22 +129,29 @@ if ((needs_multiline)); then
 	done
 fi
 
-tmux set -t "$SESSION" @window_split "$split1"
-tmux set -t "$SESSION" @window_split2 "$split2"
+# --- Build all tmux commands and execute in one batch ---
+declare -a tmux_cmds=()
+
+# Set icon display per window
+for idx in "${indices[@]}"; do
+	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_icon_display '${win_icon_str[$idx]}'")
+done
+
+# Split points and status line count
+tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
+tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
 
 if ((current_line >= 2)); then
-	tmux set -t "$SESSION" status 4
+	tmux_cmds+=("set -t '$SESSION' status 4")
 elif ((current_line >= 1)); then
-	tmux set -t "$SESSION" status 3
+	tmux_cmds+=("set -t '$SESSION' status 3")
 else
-	# needs_multiline with no splits still uses status 2 (truncated one-row format)
-	tmux set -t "$SESSION" status 2
+	tmux_cmds+=("set -t '$SESSION' status 2")
 fi
 
-# Preserve status-format[0] (session info line) at session level
-# Setting session-level status-format[1+] overrides global inheritance for ALL indices
+# Preserve status-format[0] at session level
 FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
+[[ -n $FMT0 ]] && tmux_cmds+=("set -t '$SESSION' status-format[0] '$FMT0'")
 
 # Common format fragments
 ICON='#{@window_icon_display}'
@@ -187,47 +160,35 @@ CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((!needs_multiline && current_line == 0)); then
-	# Single line: compact, no padding — just use window_name directly
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: #{window_name},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]#{window_name}}#{?window_zoomed_flag, 󰁌,}${CLAUDE}#[norange]"
-	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
-	tmux set -t "$SESSION" status-format[2] ""
-	tmux set -t "$SESSION" status-format[3] ""
+	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}'")
+	tmux_cmds+=("set -t '$SESSION' status-format[2] ''")
+	tmux_cmds+=("set -t '$SESSION' status-format[3] ''")
 elif ((current_line == 0)); then
-	# Truncated single row: names too long for single-line format but capped text
-	# fits on one row. Uses padded/truncated entry on a single ╰─ line.
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
-	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
-	tmux set -t "$SESSION" status-format[2] ""
-	tmux set -t "$SESSION" status-format[3] ""
+	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}'")
+	tmux_cmds+=("set -t '$SESSION' status-format[2] ''")
+	tmux_cmds+=("set -t '$SESSION' status-format[3] ''")
 else
-	# Multi-line: padded columns with icon separated from text
-	# Zoom indicator inside padded area so it consumes padding space, not extra width
-	# +2 for " 󰁌" (space + 1-char icon) when zoomed, +1 for "…" if any name truncated
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
-	# Right-pad index to consistent width using tmux's padding: #{pN:window_index}
 	IDX="#{p${idx_width}:window_index}"
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
 
-	# Line 1: windows 1..split1
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
-	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}"
+	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}'")
 
-	# Line 2: windows split1+1..split2
 	PREFIX2="#{?#{e|>|:#{session_windows},#{@window_split2}},├,╰}─"
-	tmux set -t "$SESSION" status-format[2] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}"
+	tmux_cmds+=("set -t '$SESSION' status-format[2] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}'")
 
-	# Line 3: windows beyond split2
-	tmux set -t "$SESSION" status-format[3] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
+	tmux_cmds+=("set -t '$SESSION' status-format[3] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}'")
 fi
 
-# Force immediate status bar redraw (run-shell is async, don't wait for next interval)
-tmux refresh-client -S 2>/dev/null || true
+# Execute all commands + force redraw in one tmux invocation
+{
+	printf '%s\n' "${tmux_cmds[@]}"
+	echo "refresh-client -S"
+} | tmux source -
