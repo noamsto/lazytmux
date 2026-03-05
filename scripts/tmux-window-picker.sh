@@ -13,23 +13,78 @@ thm_green=$(tmux show -gv @thm_green 2>/dev/null || echo "green")
 icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 
+# Icon map (Nix-generated)
+# shellcheck disable=SC2190  # @ICON_MAP@ is a Nix placeholder, substituted at build time
+declare -A ICON_MAP=(
+	@ICON_MAP@
+)
+FALLBACK="@FALLBACK_ICON@"
+MAX_ICONS=3
+
 # Pre-compute colored icons
 tmux set -g @picker_icon_branch "#[fg=${thm_green}]${icon_branch}#[fg=default]"
 tmux set -g @picker_icon_dir "#[fg=${thm_blue}]${icon_dir}#[fg=default]"
 
-# Pre-compute claude status for each window and shortened session path
+# Pre-compute claude status and process icons for each window
 while IFS=$'\t' read -r sess_name win_idx sess_path; do
 	[[ -n $win_idx ]] || continue
 	target="${sess_name}:${win_idx}"
 	status=$(claude-status --window "$target" 2>/dev/null || true)
 	tmux set -w -t "$target" @claude_win_status "$status"
+
+	# Collect unique process icons for this window
+	declare -A win_seen=()
+	declare -a win_procs=()
+	while IFS= read -r proc; do
+		[[ -z $proc ]] && continue
+		if [[ -z ${win_seen[$proc]+x} ]]; then
+			win_seen[$proc]=1
+			win_procs+=("$proc")
+		fi
+	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
+
+	win_icons=""
+	icon_count=0
+	for proc in "${win_procs[@]}"; do
+		((icon_count >= MAX_ICONS)) && break
+		win_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
+		((icon_count++))
+	done
+	unset win_seen win_procs
+
+	tmux set -w -t "$target" @picker_win_icons "$win_icons"
+
 	# Collapse $HOME to ~ (set once per session, harmless to repeat)
 	short_path="${sess_path/#$HOME/\~}"
 	tmux set -t "$sess_name" @picker_path "$short_path"
 done < <(tmux list-windows -a -F '#{session_name}	#{window_index}	#{session_path}')
 
-# Session rows: [dir icon] path
-# Window rows:  [app icon] name [zoomed] [branch icon] branch [claude status]
+# Aggregate session-level icons
+while IFS=$'\t' read -r sess_name _; do
+	[[ -n $sess_name ]] || continue
+	declare -A s_seen=()
+	declare -a s_procs=()
+	while IFS= read -r proc; do
+		[[ -z $proc ]] && continue
+		if [[ -z ${s_seen[$proc]+x} ]]; then
+			s_seen[$proc]=1
+			s_procs+=("$proc")
+		fi
+	done < <(tmux list-panes -t "$sess_name" -s -F '#{pane_current_command}' 2>/dev/null)
+
+	s_icons=""
+	s_count=0
+	for proc in "${s_procs[@]}"; do
+		((s_count >= MAX_ICONS)) && break
+		s_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
+		((s_count++))
+	done
+	unset s_seen s_procs
+	tmux set -t "$sess_name" @picker_icons "$s_icons"
+done < <(tmux list-sessions -F '#{session_name}	_')
+
+# Session rows: [process icons] [dir icon] path
+# Window rows:  [process icons] name [zoomed] [branch icon] branch [claude status]
 tmux choose-tree -Zw -O name \
-	-F '#{?window_format,#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icon_dir} #{=30:@picker_path}}' \
+	-F '#{?window_format,#{@picker_win_icons} #{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icons} #{@picker_icon_dir} #{=30:@picker_path}}' \
 	'switch-client -t "%1"'
