@@ -27,11 +27,12 @@ while IFS='|' read -r idx _; do
 		fi
 	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
 
-	# Map to icons, cap at MAX_ICONS
+	# Map to icons, cap at MAX_ICONS (space-separated)
 	icon=""
 	count=0
 	for proc in "${unique_procs[@]}"; do
 		((count >= MAX_ICONS)) && break
+		[[ -n $icon ]] && icon+=" "
 		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
 		((count++)) || true
 	done

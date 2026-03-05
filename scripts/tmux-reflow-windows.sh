@@ -79,11 +79,12 @@ for ((j = 0; j < total; j++)); do
 		fi
 	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
 
-	# Map to icons, cap at MAX_ICONS
+	# Map to icons, cap at MAX_ICONS (space-separated)
 	icon=""
 	count=0
 	for proc in "${unique_procs[@]}"; do
 		((count >= MAX_ICONS)) && break
+		[[ -n $icon ]] && icon+=" "
 		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
 		((count++)) || true
 	done
@@ -98,8 +99,8 @@ for ((j = 0; j < total; j++)); do
 		fi
 	fi
 
-	# Estimate display width: each emoji is ~2 cols
-	icon_width=$((count * 2))
+	# Estimate display width: each icon ~2 cols + spaces between
+	icon_width=$((count * 2 + (count > 1 ? count - 1 : 0)))
 	((icon_width > max_icon_width)) && max_icon_width=$icon_width
 
 	tmux set -w -t "$target" @window_icon_display "$icon"

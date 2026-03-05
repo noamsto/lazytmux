@@ -139,6 +139,7 @@ build_icons() {
 	# shellcheck disable=SC2086  # intentional word splitting
 	for proc in $1; do
 		((count >= MAX_ICONS)) && break
+		[[ -n $icons ]] && icons+=" "
 		icons+="${ICON_MAP[$proc]:-$FALLBACK}"
 		((count++)) || true
 	done
