@@ -15,6 +15,21 @@
     window-activity = "󱅫";
     window-bell = "󰂞";
   };
+
+  # Process name → emoji icon mapping (used by tmux-window-icons.sh)
+  processIcons = {
+    claude = "🧠";
+    fish = "🐟";
+    nh = "❄️";
+    nix = "❄️";
+    "process-compose" = "⚙️";
+    amp = "⚡";
+  };
+  fallbackIcon = "";
+
+  # Generate bash associative array entries from Nix attrset
+  iconMapBash = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "  [${k}]=\"${v}\"") processIcons);
+
   # --- Custom plugins (pinned versions) ---
   catppuccin = pkgs.tmuxPlugins.mkTmuxPlugin rec {
     pluginName = "catppuccin";
@@ -33,17 +48,6 @@
     };
   };
 
-  nerd-font-wn = pkgs.tmuxPlugins.mkTmuxPlugin {
-    pluginName = "tmux-nerd-font-window-name";
-    version = "2025-03-21";
-    src = pkgs.fetchFromGitHub {
-      owner = "joshmedeski";
-      repo = "tmux-nerd-font-window-name";
-      rev = "9a66e18972de25c0bb3a58b7422d6e6555f166ba";
-      sha256 = "sha256-X4Li6xkxKjqac7xedCNzzSoW7wT6N2oqVKIx7TFay64=";
-    };
-  };
-
   which-key = pkgs.tmuxPlugins.mkTmuxPlugin {
     pluginName = "tmux-which-key";
     version = "2026-02-25";
@@ -52,25 +56,6 @@
       repo = "tmux-which-key";
       rev = "151227fe1ec40cd5e8a17b34a5d08dda9e1ef3fd";
       sha256 = "sha256-Cm+5Qg5Afzr29JI8UMKk2iKS625T1a/48+DpIYm5Nec=";
-    };
-  };
-
-  # --- Nerd font icon mapping ---
-  yamlFormat = pkgs.formats.yaml {};
-  nerdFontConfig = yamlFormat.generate "tmux-nerd-font-window-name.yml" {
-    config = {
-      fallback-icon = "";
-      multi-pane-icon = "";
-      show-name = false;
-      icon-position = "left";
-    };
-    icons = {
-      claude = "🧠";
-      nh = "❄️";
-      nix = "❄️";
-      fish = "🐟";
-      process-compose = "⚙️";
-      amp = "⚡";
     };
   };
 
@@ -100,6 +85,7 @@
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
+    "tmux-window-icons"
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-set-pane-border"
@@ -108,9 +94,24 @@
   # Scripts that need claude-status path substitution
   scriptsWithDeps = ["tmux-session-picker" "tmux-window-picker" "tmux-reflow-windows"];
 
+  # Scripts that need icon map substitution (also handles claude-status if present)
+  scriptsWithIcons = ["tmux-window-icons"];
+
+  mkScriptFull = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      ["claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@"]
+      ["${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon]
+      raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
   # Individual script references for full store paths in config
   script = lib.genAttrs scriptNames (name:
-    if builtins.elem name scriptsWithDeps
+    if builtins.elem name scriptsWithIcons
+    then mkScriptFull name
+    else if builtins.elem name scriptsWithDeps
     then mkScriptWithDeps name
     else mkScript name);
 
@@ -341,14 +342,9 @@
     set -g prompt-cursor-style "blinking-bar"
     set -g prompt-cursor-colour "colour183"
 
-    # Window naming: nerd font icon + branch or dir name
+    # Window naming: multi-pane process icons + branch or dir name
     set -wg automatic-rename on
-    set -g automatic-rename-format "#{window_icon} #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
-
-    # Nerd font window name plugin
-    # Set XDG_CONFIG_DIRS in server environment so the plugin finds its YAML config
-    set-environment -g XDG_CONFIG_DIRS "${nerdFontConfigDir}"
-    run-shell ${nerd-font-wn}/share/tmux-plugins/tmux-nerd-font-window-name/tmux-nerd-font-window-name.tmux
+    set -g automatic-rename-format "#(${script.tmux-window-icons}/bin/tmux-window-icons '#{session_name}' '#{window_index}') #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
 
     # tmux-fingers (smart copy)
     set -g @fingers-hint-style "fg=colour234,bg=colour183,bold"
@@ -372,12 +368,6 @@
   # so no self-referential substitution needed
   tmuxConf = tmuxConfText;
 
-  # --- XDG config for nerd font YAML ---
-  nerdFontConfigDir = pkgs.runCommand "tmux-nerd-font-config" {} ''
-    mkdir -p $out/tmux
-    cp ${nerdFontConfig} $out/tmux/tmux-nerd-font-window-name.yml
-  '';
-
   # --- Wrapped tmux binary ---
   tmux-wrapped = pkgs.symlinkJoin {
     name = "tmux-wrapped";
@@ -386,11 +376,10 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit])} \
-        --prefix XDG_CONFIG_DIRS : ${nerdFontConfigDir}
+        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit])}
     '';
     meta.mainProgram = "tmux";
   };
 in {
-  inherit tmux-wrapped tmuxConf nerdFontConfig script;
+  inherit tmux-wrapped tmuxConf script;
 }
