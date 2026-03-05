@@ -12,6 +12,12 @@
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
 
+# Fast-path: skip if window count + width unchanged since last reflow
+cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
+if [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
+	exit 0
+fi
+
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
 # Icon map (Nix-generated)
@@ -140,6 +146,7 @@ done
 # Split points and status line count
 tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
 tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
+tmux_cmds+=("set -t '$SESSION' @reflow_key '$cache_key'")
 
 if ((current_line >= 2)); then
 	tmux_cmds+=("set -t '$SESSION' status 4")
