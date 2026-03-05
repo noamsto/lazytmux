@@ -55,7 +55,7 @@ done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 # so they match double-width emoji (4 UTF-8 bytes) for column alignment.
 
 # Icon map (Nix-generated)
-# shellcheck disable=SC2190  # @ICON_MAP@ is a Nix placeholder, substituted at build time
+# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
 declare -A ICON_MAP=(
 	@ICON_MAP@
 )

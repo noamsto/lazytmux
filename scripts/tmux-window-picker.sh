@@ -14,7 +14,7 @@ icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 
 # Icon map (Nix-generated)
-# shellcheck disable=SC2190  # @ICON_MAP@ is a Nix placeholder, substituted at build time
+# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
 declare -A ICON_MAP=(
 	@ICON_MAP@
 )
