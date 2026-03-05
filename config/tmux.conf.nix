@@ -341,6 +341,9 @@
 
     # Set pane-border-format with expanded colors (must run after catppuccin loads)
     run-shell "${script.tmux-set-pane-border}/bin/tmux-set-pane-border"
+
+    # Synchronous reflow on config load so the window bar is ready before the user sees it
+    run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
   '';
 
   # Config references ~/.config/tmux/tmux.conf (stable symlink managed by HM module)
