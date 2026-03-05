@@ -13,7 +13,7 @@
 
   # Shells
   bash = "";
-  fish = "";
+  fish = "🐟";
   nu = "";
   zsh = "";
   tcsh = "";
@@ -23,15 +23,15 @@
   hx = "";
   lvim = "";
   nano = "";
-  nvim = "";
-  vi = "";
-  vim = "";
+  nvim = "";
+  vi = "";
+  vim = "";
 
   # Version control
-  git = "";
-  gh = "";
+  git = "";
+  gh = "";
   gitui = "";
-  lazygit = "";
+  lazygit = "";
   lazyjj = "";
   jj = "";
   tig = "";
