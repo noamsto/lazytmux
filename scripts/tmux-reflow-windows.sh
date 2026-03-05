@@ -149,8 +149,11 @@ else
 	tmux_cmds+=("set -t '$SESSION' status 2")
 fi
 
-# Execute batched simple commands
-printf '%s\n' "${tmux_cmds[@]}" | tmux source -
+# Execute batched simple commands + early redraw so layout appears immediately
+{
+	printf '%s\n' "${tmux_cmds[@]}"
+	echo "refresh-client -S"
+} | tmux source -
 
 # Preserve status-format[0] at session level (contains single quotes, can't batch)
 FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
