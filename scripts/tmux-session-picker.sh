@@ -85,7 +85,7 @@ format_session_claude() {
 		icon="󰔟"
 		color=$C_W
 	elif ((k > 0)); then
-		icon=""
+		icon="󰡍"
 		color=$C_K
 	elif ((p > 0)); then
 		icon="${SPINNER_FRAMES[$((_now % ${#SPINNER_FRAMES[@]}))]}" color=$C_P
@@ -99,56 +99,64 @@ format_session_claude() {
 	echo "${ICON_CLAUDE} ${color}${icon}${C_R} "
 }
 
-# --- Pre-compute colored icons into global vars ---
-tmux set -g @picker_icon_dir "#[fg=${thm_blue}]${icon_dir}#[fg=default]"
-tmux set -g @picker_icon_branch "#[fg=${thm_green}]${icon_branch}#[fg=default]"
+# --- Collect process icons per session with a single tmux list-panes -a ---
+declare -A sess_seen_procs # keyed by "sess:proc" for dedup
+declare -A sess_proc_list  # keyed by sess, space-separated proc list
 
-# First pass: collect session data and find max name width for icon alignment
-declare -a sessions=() paths=() statuses=() icons_arr=()
+while IFS=$'\t' read -r sess proc; do
+	[[ -n $sess && -n $proc ]] || continue
+	if [[ -z ${sess_seen_procs["${sess}:${proc}"]+x} ]]; then
+		sess_seen_procs["${sess}:${proc}"]=1
+		sess_proc_list[$sess]+="${sess_proc_list[$sess]:+ }$proc"
+	fi
+done < <(tmux list-panes -a -F '#{session_name}	#{pane_current_command}')
+unset sess_seen_procs
+
+# Build icon strings per session
+declare -A sess_icons_map
+for sess in "${!sess_proc_list[@]}"; do
+	icons=""
+	count=0
+	# shellcheck disable=SC2086  # intentional word splitting
+	for proc in ${sess_proc_list[$sess]}; do
+		((count >= MAX_ICONS)) && break
+		icons+="${ICON_MAP[$proc]:-$FALLBACK}"
+		((count++)) || true
+	done
+	sess_icons_map[$sess]="$icons"
+done
+unset sess_proc_list
+
+# --- Collect session data and build tmux commands in one batch ---
+declare -a sessions=() tmux_cmds=()
 max_name=0
+
+# Pre-compute colored icons (2 commands)
+tmux_cmds+=("set -g @picker_icon_dir '#[fg=${thm_blue}]${icon_dir}#[fg=default]'")
+tmux_cmds+=("set -g @picker_icon_branch '#[fg=${thm_green}]${icon_branch}#[fg=default]'")
 
 while IFS=$'\t' read -r sess sess_path; do
 	[[ -n $sess ]] || continue
-	status=$(format_session_claude "$sess")
-	short_path="${sess_path/#$HOME/\~}"
-
-	# Collect unique process icons across all panes in this session
-	declare -A sess_seen=()
-	declare -a sess_procs=()
-	while IFS= read -r proc; do
-		[[ -z $proc ]] && continue
-		if [[ -z ${sess_seen[$proc]+x} ]]; then
-			sess_seen[$proc]=1
-			sess_procs+=("$proc")
-		fi
-	done < <(tmux list-panes -t "$sess" -s -F '#{pane_current_command}' 2>/dev/null)
-
-	sess_icons=""
-	icon_count=0
-	for proc in "${sess_procs[@]}"; do
-		((icon_count >= MAX_ICONS)) && break
-		sess_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
-		((icon_count++)) || true
-	done
-	unset sess_seen sess_procs
-
 	sessions+=("$sess")
-	paths+=("$short_path")
-	statuses+=("$status")
-	icons_arr+=("$sess_icons")
 	((${#sess} > max_name)) && max_name=${#sess}
 done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
 
-# Second pass: set alignment padding, path, and status per session
-for i in "${!sessions[@]}"; do
-	name="${sessions[$i]}"
-	pad_len=$((max_name - ${#name}))
+# Build all tmux set commands
+while IFS=$'\t' read -r sess sess_path; do
+	[[ -n $sess ]] || continue
+	pad_len=$((max_name - ${#sess}))
 	padding=$(printf '%*s' "$pad_len" '')
-	tmux set -t "$name" @picker_pad "$padding"
-	tmux set -t "$name" @picker_path "${paths[$i]}"
-	tmux set -t "$name" @picker_icons "${icons_arr[$i]}"
-	tmux set -t "$name" @claude_status "${statuses[$i]}"
-done
+	short_path="${sess_path/#$HOME/\~}"
+	status=$(format_session_claude "$sess")
+
+	tmux_cmds+=("set -t '$sess' @picker_pad '$padding'")
+	tmux_cmds+=("set -t '$sess' @picker_path '$short_path'")
+	tmux_cmds+=("set -t '$sess' @picker_icons '${sess_icons_map[$sess]:-}'")
+	tmux_cmds+=("set -t '$sess' @claude_status '$status'")
+done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
+
+# Execute all tmux set commands in a single invocation
+printf '%s\n' "${tmux_cmds[@]}" | tmux source -
 
 # Format: [padding] [dir icon] path  [claude status]
 # tmux's tree prefix shows "session_name:" before this, padding aligns the icon column
