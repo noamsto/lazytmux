@@ -336,8 +336,9 @@
     set -g @fingers-pattern-3 "sha256:[0-9a-z]{52}"
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
-    # Reload config on first attach (workaround for tmux-fingers colors)
-    set-hook -g client-attached[99] 'source-file ~/.config/tmux/tmux.conf'
+    # Re-init fingers on attach (workaround for tmux-fingers colors)
+    # Only re-run fingers, not the full config, to avoid status bar flash
+    set-hook -g client-attached[99] 'run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux'
 
     # Set pane-border-format with expanded colors (must run after catppuccin loads)
     run-shell "${script.tmux-set-pane-border}/bin/tmux-set-pane-border"
