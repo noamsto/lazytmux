@@ -11,9 +11,8 @@
   nh = "❄️";
   "process-compose" = "⚙️";
 
-  # Shells
+  # Shells (fish excluded — default shell, too noisy)
   bash = "";
-  fish = "🐟";
   nu = "";
   zsh = "";
   tcsh = "";

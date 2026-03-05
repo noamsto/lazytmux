@@ -81,8 +81,10 @@ for idx in "${indices[@]}"; do
 	# shellcheck disable=SC2086  # intentional word splitting
 	for proc in ${win_procs[$idx]:-}; do
 		((count >= MAX_ICONS)) && break
+		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
+		[[ -z $proc_icon ]] && continue
 		[[ -n $icon ]] && icon+=" "
-		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
+		icon+="$proc_icon"
 		((count++)) || true
 	done
 

@@ -32,8 +32,10 @@ while IFS='|' read -r idx _; do
 	count=0
 	for proc in "${unique_procs[@]}"; do
 		((count >= MAX_ICONS)) && break
+		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
+		[[ -z $proc_icon ]] && continue
 		[[ -n $icon ]] && icon+=" "
-		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
+		icon+="$proc_icon"
 		((count++)) || true
 	done
 	unset seen unique_procs

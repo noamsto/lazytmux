@@ -120,8 +120,10 @@ for sess in "${!sess_proc_list[@]}"; do
 	# shellcheck disable=SC2086  # intentional word splitting
 	for proc in ${sess_proc_list[$sess]}; do
 		((count >= MAX_ICONS)) && break
+		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
+		[[ -z $proc_icon ]] && continue
 		[[ -n $icons ]] && icons+=" "
-		icons+="${ICON_MAP[$proc]:-$FALLBACK}"
+		icons+="$proc_icon"
 		((count++)) || true
 	done
 	sess_icons_map[$sess]="$icons"
