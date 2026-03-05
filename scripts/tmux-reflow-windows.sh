@@ -49,21 +49,46 @@ done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 [[ $total -eq 0 ]] && exit 0
 
-# Discover nerd font binary path from tmux's automatic-rename-format
-# (the plugin embeds its full nix store path there)
-NERD_BIN=$(tmux show-option -gv automatic-rename-format 2>/dev/null |
-	grep -oP '#\(\K[^ ]+tmux-nerd-font-window-name' || true)
-
-# Cache nerd font icon per window as @window_icon_display option
+# Cache multi-pane icons per window as @window_icon_display
 # Runs only on hook events, not every status-interval
 # Pad single-width glyphs (nerd fonts, 3 UTF-8 bytes) with a trailing space
 # so they match double-width emoji (4 UTF-8 bytes) for column alignment.
+
+# Icon map (Nix-generated)
+# shellcheck disable=SC2190  # @ICON_MAP@ is a Nix placeholder, substituted at build time
+declare -A ICON_MAP=(
+	@ICON_MAP@
+)
+FALLBACK="@FALLBACK_ICON@"
+MAX_ICONS=3
+
+# Track max icon display width across all windows for slot width calculation
+max_icon_width=0
+
 for ((j = 0; j < total; j++)); do
-	if [[ -n $NERD_BIN && -x $NERD_BIN ]]; then
-		icon=$("$NERD_BIN" "${commands[$j]}" "${pane_counts[$j]:-1}")
-	else
-		icon=""
-	fi
+	target="${SESSION}:${indices[$j]}"
+
+	# Collect unique processes across all panes in this window
+	declare -A seen=()
+	declare -a unique_procs=()
+	while IFS= read -r proc; do
+		[[ -z $proc ]] && continue
+		if [[ -z ${seen[$proc]+x} ]]; then
+			seen[$proc]=1
+			unique_procs+=("$proc")
+		fi
+	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
+
+	# Map to icons, cap at MAX_ICONS
+	icon=""
+	count=0
+	for proc in "${unique_procs[@]}"; do
+		((count >= MAX_ICONS)) && break
+		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
+		((count++))
+	done
+	unset seen unique_procs
+
 	# Nerd font glyphs are 3 bytes (PUA, 1 display col); emoji are 4 bytes (2 display cols).
 	# Append a space to single-width icons for consistent 2-col alignment.
 	if [[ -n $icon && ${#icon} -eq 1 ]]; then
@@ -72,12 +97,16 @@ for ((j = 0; j < total; j++)); do
 			icon="$icon "
 		fi
 	fi
-	tmux set -w -t "$SESSION:${indices[$j]}" @window_icon_display "$icon"
+
+	# Estimate display width: each emoji is ~2 cols
+	icon_width=$((count * 2))
+	((icon_width > max_icon_width)) && max_icon_width=$icon_width
+
+	tmux set -w -t "$target" @window_icon_display "$icon"
 done
 
 # Compute split points
-# Each slot: "N: " (idx_width+2) + icon (2) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 13
-# Note: nerd font icons are 1 display col each; emoji icons (🤖🐟) are 2 cols
+# Each slot: "N: " (idx_width+2) + icons (max_icon_width) + space (1) + text + claude_status (5) + " │ " (3) = text + idx_width + 11 + max_icon_width
 # Zoom indicator: " 󰁌" = 2 display cols (space + 1-col nerd icon)
 # Only one window can be zoomed at a time.
 last_idx=${indices[$((total - 1))]}
@@ -97,8 +126,8 @@ zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 ellipsis_extra=0
 ((has_truncated)) && ellipsis_extra=1
-slot_width_raw=$((max_text_len_raw + idx_width + 13))
-slot_width_capped=$((max_text_len + 2 + ellipsis_extra + idx_width + 13))
+slot_width_raw=$((max_text_len_raw + idx_width + 11 + max_icon_width))
+slot_width_capped=$((max_text_len + 2 + ellipsis_extra + idx_width + 11 + max_icon_width))
 
 # Check if everything fits on one line (conservative: uses max-width slot for all)
 # Add zoom_extra (2) if any window is zoomed — only one can be at a time.

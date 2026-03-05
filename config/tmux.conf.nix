@@ -91,11 +91,11 @@
     "tmux-set-pane-border"
   ];
 
-  # Scripts that need claude-status path substitution
-  scriptsWithDeps = ["tmux-session-picker" "tmux-window-picker" "tmux-reflow-windows"];
+  # Scripts that need claude-status path substitution (but NOT icon map)
+  scriptsWithDeps = ["tmux-session-picker" "tmux-window-picker"];
 
   # Scripts that need icon map substitution (also handles claude-status if present)
-  scriptsWithIcons = ["tmux-window-icons"];
+  scriptsWithIcons = ["tmux-window-icons" "tmux-reflow-windows"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
