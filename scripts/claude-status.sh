@@ -33,7 +33,8 @@ ICON_DONE="󰸞"
 ICON_IDLE="󰒲"
 
 get_spinner_frame() {
-	echo "${SPINNER_FRAMES[$(($(date +%s) % SPINNER_COUNT))]}"
+	printf -v _now '%(%s)T' -1
+	echo "${SPINNER_FRAMES[$((_now % SPINNER_COUNT))]}"
 }
 
 state_icon() {
@@ -89,12 +90,17 @@ read_pane_state() {
 	local pane_file="$PANES_DIR/${1#%}"
 	[[ -f $pane_file ]] || return 1
 
-	local state timestamp
-	state=$(grep "^state=" "$pane_file" 2>/dev/null | cut -d= -f2)
-	timestamp=$(grep "^timestamp=" "$pane_file" 2>/dev/null | cut -d= -f2)
+	local state="" timestamp="" key val
+	while IFS='=' read -r key val; do
+		case "$key" in
+		state) state="$val" ;;
+		timestamp) timestamp="$val" ;;
+		esac
+	done <"$pane_file"
 
 	if [[ -n $timestamp ]]; then
-		local age=$(($(date +%s) - timestamp))
+		printf -v _now '%(%s)T' -1
+		local age=$((_now - timestamp))
 		# Stale waiting (>30s) -> permission was likely responded to
 		[[ $state == "waiting" && $age -gt 30 ]] && state="processing"
 		# Stale processing (>15s) -> Stop hook probably didn't fire
@@ -131,12 +137,16 @@ count_for_window() {
 count_for_session() {
 	for pf in "$PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
-		local pane_session pane_id
-		pane_session=$(grep "^session=" "$pf" 2>/dev/null | cut -d= -f2)
+		local pane_session="" key val
+		while IFS='=' read -r key val; do
+			[[ $key == "session" ]] && {
+				pane_session="$val"
+				break
+			}
+		done <"$pf"
 		[[ $pane_session == "$1" ]] || continue
-		pane_id=$(basename "$pf")
 		local state
-		state=$(read_pane_state "$pane_id") || continue
+		state=$(read_pane_state "${pf##*/}") || continue
 		tally_state "$state"
 	done
 }

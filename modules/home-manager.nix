@@ -109,9 +109,6 @@ in {
     };
 
     xdg.configFile = {
-      # Plugin hardcodes ~/.config/tmux/tmux-nerd-font-window-name.yml
-      "tmux/tmux-nerd-font-window-name.yml".source = tmuxConfig.nerdFontConfig;
-
       # Fish completions for wt
       "fish/completions/wt.fish" = lib.mkIf cfg.wt.enable {
         text = ''

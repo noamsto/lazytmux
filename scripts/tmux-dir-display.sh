@@ -22,5 +22,5 @@ if [[ -n $git_root ]]; then
 	fi
 else
 	# Not in git repo, show basename
-	basename "$pane_path" 2>/dev/null
+	echo "${pane_path##*/}"
 fi
