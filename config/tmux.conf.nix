@@ -26,6 +26,7 @@
     amp = "⚡";
   };
   fallbackIcon = "";
+  maxIcons = "3";
 
   # Generate bash associative array entries from Nix attrset
   iconMapBash = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "  [${k}]=\"${v}\"") processIcons);
@@ -68,41 +69,26 @@
   claude-status-pkg = mkScript "claude-status";
   claude-status-bin = "${claude-status-pkg}/bin/claude-status";
 
-  # Scripts that call claude-status get its full store path substituted in
-  mkScriptWithDeps = name: let
-    raw = builtins.readFile ../scripts/${name}.sh;
-    patched =
-      builtins.replaceStrings
-      ["claude-status " "@claude_status_bin@"]
-      ["${claude-status-bin} " claude-status-bin]
-      raw;
-  in
-    pkgs.writeShellScriptBin name patched;
-
   scriptNames = [
     "claude-status"
     "claude-status-update"
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
-    "tmux-window-icons"
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-set-pane-border"
   ];
 
-  # Scripts that need claude-status path substitution (but NOT icon map)
-  scriptsWithDeps = [];
-
-  # Scripts that need icon map substitution (also handles claude-status if present)
-  scriptsWithIcons = ["tmux-window-icons" "tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker"];
+  # Scripts that need icon map + claude-status path substitution
+  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@"]
-      ["${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon]
+      ["claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@"]
+      ["${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -111,8 +97,6 @@
   script = lib.genAttrs scriptNames (name:
     if builtins.elem name scriptsWithIcons
     then mkScriptFull name
-    else if builtins.elem name scriptsWithDeps
-    then mkScriptWithDeps name
     else mkScript name);
 
   scripts = lib.attrValues script;
@@ -344,7 +328,7 @@
 
     # Window naming: multi-pane process icons + branch or dir name
     set -wg automatic-rename on
-    set -g automatic-rename-format "#(${script.tmux-window-icons}/bin/tmux-window-icons '#{session_name}' '#{window_index}') #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
+    set -g automatic-rename-format "#{@window_icon_display} #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
 
     # tmux-fingers (smart copy)
     set -g @fingers-hint-style "fg=colour234,bg=colour183,bold"

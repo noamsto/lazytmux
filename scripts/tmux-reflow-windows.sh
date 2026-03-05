@@ -60,7 +60,7 @@ declare -A ICON_MAP=(
 	@ICON_MAP@
 )
 FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=3
+MAX_ICONS=@MAX_ICONS@
 
 # Track max icon display width across all windows for slot width calculation
 max_icon_width=0

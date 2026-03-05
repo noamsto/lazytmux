@@ -22,7 +22,7 @@ declare -A ICON_MAP=(
 	@ICON_MAP@
 )
 FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=3
+MAX_ICONS=@MAX_ICONS@
 
 # Pre-compute colored icons into global vars (choose-tree reads them via #{@var})
 tmux set -g @picker_icon_dir "#[fg=${thm_blue}]${icon_dir}#[fg=default]"
