@@ -173,11 +173,11 @@ CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((!needs_multiline && current_line == 0)); then
-	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: #{window_name},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]#{window_name}}#{?window_zoomed_flag, 󰁌,}${CLAUDE}#[norange]"
-	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
-	tmux set -t "$SESSION" status-format[2] ""
-	tmux set -t "$SESSION" status-format[3] ""
+	# Single line: clear session-level overrides, fall back to global default.
+	# Setting a session-level format (even if identical) invalidates #() caches and causes a flash.
+	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
 elif ((current_line == 0)); then
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
