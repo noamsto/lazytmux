@@ -302,7 +302,6 @@
     set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g pane-focus-in           'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
 
     # Pane borders
     setw -g pane-border-status top

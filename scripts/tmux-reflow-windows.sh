@@ -228,3 +228,6 @@ else
 	tmux set -t "$SESSION" status-format[3] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
 fi
+
+# Force immediate status bar redraw (run-shell is async, don't wait for next interval)
+tmux refresh-client -S 2>/dev/null || true
