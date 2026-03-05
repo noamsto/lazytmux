@@ -162,10 +162,6 @@ fi
 	echo "refresh-client -S"
 } | tmux source -
 
-# Preserve status-format[0] at session level (contains single quotes, can't batch)
-FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
-
 # Common format fragments
 ICON='#{@window_icon_display}'
 TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{=20:#{b:pane_current_path}}#{?#{==:#{=20:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
@@ -173,12 +169,17 @@ CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((!needs_multiline && current_line == 0)); then
-	# Single line: clear session-level overrides, fall back to global default.
-	# Setting a session-level format (even if identical) invalidates #() caches and causes a flash.
+	# Single line: clear ALL session-level format overrides to fall back to global.
+	# tmux treats session-level status-format as all-or-nothing: setting any index
+	# at session level overrides ALL indices. So we must unset all of them.
+	tmux set -u -t "$SESSION" status-format[0] 2>/dev/null || true
 	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
 	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
 	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
 elif ((current_line == 0)); then
+	# Preserve status-format[0] at session level (all-or-nothing override)
+	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
+	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
@@ -188,6 +189,10 @@ elif ((current_line == 0)); then
 	tmux set -t "$SESSION" status-format[2] ""
 	tmux set -t "$SESSION" status-format[3] ""
 else
+	# Preserve status-format[0] at session level (all-or-nothing override)
+	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
+	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
+
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
