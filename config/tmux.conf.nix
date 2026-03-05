@@ -16,15 +16,8 @@
     window-bell = "󰂞";
   };
 
-  # Process name → emoji icon mapping (used by tmux-window-icons.sh)
-  processIcons = {
-    claude = "🧠";
-    fish = "🐟";
-    nh = "❄️";
-    nix = "❄️";
-    "process-compose" = "⚙️";
-    amp = "⚡";
-  };
+  # Process name → icon mapping (separate file for easy editing)
+  processIcons = import ./process-icons.nix;
   fallbackIcon = "";
   maxIcons = "3";
 
