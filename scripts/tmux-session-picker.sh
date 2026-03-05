@@ -53,7 +53,7 @@ while IFS=$'\t' read -r sess sess_path; do
 	for proc in "${sess_procs[@]}"; do
 		((icon_count >= MAX_ICONS)) && break
 		sess_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
-		((icon_count++))
+		((icon_count++)) || true
 	done
 	unset sess_seen sess_procs
 

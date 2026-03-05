@@ -57,7 +57,7 @@ while IFS=$'\t' read -r sess_name win_idx sess_path; do
 	for proc in "${win_procs[@]}"; do
 		((icon_count >= MAX_ICONS)) && break
 		win_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
-		((icon_count++))
+		((icon_count++)) || true
 	done
 	unset win_seen win_procs
 
@@ -76,7 +76,7 @@ for sess_name in "${!sess_procs_list[@]}"; do
 	for proc in ${sess_procs_list[$sess_name]}; do
 		((s_count >= MAX_ICONS)) && break
 		s_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
-		((s_count++))
+		((s_count++)) || true
 	done
 	tmux set -t "$sess_name" @picker_icons "$s_icons"
 done

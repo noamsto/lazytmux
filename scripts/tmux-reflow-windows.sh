@@ -85,7 +85,7 @@ for ((j = 0; j < total; j++)); do
 	for proc in "${unique_procs[@]}"; do
 		((count >= MAX_ICONS)) && break
 		icon+="${ICON_MAP[$proc]:-$FALLBACK}"
-		((count++))
+		((count++)) || true
 	done
 	unset seen unique_procs
 
