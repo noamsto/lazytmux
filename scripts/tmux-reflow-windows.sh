@@ -129,7 +129,7 @@ if ((needs_multiline)); then
 	done
 fi
 
-# --- Build all tmux commands and execute in one batch ---
+# --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
 # Set icon display per window
@@ -149,9 +149,12 @@ else
 	tmux_cmds+=("set -t '$SESSION' status 2")
 fi
 
-# Preserve status-format[0] at session level
+# Execute batched simple commands
+printf '%s\n' "${tmux_cmds[@]}" | tmux source -
+
+# Preserve status-format[0] at session level (contains single quotes, can't batch)
 FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-[[ -n $FMT0 ]] && tmux_cmds+=("set -t '$SESSION' status-format[0] '$FMT0'")
+[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 
 # Common format fragments
 ICON='#{@window_icon_display}'
@@ -161,17 +164,19 @@ SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((!needs_multiline && current_line == 0)); then
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: #{window_name},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]#{window_name}}#{?window_zoomed_flag, 󰁌,}${CLAUDE}#[norange]"
-	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}'")
-	tmux_cmds+=("set -t '$SESSION' status-format[2] ''")
-	tmux_cmds+=("set -t '$SESSION' status-format[3] ''")
+	tmux set -t "$SESSION" status-format[1] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
+	tmux set -t "$SESSION" status-format[2] ""
+	tmux set -t "$SESSION" status-format[3] ""
 elif ((current_line == 0)); then
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
-	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}'")
-	tmux_cmds+=("set -t '$SESSION' status-format[2] ''")
-	tmux_cmds+=("set -t '$SESSION' status-format[3] ''")
+	tmux set -t "$SESSION" status-format[1] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
+	tmux set -t "$SESSION" status-format[2] ""
+	tmux set -t "$SESSION" status-format[3] ""
 else
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
@@ -179,16 +184,16 @@ else
 	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
 
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
-	tmux_cmds+=("set -t '$SESSION' status-format[1] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}'")
+	tmux set -t "$SESSION" status-format[1] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}"
 
 	PREFIX2="#{?#{e|>|:#{session_windows},#{@window_split2}},├,╰}─"
-	tmux_cmds+=("set -t '$SESSION' status-format[2] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}'")
+	tmux set -t "$SESSION" status-format[2] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}"
 
-	tmux_cmds+=("set -t '$SESSION' status-format[3] '#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}'")
+	tmux set -t "$SESSION" status-format[3] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
 fi
 
-# Execute all commands + force redraw in one tmux invocation
-{
-	printf '%s\n' "${tmux_cmds[@]}"
-	echo "refresh-client -S"
-} | tmux source -
+# Force immediate status bar redraw
+tmux refresh-client -S 2>/dev/null || true
