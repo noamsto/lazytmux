@@ -16,21 +16,51 @@ thm_green=$(tmux show -gv @thm_green 2>/dev/null || echo "green")
 icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 
+# Icon map (Nix-generated)
+# shellcheck disable=SC2190  # @ICON_MAP@ is a Nix placeholder, substituted at build time
+declare -A ICON_MAP=(
+	@ICON_MAP@
+)
+FALLBACK="@FALLBACK_ICON@"
+MAX_ICONS=3
+
 # Pre-compute colored icons into global vars (choose-tree reads them via #{@var})
 tmux set -g @picker_icon_dir "#[fg=${thm_blue}]${icon_dir}#[fg=default]"
 tmux set -g @picker_icon_branch "#[fg=${thm_green}]${icon_branch}#[fg=default]"
 
 # First pass: collect session data and find max name width for icon alignment
-declare -a sessions=() paths=() statuses=()
+declare -a sessions=() paths=() statuses=() icons_arr=()
 max_name=0
 
 while IFS=$'\t' read -r sess sess_path; do
 	[[ -n $sess ]] || continue
 	status=$(claude-status --session "$sess" --format icon-color 2>/dev/null || true)
 	short_path="${sess_path/#$HOME/\~}"
+
+	# Collect unique process icons across all panes in this session
+	declare -A sess_seen=()
+	declare -a sess_procs=()
+	while IFS= read -r proc; do
+		[[ -z $proc ]] && continue
+		if [[ -z ${sess_seen[$proc]+x} ]]; then
+			sess_seen[$proc]=1
+			sess_procs+=("$proc")
+		fi
+	done < <(tmux list-panes -t "$sess" -s -F '#{pane_current_command}' 2>/dev/null)
+
+	sess_icons=""
+	icon_count=0
+	for proc in "${sess_procs[@]}"; do
+		((icon_count >= MAX_ICONS)) && break
+		sess_icons+="${ICON_MAP[$proc]:-$FALLBACK}"
+		((icon_count++))
+	done
+	unset sess_seen sess_procs
+
 	sessions+=("$sess")
 	paths+=("$short_path")
 	statuses+=("$status")
+	icons_arr+=("$sess_icons")
 	((${#sess} > max_name)) && max_name=${#sess}
 done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
 
@@ -41,11 +71,12 @@ for i in "${!sessions[@]}"; do
 	padding=$(printf '%*s' "$pad_len" '')
 	tmux set -t "$name" @picker_pad "$padding"
 	tmux set -t "$name" @picker_path "${paths[$i]}"
+	tmux set -t "$name" @picker_icons "${icons_arr[$i]}"
 	tmux set -t "$name" @claude_status "${statuses[$i]}"
 done
 
 # Format: [padding] [dir icon] path  [claude status]
 # tmux's tree prefix shows "session_name:" before this, padding aligns the icon column
 tmux choose-tree -Zs -O name \
-	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
+	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icons} #{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
 	'switch-client -t "%1"'
