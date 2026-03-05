@@ -135,17 +135,18 @@ done < <(tmux list-panes -a -F '#{session_name}	#{window_index}	#{pane_current_c
 unset win_seen_procs sess_seen_procs
 
 build_icons() {
-	local icons="" count=0 proc
+	local icons="" count=0 proc pad
 	# shellcheck disable=SC2086  # intentional word splitting
 	for proc in $1; do
 		((count >= MAX_ICONS)) && break
 		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
 		[[ -z $proc_icon ]] && continue
-		[[ -n $icons ]] && icons+=" "
-		icons+="$proc_icon"
+		icons+="$proc_icon "
 		((count++)) || true
 	done
-	echo "$icons"
+	# Pad remaining slots so column width is constant
+	printf -v pad '%*s' "$(((MAX_ICONS - count) * 3))" ''
+	echo "${icons}${pad}"
 }
 
 # --- Build all tmux commands in one batch ---
@@ -172,11 +173,12 @@ while IFS=$'\t' read -r sess win_idx sess_path; do
 	tmux_cmds+=("set -t '$sess' @picker_path '$short_path'")
 done < <(tmux list-windows -a -F '#{session_name}	#{window_index}	#{session_path}')
 
-# Per-session: icons
-for sess in "${!sess_proc_list[@]}"; do
-	s_icons=$(build_icons "${sess_proc_list[$sess]}")
+# Per-session: icons (set for all sessions, padded for alignment)
+while IFS= read -r sess; do
+	[[ -n $sess ]] || continue
+	s_icons=$(build_icons "${sess_proc_list[$sess]:-}")
 	tmux_cmds+=("set -t '$sess' @picker_icons '$s_icons'")
-done
+done < <(tmux list-sessions -F '#{session_name}')
 
 # Execute all tmux set commands in a single invocation
 printf '%s\n' "${tmux_cmds[@]}" | tmux source -
@@ -184,5 +186,5 @@ printf '%s\n' "${tmux_cmds[@]}" | tmux source -
 # Session rows: [process icons] [dir icon] path
 # Window rows:  [process icons] name [zoomed] [branch icon] branch [claude status]
 tmux choose-tree -Zw -O name \
-	-F '#{?window_format,#{@picker_win_icons} #{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icons} #{@picker_icon_dir} #{=30:@picker_path}}' \
+	-F '#{?window_format,#{@picker_win_icons}#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icons}#{@picker_icon_dir} #{=30:@picker_path}}' \
 	'switch-client -t "%1"'

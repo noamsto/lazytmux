@@ -112,8 +112,9 @@ while IFS=$'\t' read -r sess proc; do
 done < <(tmux list-panes -a -F '#{session_name}	#{pane_current_command}')
 unset sess_seen_procs
 
-# Build icon strings per session
+# Build icon strings per session (fixed-width column for alignment)
 declare -A sess_icons_map
+ICON_COL_WIDTH=$((MAX_ICONS * 3))
 for sess in "${!sess_proc_list[@]}"; do
 	icons=""
 	count=0
@@ -122,11 +123,12 @@ for sess in "${!sess_proc_list[@]}"; do
 		((count >= MAX_ICONS)) && break
 		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
 		[[ -z $proc_icon ]] && continue
-		[[ -n $icons ]] && icons+=" "
-		icons+="$proc_icon"
+		icons+="$proc_icon "
 		((count++)) || true
 	done
-	sess_icons_map[$sess]="$icons"
+	# Pad remaining slots so column width is constant
+	printf -v pad '%*s' "$(((MAX_ICONS - count) * 3))" ''
+	sess_icons_map[$sess]="${icons}${pad}"
 done
 unset sess_proc_list
 
@@ -154,7 +156,8 @@ while IFS=$'\t' read -r sess sess_path; do
 
 	tmux_cmds+=("set -t '$sess' @picker_pad '$padding'")
 	tmux_cmds+=("set -t '$sess' @picker_path '$short_path'")
-	tmux_cmds+=("set -t '$sess' @picker_icons '${sess_icons_map[$sess]:-}'")
+	printf -v empty_icons '%*s' "$ICON_COL_WIDTH" ''
+	tmux_cmds+=("set -t '$sess' @picker_icons '${sess_icons_map[$sess]:-$empty_icons}'")
 	tmux_cmds+=("set -t '$sess' @claude_status '$status'")
 done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
 
@@ -164,5 +167,5 @@ printf '%s\n' "${tmux_cmds[@]}" | tmux source -
 # Format: [padding] [dir icon] path  [claude status]
 # tmux's tree prefix shows "session_name:" before this, padding aligns the icon column
 tmux choose-tree -Zs -O name \
-	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icons} #{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
+	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icons}#{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
 	'switch-client -t "%1"'

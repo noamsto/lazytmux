@@ -323,7 +323,7 @@
 
     # Window naming: multi-pane process icons + branch or dir name
     set -wg automatic-rename on
-    set -g automatic-rename-format "#{@window_icon_display} #{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}}"
+    set -g automatic-rename-format "#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{b:pane_current_path}} #{@window_icon_display}"
 
     # tmux-fingers (smart copy)
     set -g @fingers-hint-style "fg=colour234,bg=colour183,bold"
