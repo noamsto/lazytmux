@@ -28,7 +28,8 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 
 `flake.nix` imports `config/tmux.conf.nix` which is the core of the build:
 
-1. **Script packaging**: Each `scripts/*.sh` file becomes a Nix store binary via `writeShellScriptBin`. Scripts in `scriptsWithIcons` get Nix-time string substitution for `@ICON_MAP@`, `@FALLBACK_ICON@`, `@MAX_ICONS@`, `@MAX_ICONS_PICKER@`, and `@claude_status_bin@` placeholders.
+1. **Shared libraries**: `scripts/lib-icons.sh` and `scripts/lib-claude.sh` are built via `writeShellScript` with placeholder substitution, then sourced by scripts at runtime via `source @lib_icons@` (replaced with store paths at build time).
+1. **Script packaging**: Each `scripts/*.sh` file becomes a Nix store binary via `writeShellScriptBin`. Scripts in `scriptsWithIcons` get Nix-time string substitution for `@lib_icons@`, `@lib_claude@`, `@ICON_MAP@`, `@FALLBACK_ICON@`, `@MAX_ICONS@`, `@MAX_ICONS_PICKER@`, and `@claude_status_bin@` placeholders.
 2. **Plugin pinning**: Catppuccin and which-key are pinned with `mkTmuxPlugin`; others come from nixpkgs `tmuxPlugins`.
 3. **Config generation**: The full tmux.conf is generated as a Nix store text file with interpolated store paths to all scripts and plugins.
 4. **Binary wrapping**: `symlinkJoin` + `wrapProgram` creates a `tmux` wrapper that loads the config via `-f` and adds all scripts to PATH.
@@ -46,6 +47,13 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
 | `tmux-set-pane-border` | `run-shell` at config load | Interpolates `@thm_*` color variables into `pane-border-format` (needed because nested `#{@thm_*}` inside `#[]` don't expand at render time). |
+
+### Shared Libraries
+
+- **`lib-icons.sh`** — `ICON_MAP` associative array, `build_proc_icons`, `measure_display_width`, `strip_tmux_colors`, `pad_to_width`. Sourced by update-icons, reflow, session-picker, window-picker.
+- **`lib-claude.sh`** — `CLAUDE_PANES_DIR`, spinner frames, `read_pane_state` (with staleness), `claude_state_icon`, `setup_claude_colors`, `claude_colored_icon`, `claude_priority_state`. Sourced by update-icons, session-picker, window-picker, claude-status.
+
+Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to avoid subshell forks in hot paths.
 
 ### Two Icon Variables
 

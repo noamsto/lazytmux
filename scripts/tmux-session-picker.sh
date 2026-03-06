@@ -10,46 +10,34 @@
 
 set -euo pipefail
 
+# shellcheck source=/dev/null  # Nix store paths substituted at build time
+source @lib_icons@
+# shellcheck source=/dev/null
+source @lib_claude@
+
+MAX_ICONS=@MAX_ICONS_PICKER@
+
 # Read theme colors and icons from tmux
 thm_blue=$(tmux show -gv @thm_blue 2>/dev/null || echo "blue")
 thm_green=$(tmux show -gv @thm_green 2>/dev/null || echo "green")
 icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 
-# Icon map (Nix-generated)
-# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
-declare -A ICON_MAP=(
-	@ICON_MAP@
-)
-FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=@MAX_ICONS_PICKER@
-
 # --- Claude status: read all pane files once, bucket by session ---
-PANES_DIR="/tmp/claude-status/panes"
-SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
-printf -v _now '%(%s)T' -1
-
-# Per-session claude state tallies: sess_claude_<state>[session]=count
 declare -A sess_claude_waiting sess_claude_compacting sess_claude_processing sess_claude_done sess_claude_idle
 
-if [[ -d $PANES_DIR ]]; then
-	for pf in "$PANES_DIR"/*; do
+if [[ -d $CLAUDE_PANES_DIR ]]; then
+	for pf in "$CLAUDE_PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
-		state="" timestamp="" pane_session=""
+		state="" pane_session=""
 		while IFS='=' read -r key val; do
 			case "$key" in
-			state) state="$val" ;;
-			timestamp) timestamp="$val" ;;
 			session) pane_session="$val" ;;
 			esac
 		done <"$pf"
-		[[ -n $pane_session && -n $state ]] || continue
-		# Staleness checks
-		if [[ -n $timestamp ]]; then
-			age=$((_now - timestamp))
-			[[ $state == "waiting" && $age -gt 30 ]] && state="processing"
-			[[ $state == "processing" && $age -gt 15 ]] && state="done"
-		fi
+		[[ -n $pane_session ]] || continue
+		read_pane_state "$pf" || continue
+		state="$REPLY"
 		# Tally into per-session counters
 		case "$state" in
 		waiting) sess_claude_waiting[$pane_session]=$((${sess_claude_waiting[$pane_session]:-0} + 1)) ;;
@@ -61,22 +49,11 @@ if [[ -d $PANES_DIR ]]; then
 	done
 fi
 
-# Detect theme for colors
-theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
-theme="dark"
-if [[ -f $theme_file ]]; then
-	theme=$(grep -o '"theme"[[:space:]]*:[[:space:]]*"[^"]*"' "$theme_file" 2>/dev/null | cut -d'"' -f4) || true
-fi
-if [[ $theme == "light" ]]; then
-	C_W="#[fg=#fe640b]" C_K="#[fg=#04a5e5]" C_P="#[fg=#179299]" C_D="#[fg=#40a02b]" C_I="#[fg=#6c6f85]"
-else
-	C_W="#[fg=#fab387]" C_K="#[fg=#89dceb]" C_P="#[fg=#94e2d5]" C_D="#[fg=#a6e3a1]" C_I="#[fg=#6c7086]"
-fi
-C_R="#[fg=default]"
+setup_claude_colors
 
 # --- Collect process icons per session with a single tmux list-panes -a ---
-declare -A sess_seen_procs # keyed by "sess:proc" for dedup
-declare -A sess_proc_list  # keyed by sess, space-separated proc list
+declare -A sess_seen_procs
+declare -A sess_proc_list
 
 while IFS=$'\t' read -r sess proc; do
 	[[ -n $sess && -n $proc ]] || continue
@@ -90,51 +67,26 @@ unset sess_seen_procs
 # Build icon strings per session (dynamic-width column: process icons + claude status)
 declare -A sess_icons_map sess_icons_dw
 
-claude_icon_for() {
-	local s=$1
-	local w=${sess_claude_waiting[$s]:-0} k=${sess_claude_compacting[$s]:-0}
-	local p=${sess_claude_processing[$s]:-0} d=${sess_claude_done[$s]:-0} i=${sess_claude_idle[$s]:-0}
-	((w + k + p + d + i == 0)) && return
-	local icon color
-	if ((w > 0)); then
-		icon="󰔟"
-		color=$C_W
-	elif ((k > 0)); then
-		icon="󰡍"
-		color=$C_K
-	elif ((p > 0)); then
-		icon="${SPINNER_FRAMES[$((_now % ${#SPINNER_FRAMES[@]}))]}"
-		color=$C_P
-	elif ((d > 0)); then
-		icon="󰸞"
-		color=$C_D
-	else
-		icon="󰒲"
-		color=$C_I
-	fi
-	echo "${color}${icon}${C_R} "
-}
-
-# First pass: build icon strings and measure display widths
 while IFS=$'\t' read -r sess _; do
 	[[ -n $sess ]] || continue
-	icons=""
-	count=0
-	# shellcheck disable=SC2086  # intentional word splitting
-	for proc in ${sess_proc_list[$sess]:-}; do
-		((count >= MAX_ICONS)) && break
-		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
-		[[ -z $proc_icon ]] && continue
-		icons+="$proc_icon "
-		((count++)) || true
-	done
+
+	build_proc_icons "${sess_proc_list[$sess]:-}" "$MAX_ICONS"
+	icons="$REPLY"
+
 	# Append claude status icon
-	c_icon=$(claude_icon_for "$sess")
-	[[ -n $c_icon ]] && icons+="$c_icon"
+	claude_priority_state \
+		"${sess_claude_waiting[$sess]:-0}" "${sess_claude_compacting[$sess]:-0}" \
+		"${sess_claude_processing[$sess]:-0}" "${sess_claude_done[$sess]:-0}" "${sess_claude_idle[$sess]:-0}"
+	if [[ -n $REPLY ]]; then
+		claude_colored_icon "$REPLY"
+		icons+="$REPLY"
+	fi
+
 	# Measure display width (strip tmux color codes before measuring)
-	stripped=$(printf '%s' "$icons" | sed 's/#\[[^]]*\]//g')
+	strip_tmux_colors "$icons"
+	measure_display_width "$REPLY"
 	sess_icons_map[$sess]="$icons"
-	sess_icons_dw[$sess]=$(printf '%s' "$stripped" | wc -L)
+	sess_icons_dw[$sess]=$REPLY
 done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 unset sess_proc_list
 
@@ -146,10 +98,8 @@ done
 ICON_COL_WIDTH=$((max_icon_dw + 1))
 
 for sess in "${!sess_icons_map[@]}"; do
-	pad_needed=$((ICON_COL_WIDTH - sess_icons_dw[$sess]))
-	((pad_needed < 0)) && pad_needed=0
-	printf -v pad '%*s' "$pad_needed" ''
-	sess_icons_map[$sess]="${sess_icons_map[$sess]}${pad}"
+	pad_to_width "${sess_icons_map[$sess]}" "${sess_icons_dw[$sess]}" "$ICON_COL_WIDTH"
+	sess_icons_map[$sess]="$REPLY"
 done
 
 # --- Collect session data and build tmux commands in one batch ---

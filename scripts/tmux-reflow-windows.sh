@@ -8,9 +8,13 @@
 # so padding only the text portion (ASCII branch/dir names) gives
 # consistent column alignment regardless of icon encoding.
 
+# shellcheck source=/dev/null  # Nix store path substituted at build time
+source @lib_icons@
+
 # Accept session/width as args (from hooks) or fall back to display-message
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
+MAX_ICONS=@MAX_ICONS@
 
 # Fast-path: skip if window count + width unchanged since last reflow
 cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
@@ -19,14 +23,6 @@ if [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>
 fi
 
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
-
-# Icon map (Nix-generated)
-# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
-declare -A ICON_MAP=(
-	@ICON_MAP@
-)
-FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=@MAX_ICONS@
 
 # --- Single pass: collect window data + pane processes ---
 declare -a indices
@@ -77,21 +73,11 @@ max_icon_width=$((MAX_ICONS * 3 + 2))
 declare -A win_icon_str
 
 for idx in "${indices[@]}"; do
-	icon=""
-	count=0
-	# shellcheck disable=SC2086  # intentional word splitting
-	for proc in ${win_procs[$idx]:-}; do
-		((count >= MAX_ICONS)) && break
-		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
-		[[ -z $proc_icon ]] && continue
-		icon+="$proc_icon "
-		((count++)) || true
-	done
-	dw=$(printf '%s' "$icon" | wc -L)
-	pad_needed=$((max_icon_width - dw))
-	((pad_needed < 0)) && pad_needed=0
-	printf -v pad '%*s' "$pad_needed" ''
-	win_icon_str[$idx]="${icon}${pad}"
+	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
+	icon_str="$REPLY"
+	measure_display_width "$icon_str"
+	pad_to_width "$icon_str" "$REPLY" "$max_icon_width"
+	win_icon_str[$idx]="$REPLY"
 done
 
 # --- Compute split points ---

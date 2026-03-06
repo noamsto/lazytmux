@@ -10,7 +10,7 @@
 # Formats:
 #   icon        Plain icon, count if >1 (no tmux color codes)
 #   icon-color  Icon with tmux #[fg=...] color codes, count if >1 (default)
-#   short       Icon + total count always (e.g. "󰔟2")
+#   short       Icon + total count always (e.g. "icon2")
 #   long        Text breakdown ("2 processing, 1 waiting")
 #   gum         Gum-styled output for sesh picker
 #
@@ -19,95 +19,8 @@
 
 set -euo pipefail
 
-STATE_DIR="/tmp/claude-status"
-PANES_DIR="$STATE_DIR/panes"
-
-# --- Icons & Spinner ---
-
-SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
-SPINNER_COUNT=${#SPINNER_FRAMES[@]}
-ICON_WAITING="󰔟"
-ICON_COMPACTING=""
-ICON_DONE="󰸞"
-ICON_IDLE="󰒲"
-
-get_spinner_frame() {
-	printf -v _now '%(%s)T' -1
-	echo "${SPINNER_FRAMES[$((_now % SPINNER_COUNT))]}"
-}
-
-state_icon() {
-	case "$1" in
-	processing) get_spinner_frame ;;
-	waiting) echo "$ICON_WAITING" ;;
-	compacting) echo "$ICON_COMPACTING" ;;
-	done) echo "$ICON_DONE" ;;
-	idle) echo "$ICON_IDLE" ;;
-	esac
-}
-
-# --- Theme & Colors ---
-
-C_PROCESSING="" C_WAITING="" C_COMPACTING="" C_DONE="" C_IDLE="" C_RESET=""
-
-setup_colors() {
-	local theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
-	local theme="dark"
-	if [[ -f $theme_file ]]; then
-		theme=$(grep -o '"theme"[[:space:]]*:[[:space:]]*"[^"]*"' "$theme_file" 2>/dev/null | cut -d'"' -f4)
-	fi
-
-	if [[ $theme == "light" ]]; then
-		C_PROCESSING="#[fg=#179299]"
-		C_WAITING="#[fg=#fe640b]"
-		C_COMPACTING="#[fg=#04a5e5]"
-		C_DONE="#[fg=#40a02b]"
-		C_IDLE="#[fg=#6c6f85]"
-	else
-		C_PROCESSING="#[fg=#94e2d5]"
-		C_WAITING="#[fg=#fab387]"
-		C_COMPACTING="#[fg=#89dceb]"
-		C_DONE="#[fg=#a6e3a1]"
-		C_IDLE="#[fg=#6c7086]"
-	fi
-	C_RESET="#[fg=default]"
-}
-
-state_color() {
-	case "$1" in
-	processing) echo "$C_PROCESSING" ;;
-	waiting) echo "$C_WAITING" ;;
-	compacting) echo "$C_COMPACTING" ;;
-	done) echo "$C_DONE" ;;
-	idle) echo "$C_IDLE" ;;
-	esac
-}
-
-# --- State Reading (with staleness checks) ---
-
-read_pane_state() {
-	local pane_file="$PANES_DIR/${1#%}"
-	[[ -f $pane_file ]] || return 1
-
-	local state="" timestamp="" key val
-	while IFS='=' read -r key val; do
-		case "$key" in
-		state) state="$val" ;;
-		timestamp) timestamp="$val" ;;
-		esac
-	done <"$pane_file"
-
-	if [[ -n $timestamp ]]; then
-		printf -v _now '%(%s)T' -1
-		local age=$((_now - timestamp))
-		# Stale waiting (>30s) -> permission was likely responded to
-		[[ $state == "waiting" && $age -gt 30 ]] && state="processing"
-		# Stale processing (>15s) -> Stop hook probably didn't fire
-		[[ $state == "processing" && $age -gt 15 ]] && state="done"
-	fi
-
-	echo "$state"
-}
+# shellcheck source=/dev/null  # Nix store path substituted at build time
+source @lib_claude@
 
 # --- Counting ---
 
@@ -127,14 +40,13 @@ tally_state() {
 count_for_window() {
 	while IFS= read -r pane; do
 		[[ -n $pane ]] || continue
-		local state
-		state=$(read_pane_state "$pane") || continue
-		tally_state "$state"
+		read_pane_state "$CLAUDE_PANES_DIR/${pane#%}" || continue
+		tally_state "$REPLY"
 	done < <(tmux list-panes -t "$1" -F '#{pane_id}' 2>/dev/null)
 }
 
 count_for_session() {
-	for pf in "$PANES_DIR"/*; do
+	for pf in "$CLAUDE_PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
 		local pane_session="" key val
 		while IFS='=' read -r key val; do
@@ -144,24 +56,13 @@ count_for_session() {
 			}
 		done <"$pf"
 		[[ $pane_session == "$1" ]] || continue
-		local state
-		state=$(read_pane_state "${pf##*/}") || continue
-		tally_state "$state"
+		read_pane_state "$pf" || continue
+		tally_state "$REPLY"
 	done
 }
 
-priority_state() {
-	if [[ $count_waiting -gt 0 ]]; then
-		echo "waiting"
-	elif [[ $count_compacting -gt 0 ]]; then
-		echo "compacting"
-	elif [[ $count_processing -gt 0 ]]; then
-		echo "processing"
-	elif [[ $count_done -gt 0 ]]; then
-		echo "done"
-	elif [[ $count_idle -gt 0 ]]; then
-		echo "idle"
-	fi
+get_priority_state() {
+	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle"
 }
 
 # --- Output Formatting ---
@@ -170,22 +71,24 @@ format_output() {
 	local state="$1" count="$2" format="$3" leading_space="$4"
 	[[ -n $state ]] || return 0
 
-	local icon prefix=""
-	icon=$(state_icon "$state")
+	local prefix=""
 	[[ $leading_space == "true" ]] && prefix=" "
 
 	case "$format" in
 	icon)
+		claude_state_icon "$state"
 		local count_prefix=""
 		[[ $count -gt 1 ]] && count_prefix="${count} "
-		echo "${prefix}${count_prefix}${icon} "
+		echo "${prefix}${count_prefix}${REPLY} "
 		;;
 	icon-color)
-		setup_colors
-		echo "${prefix}$(state_color "$state")${icon}${C_RESET} "
+		setup_claude_colors
+		claude_colored_icon "$state"
+		echo "${prefix}${REPLY}"
 		;;
 	short)
-		echo "${prefix}${count} ${icon}"
+		claude_state_icon "$state"
+		echo "${prefix}${count} ${REPLY}"
 		;;
 	long)
 		local parts=()
@@ -198,28 +101,15 @@ format_output() {
 		echo "${parts[*]}"
 		;;
 	gum)
+		claude_state_icon "$state"
+		local icon="$REPLY"
 		local gum_color label
 		case "$state" in
-		waiting)
-			gum_color=216
-			label="$count_waiting waiting"
-			;;
-		compacting)
-			gum_color=117
-			label="$count_compacting compacting"
-			;;
-		processing)
-			gum_color=183
-			label="$count_processing working"
-			;;
-		done)
-			gum_color=151
-			label="$count_done done"
-			;;
-		idle)
-			gum_color=245
-			label="$count_idle idle"
-			;;
+		waiting) gum_color=216 label="$count_waiting waiting" ;;
+		compacting) gum_color=117 label="$count_compacting compacting" ;;
+		processing) gum_color=183 label="$count_processing working" ;;
+		done) gum_color=151 label="$count_done done" ;;
+		idle) gum_color=245 label="$count_idle idle" ;;
 		esac
 		gum style --foreground "$gum_color" "$icon $label" 2>/dev/null || echo "$icon $label"
 		;;
@@ -264,23 +154,25 @@ done
 
 case "$mode" in
 pane)
-	state=$(read_pane_state "$target") || exit 0
-	tally_state "$state"
-	format_output "$state" 1 "$format" "true"
+	read_pane_state "$CLAUDE_PANES_DIR/${target#%}" || exit 0
+	tally_state "$REPLY"
+	get_priority_state
+	format_output "$REPLY" 1 "$format" "true"
 	;;
 window)
 	count_for_window "$target"
 	if [[ $total -eq 0 ]]; then
-		# Fixed-width blank: match visible width of " 󱙺 X " (5 display cols)
-		# space(1) + claude_icon(1) + space(1) + state_icon(1) + space(1) = 5
+		# Fixed-width blank: match visible width of " icon X " (5 display cols)
 		echo "     "
 		exit 0
 	fi
-	format_output "$(priority_state)" "$total" "$format" "true"
+	get_priority_state
+	format_output "$REPLY" "$total" "$format" "true"
 	;;
 session)
 	count_for_session "$target"
 	[[ $total -gt 0 ]] || exit 0
-	format_output "$(priority_state)" "$total" "$format" "false"
+	get_priority_state
+	format_output "$REPLY" "$total" "$format" "false"
 	;;
 esac

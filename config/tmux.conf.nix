@@ -56,11 +56,36 @@
 
   whichKeyConfig = pkgs.writeText "which-key.json" (builtins.readFile ./which-key.json);
 
+  # --- Shared libraries (sourced, not executed) ---
+  mkLib = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      ["@ICON_MAP@" "@FALLBACK_ICON@"]
+      [iconMapBash fallbackIcon]
+      raw;
+  in
+    pkgs.writeShellScript name patched;
+
+  lib-icons = mkLib "lib-icons";
+  lib-claude = mkLib "lib-claude";
+
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
 
+  # claude-status needs lib substitution but not self-reference
+  mkScriptWithLibs = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      ["@lib_icons@" "@lib_claude@"]
+      ["${lib-icons}" "${lib-claude}"]
+      raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
   # Build claude-status first — other scripts reference it by full path
-  claude-status-pkg = mkScript "claude-status";
+  claude-status-pkg = mkScriptWithLibs "claude-status";
   claude-status-bin = "${claude-status-pkg}/bin/claude-status";
 
   scriptNames = [
@@ -75,15 +100,15 @@
     "tmux-set-pane-border"
   ];
 
-  # Scripts that need icon map + claude-status path substitution
+  # Scripts that need icon map + library + claude-status path substitution
   scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@"]
-      ["${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker]
+      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@"]
+      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -92,6 +117,8 @@
   script = lib.genAttrs scriptNames (name:
     if builtins.elem name scriptsWithIcons
     then mkScriptFull name
+    else if name == "claude-status"
+    then claude-status-pkg
     else mkScript name);
 
   scripts = lib.attrValues script;
