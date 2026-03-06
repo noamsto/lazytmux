@@ -50,9 +50,9 @@ while IFS='|' read -r idx branch pane_path zoomed; do
 	fi
 	((text_len > max_text_len_raw)) && max_text_len_raw=$text_len
 	capped=$text_len
-	((capped > 20)) && {
+	((capped > 30)) && {
 		has_truncated=1
-		capped=20
+		capped=30
 	}
 	((capped > max_text_len)) && max_text_len=$capped
 	((total++))
@@ -71,8 +71,9 @@ while IFS=$'\t' read -r win_idx proc; do
 done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
 unset win_seen
 
-# --- Build icon strings and track max width ---
-max_icon_width=0
+# --- Build icon strings with fixed-width padding (stable layout across icon changes) ---
+# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd claude (2 cells)
+max_icon_width=$((MAX_ICONS * 3 + 2))
 declare -A win_icon_str
 
 for idx in "${indices[@]}"; do
@@ -83,16 +84,14 @@ for idx in "${indices[@]}"; do
 		((count >= MAX_ICONS)) && break
 		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
 		[[ -z $proc_icon ]] && continue
-		[[ -n $icon ]] && icon+=" "
-		icon+="$proc_icon"
+		icon+="$proc_icon "
 		((count++)) || true
 	done
-
-	# Estimate display width: each icon ~2 cols + spaces between
-	icon_width=$((count * 2 + (count > 1 ? count - 1 : 0)))
-	((icon_width > max_icon_width)) && max_icon_width=$icon_width
-
-	win_icon_str[$idx]="$icon"
+	dw=$(printf '%s' "$icon" | wc -L)
+	pad_needed=$((max_icon_width - dw))
+	((pad_needed < 0)) && pad_needed=0
+	printf -v pad '%*s' "$pad_needed" ''
+	win_icon_str[$idx]="${icon}${pad}"
 done
 
 # --- Compute split points ---
@@ -104,24 +103,33 @@ zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 ellipsis_extra=0
 ((has_truncated)) && ellipsis_extra=1
-slot_width_raw=$((max_text_len_raw + idx_width + 11 + max_icon_width))
-slot_width_capped=$((max_text_len + 2 + ellipsis_extra + idx_width + 11 + max_icon_width))
+# Slot base: IDX(idx_width) + ": "(2) + TEXT(P) + " "(1) + ICON(max_icon_width)
+# P = max_text_len + 2(zoom) + ellipsis_extra
+SEP_WIDTH=3 # " │ "
+slot_base_raw=$((max_text_len_raw + 2 + idx_width + 3 + max_icon_width))
+slot_base=$((max_text_len + 2 + ellipsis_extra + idx_width + 3 + max_icon_width))
 
-if ((slot_width_raw * total + zoom_extra <= available)); then
+# Single-line check: N items + (N-1) separators
+if ((total * slot_base_raw + (total - 1) * SEP_WIDTH + zoom_extra <= available)); then
 	needs_multiline=0
 else
 	needs_multiline=1
 fi
 
-cumulative=0
 current_line=0
 split1=999
 split2=999
-prev_idx=
 
 if ((needs_multiline)); then
+	# Greedy fill: slot_base per item + SEP_WIDTH between items
+	cumulative=0
+	prev_idx=
 	for ((j = 0; j < total; j++)); do
-		if ((cumulative + slot_width_capped > available && cumulative > 0)); then
+		if ((cumulative == 0)); then
+			# First item on line
+			cumulative=$slot_base
+		elif ((cumulative + SEP_WIDTH + slot_base > available)); then
+			# Would overflow: start new line
 			((current_line++))
 			if ((current_line == 1)); then
 				split1=$prev_idx
@@ -129,9 +137,9 @@ if ((needs_multiline)); then
 				split2=$prev_idx
 				break
 			fi
-			cumulative=$slot_width_capped
+			cumulative=$slot_base
 		else
-			cumulative=$((cumulative + slot_width_capped))
+			cumulative=$((cumulative + SEP_WIDTH + slot_base))
 		fi
 		prev_idx=${indices[$j]}
 	done
@@ -140,9 +148,9 @@ fi
 # --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
-# Set icon display per window
+# Set padded icon display per window (separate from @window_icon_display which is unpadded)
 for idx in "${indices[@]}"; do
-	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_icon_display '${win_icon_str[$idx]}'")
+	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_icon_padded '${win_icon_str[$idx]}'")
 done
 
 # Split points and status line count
@@ -165,9 +173,8 @@ fi
 } | tmux source -
 
 # Common format fragments
-ICON='#{@window_icon_display}'
-TEXT='#{?#{@branch},#{=20:@branch}#{?#{==:#{=20:@branch},#{@branch}},,…},#{=20:#{b:pane_current_path}}#{?#{==:#{=20:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
-CLAUDE='#(@claude_status_bin@ --window '"'"'#{session_name}:#{window_index}'"'"')'
+ICON='#{@window_icon_padded}'
+TEXT='#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{=30:#{b:pane_current_path}}#{?#{==:#{=30:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
 if ((!needs_multiline && current_line == 0)); then
@@ -185,7 +192,7 @@ elif ((current_line == 0)); then
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
-	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
+	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
 	tmux set -t "$SESSION" status-format[1] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
 	tmux set -t "$SESSION" status-format[2] ""
@@ -198,7 +205,7 @@ else
 	P=$((max_text_len + 2 + ellipsis_extra))
 	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 	IDX="#{p${idx_width}:window_index}"
-	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${ICON} #{p${P}:${TEXT_Z}},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${ICON} #{p${P}:${TEXT_Z}}}${CLAUDE}#[norange]"
+	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
 
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
 	tmux set -t "$SESSION" status-format[1] \

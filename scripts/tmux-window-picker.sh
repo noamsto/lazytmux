@@ -20,10 +20,10 @@ declare -A ICON_MAP=(
 )
 FALLBACK="@FALLBACK_ICON@"
 MAX_ICONS=@MAX_ICONS@
+MAX_ICONS_PICKER=@MAX_ICONS_PICKER@
 
 # --- Claude status: read all pane files once, bucket by window and session ---
 PANES_DIR="/tmp/claude-status/panes"
-ICON_CLAUDE="󱙺"
 SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 printf -v _now '%(%s)T' -1
 
@@ -112,7 +112,7 @@ format_claude() {
 		icon="󰒲"
 		color=$C_I
 	fi
-	echo "${ICON_CLAUDE} ${color}${icon}${C_R} "
+	echo "${color}${icon}${C_R} "
 }
 
 # --- Collect process icons with single list-panes -a call (already done above) ---
@@ -134,57 +134,104 @@ while IFS=$'\t' read -r sess win_idx proc; do
 done < <(tmux list-panes -a -F '#{session_name}	#{window_index}	#{pane_current_command}')
 unset win_seen_procs sess_seen_procs
 
-build_icons() {
-	local icons="" count=0 proc pad
+# --- First pass: build icon strings and measure display widths ---
+declare -A win_icons_str win_icons_dw
+declare -A sess_icons_str sess_icons_dw
+
+# Per-window icons (capped at MAX_ICONS)
+while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
+	[[ -n $win_idx ]] || continue
+	target="${sess}:${win_idx}"
+
+	icons=""
+	count=0
 	# shellcheck disable=SC2086  # intentional word splitting
-	for proc in $1; do
+	for proc in ${win_proc_list[$target]:-}; do
 		((count >= MAX_ICONS)) && break
 		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
 		[[ -z $proc_icon ]] && continue
 		icons+="$proc_icon "
 		((count++)) || true
 	done
-	# Pad remaining slots so column width is constant
-	printf -v pad '%*s' "$(((MAX_ICONS - count) * 3))" ''
-	echo "${icons}${pad}"
-}
+	c_icon=$(format_claude \
+		"${win_waiting[$target]:-0}" "${win_compacting[$target]:-0}" \
+		"${win_processing[$target]:-0}" "${win_done[$target]:-0}" "${win_idle[$target]:-0}")
+	[[ -n $c_icon ]] && icons+="$c_icon"
+	stripped=$(printf '%s' "$icons" | sed 's/#\[[^]]*\]//g')
+	win_icons_str[$target]="$icons"
+	win_icons_dw[$target]=$(printf '%s' "$stripped" | wc -L)
+done < <(tmux list-windows -a -F '#{session_name}	#{session_id}	#{window_index}	#{session_path}')
 
-# --- Build all tmux commands in one batch ---
+# Per-session icons (capped at MAX_ICONS_PICKER for more coverage)
+while IFS=$'\t' read -r sess sess_id; do
+	[[ -n $sess ]] || continue
+	icons=""
+	count=0
+	# shellcheck disable=SC2086  # intentional word splitting
+	for proc in ${sess_proc_list[$sess]:-}; do
+		((count >= MAX_ICONS_PICKER)) && break
+		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
+		[[ -z $proc_icon ]] && continue
+		icons+="$proc_icon "
+		((count++)) || true
+	done
+	c_icon=$(format_claude \
+		"${sess_waiting[$sess]:-0}" "${sess_compacting[$sess]:-0}" \
+		"${sess_processing[$sess]:-0}" "${sess_done[$sess]:-0}" "${sess_idle[$sess]:-0}")
+	[[ -n $c_icon ]] && icons+="$c_icon"
+	stripped=$(printf '%s' "$icons" | sed 's/#\[[^]]*\]//g')
+	sess_icons_str[$sess]="$icons"
+	sess_icons_dw[$sess]=$(printf '%s' "$stripped" | wc -L)
+done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
+
+# --- Compute dynamic column widths ---
+max_win_dw=0
+for target in "${!win_icons_dw[@]}"; do
+	((win_icons_dw[$target] > max_win_dw)) && max_win_dw=${win_icons_dw[$target]}
+done
+WIN_COL=$((max_win_dw > 0 ? max_win_dw + 1 : 0))
+
+max_sess_dw=0
+for sess in "${!sess_icons_dw[@]}"; do
+	((sess_icons_dw[$sess] > max_sess_dw)) && max_sess_dw=${sess_icons_dw[$sess]}
+done
+SESS_COL=$((max_sess_dw > 0 ? max_sess_dw + 1 : 0))
+
+# --- Second pass: pad and build tmux commands ---
 declare -a tmux_cmds=()
 
 tmux_cmds+=("set -g @picker_icon_branch '#[fg=${thm_green}]${icon_branch}#[fg=default]'")
 tmux_cmds+=("set -g @picker_icon_dir '#[fg=${thm_blue}]${icon_dir}#[fg=default]'")
 
-# Per-window: icons and claude status
-while IFS=$'\t' read -r sess win_idx sess_path; do
+# Per-window
+while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
 	[[ -n $win_idx ]] || continue
 	target="${sess}:${win_idx}"
+	id_target="${sess_id}:${win_idx}"
 
-	win_icons=$(build_icons "${win_proc_list[$target]:-}")
-	win_status=$(format_claude \
-		"${win_waiting[$target]:-0}" "${win_compacting[$target]:-0}" \
-		"${win_processing[$target]:-0}" "${win_done[$target]:-0}" "${win_idle[$target]:-0}")
+	pad_needed=$((WIN_COL - win_icons_dw[$target]))
+	((pad_needed < 0)) && pad_needed=0
+	printf -v pad '%*s' "$pad_needed" ''
+	tmux_cmds+=("set -w -t '${id_target}' @picker_win_icons '${win_icons_str[$target]}${pad}'")
 
-	tmux_cmds+=("set -w -t '$target' @picker_win_icons '$win_icons'")
-	tmux_cmds+=("set -w -t '$target' @claude_win_status '$win_status'")
-
-	# Collapse $HOME to ~ (set once per session, harmless to repeat)
 	short_path="${sess_path/#$HOME/\~}"
-	tmux_cmds+=("set -t '$sess' @picker_path '$short_path'")
-done < <(tmux list-windows -a -F '#{session_name}	#{window_index}	#{session_path}')
+	tmux_cmds+=("set -t '${sess_id}' @picker_path '$short_path'")
+done < <(tmux list-windows -a -F '#{session_name}	#{session_id}	#{window_index}	#{session_path}')
 
-# Per-session: icons (set for all sessions, padded for alignment)
-while IFS= read -r sess; do
+# Per-session
+while IFS=$'\t' read -r sess sess_id; do
 	[[ -n $sess ]] || continue
-	s_icons=$(build_icons "${sess_proc_list[$sess]:-}")
-	tmux_cmds+=("set -t '$sess' @picker_icons '$s_icons'")
-done < <(tmux list-sessions -F '#{session_name}')
+	pad_needed=$((SESS_COL - sess_icons_dw[$sess]))
+	((pad_needed < 0)) && pad_needed=0
+	printf -v pad '%*s' "$pad_needed" ''
+	tmux_cmds+=("set -t '${sess_id}' @picker_icons '${sess_icons_str[$sess]:-}${pad}'")
+done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 
 # Execute all tmux set commands in a single invocation
 printf '%s\n' "${tmux_cmds[@]}" | tmux source -
 
-# Session rows: [process icons] [dir icon] path
-# Window rows:  [process icons] name [zoomed] [branch icon] branch [claude status]
+# Session rows: [icons + claude] [dir icon] path
+# Window rows:  [icons + claude] name [zoomed] [branch icon] branch
 tmux choose-tree -Zw -O name \
-	-F '#{?window_format,#{@picker_win_icons}#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},} #{@claude_win_status},#{@picker_icons}#{@picker_icon_dir} #{=30:@picker_path}}' \
+	-F '#{?window_format,#{@picker_win_icons}#{window_name}#{?window_zoomed_flag, 󰁌,}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},},#{@picker_icons}#{@picker_icon_dir} #{=30:@picker_path}}' \
 	'switch-client -t "%1"'

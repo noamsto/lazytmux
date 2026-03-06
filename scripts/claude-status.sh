@@ -26,7 +26,6 @@ PANES_DIR="$STATE_DIR/panes"
 
 SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 SPINNER_COUNT=${#SPINNER_FRAMES[@]}
-ICON_CLAUDE="󱙺"
 ICON_WAITING="󰔟"
 ICON_COMPACTING=""
 ICON_DONE="󰸞"
@@ -179,15 +178,14 @@ format_output() {
 	icon)
 		local count_prefix=""
 		[[ $count -gt 1 ]] && count_prefix="${count} "
-		echo "${prefix}${count_prefix}${ICON_CLAUDE} ${icon} "
+		echo "${prefix}${count_prefix}${icon} "
 		;;
 	icon-color)
 		setup_colors
-		# Fixed-width: " 󱙺 X " — no count prefix to keep alignment consistent
-		echo "${prefix}${ICON_CLAUDE} $(state_color "$state")${icon}${C_RESET} "
+		echo "${prefix}$(state_color "$state")${icon}${C_RESET} "
 		;;
 	short)
-		echo "${prefix}${count} ${ICON_CLAUDE} ${icon}"
+		echo "${prefix}${count} ${icon}"
 		;;
 	long)
 		local parts=()

@@ -22,11 +22,10 @@ declare -A ICON_MAP=(
 	@ICON_MAP@
 )
 FALLBACK="@FALLBACK_ICON@"
-MAX_ICONS=@MAX_ICONS@
+MAX_ICONS=@MAX_ICONS_PICKER@
 
 # --- Claude status: read all pane files once, bucket by session ---
 PANES_DIR="/tmp/claude-status/panes"
-ICON_CLAUDE="󱙺"
 SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 printf -v _now '%(%s)T' -1
 
@@ -75,30 +74,6 @@ else
 fi
 C_R="#[fg=default]"
 
-format_session_claude() {
-	local s=$1
-	local w=${sess_claude_waiting[$s]:-0} k=${sess_claude_compacting[$s]:-0}
-	local p=${sess_claude_processing[$s]:-0} d=${sess_claude_done[$s]:-0} i=${sess_claude_idle[$s]:-0}
-	((w + k + p + d + i == 0)) && return
-	local icon color
-	if ((w > 0)); then
-		icon="󰔟"
-		color=$C_W
-	elif ((k > 0)); then
-		icon="󰡍"
-		color=$C_K
-	elif ((p > 0)); then
-		icon="${SPINNER_FRAMES[$((_now % ${#SPINNER_FRAMES[@]}))]}" color=$C_P
-	elif ((d > 0)); then
-		icon="󰸞"
-		color=$C_D
-	else
-		icon="󰒲"
-		color=$C_I
-	fi
-	echo "${ICON_CLAUDE} ${color}${icon}${C_R} "
-}
-
 # --- Collect process icons per session with a single tmux list-panes -a ---
 declare -A sess_seen_procs # keyed by "sess:proc" for dedup
 declare -A sess_proc_list  # keyed by sess, space-separated proc list
@@ -112,25 +87,70 @@ while IFS=$'\t' read -r sess proc; do
 done < <(tmux list-panes -a -F '#{session_name}	#{pane_current_command}')
 unset sess_seen_procs
 
-# Build icon strings per session (fixed-width column for alignment)
-declare -A sess_icons_map
-ICON_COL_WIDTH=$((MAX_ICONS * 3))
-for sess in "${!sess_proc_list[@]}"; do
+# Build icon strings per session (dynamic-width column: process icons + claude status)
+declare -A sess_icons_map sess_icons_dw
+
+claude_icon_for() {
+	local s=$1
+	local w=${sess_claude_waiting[$s]:-0} k=${sess_claude_compacting[$s]:-0}
+	local p=${sess_claude_processing[$s]:-0} d=${sess_claude_done[$s]:-0} i=${sess_claude_idle[$s]:-0}
+	((w + k + p + d + i == 0)) && return
+	local icon color
+	if ((w > 0)); then
+		icon="󰔟"
+		color=$C_W
+	elif ((k > 0)); then
+		icon="󰡍"
+		color=$C_K
+	elif ((p > 0)); then
+		icon="${SPINNER_FRAMES[$((_now % ${#SPINNER_FRAMES[@]}))]}"
+		color=$C_P
+	elif ((d > 0)); then
+		icon="󰸞"
+		color=$C_D
+	else
+		icon="󰒲"
+		color=$C_I
+	fi
+	echo "${color}${icon}${C_R} "
+}
+
+# First pass: build icon strings and measure display widths
+while IFS=$'\t' read -r sess _; do
+	[[ -n $sess ]] || continue
 	icons=""
 	count=0
 	# shellcheck disable=SC2086  # intentional word splitting
-	for proc in ${sess_proc_list[$sess]}; do
+	for proc in ${sess_proc_list[$sess]:-}; do
 		((count >= MAX_ICONS)) && break
 		proc_icon="${ICON_MAP[$proc]:-$FALLBACK}"
 		[[ -z $proc_icon ]] && continue
 		icons+="$proc_icon "
 		((count++)) || true
 	done
-	# Pad remaining slots so column width is constant
-	printf -v pad '%*s' "$(((MAX_ICONS - count) * 3))" ''
-	sess_icons_map[$sess]="${icons}${pad}"
-done
+	# Append claude status icon
+	c_icon=$(claude_icon_for "$sess")
+	[[ -n $c_icon ]] && icons+="$c_icon"
+	# Measure display width (strip tmux color codes before measuring)
+	stripped=$(printf '%s' "$icons" | sed 's/#\[[^]]*\]//g')
+	sess_icons_map[$sess]="$icons"
+	sess_icons_dw[$sess]=$(printf '%s' "$stripped" | wc -L)
+done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 unset sess_proc_list
+
+# Second pass: find max width and pad all to max + 1
+max_icon_dw=0
+for sess in "${!sess_icons_dw[@]}"; do
+	((sess_icons_dw[$sess] > max_icon_dw)) && max_icon_dw=${sess_icons_dw[$sess]}
+done
+ICON_COL_WIDTH=$((max_icon_dw + 1))
+
+for sess in "${!sess_icons_map[@]}"; do
+	pad_needed=$((ICON_COL_WIDTH - sess_icons_dw[$sess]))
+	((pad_needed < 0)) && pad_needed=0
+	printf -v pad '%*s' "$pad_needed" ''
+	sess_icons_map[$sess]="${sess_icons_map[$sess]}${pad}"
+done
 
 # --- Collect session data and build tmux commands in one batch ---
 declare -a sessions=() tmux_cmds=()
@@ -140,32 +160,30 @@ max_name=0
 tmux_cmds+=("set -g @picker_icon_dir '#[fg=${thm_blue}]${icon_dir}#[fg=default]'")
 tmux_cmds+=("set -g @picker_icon_branch '#[fg=${thm_green}]${icon_branch}#[fg=default]'")
 
-while IFS=$'\t' read -r sess sess_path; do
+while IFS=$'\t' read -r sess _; do
 	[[ -n $sess ]] || continue
 	sessions+=("$sess")
 	((${#sess} > max_name)) && max_name=${#sess}
-done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
+done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 
-# Build all tmux set commands
-while IFS=$'\t' read -r sess sess_path; do
+# Build all tmux set commands (use $id to avoid numeric name ambiguity)
+while IFS=$'\t' read -r sess sess_id sess_path; do
 	[[ -n $sess ]] || continue
 	pad_len=$((max_name - ${#sess}))
 	padding=$(printf '%*s' "$pad_len" '')
 	short_path="${sess_path/#$HOME/\~}"
-	status=$(format_session_claude "$sess")
 
-	tmux_cmds+=("set -t '$sess' @picker_pad '$padding'")
-	tmux_cmds+=("set -t '$sess' @picker_path '$short_path'")
 	printf -v empty_icons '%*s' "$ICON_COL_WIDTH" ''
-	tmux_cmds+=("set -t '$sess' @picker_icons '${sess_icons_map[$sess]:-$empty_icons}'")
-	tmux_cmds+=("set -t '$sess' @claude_status '$status'")
-done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
+	tmux_cmds+=("set -t '${sess_id}' @picker_pad '$padding'")
+	tmux_cmds+=("set -t '${sess_id}' @picker_path '$short_path'")
+	tmux_cmds+=("set -t '${sess_id}' @picker_icons '${sess_icons_map[$sess]:-$empty_icons}'")
+done < <(tmux list-sessions -F '#{session_name}	#{session_id}	#{session_path}')
 
 # Execute all tmux set commands in a single invocation
 printf '%s\n' "${tmux_cmds[@]}" | tmux source -
 
-# Format: [padding] [dir icon] path  [claude status]
+# Format: [padding] [icons + claude] [dir icon] path
 # tmux's tree prefix shows "session_name:" before this, padding aligns the icon column
 tmux choose-tree -Zs -O name \
-	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=20:@branch},},#{@picker_pad}#{@picker_icons}#{@picker_icon_dir} #{@picker_path} #{@claude_status}}' \
+	-F '#{?window_format,#{window_name}#{?#{@branch}, #{@picker_icon_branch} #{=30:@branch},},#{@picker_pad}#{@picker_icons}#{@picker_icon_dir} #{@picker_path}}' \
 	'switch-client -t "%1"'
