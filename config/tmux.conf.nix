@@ -1,6 +1,7 @@
 {
   pkgs,
   lib,
+  extraProcessIcons ? {},
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -17,7 +18,8 @@
   };
 
   # Process name → icon mapping (separate file for easy editing)
-  processIcons = import ./process-icons.nix;
+  # extraProcessIcons overrides defaults when keys collide
+  processIcons = (import ./process-icons.nix) // extraProcessIcons;
   fallbackIcon = "";
   maxIcons = "2";
   maxIconsPicker = "5";

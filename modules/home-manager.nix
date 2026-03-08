@@ -5,11 +5,21 @@
   ...
 }: let
   cfg = config.programs.lazytmux;
-  tmuxConfig = import ../config/tmux.conf.nix {inherit pkgs lib;};
+  tmuxConfig = import ../config/tmux.conf.nix {
+    inherit pkgs lib;
+    extraProcessIcons = cfg.processIcons;
+  };
   wtPkg = import ../wt {inherit pkgs;};
 in {
   options.programs.lazytmux = {
     enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";
+
+    processIcons = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = {};
+      example = lib.literalExpression ''{ "my-app" = "⚡"; }'';
+      description = "Extra process name → icon mappings. Overrides built-in defaults on collision.";
+    };
 
     wt = {
       enable = lib.mkOption {
