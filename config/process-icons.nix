@@ -29,26 +29,26 @@
   # Version control
   git = "";
   gh = "";
-  gitui = "";
+  gitui = "";
   lazygit = "";
-  lazyjj = "";
-  jj = "";
-  tig = "";
+  lazyjj = "";
+  jj = "";
+  tig = "";
 
   # Languages & runtimes
   cargo = "";
-  deno = "";
-  go = "";
-  java = "";
-  node = "";
+  deno = "";
+  go = "";
+  java = "";
+  node = "";
   perl = "";
   php = "";
-  python = "";
-  python3 = "";
-  "Python" = "";
+  python = "";
+  python3 = "";
+  "Python" = "";
   ruby = "";
-  rustc = "";
-  rustup = "";
+  rustc = "";
+  rustup = "";
   scala = "";
   swift = "";
   zig = "";
@@ -58,7 +58,8 @@
   brew = "";
   dnf = "";
   nix = "❄️";
-  npm = "";
+  npm = "";
+  pnpm = "";
   pacman = "";
   paru = "";
   pip = "";
@@ -67,58 +68,59 @@
   yay = "";
 
   # Build tools
-  cmake = "";
-  gcc = "";
+  cmake = "";
+  gcc = "";
   gradle = "";
-  just = "";
-  make = "";
+  just = "";
+  make = "";
   bazel = "";
 
   # Containers & cloud
-  docker = "";
-  helm = "";
-  k9s = "";
-  kubectl = "";
-  lazydocker = "";
-  terraform = "";
-  aws = "";
-  gcloud = "";
+  docker = "";
+  helm = "󱃾";
+  k9s = "󱃾";
+  kubectl = "󱃾";
+  lazydocker = "";
+  terraform = "ﲽ";
+  aws = "";
+  gcloud = "";
 
   # System & monitoring
-  btm = "";
-  btop = "";
-  htop = "";
-  top = "";
+  btm = "";
+  btop = "";
+  htop = "";
+  top = "";
   glances = "";
-  sudo = "";
-  systemctl = "";
+  sudo = "";
+  systemctl = "";
 
   # Network
-  curl = "";
-  ping = "";
-  ssh = "";
-  scp = "";
-  wget = "";
-  gping = "";
+  curl = "";
+  ping = "";
+  ssh = "󰣀";
+  scp = "󰣀";
+  wget = "";
+  gping = "";
 
   # Databases
   mongo = "";
   mysql = "";
-  psql = "";
-  redis = "";
-  sqlite = "";
+  psql = "";
+  lazysql = "";
+  redis = "";
+  sqlite = "";
 
   # File managers & tools
-  bat = "";
-  lf = "";
-  ranger = "";
-  yazi = "";
-  rsync = "";
-  zip = "";
-  unzip = "";
+  bat = "󰭟";
+  lf = "";
+  ranger = "";
+  yazi = "";
+  rsync = "";
+  zip = "";
+  unzip = "";
 
   # Terminals & multiplexers
-  tmux = "";
+  tmux = "";
   screen = "";
 
   # Other
