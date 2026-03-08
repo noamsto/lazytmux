@@ -64,17 +64,18 @@ while IFS='|' read -r idx _; do
 	build_proc_icons "$procs" "$MAX_ICONS"
 	proc_icon_str="${REPLY% }"
 	icon="$REPLY"
+	icon_dw=$REPLY_DW
 
 	# Append claude status icon (shares the icon column)
 	c_state="${win_claude_state[$idx]:-}"
 	claude_state_icon "$c_state"
-	[[ -n $REPLY ]] && icon+="$REPLY "
-
-	# Measure display width
-	measure_display_width "$icon"
+	if [[ -n $REPLY ]]; then
+		icon+="$REPLY "
+		((icon_dw += 3)) # 2-cell icon + 1 space
+	fi
 
 	win_icons[$idx]="$icon"
-	win_icon_dw[$idx]=$REPLY
+	win_icon_dw[$idx]=$icon_dw
 	win_proc_icons[$idx]="$proc_icon_str"
 done < <(tmux list-windows -t "$SESSION" -F '#{window_index}|')
 
@@ -83,8 +84,8 @@ active_proc=$(tmux display-message -t "$SESSION" -p '#{pane_current_command}' 2>
 tmux set -q -t "$SESSION" @active_pane_icon "${ICON_MAP[$active_proc]:-}"
 
 # --- Second pass: set unpadded + padded icon variables ---
-# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd claude (2 cells)
-TARGET_DW=$((MAX_ICONS * 3 + 2))
+# Fixed column: worst case MAX_ICONS icons (3 cells each) + 1 claude icon (3 cells)
+TARGET_DW=$(((MAX_ICONS + 1) * 3))
 for idx in "${all_idx[@]}"; do
 	target="${SESSION}:${idx}"
 

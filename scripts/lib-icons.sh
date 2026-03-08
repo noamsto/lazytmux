@@ -3,7 +3,7 @@
 # Sourced (not executed) — provides constants and functions.
 # Nix build time substitution provides ICON_MAP and FALLBACK_ICON.
 
-# shellcheck disable=SC2190  # icon map entries are Nix-generated placeholders
+# shellcheck disable=SC2034,SC2190  # REPLY_DW used by callers; icon map entries are Nix-generated
 declare -A ICON_MAP=(
 	@ICON_MAP@
 )
@@ -12,6 +12,7 @@ FALLBACK_ICON="@FALLBACK_ICON@"
 # build_proc_icons "proc1 proc2 ..." MAX_COUNT
 # Builds space-separated icon string from process names, capped at MAX_COUNT.
 # Sets REPLY to the icon string (trailing space per icon).
+# Sets REPLY_DW to display width (each icon = 2 cells + 1 space = 3 per icon).
 build_proc_icons() {
 	local procs="$1" max="$2"
 	REPLY=""
@@ -24,20 +25,7 @@ build_proc_icons() {
 		REPLY+="$icon "
 		((count++)) || true
 	done
-}
-
-# measure_display_width STRING
-# Measures actual display width (handles mixed 1-cell nerd font + 2-cell emoji).
-# Sets REPLY to integer width.
-measure_display_width() {
-	REPLY=$(printf '%s' "$1" | wc -L)
-}
-
-# strip_tmux_colors STRING
-# Removes tmux #[...] color codes from a string.
-# Sets REPLY to stripped string.
-strip_tmux_colors() {
-	REPLY=$(printf '%s' "$1" | sed 's/#\[[^]]*\]//g')
+	REPLY_DW=$((count * 3))
 }
 
 # pad_to_width STRING CURRENT_WIDTH TARGET_WIDTH

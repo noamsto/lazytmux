@@ -93,6 +93,7 @@ while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
 
 	build_proc_icons "${win_proc_list[$target]:-}" "$MAX_ICONS"
 	icons="$REPLY"
+	icons_dw=$REPLY_DW
 
 	claude_priority_state \
 		"${win_waiting[$target]:-0}" "${win_compacting[$target]:-0}" \
@@ -100,12 +101,11 @@ while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
+		((icons_dw += 3)) # 2-cell icon + 1 space
 	fi
 
-	strip_tmux_colors "$icons"
-	measure_display_width "$REPLY"
 	win_icons_str[$target]="$icons"
-	win_icons_dw[$target]=$REPLY
+	win_icons_dw[$target]=$icons_dw
 done < <(tmux list-windows -a -F '#{session_name}	#{session_id}	#{window_index}	#{session_path}')
 
 # Per-session icons (capped at MAX_ICONS_PICKER for more coverage)
@@ -114,6 +114,7 @@ while IFS=$'\t' read -r sess sess_id; do
 
 	build_proc_icons "${sess_proc_list[$sess]:-}" "$MAX_ICONS_PICKER"
 	icons="$REPLY"
+	icons_dw=$REPLY_DW
 
 	claude_priority_state \
 		"${sess_waiting[$sess]:-0}" "${sess_compacting[$sess]:-0}" \
@@ -121,12 +122,11 @@ while IFS=$'\t' read -r sess sess_id; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
+		((icons_dw += 3)) # 2-cell icon + 1 space
 	fi
 
-	strip_tmux_colors "$icons"
-	measure_display_width "$REPLY"
 	sess_icons_str[$sess]="$icons"
-	sess_icons_dw[$sess]=$REPLY
+	sess_icons_dw[$sess]=$icons_dw
 done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 
 # --- Compute dynamic column widths ---

@@ -72,6 +72,7 @@ while IFS=$'\t' read -r sess _; do
 
 	build_proc_icons "${sess_proc_list[$sess]:-}" "$MAX_ICONS"
 	icons="$REPLY"
+	icons_dw=$REPLY_DW
 
 	# Append claude status icon
 	claude_priority_state \
@@ -80,13 +81,11 @@ while IFS=$'\t' read -r sess _; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
+		((icons_dw += 3)) # 2-cell icon + 1 space
 	fi
 
-	# Measure display width (strip tmux color codes before measuring)
-	strip_tmux_colors "$icons"
-	measure_display_width "$REPLY"
 	sess_icons_map[$sess]="$icons"
-	sess_icons_dw[$sess]=$REPLY
+	sess_icons_dw[$sess]=$icons_dw
 done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
 unset sess_proc_list
 
