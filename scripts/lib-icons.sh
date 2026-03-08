@@ -12,14 +12,16 @@ FALLBACK_ICON="@FALLBACK_ICON@"
 # _icon_cell_width CHAR
 # Determines display width of a single icon character from its Unicode codepoint.
 # Nerd Font PUA (U+E000-F8FF, U+F0000+): 1 cell. Emoji/other: 2 cells.
-# Sets REPLY to integer width.
+# Sets _ICW to integer width (avoids clobbering REPLY used by callers).
 _icon_cell_width() {
 	local -i cp
 	printf -v cp '%d' "'${1:0:1}"
-	if ((cp >= 0xE000 && cp <= 0xF8FF)) || ((cp >= 0xF0000)); then
-		REPLY=1
+	if ((cp == 0)); then
+		_ICW=2 # unrecognized → assume wide
+	elif ((cp >= 0xE000 && cp <= 0xF8FF)) || ((cp >= 0xF0000)); then
+		_ICW=1
 	else
-		REPLY=2
+		_ICW=2
 	fi
 }
 
@@ -39,7 +41,7 @@ build_proc_icons() {
 		[[ -z $icon ]] && continue
 		REPLY+="$icon "
 		_icon_cell_width "$icon"
-		((REPLY_DW += REPLY + 1)) # icon width + 1 space
+		((REPLY_DW += _ICW + 1)) # icon width + 1 space
 		((count++)) || true
 	done
 }
