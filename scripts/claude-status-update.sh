@@ -14,24 +14,36 @@ PANES_DIR="$STATE_DIR/panes"
 # Ensure directories exist
 mkdir -p "$PANES_DIR"
 
-# Function to clean up stale pane entries (panes that no longer exist in tmux)
+# Function to clean up stale pane entries
+# Removes entries for panes that either:
+#   1. No longer exist in tmux
+#   2. Exist but are no longer running claude
 cleanup_stale_panes() {
 	[[ -d $PANES_DIR ]] || return 0
 	command -v tmux &>/dev/null || return 0
 
-	# Build associative array of active tmux pane IDs for O(1) lookup
-	declare -A active
-	while IFS= read -r pid; do
-		active["${pid#%}"]=1
-	done < <(tmux list-panes -a -F '#{pane_id}' 2>/dev/null || true)
+	# Build lookup: pane_id (without %) -> current_command
+	declare -A pane_commands
+	while IFS=$'\t' read -r pid cmd; do
+		pane_commands["${pid#%}"]="$cmd"
+	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
 
 	# Check each pane file
 	for pf in "$PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
 		local pane_file="${pf##*/}"
 
-		# If pane doesn't exist in tmux, remove the file
-		if [[ -z ${active[$pane_file]+x} ]]; then
+		local should_remove=false
+
+		if [[ -z ${pane_commands[$pane_file]+x} ]]; then
+			# Pane no longer exists in tmux
+			should_remove=true
+		elif [[ ${pane_commands[$pane_file]} != "claude" ]]; then
+			# Pane exists but is no longer running claude
+			should_remove=true
+		fi
+
+		if $should_remove; then
 			rm -f "$pf"
 		fi
 	done
