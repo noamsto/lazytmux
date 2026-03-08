@@ -71,7 +71,7 @@ while IFS='|' read -r idx _; do
 	claude_state_icon "$c_state"
 	if [[ -n $REPLY ]]; then
 		icon+="$REPLY "
-		((icon_dw += 3)) # 2-cell icon + 1 space
+		((icon_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
 
 	win_icons[$idx]="$icon"
@@ -84,8 +84,8 @@ active_proc=$(tmux display-message -t "$SESSION" -p '#{pane_current_command}' 2>
 tmux set -q -t "$SESSION" @active_pane_icon "${ICON_MAP[$active_proc]:-}"
 
 # --- Second pass: set unpadded + padded icon variables ---
-# Fixed column: worst case MAX_ICONS icons (3 cells each) + 1 claude icon (3 cells)
-TARGET_DW=$(((MAX_ICONS + 1) * 3))
+# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
+TARGET_DW=$((MAX_ICONS * 3 + 2))
 for idx in "${all_idx[@]}"; do
 	target="${SESSION}:${idx}"
 

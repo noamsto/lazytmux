@@ -81,7 +81,7 @@ while IFS=$'\t' read -r sess _; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
-		((icons_dw += 3)) # 2-cell icon + 1 space
+		((icons_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
 
 	sess_icons_map[$sess]="$icons"

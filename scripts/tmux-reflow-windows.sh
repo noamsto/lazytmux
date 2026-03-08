@@ -68,8 +68,8 @@ done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_com
 unset win_seen
 
 # --- Build icon strings with fixed-width padding (stable layout across icon changes) ---
-# Fixed column: worst case MAX_ICONS icons (3 cells each) + 1 claude icon (3 cells)
-max_icon_width=$(((MAX_ICONS + 1) * 3))
+# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
+max_icon_width=$((MAX_ICONS * 3 + 2))
 declare -A win_icon_str
 
 for idx in "${indices[@]}"; do

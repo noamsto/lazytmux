@@ -101,7 +101,7 @@ while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
-		((icons_dw += 3)) # 2-cell icon + 1 space
+		((icons_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
 
 	win_icons_str[$target]="$icons"
@@ -122,7 +122,7 @@ while IFS=$'\t' read -r sess sess_id; do
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
-		((icons_dw += 3)) # 2-cell icon + 1 space
+		((icons_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
 
 	sess_icons_str[$sess]="$icons"

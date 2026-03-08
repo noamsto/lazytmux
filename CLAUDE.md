@@ -58,9 +58,9 @@ Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to a
 ### Two Icon Variables
 
 - `@window_icon_display` — unpadded, used in `automatic-rename-format` (window tab names) and top-right status
-- `@window_icon_padded` — fixed-width padded to `(MAX_ICONS + 1) * 3` cells, used in status-format ENTRY for `|` separator alignment. Set by both `tmux-update-icons` (every 1s) and `tmux-reflow-windows` (on layout events)
+- `@window_icon_padded` — fixed-width padded to `MAX_ICONS * 3 + 2` cells, used in status-format ENTRY for `|` separator alignment. Set by both `tmux-update-icons` (every 1s) and `tmux-reflow-windows` (on layout events)
 
-Icon display width is computed from icon count (each icon = 2 display cells + 1 space = 3 cells per icon). `wc -L` is unreliable for nerd font glyphs (reports 0 for PUA range) and emoji with variant selectors.
+Icon display width is computed per-icon from Unicode codepoint: nerd font PUA (U+E000-F8FF, U+F0000+) = 1 cell, emoji/other = 2 cells, plus 1 space each. `wc -L` is unreliable for nerd font glyphs (reports 0 for PUA range) and emoji with variant selectors.
 
 ### Status Bar Layout
 
