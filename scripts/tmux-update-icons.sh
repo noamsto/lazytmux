@@ -13,6 +13,8 @@ source @lib_claude@
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 MAX_ICONS=@MAX_ICONS@
 
+setup_claude_colors
+
 # --- Claude status: read pane files, bucket by window index ---
 declare -A pane_to_win
 while IFS=$'\t' read -r pane_id win_idx; do
@@ -68,9 +70,9 @@ while IFS='|' read -r idx _; do
 
 	# Append claude status icon (shares the icon column)
 	c_state="${win_claude_state[$idx]:-}"
-	claude_state_icon "$c_state"
+	claude_colored_icon "$c_state"
 	if [[ -n $REPLY ]]; then
-		icon+="$REPLY "
+		icon+="$REPLY"
 		((icon_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
 
