@@ -170,6 +170,8 @@ if ((!needs_multiline && current_line == 0)); then
 	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
 	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
 	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
+	# tmux leaves an empty array container after unsetting all indices — clear it too
+	tmux set -u -t "$SESSION" status-format 2>/dev/null || true
 elif ((current_line == 0)); then
 	# Preserve status-format[0] at session level (all-or-nothing override)
 	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
