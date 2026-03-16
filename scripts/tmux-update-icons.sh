@@ -2,7 +2,7 @@
 # Lightweight icon updater called via #() every status-interval.
 # Updates @window_icon_display (unpadded, for window names / top-right)
 # and @window_icon_padded (fixed-width, for status bar alignment).
-# Includes claude status icon in the padded column.
+# Includes colored claude status icon in both variables.
 # Outputs nothing (side-effect only).
 
 # shellcheck source=/dev/null  # Nix store paths substituted at build time
@@ -12,6 +12,8 @@ source @lib_claude@
 
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 MAX_ICONS=@MAX_ICONS@
+
+setup_claude_colors
 
 # --- Claude status: read pane files, bucket by window index ---
 declare -A pane_to_win
@@ -42,7 +44,7 @@ fi
 
 # --- First pass: compute process icons + claude per window, measure display widths ---
 declare -a all_idx=()
-declare -A win_icons win_icon_dw win_proc_icons
+declare -A win_icons win_icon_dw win_display
 
 while IFS='|' read -r idx _; do
 	target="${SESSION}:${idx}"
@@ -66,17 +68,21 @@ while IFS='|' read -r idx _; do
 	icon="$REPLY"
 	icon_dw=$REPLY_DW
 
-	# Append claude status icon (shares the icon column)
+	# Append colored claude status icon (shares the icon column)
 	c_state="${win_claude_state[$idx]:-}"
-	claude_state_icon "$c_state"
+	display="${proc_icon_str}"
+	claude_colored_icon "$c_state"
 	if [[ -n $REPLY ]]; then
-		icon+="$REPLY "
+		icon+="$REPLY"
 		((icon_dw += 2)) # 1-cell nerd font icon + 1 space
+		# Add to display with space separator if process icons exist
+		[[ -n $display ]] && display+=" "
+		display+="${REPLY% }" # strip trailing space for display
 	fi
 
 	win_icons[$idx]="$icon"
 	win_icon_dw[$idx]=$icon_dw
-	win_proc_icons[$idx]="$proc_icon_str"
+	win_display[$idx]="$display"
 done < <(tmux list-windows -t "$SESSION" -F '#{window_index}|')
 
 # Set active pane icon for top-right display
@@ -89,8 +95,8 @@ TARGET_DW=$((MAX_ICONS * 3 + 2))
 for idx in "${all_idx[@]}"; do
 	target="${SESSION}:${idx}"
 
-	# Unpadded (for window names — process icons only, no claude)
-	tmux set -qw -t "$target" @window_icon_display "${win_proc_icons[$idx]}"
+	# Unpadded (for window names — process icons + colored claude)
+	tmux set -qw -t "$target" @window_icon_display "${win_display[$idx]}"
 
 	# Padded (for status bar — process icons + claude, fixed width)
 	pad_to_width "${win_icons[$idx]}" "${win_icon_dw[$idx]}" "$TARGET_DW"
