@@ -38,88 +38,88 @@
   # Languages & runtimes
   cargo = "";
   deno = "";
-  go = "";
+  go = "";
   java = "";
-  node = "";
+  node = "";
   perl = "";
   php = "";
-  python = "";
-  python3 = "";
-  "Python" = "";
+  python = "";
+  python3 = "";
+  "Python" = "";
   ruby = "";
-  rustc = "";
-  rustup = "";
+  rustc = "";
+  rustup = "";
   scala = "";
   swift = "";
-  zig = "";
+  zig = "↯";
 
   # Package managers
   apt = "";
   brew = "";
   dnf = "";
   nix = "❄️";
-  npm = "";
+  npm = "";
   pacman = "";
   paru = "";
-  pip = "";
-  pip3 = "";
-  yarn = "";
+  pip = "";
+  pip3 = "";
+  yarn = "";
   yay = "";
 
   # Build tools
-  cmake = "";
-  gcc = "";
+  cmake = "";
+  gcc = "";
   gradle = "";
-  just = "";
-  make = "";
+  just = "";
+  make = "";
   bazel = "";
 
   # Containers & cloud
-  docker = "";
-  helm = "";
-  k9s = "";
-  kubectl = "";
-  lazydocker = "";
-  terraform = "";
-  aws = "";
-  gcloud = "";
+  docker = "";
+  helm = "󱃾";
+  k9s = "󱃾";
+  kubectl = "󱃾";
+  lazydocker = "";
+  terraform = "";
+  aws = "";
+  gcloud = "";
 
   # System & monitoring
-  btm = "";
-  btop = "";
-  htop = "";
-  top = "";
-  glances = "";
-  sudo = "";
-  systemctl = "";
+  btm = "";
+  btop = "";
+  htop = "";
+  top = "";
+  glances = "";
+  sudo = "";
+  systemctl = "";
 
   # Network
-  curl = "";
-  ping = "";
-  ssh = "";
-  scp = "";
-  wget = "";
-  gping = "";
+  curl = "";
+  ping = "";
+  ssh = "󰣀";
+  scp = "󰣀";
+  wget = "";
+  gping = "";
 
   # Databases
-  mongo = "";
-  mysql = "";
-  psql = "";
-  redis = "";
-  sqlite = "";
+  mongo = "";
+  mysql = "";
+  psql = "";
+  redis = "";
+  sqlite = "";
 
   # File managers & tools
-  bat = "";
+  bat = "󰭟";
   lf = "";
   ranger = "";
-  yazi = "";
-  rsync = "";
-  zip = "";
-  unzip = "";
+  yazi = "";
+  rsync = "";
+  zip = "";
+  unzip = "";
 
   # Terminals & multiplexers
-  tmux = "";
-  screen = "";
+  tmux = "";
+  screen = "";
 
   # Other
   gpg = "";
