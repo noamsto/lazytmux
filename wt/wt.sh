@@ -52,7 +52,8 @@ Usage:
   wt -q <branch>        Quiet mode (only output path)
   wt -n <branch>        No tmux (skip window creation/switching)
   wt -yqn <branch>      Combine flags (for Claude/scripts)
-  wt z [query]          Fuzzy find worktree, output path (use: cd "$(wt z)")
+  wt z [query]          Fuzzy find worktree, switch window, output path (cd "$(wt z)")
+  wt -n z [query]       Fuzzy find worktree, output path only (no tmux update)
   wt main               Switch to root repository window
   wt list               List all worktrees
   wt remove <branch>    Remove worktree + kill window
@@ -696,6 +697,14 @@ wt_z() {
 		# No query - interactive pick from all worktrees
 		result=$(printf '%s\n' "${worktree_paths[@]}" | gum filter --placeholder "Select worktree...")
 		[[ -z $result ]] && return 1
+	fi
+
+	# Update current tmux window metadata to reflect the chosen worktree
+	if [[ $NO_SWITCH != "true" && -n ${TMUX:-} ]]; then
+		local branch_name
+		branch_name=$(basename "$result")
+		tmux set-option -w @worktree "$result"
+		tmux set-option -w @branch "$branch_name"
 	fi
 
 	echo "$result"
