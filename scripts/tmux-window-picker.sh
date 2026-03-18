@@ -31,8 +31,8 @@ while IFS=$'\t' read -r pane_id sess win_idx; do
 done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}	#{window_index}')
 
 # Per-window and per-session claude state tallies
-declare -A win_waiting win_compacting win_processing win_done win_idle
-declare -A sess_waiting sess_compacting sess_processing sess_done sess_idle
+declare -A win_waiting win_compacting win_processing win_done win_idle win_error
+declare -A sess_waiting sess_compacting sess_processing sess_done sess_idle sess_error
 
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
@@ -50,6 +50,7 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		processing) win_processing[$target]=$((${win_processing[$target]:-0} + 1)) ;;
 		done) win_done[$target]=$((${win_done[$target]:-0} + 1)) ;;
 		idle) win_idle[$target]=$((${win_idle[$target]:-0} + 1)) ;;
+		error) win_error[$target]=$((${win_error[$target]:-0} + 1)) ;;
 		esac
 		# Tally per session
 		case "$state" in
@@ -58,6 +59,7 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		processing) sess_processing[$sess]=$((${sess_processing[$sess]:-0} + 1)) ;;
 		done) sess_done[$sess]=$((${sess_done[$sess]:-0} + 1)) ;;
 		idle) sess_idle[$sess]=$((${sess_idle[$sess]:-0} + 1)) ;;
+		error) sess_error[$sess]=$((${sess_error[$sess]:-0} + 1)) ;;
 		esac
 	done
 fi
@@ -97,7 +99,8 @@ while IFS=$'\t' read -r sess sess_id win_idx sess_path; do
 
 	claude_priority_state \
 		"${win_waiting[$target]:-0}" "${win_compacting[$target]:-0}" \
-		"${win_processing[$target]:-0}" "${win_done[$target]:-0}" "${win_idle[$target]:-0}"
+		"${win_processing[$target]:-0}" "${win_done[$target]:-0}" "${win_idle[$target]:-0}" \
+		"${win_error[$target]:-0}"
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"
@@ -118,7 +121,8 @@ while IFS=$'\t' read -r sess sess_id; do
 
 	claude_priority_state \
 		"${sess_waiting[$sess]:-0}" "${sess_compacting[$sess]:-0}" \
-		"${sess_processing[$sess]:-0}" "${sess_done[$sess]:-0}" "${sess_idle[$sess]:-0}"
+		"${sess_processing[$sess]:-0}" "${sess_done[$sess]:-0}" "${sess_idle[$sess]:-0}" \
+		"${sess_error[$sess]:-0}"
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"

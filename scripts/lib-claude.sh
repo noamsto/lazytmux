@@ -9,6 +9,7 @@ CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
 CLAUDE_ICON_DONE="󰸞"
 CLAUDE_ICON_IDLE="󰒲"
+CLAUDE_ICON_ERROR="󰅚" # nerd: nf-md-close_circle_outline
 
 # Timestamp cache (set once per script invocation)
 printf -v CLAUDE_NOW '%(%s)T' -1
@@ -36,6 +37,7 @@ read_pane_state() {
 		[[ $state == "waiting" && $age -gt 30 ]] && state="processing"
 		[[ $state == "compacting" && $age -gt 60 ]] && state="done"
 		[[ $state == "processing" && $age -gt 15 ]] && state="done"
+		[[ $state == "error" && $age -gt 120 ]] && state="done"
 	fi
 
 	REPLY="$state"
@@ -51,6 +53,7 @@ claude_state_icon() {
 	compacting) REPLY="$CLAUDE_ICON_COMPACTING" ;;
 	done) REPLY="$CLAUDE_ICON_DONE" ;;
 	idle) REPLY="$CLAUDE_ICON_IDLE" ;;
+	error) REPLY="$CLAUDE_ICON_ERROR" ;;
 	*) REPLY="" ;;
 	esac
 }
@@ -66,9 +69,9 @@ setup_claude_colors() {
 	fi
 
 	if [[ $theme == "light" ]]; then
-		C_W="#[fg=#fe640b]" C_K="#[fg=#04a5e5]" C_P="#[fg=#179299]" C_D="#[fg=#40a02b]" C_I="#[fg=#6c6f85]"
+		C_W="#[fg=#fe640b]" C_K="#[fg=#04a5e5]" C_P="#[fg=#179299]" C_D="#[fg=#40a02b]" C_I="#[fg=#6c6f85]" C_E="#[fg=#d20f39]"
 	else
-		C_W="#[fg=#fab387]" C_K="#[fg=#89dceb]" C_P="#[fg=#94e2d5]" C_D="#[fg=#a6e3a1]" C_I="#[fg=#6c7086]"
+		C_W="#[fg=#fab387]" C_K="#[fg=#89dceb]" C_P="#[fg=#94e2d5]" C_D="#[fg=#a6e3a1]" C_I="#[fg=#6c7086]" C_E="#[fg=#f38ba8]"
 	fi
 	C_R="#[fg=default]"
 }
@@ -100,17 +103,23 @@ claude_colored_icon() {
 		icon="$CLAUDE_ICON_IDLE"
 		color=$C_I
 		;;
+	error)
+		icon="$CLAUDE_ICON_ERROR"
+		color=$C_E
+		;;
 	*) REPLY="" && return ;;
 	esac
 	REPLY="${color}${icon}${C_R} "
 }
 
-# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE
+# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR
 # Given counts per state, returns the highest-priority non-zero state.
 # Sets REPLY to state string, empty if all zero.
 claude_priority_state() {
-	local w=$1 k=$2 p=$3 d=$4 i=$5
-	if ((w > 0)); then
+	local w=$1 k=$2 p=$3 d=$4 i=$5 e=${6:-0}
+	if ((e > 0)); then
+		REPLY="error"
+	elif ((w > 0)); then
 		REPLY="waiting"
 	elif ((k > 0)); then
 		REPLY="compacting"

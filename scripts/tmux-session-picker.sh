@@ -24,7 +24,7 @@ icon_dir=$(tmux show -gv @icon_dir 2>/dev/null || echo "")
 icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 
 # --- Claude status: read all pane files once, bucket by session ---
-declare -A sess_claude_waiting sess_claude_compacting sess_claude_processing sess_claude_done sess_claude_idle
+declare -A sess_claude_waiting sess_claude_compacting sess_claude_processing sess_claude_done sess_claude_idle sess_claude_error
 
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
@@ -45,6 +45,7 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		processing) sess_claude_processing[$pane_session]=$((${sess_claude_processing[$pane_session]:-0} + 1)) ;;
 		done) sess_claude_done[$pane_session]=$((${sess_claude_done[$pane_session]:-0} + 1)) ;;
 		idle) sess_claude_idle[$pane_session]=$((${sess_claude_idle[$pane_session]:-0} + 1)) ;;
+		error) sess_claude_error[$pane_session]=$((${sess_claude_error[$pane_session]:-0} + 1)) ;;
 		esac
 	done
 fi
@@ -77,7 +78,8 @@ while IFS=$'\t' read -r sess _; do
 	# Append claude status icon
 	claude_priority_state \
 		"${sess_claude_waiting[$sess]:-0}" "${sess_claude_compacting[$sess]:-0}" \
-		"${sess_claude_processing[$sess]:-0}" "${sess_claude_done[$sess]:-0}" "${sess_claude_idle[$sess]:-0}"
+		"${sess_claude_processing[$sess]:-0}" "${sess_claude_done[$sess]:-0}" "${sess_claude_idle[$sess]:-0}" \
+		"${sess_claude_error[$sess]:-0}"
 	if [[ -n $REPLY ]]; then
 		claude_colored_icon "$REPLY"
 		icons+="$REPLY"

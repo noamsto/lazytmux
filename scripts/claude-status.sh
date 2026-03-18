@@ -24,7 +24,7 @@ source @lib_claude@
 
 # --- Counting ---
 
-count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 total=0
+count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 total=0
 
 tally_state() {
 	((total++)) || true
@@ -34,6 +34,7 @@ tally_state() {
 	compacting) ((count_compacting++)) || true ;;
 	done) ((count_done++)) || true ;;
 	idle) ((count_idle++)) || true ;;
+	error) ((count_error++)) || true ;;
 	esac
 }
 
@@ -62,7 +63,7 @@ count_for_session() {
 }
 
 get_priority_state() {
-	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle"
+	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle" "$count_error"
 }
 
 # --- Output Formatting ---
@@ -95,6 +96,7 @@ format_output() {
 		[[ $count_processing -eq 0 ]] || parts+=("$count_processing processing")
 		[[ $count_waiting -eq 0 ]] || parts+=("$count_waiting waiting")
 		[[ $count_compacting -eq 0 ]] || parts+=("$count_compacting compacting")
+		[[ $count_error -eq 0 ]] || parts+=("$count_error error")
 		[[ $count_done -eq 0 ]] || parts+=("$count_done done")
 		[[ $count_idle -eq 0 ]] || parts+=("$count_idle idle")
 		local IFS=", "
@@ -110,6 +112,7 @@ format_output() {
 		processing) gum_color=183 label="$count_processing working" ;;
 		done) gum_color=151 label="$count_done done" ;;
 		idle) gum_color=245 label="$count_idle idle" ;;
+		error) gum_color=196 label="$count_error error" ;;
 		esac
 		gum style --foreground "$gum_color" "$icon $label" 2>/dev/null || echo "$icon $label"
 		;;
