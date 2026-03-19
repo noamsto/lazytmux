@@ -25,6 +25,7 @@ icon_branch=$(tmux show -gv @icon_branch 2>/dev/null || echo "")
 
 # --- Claude status: read all pane files once, bucket by session ---
 declare -A sess_claude_waiting sess_claude_compacting sess_claude_processing sess_claude_done sess_claude_idle sess_claude_error
+declare -A sess_claude_stale
 
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
@@ -47,6 +48,9 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		idle) sess_claude_idle[$pane_session]=$((${sess_claude_idle[$pane_session]:-0} + 1)) ;;
 		error) sess_claude_error[$pane_session]=$((${sess_claude_error[$pane_session]:-0} + 1)) ;;
 		esac
+		# Track staleness: non-stale pane clears the flag
+		[[ $REPLY_STALE == 0 ]] && sess_claude_stale[$pane_session]=0
+		[[ -n ${sess_claude_stale[$pane_session]+x} ]] || sess_claude_stale[$pane_session]=1
 	done
 fi
 
@@ -81,7 +85,7 @@ while IFS=$'\t' read -r sess _; do
 		"${sess_claude_processing[$sess]:-0}" "${sess_claude_done[$sess]:-0}" "${sess_claude_idle[$sess]:-0}" \
 		"${sess_claude_error[$sess]:-0}"
 	if [[ -n $REPLY ]]; then
-		claude_colored_icon "$REPLY"
+		claude_colored_icon "$REPLY" "${sess_claude_stale[$sess]:-0}"
 		icons+="$REPLY"
 		((icons_dw += 2)) # 1-cell nerd font icon + 1 space
 	fi
