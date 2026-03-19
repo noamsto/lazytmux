@@ -25,6 +25,7 @@ source @lib_claude@
 # --- Counting ---
 
 count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 total=0
+all_stale=1 # assume stale until a non-stale pane proves otherwise
 
 tally_state() {
 	((total++)) || true
@@ -36,6 +37,7 @@ tally_state() {
 	idle) ((count_idle++)) || true ;;
 	error) ((count_error++)) || true ;;
 	esac
+	[[ $REPLY_STALE == 1 ]] || all_stale=0
 }
 
 count_for_window() {
@@ -69,7 +71,7 @@ get_priority_state() {
 # --- Output Formatting ---
 
 format_output() {
-	local state="$1" count="$2" format="$3" leading_space="$4"
+	local state="$1" count="$2" format="$3" leading_space="$4" stale="${5:-0}"
 	[[ -n $state ]] || return 0
 
 	local prefix=""
@@ -84,7 +86,7 @@ format_output() {
 		;;
 	icon-color)
 		setup_claude_colors
-		claude_colored_icon "$state"
+		claude_colored_icon "$state" "$stale"
 		echo "${prefix}${REPLY}"
 		;;
 	short)
@@ -160,7 +162,7 @@ pane)
 	read_pane_state "$CLAUDE_PANES_DIR/${target#%}" || exit 0
 	tally_state "$REPLY"
 	get_priority_state
-	format_output "$REPLY" 1 "$format" "true"
+	format_output "$REPLY" 1 "$format" "true" "$all_stale"
 	;;
 window)
 	count_for_window "$target"
@@ -170,12 +172,12 @@ window)
 		exit 0
 	fi
 	get_priority_state
-	format_output "$REPLY" "$total" "$format" "true"
+	format_output "$REPLY" "$total" "$format" "true" "$all_stale"
 	;;
 session)
 	count_for_session "$target"
 	[[ $total -gt 0 ]] || exit 0
 	get_priority_state
-	format_output "$REPLY" "$total" "$format" "false"
+	format_output "$REPLY" "$total" "$format" "false" "$all_stale"
 	;;
 esac

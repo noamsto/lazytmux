@@ -14,9 +14,15 @@ CLAUDE_ICON_ERROR="󰅚" # nerd: nf-md-close_circle_outline
 # Timestamp cache (set once per script invocation)
 printf -v CLAUDE_NOW '%(%s)T' -1
 
+# Staleness thresholds (seconds) — icon stays, color dims past these
+CLAUDE_STALE_WAITING=30
+CLAUDE_STALE_COMPACTING=60
+CLAUDE_STALE_PROCESSING=15
+CLAUDE_STALE_ERROR=120
+
 # read_pane_state PANE_FILE_PATH
-# Reads a pane state file with staleness checks.
-# Sets REPLY to the (possibly adjusted) state string.
+# Reads a pane state file and checks staleness.
+# Sets REPLY to the state string, REPLY_STALE to 0 or 1.
 # Returns 1 if file doesn't exist or has no state.
 read_pane_state() {
 	local pane_file="$1"
@@ -32,13 +38,14 @@ read_pane_state() {
 
 	[[ -n $state ]] || return 1
 
+	REPLY_STALE=0
 	if [[ -n $timestamp ]]; then
 		local age=$((CLAUDE_NOW - timestamp))
 		case "$state" in
-		waiting) ((age > 30)) && state="processing" ;;
-		compacting) ((age > 60)) && state="done" ;;
-		processing) ((age > 15)) && state="done" ;;
-		error) ((age > 120)) && state="done" ;;
+		waiting) ((age > CLAUDE_STALE_WAITING)) && REPLY_STALE=1 ;;
+		compacting) ((age > CLAUDE_STALE_COMPACTING)) && REPLY_STALE=1 ;;
+		processing) ((age > CLAUDE_STALE_PROCESSING)) && REPLY_STALE=1 ;;
+		error) ((age > CLAUDE_STALE_ERROR)) && REPLY_STALE=1 ;;
 		esac
 	fi
 
@@ -78,9 +85,10 @@ setup_claude_colors() {
 	C_R="#[fg=default]"
 }
 
-# claude_colored_icon STATE
+# claude_colored_icon STATE [STALE]
 # Returns tmux-colored icon string for a state.
 # Sets REPLY to "#[fg=...]ICON#[fg=default] " or empty if unknown.
+# If STALE=1, uses dim color (C_I) instead of the state's color.
 # Must call setup_claude_colors first.
 claude_colored_icon() {
 	local icon color
@@ -111,6 +119,7 @@ claude_colored_icon() {
 		;;
 	*) REPLY="" && return ;;
 	esac
+	[[ ${2:-0} == 1 ]] && color=$C_I
 	REPLY="${color}${icon}${C_R} "
 }
 
