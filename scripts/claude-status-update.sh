@@ -113,6 +113,22 @@ if [[ $state == "clear" ]]; then
 	exit 0
 fi
 
+# Don't let "processing" overwrite higher-priority interactive states.
+# Parallel subagents fire PreToolUse/PostToolUse rapidly, which would
+# clobber "waiting"/"error" set by PermissionRequest/StopFailure hooks.
+if [[ $state == "processing" && -f "$PANES_DIR/$pane_file" ]]; then
+	cur_state=""
+	while IFS='=' read -r key val; do
+		[[ $key == "state" ]] && {
+			cur_state="$val"
+			break
+		}
+	done <"$PANES_DIR/$pane_file"
+	case "$cur_state" in
+	waiting | error) exit 0 ;;
+	esac
+fi
+
 # Write pane state with timestamp
 printf -v _now '%(%s)T' -1
 cat >"$PANES_DIR/$pane_file" <<EOF
