@@ -92,10 +92,14 @@ func main() {
 	reset := "\033[0m"
 	dim := "\033[2m"
 
-	// Sort by most recently attached (only changes on session switch, not
-	// on every keystroke like session_activity — stable across refreshes)
+	// Sort by most recently attached, then alphabetically as tiebreaker.
+	// session_last_attached only changes on session switch (not every
+	// keystroke like session_activity), so order is stable across refreshes.
 	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].activity > sessions[j].activity
+		if sessions[i].activity != sessions[j].activity {
+			return sessions[i].activity > sessions[j].activity
+		}
+		return sessions[i].name < sessions[j].name
 	})
 
 	// Build icon strings and compute column widths
