@@ -11,17 +11,20 @@ if [[ ${1:-} == "--generate" ]]; then
 fi
 
 SELF="$0"
-CURL=@curl@
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
 # Background refresh: sends reload every 1s via fzf's HTTP API.
-# Self-terminates when curl fails (fzf closed, port gone).
+# Uses bash /dev/tcp (no curl dependency). Self-terminates on closed port.
 (
 	sleep 1
 	while sleep 1; do
-		"$CURL" -s -XPOST "localhost:$PORT" \
-			-d "reload($SELF --generate)" 2>/dev/null || exit 0
+		body="reload($SELF --generate)"
+		exec 3<>/dev/tcp/127.0.0.1/"$PORT" 2>/dev/null || exit 0
+		printf 'POST / HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n%s' \
+			"${#body}" "$body" >&3
+		cat <&3 >/dev/null 2>&1
+		exec 3>&-
 	done
 ) &
 
