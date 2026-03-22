@@ -174,8 +174,10 @@ PORT=$((RANDOM % 10000 + 40000))
 
 # Background reload loop: auto-killed when popup closes (same process group).
 (
-	sleep 2
-	while sleep 2; do
+	sleep 0.1 # fzf needs a moment to bind
+	"$CURL" -s -XPOST "localhost:$PORT" \
+		-d "reload($SELF --generate)" 2>/dev/null || true
+	while sleep 1; do
 		"$CURL" -s -XPOST "localhost:$PORT" \
 			-d "reload($SELF --generate)" 2>/dev/null || exit 0
 	done
