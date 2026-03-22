@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"encoding/json"
 )
 
 // Build-time constants injected via icons_generated.go:
@@ -446,29 +446,20 @@ func detectTheme() string {
 	if err != nil {
 		return "dark"
 	}
-	// Simple parse: find "theme":"light" or "theme":"dark"
-	s := string(data)
-	idx := strings.Index(s, `"theme"`)
-	if idx < 0 {
+	var cfg struct {
+		Theme string `json:"theme"`
+	}
+	if json.Unmarshal(data, &cfg) != nil || cfg.Theme == "" {
 		return "dark"
 	}
-	rest := s[idx+7:]
-	// Skip whitespace and colon
-	for len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t' || rest[0] == ':' || rest[0] == '\n') {
-		rest = rest[1:]
-	}
-	if len(rest) > 0 && rest[0] == '"' {
-		rest = rest[1:]
-		if end := strings.IndexByte(rest, '"'); end > 0 {
-			return rest[:end]
-		}
-	}
-	return "dark"
+	return cfg.Theme
 }
 
-// readTmuxOpts reads all global tmux user options in a single call.
+// readTmuxOpts reads only the needed tmux options in a single call.
 func readTmuxOpts() map[string]string {
-	out, err := exec.Command("tmux", "show", "-g").Output()
+	out, err := exec.Command("tmux", "show", "-g",
+		"@thm_mauve", "@thm_blue", "@thm_subtext_0",
+		"@icon_dir", "@icon_session").Output()
 	if err != nil {
 		return nil
 	}
@@ -494,20 +485,3 @@ func envOrMap(envKey string, tmuxOpts map[string]string, tmuxOpt, fallback strin
 	return fallback
 }
 
-// Compat helpers (Go 1.21+ has these in stdlib, but being safe)
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// Ensure utf8 import is used (iconCellWidth iterates runes)
-var _ = utf8.RuneLen
