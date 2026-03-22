@@ -469,9 +469,11 @@ func readTmuxOpts() map[string]string {
 	}
 	m := make(map[string]string)
 	for _, line := range strings.Split(string(out), "\n") {
-		// Format: "option-name value" or "@user_option value"
+		// Format: "option-name value" or "@user_option \"value\""
 		if i := strings.IndexByte(line, ' '); i > 0 {
-			m[line[:i]] = strings.TrimRight(line[i+1:], " \t\r")
+			v := strings.TrimRight(line[i+1:], " \t\r")
+			v = strings.Trim(v, "\"") // tmux wraps values in quotes
+			m[line[:i]] = v
 		}
 	}
 	return m
