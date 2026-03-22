@@ -196,6 +196,7 @@ fi
 SELF="$0"
 CURL=@curl@
 PORT=$((RANDOM % 10000 + 40000))
+THM_MANTLE=$(tmux show -gv @thm_mantle 2>/dev/null || echo '#181825')
 
 # Background reload loop: auto-killed when popup closes (same process group).
 (
@@ -217,6 +218,7 @@ selected=$(
 		--nth 2 \
 		--header-lines 1 \
 		--layout reverse \
+		--color "bg:$THM_MANTLE,bg+:$THM_MANTLE" \
 		--border rounded \
 		--border-label ' Sessions ' \
 		--pointer '▸' \
