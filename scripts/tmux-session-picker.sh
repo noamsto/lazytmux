@@ -8,7 +8,6 @@
 set -euo pipefail
 
 FZF=@fzf@
-CURL=@curl@
 
 # --- Generate mode: output one line per session for fzf ---
 # Handles its own library sourcing and tmux queries.
@@ -171,24 +170,11 @@ fi
 # Libraries and tmux queries happen in --generate subprocess, not here.
 
 SELF="$0"
-PORT=$((RANDOM % 10000 + 40000))
 
-# Background loop: reload fzf every 2s via its HTTP API.
-# Self-terminates when curl fails (fzf closed, port gone).
-(
-	sleep 2 # give fzf time to bind
-	while sleep 2; do
-		"$CURL" -s -XPOST "localhost:$PORT" \
-			-d "reload($SELF --generate)" 2>/dev/null || exit 0
-	done
-) &
-disown
-
-# fzf inherits the popup's TTY (no stdin redirect — /dev/null causes early exit).
-# Starts empty, populates via start:reload.
+# fzf inherits the popup's TTY (FZF_DEFAULT_COMMAND='' suppresses file walker).
+# Starts empty, populates via start:reload. ctrl-r for manual refresh.
 selected=$(
 	FZF_DEFAULT_COMMAND='' "$FZF" \
-		--listen "$PORT" \
 		--ansi \
 		--no-sort \
 		--delimiter '\t' \
@@ -203,6 +189,7 @@ selected=$(
 		--margin 0 \
 		--padding 0,1 \
 		--bind "start:reload($SELF --generate)" \
+		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
