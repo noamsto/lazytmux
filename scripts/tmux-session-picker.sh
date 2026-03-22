@@ -146,17 +146,16 @@ if [[ ${1:-} == "--generate" ]]; then
 		sess_icons[$sess]="$REPLY"
 	done
 
-	# Output: key<TAB>display
+	# Output: session_name is the first space-delimited field (for --nth 1 matching)
 	printf -v empty_icons '%*s' "$icon_col" ''
 	for sess in "${!sess_path_map[@]}"; do
 		short_path="${sess_path_map[$sess]/#$HOME/\~}"
 		printf -v padding '%*s' "$((max_name - ${#sess}))" ''
 		icons="${sess_icons[$sess]:-$empty_icons}"
 
-		printf '%s\t%s %s%s  %s%s %s\n' \
-			"$sess" \
-			"${C_MAUVE}${icon_session}${RESET}" \
+		printf '%s %s%s  %s%s %s\n' \
 			"${C_MAUVE}${sess}${RESET}" \
+			"${C_MAUVE}${icon_session}${RESET}" \
 			"$padding" \
 			"$icons" \
 			"${C_BLUE}${icon_dir}${RESET}" \
@@ -165,18 +164,29 @@ if [[ ${1:-} == "--generate" ]]; then
 	exit 0
 fi
 
-# --- Picker mode: minimal startup, fzf-tmux handles the popup ---
-# Libraries and tmux queries happen in --generate subprocess, not here.
+# --- Picker mode: runs inside display-popup ---
+# Popup is non-blocking (tmux stays responsive). All child processes
+# are killed when the popup closes — no orphaned background loops.
 
 SELF="$0"
-FZF_TMUX="${FZF%fzf}fzf-tmux"
+CURL=@curl@
+PORT=$((RANDOM % 10000 + 40000))
+
+# Background reload loop: auto-killed when popup closes (same process group).
+(
+	sleep 2
+	while sleep 2; do
+		"$CURL" -s -XPOST "localhost:$PORT" \
+			-d "reload($SELF --generate)" 2>/dev/null || exit 0
+	done
+) &
 
 selected=$(
-	"$SELF" --generate | "$FZF_TMUX" -p 70%,50% -- \
+	"$SELF" --generate | "$FZF" \
+		--no-tmux --no-height \
+		--listen "$PORT" \
 		--ansi \
 		--no-sort \
-		--delimiter '\t' \
-		--with-nth 2 \
 		--nth 1 \
 		--layout reverse \
 		--border rounded \
@@ -190,8 +200,9 @@ selected=$(
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
-
-# Extract session name (first field before tab)
-session_name="${selected%%	*}"
+# Session name is first space-delimited field (strip ANSI, take first word)
+# shellcheck disable=SC2001
+session_name=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$selected")
+session_name="${session_name%% *}"
 [[ -n $session_name ]] && tmux switch-client -t "$session_name"
 exit 0

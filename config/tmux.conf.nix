@@ -109,8 +109,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@"]
-      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf"]
+      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@" "@curl@"]
+      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf" "${pkgs.curl}/bin/curl"]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -256,7 +256,7 @@
     bind -n M-L next-window
 
     # Session/window pickers (wrappers pre-compute claude status)
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
+    bind s display-popup -E -b none -w 70% -h 50% '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
 
     # Click session name in status bar to open session picker
