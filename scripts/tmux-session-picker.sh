@@ -191,16 +191,17 @@ SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
-# Background loop: reload fzf every 2s via its HTTP API
+# Background loop: reload fzf every 2s via its HTTP API.
+# Self-terminates when curl fails (fzf closed, port gone).
+# Disowned so bash doesn't track it or report its exit status.
 (
 	sleep 2 # give fzf time to bind
 	while sleep 2; do
 		"$CURL" -s -XPOST "localhost:$PORT" \
-			-d "reload($SELF --generate)" 2>/dev/null || break
+			-d "reload($SELF --generate)" 2>/dev/null || exit 0
 	done
 ) &
-REFRESH_PID=$!
-trap 'kill $REFRESH_PID 2>/dev/null; wait $REFRESH_PID 2>/dev/null || true' EXIT
+disown
 
 selected=$(
 	generate | "$FZF_TMUX" -p 70%,50% -- \
@@ -221,8 +222,9 @@ selected=$(
 		--bind "focus:reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
-) || exit 0
+) || true
 
 # Extract session name (first field before tab)
 session_name="${selected%%	*}"
 [[ -n $session_name ]] && tmux switch-client -t "$session_name"
+exit 0
