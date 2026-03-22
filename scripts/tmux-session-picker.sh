@@ -166,11 +166,11 @@ if [[ ${1:-} == "--generate" ]]; then
 	exit 0
 fi
 
-# --- Picker mode: minimal startup, open popup immediately ---
+# --- Picker mode: minimal startup ---
+# Runs inside display-popup (not run-shell) so tmux stays responsive.
 # Libraries and tmux queries happen in --generate subprocess, not here.
 
 SELF="$0"
-FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
 # Background loop: reload fzf every 2s via its HTTP API.
@@ -184,10 +184,10 @@ PORT=$((RANDOM % 10000 + 40000))
 ) &
 disown
 
-# Open popup immediately, populate via start:reload (data loads async).
-# No focus:reload — it causes flicker during search by replacing filtered results.
+# fzf starts empty, populates via start:reload. Runs directly in the
+# display-popup terminal (no fzf-tmux wrapper needed).
 selected=$(
-	"$FZF_TMUX" -p 70%,50% -- \
+	"$FZF" \
 		--listen "$PORT" \
 		--ansi \
 		--no-sort \
