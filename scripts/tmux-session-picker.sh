@@ -219,8 +219,7 @@ selected=$(
 		--header-lines 1 \
 		--layout reverse \
 		--color "bg:$THM_MANTLE,bg+:$THM_MANTLE" \
-		--border rounded \
-		--border-label ' Sessions ' \
+		--no-border \
 		--pointer '▸' \
 		--prompt '  ' \
 		--no-info \
