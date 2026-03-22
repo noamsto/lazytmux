@@ -17,7 +17,7 @@ PORT=$((RANDOM % 10000 + 40000))
 # Background refresh: sends reload every 1s via fzf's HTTP API.
 # Uses bash /dev/tcp (no curl dependency). Self-terminates on closed port.
 (
-	sleep 1
+	sleep 0.3
 	while sleep 1; do
 		body="reload($SELF --generate)"
 		exec 3<>/dev/tcp/127.0.0.1/"$PORT" 2>/dev/null || exit 0
