@@ -92,10 +92,10 @@ func main() {
 	reset := "\033[0m"
 	dim := "\033[2m"
 
-	// Sort alphabetically (stable order across refreshes — activity sort
-	// causes constant reordering since timestamps change every second)
+	// Sort by most recently attached (only changes on session switch, not
+	// on every keystroke like session_activity — stable across refreshes)
 	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].name < sessions[j].name
+		return sessions[i].activity > sessions[j].activity
 	})
 
 	// Build icon strings and compute column widths
@@ -188,7 +188,7 @@ func main() {
 // collectSessions runs tmux list-panes -a and aggregates by session.
 func collectSessions() []sessionData {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{session_path}\t#{session_activity}\t#{pane_current_command}").Output()
+		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{pane_current_command}").Output()
 	if err != nil {
 		return nil
 	}
