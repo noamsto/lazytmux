@@ -173,22 +173,10 @@ SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
-# Cache theme colors for --generate subprocesses (runs async, doesn't block)
-{
-	THM_MAUVE=$(tmux show -gv @thm_mauve 2>/dev/null || echo '#cba6f7')
-	THM_BLUE=$(tmux show -gv @thm_blue 2>/dev/null || echo '#89b4fa')
-	THM_SUBTEXT_0=$(tmux show -gv @thm_subtext_0 2>/dev/null || echo '#a6adc8')
-	PICKER_ICON_DIR=$(tmux show -gv @icon_dir 2>/dev/null || echo '')
-	PICKER_ICON_SESSION=$(tmux show -gv @icon_session 2>/dev/null || echo '')
-	export THM_MAUVE THM_BLUE THM_SUBTEXT_0 PICKER_ICON_DIR PICKER_ICON_SESSION
-} &
-ENV_PID=$!
-
 # Background loop: reload fzf every 2s via its HTTP API.
 # Self-terminates when curl fails (fzf closed, port gone).
 (
-	wait "$ENV_PID" 2>/dev/null || true
-	sleep 1 # give fzf time to bind
+	sleep 2 # give fzf time to bind
 	while sleep 2; do
 		"$CURL" -s -XPOST "localhost:$PORT" \
 			-d "reload($SELF --generate)" 2>/dev/null || exit 0
@@ -196,7 +184,8 @@ ENV_PID=$!
 ) &
 disown
 
-# Open popup immediately, populate via start:reload
+# Open popup immediately, populate via start:reload (data loads async).
+# No focus:reload — it causes flicker during search by replacing filtered results.
 selected=$(
 	"$FZF_TMUX" -p 70%,50% -- \
 		--listen "$PORT" \
@@ -214,7 +203,6 @@ selected=$(
 		--margin 0 \
 		--padding 0,1 \
 		--bind "start:reload($SELF --generate)" \
-		--bind "focus:reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort' \
 		</dev/null
