@@ -162,33 +162,29 @@ if [[ ${1:-} == "--generate" ]]; then
 	# Session name is field 2 (for --nth 2 matching)
 	printf -v empty_icons '%*s' "$icon_col" ''
 
-	# Write header + data to stdout and cache file
-	CACHE="/tmp/tmux-session-picker-${UID}"
-	{
-		# Header row (--header-lines 1 makes it non-selectable)
-		printf -v name_pad '%*s' "$((max_name - 7))" ''
+	# Header row (--header-lines 1 makes it non-selectable)
+	printf -v name_pad '%*s' "$((max_name - 7))" ''
+	printf '%s %s%s  %s  %s %s\n' \
+		"${C_DIM}${icon_session}${RESET}" \
+		"${C_DIM}Session${RESET}" \
+		"$name_pad" \
+		"${C_DIM}Procs${empty_icons:5}${RESET}" \
+		"${C_DIM}${icon_dir}${RESET}" \
+		"${C_DIM}Path${RESET}"
+
+	for sess in "${sorted_sessions[@]}"; do
+		short_path="${sess_path_map[$sess]/#$HOME/\~}"
+		printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
+		icons="${sess_icons[$sess]:-$empty_icons}"
+
 		printf '%s %s%s  %s  %s %s\n' \
-			"${C_DIM}${icon_session}${RESET}" \
-			"${C_DIM}Session${RESET}" \
+			"${C_MAUVE}${icon_session}${RESET}" \
+			"${C_MAUVE}${sess}${RESET}" \
 			"$name_pad" \
-			"${C_DIM}Procs${empty_icons:5}${RESET}" \
-			"${C_DIM}${icon_dir}${RESET}" \
-			"${C_DIM}Path${RESET}"
-
-		for sess in "${sorted_sessions[@]}"; do
-			short_path="${sess_path_map[$sess]/#$HOME/\~}"
-			printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
-			icons="${sess_icons[$sess]:-$empty_icons}"
-
-			printf '%s %s%s  %s  %s %s\n' \
-				"${C_MAUVE}${icon_session}${RESET}" \
-				"${C_MAUVE}${sess}${RESET}" \
-				"$name_pad" \
-				"$icons" \
-				"${C_BLUE}${icon_dir}${RESET}" \
-				"${C_DIM}${short_path}${RESET}"
-		done
-	} | tee "$CACHE"
+			"$icons" \
+			"${C_BLUE}${icon_dir}${RESET}" \
+			"${C_DIM}${short_path}${RESET}"
+	done
 	exit 0
 fi
 
@@ -199,7 +195,6 @@ fi
 SELF="$0"
 CURL=@curl@
 PORT=$((RANDOM % 10000 + 40000))
-CACHE="/tmp/tmux-session-picker-${UID}"
 
 # Background reload loop: auto-killed when popup closes (same process group).
 # First reload at 0.1s replaces cached data with fresh.
@@ -213,9 +208,8 @@ CACHE="/tmp/tmux-session-picker-${UID}"
 	done
 ) &
 
-# Pipe cached data for instant display; background loop refreshes at 0.1s.
 selected=$(
-	cat "$CACHE" 2>/dev/null | "$FZF" \
+	"$SELF" --generate | "$FZF" \
 		--no-tmux --no-height \
 		--listen "$PORT" \
 		--ansi \
