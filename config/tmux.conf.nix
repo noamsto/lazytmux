@@ -90,6 +90,13 @@
   claude-status-pkg = mkScriptWithLibs "claude-status";
   claude-status-bin = "${claude-status-pkg}/bin/claude-status";
 
+  # Go binary for fast session picker generation (~4ms vs ~85ms in bash)
+  picker-generate = import ../picker {
+    inherit pkgs lib processIcons fallbackIcon;
+    inherit maxIconsPicker;
+  };
+  picker-generate-bin = "${picker-generate}/bin/tmux-picker-generate";
+
   scriptNames = [
     "claude-status"
     "claude-status-update"
@@ -109,8 +116,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@" "@curl@"]
-      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf" "${pkgs.curl}/bin/curl"]
+      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@" "@curl@" "@picker_generate@"]
+      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf" "${pkgs.curl}/bin/curl" picker-generate-bin]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
