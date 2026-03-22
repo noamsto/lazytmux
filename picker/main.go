@@ -455,11 +455,9 @@ func detectTheme() string {
 	return cfg.Theme
 }
 
-// readTmuxOpts reads only the needed tmux options in a single call.
+// readTmuxOpts reads all global tmux options in a single call.
 func readTmuxOpts() map[string]string {
-	out, err := exec.Command("tmux", "show", "-g",
-		"@thm_mauve", "@thm_blue", "@thm_subtext_0",
-		"@icon_dir", "@icon_session").Output()
+	out, err := exec.Command("tmux", "show", "-g").Output()
 	if err != nil {
 		return nil
 	}
