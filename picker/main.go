@@ -60,7 +60,8 @@ func main() {
 		sessions []sessionData
 	}
 	type optsResult struct {
-		opts map[string]string
+		opts        map[string]string
+		currentSess string
 	}
 	sessCh := make(chan sessResult, 1)
 	optsCh := make(chan optsResult, 1)
@@ -69,7 +70,12 @@ func main() {
 		sessCh <- sessResult{collectSessions()}
 	}()
 	go func() {
-		optsCh <- optsResult{readTmuxOpts()}
+		opts := readTmuxOpts()
+		cur := ""
+		if out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output(); err == nil {
+			cur = strings.TrimSpace(string(out))
+		}
+		optsCh <- optsResult{opts, cur}
 	}()
 	claude := collectClaude() // file reads, runs concurrently with tmux calls
 	theme := detectTheme()
@@ -78,6 +84,7 @@ func main() {
 	or := <-optsCh
 	sessions := sr.sessions
 	tmuxOpts := or.opts
+	currentSess := or.currentSess
 
 	mergeClaude(sessions, claude)
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
@@ -93,9 +100,13 @@ func main() {
 	dim := "\033[2m"
 
 	// Sort by most recently attached, then alphabetically as tiebreaker.
-	// session_last_attached only changes on session switch (not every
-	// keystroke like session_activity), so order is stable across refreshes.
+	// Current session pushed to bottom so fzf prioritizes other matches.
 	sort.Slice(sessions, func(i, j int) bool {
+		ci := sessions[i].name == currentSess
+		cj := sessions[j].name == currentSess
+		if ci != cj {
+			return !ci // current session sorts last
+		}
 		if sessions[i].activity != sessions[j].activity {
 			return sessions[i].activity > sessions[j].activity
 		}
