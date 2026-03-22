@@ -1,58 +1,52 @@
 #!/usr/bin/env bash
-# Session picker using fzf inside display-popup for full formatting control.
+# Session picker using fzf-tmux popup for full formatting control.
 #
 # Two modes:
-#   (no args)    — open fzf picker, refresh on navigation
-#   --generate   — output ANSI-colored session list for fzf (called by reload)
-#
-# Theme colors are cached as env vars so reloads skip tmux server round-trips.
+#   (no args)    — open fzf popup, populate via start:reload
+#   --generate   — output ANSI-colored session list for fzf
 
 set -euo pipefail
 
-# shellcheck source=/dev/null  # Nix store paths substituted at build time
-source @lib_icons@
-# shellcheck source=/dev/null
-source @lib_claude@
-
-MAX_ICONS=@MAX_ICONS_PICKER@
 FZF=@fzf@
 CURL=@curl@
 
-# --- Helpers ---
-
-# _ansi_fg HEX — convert "#rrggbb" to ANSI 24-bit foreground escape
-# Sets REPLY (avoids subshell forks in hot path).
-_ansi_fg() {
-	local hex="${1#\#}"
-	printf -v REPLY '\033[38;2;%d;%d;%dm' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
-}
-
-# --- Generate: output one line per session for fzf ---
+# --- Generate mode: output one line per session for fzf ---
+# Handles its own library sourcing and tmux queries.
 # Line format: session_name<TAB>colorized_display
-generate() {
-	# Theme colors (env vars set by picker mode; fallback to tmux for standalone)
-	local thm_mauve="${THM_MAUVE:-$(tmux show -gv @thm_mauve 2>/dev/null || echo '#cba6f7')}"
-	local thm_blue="${THM_BLUE:-$(tmux show -gv @thm_blue 2>/dev/null || echo '#89b4fa')}"
-	local thm_subtext_0="${THM_SUBTEXT_0:-$(tmux show -gv @thm_subtext_0 2>/dev/null || echo '#a6adc8')}"
-	local icon_dir="${PICKER_ICON_DIR:-$(tmux show -gv @icon_dir 2>/dev/null || echo '')}"
-	local icon_session="${PICKER_ICON_SESSION:-$(tmux show -gv @icon_session 2>/dev/null || echo '')}"
+if [[ ${1:-} == "--generate" ]]; then
+	# shellcheck source=/dev/null  # Nix store paths substituted at build time
+	source @lib_icons@
+	# shellcheck source=/dev/null
+	source @lib_claude@
+	MAX_ICONS=@MAX_ICONS_PICKER@
 
-	local C_MAUVE C_BLUE C_DIM RESET DIM
+	# _ansi_fg HEX — sets REPLY to ANSI 24-bit foreground escape
+	_ansi_fg() {
+		local hex="${1#\#}"
+		printf -v REPLY '\033[38;2;%d;%d;%dm' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+	}
+
+	# Theme colors (cached via env vars from picker mode when available)
+	thm_mauve="${THM_MAUVE:-$(tmux show -gv @thm_mauve 2>/dev/null || echo '#cba6f7')}"
+	thm_blue="${THM_BLUE:-$(tmux show -gv @thm_blue 2>/dev/null || echo '#89b4fa')}"
+	thm_subtext_0="${THM_SUBTEXT_0:-$(tmux show -gv @thm_subtext_0 2>/dev/null || echo '#a6adc8')}"
+	icon_dir="${PICKER_ICON_DIR:-$(tmux show -gv @icon_dir 2>/dev/null || echo '')}"
+	icon_session="${PICKER_ICON_SESSION:-$(tmux show -gv @icon_session 2>/dev/null || echo '')}"
+
 	_ansi_fg "$thm_mauve" && C_MAUVE="$REPLY"
 	_ansi_fg "$thm_blue" && C_BLUE="$REPLY"
 	_ansi_fg "$thm_subtext_0" && C_DIM="$REPLY"
 	RESET=$'\033[0m'
 	DIM=$'\033[2m'
 
-	# Claude state → ANSI color (uses same hex values as lib-claude.sh setup_claude_colors,
+	# Claude state → ANSI color (same hex values as lib-claude.sh setup_claude_colors,
 	# but as ANSI escapes instead of tmux #[fg=...] syntax for fzf compatibility)
-	local theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
-	local theme="dark"
+	theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
+	theme="dark"
 	if [[ -f $theme_file ]]; then
 		theme=$(grep -o '"theme"[[:space:]]*:[[:space:]]*"[^"]*"' "$theme_file" 2>/dev/null | cut -d'"' -f4) || true
 	fi
 
-	local CC_W CC_K CC_P CC_D CC_I CC_E
 	if [[ $theme == "light" ]]; then
 		_ansi_fg "#fe640b" && CC_W="$REPLY"
 		_ansi_fg "#04a5e5" && CC_K="$REPLY"
@@ -73,7 +67,6 @@ generate() {
 	declare -A sess_cw sess_ck sess_cp sess_cd sess_ci sess_ce sess_cs
 
 	if [[ -d $CLAUDE_PANES_DIR ]]; then
-		local pf pane_session key val
 		for pf in "$CLAUDE_PANES_DIR"/*; do
 			[[ -f $pf ]] || continue
 			pane_session=""
@@ -108,23 +101,24 @@ generate() {
 
 	# Single tmux call: collect session data + build icons in one pass
 	declare -A sess_icons sess_idw sess_path_map
-	local max_name=0
+	max_name=0
 	while IFS=$'\t' read -r sess _ sess_path; do
 		[[ -n $sess ]] || continue
 		sess_path_map[$sess]="$sess_path"
 		((${#sess} > max_name)) && max_name=${#sess}
 
 		build_proc_icons "${sess_procs[$sess]:-}" "$MAX_ICONS"
-		local icons="$REPLY" idw=$REPLY_DW
+		icons="$REPLY"
+		idw=$REPLY_DW
 
 		claude_priority_state \
 			"${sess_cw[$sess]:-0}" "${sess_ck[$sess]:-0}" \
 			"${sess_cp[$sess]:-0}" "${sess_cd[$sess]:-0}" \
 			"${sess_ci[$sess]:-0}" "${sess_ce[$sess]:-0}"
 		if [[ -n $REPLY ]]; then
-			local cs="$REPLY" stale="${sess_cs[$sess]:-0}"
+			cs="$REPLY" stale="${sess_cs[$sess]:-0}"
 			claude_state_icon "$cs"
-			local ci="$REPLY" cc
+			ci="$REPLY"
 			if ((stale)); then
 				cc="$DIM"
 			else
@@ -143,24 +137,22 @@ generate() {
 	unset sess_procs
 
 	# Pad icon column to uniform width
-	local max_idw=0
+	max_idw=0
 	for sess in "${!sess_idw[@]}"; do
 		((sess_idw[$sess] > max_idw)) && max_idw=${sess_idw[$sess]}
 	done
-	local icon_col=$((max_idw + 1))
+	icon_col=$((max_idw + 1))
 	for sess in "${!sess_icons[@]}"; do
 		pad_to_width "${sess_icons[$sess]}" "${sess_idw[$sess]}" "$icon_col"
 		sess_icons[$sess]="$REPLY"
 	done
 
 	# Output: key<TAB>display
-	local empty_icons
 	printf -v empty_icons '%*s' "$icon_col" ''
 	for sess in "${!sess_path_map[@]}"; do
-		local short_path="${sess_path_map[$sess]/#$HOME/\~}"
-		local padding
+		short_path="${sess_path_map[$sess]/#$HOME/\~}"
 		printf -v padding '%*s' "$((max_name - ${#sess}))" ''
-		local icons="${sess_icons[$sess]:-$empty_icons}"
+		icons="${sess_icons[$sess]:-$empty_icons}"
 
 		printf '%s\t%s %s%s  %s%s %s\n' \
 			"$sess" \
@@ -171,31 +163,32 @@ generate() {
 			"${C_BLUE}${icon_dir}${RESET}" \
 			"${C_DIM}${short_path}${RESET}"
 	done
-}
-
-# --- Entry point ---
-if [[ ${1:-} == "--generate" ]]; then
-	generate
 	exit 0
 fi
 
-# Cache theme colors as env vars for fast reloads
-THM_MAUVE=$(tmux show -gv @thm_mauve 2>/dev/null || echo '#cba6f7')
-THM_BLUE=$(tmux show -gv @thm_blue 2>/dev/null || echo '#89b4fa')
-THM_SUBTEXT_0=$(tmux show -gv @thm_subtext_0 2>/dev/null || echo '#a6adc8')
-PICKER_ICON_DIR=$(tmux show -gv @icon_dir 2>/dev/null || echo '')
-PICKER_ICON_SESSION=$(tmux show -gv @icon_session 2>/dev/null || echo '')
-export THM_MAUVE THM_BLUE THM_SUBTEXT_0 PICKER_ICON_DIR PICKER_ICON_SESSION
+# --- Picker mode: minimal startup, open popup immediately ---
+# Libraries and tmux queries happen in --generate subprocess, not here.
 
 SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
+# Cache theme colors for --generate subprocesses (runs async, doesn't block)
+{
+	THM_MAUVE=$(tmux show -gv @thm_mauve 2>/dev/null || echo '#cba6f7')
+	THM_BLUE=$(tmux show -gv @thm_blue 2>/dev/null || echo '#89b4fa')
+	THM_SUBTEXT_0=$(tmux show -gv @thm_subtext_0 2>/dev/null || echo '#a6adc8')
+	PICKER_ICON_DIR=$(tmux show -gv @icon_dir 2>/dev/null || echo '')
+	PICKER_ICON_SESSION=$(tmux show -gv @icon_session 2>/dev/null || echo '')
+	export THM_MAUVE THM_BLUE THM_SUBTEXT_0 PICKER_ICON_DIR PICKER_ICON_SESSION
+} &
+ENV_PID=$!
+
 # Background loop: reload fzf every 2s via its HTTP API.
 # Self-terminates when curl fails (fzf closed, port gone).
-# Disowned so bash doesn't track it or report its exit status.
 (
-	sleep 2 # give fzf time to bind
+	wait "$ENV_PID" 2>/dev/null || true
+	sleep 1 # give fzf time to bind
 	while sleep 2; do
 		"$CURL" -s -XPOST "localhost:$PORT" \
 			-d "reload($SELF --generate)" 2>/dev/null || exit 0
@@ -203,8 +196,9 @@ PORT=$((RANDOM % 10000 + 40000))
 ) &
 disown
 
+# Open popup immediately, populate via start:reload
 selected=$(
-	generate | "$FZF_TMUX" -p 70%,50% -- \
+	"$FZF_TMUX" -p 70%,50% -- \
 		--listen "$PORT" \
 		--ansi \
 		--no-sort \
@@ -219,9 +213,11 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
+		--bind "start:reload($SELF --generate)" \
 		--bind "focus:reload($SELF --generate)" \
 		--bind 'enter:accept' \
-		--bind 'esc:abort'
+		--bind 'esc:abort' \
+		</dev/null
 ) || true
 
 # Extract session name (first field before tab)
