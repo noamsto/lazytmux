@@ -17,7 +17,7 @@ printf -v CLAUDE_NOW '%(%s)T' -1
 # Staleness thresholds (seconds) — icon stays, color dims past these
 CLAUDE_STALE_WAITING=30
 CLAUDE_STALE_COMPACTING=60
-CLAUDE_STALE_PROCESSING=15
+CLAUDE_STALE_PROCESSING=300
 CLAUDE_STALE_ERROR=120
 
 # read_pane_state PANE_FILE_PATH

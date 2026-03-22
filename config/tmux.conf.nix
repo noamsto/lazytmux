@@ -109,8 +109,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@"]
-      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker]
+      ["@lib_icons@" "@lib_claude@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@" "@curl@"]
+      ["${lib-icons}" "${lib-claude}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf" "${pkgs.curl}/bin/curl"]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
