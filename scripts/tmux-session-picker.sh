@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Session picker: Go binary generates ANSI output, fzf-tmux provides the popup.
-# Initial data piped for instant display, --listen for 1s auto-refresh.
+# Background refresh every 1s via /dev/tcp.
 
 set -euo pipefail
 
@@ -14,8 +14,7 @@ SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
-# Background refresh: sends reload every 1s via fzf's HTTP API.
-# Uses bash /dev/tcp (no curl dependency). Self-terminates on closed port.
+# Background refresh via /dev/tcp (no curl dependency).
 (
 	sleep 0.3
 	while sleep 1; do
