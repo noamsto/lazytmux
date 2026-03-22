@@ -92,9 +92,10 @@ func main() {
 	reset := "\033[0m"
 	dim := "\033[2m"
 
-	// Sort by most recent activity
+	// Sort alphabetically (stable order across refreshes — activity sort
+	// causes constant reordering since timestamps change every second)
 	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].activity > sessions[j].activity
+		return sessions[i].name < sessions[j].name
 	})
 
 	// Build icon strings and compute column widths
