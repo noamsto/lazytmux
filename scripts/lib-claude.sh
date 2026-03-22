@@ -18,6 +18,7 @@ printf -v CLAUDE_NOW '%(%s)T' -1
 CLAUDE_STALE_WAITING=30
 CLAUDE_STALE_COMPACTING=60
 CLAUDE_STALE_PROCESSING=300
+CLAUDE_STALE_DONE=60
 CLAUDE_STALE_ERROR=120
 
 # read_pane_state PANE_FILE_PATH
@@ -45,6 +46,7 @@ read_pane_state() {
 		waiting) ((age > CLAUDE_STALE_WAITING)) && REPLY_STALE=1 ;;
 		compacting) ((age > CLAUDE_STALE_COMPACTING)) && REPLY_STALE=1 ;;
 		processing) ((age > CLAUDE_STALE_PROCESSING)) && REPLY_STALE=1 ;;
+		done) ((age > CLAUDE_STALE_DONE)) && REPLY_STALE=1 ;;
 		error) ((age > CLAUDE_STALE_ERROR)) && REPLY_STALE=1 ;;
 		esac
 	fi
