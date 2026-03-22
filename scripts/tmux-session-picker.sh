@@ -162,20 +162,19 @@ if [[ ${1:-} == "--generate" ]]; then
 	# Session name is field 2 (for --nth 2 matching)
 	printf -v empty_icons '%*s' "$icon_col" ''
 
-	# Header row (--header-lines 1 makes it non-selectable)
-	# Same format string as data rows for alignment
-	printf -v name_pad '%*s' "$((max_name - 7))" ''
-	printf '%s %s%s  %s  %s %s\n' \
-		"${C_DIM}${icon_session}${RESET}" \
-		"${C_DIM}Session${RESET}" \
-		"$name_pad" \
-		"${C_DIM}Procs${empty_icons:5}${RESET}" \
-		"${C_DIM}${icon_dir}${RESET}" \
-		"${C_DIM}Path${RESET}"
-
-	# Write to stdout and cache file (cache serves instant data on next open)
+	# Write header + data to stdout and cache file
 	CACHE="/tmp/tmux-session-picker-${UID}"
 	{
+		# Header row (--header-lines 1 makes it non-selectable)
+		printf -v name_pad '%*s' "$((max_name - 7))" ''
+		printf '%s %s%s  %s  %s %s\n' \
+			"${C_DIM}${icon_session}${RESET}" \
+			"${C_DIM}Session${RESET}" \
+			"$name_pad" \
+			"${C_DIM}Procs${empty_icons:5}${RESET}" \
+			"${C_DIM}${icon_dir}${RESET}" \
+			"${C_DIM}Path${RESET}"
+
 		for sess in "${sorted_sessions[@]}"; do
 			short_path="${sess_path_map[$sess]/#$HOME/\~}"
 			printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
