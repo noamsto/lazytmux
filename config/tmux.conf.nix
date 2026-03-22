@@ -269,6 +269,7 @@
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
+    bind-key "y" display-popup -E -d '#{pane_current_path}' -w 90% -h 90% yazi
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"

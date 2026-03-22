@@ -99,11 +99,12 @@ if [[ ${1:-} == "--generate" ]]; then
 	unset sess_seen
 
 	# Single tmux call: collect session data + build icons in one pass
-	declare -A sess_icons sess_idw sess_path_map
+	declare -A sess_icons sess_idw sess_path_map sess_activity_map
 	max_name=0
-	while IFS=$'\t' read -r sess _ sess_path; do
+	while IFS=$'\t' read -r sess _ sess_path sess_activity; do
 		[[ -n $sess ]] || continue
 		sess_path_map[$sess]="$sess_path"
+		sess_activity_map[$sess]=$sess_activity
 		((${#sess} > max_name)) && max_name=${#sess}
 
 		build_proc_icons "${sess_procs[$sess]:-}" "$MAX_ICONS"
@@ -132,7 +133,7 @@ if [[ ${1:-} == "--generate" ]]; then
 
 		sess_icons[$sess]="$icons"
 		sess_idw[$sess]=$idw
-	done < <(tmux list-sessions -F '#{session_name}	#{session_id}	#{session_path}')
+	done < <(tmux list-sessions -F '#{session_name}	#{session_id}	#{session_path}	#{session_activity}')
 	unset sess_procs
 
 	# Pad icon column to uniform width
@@ -141,22 +142,46 @@ if [[ ${1:-} == "--generate" ]]; then
 		((sess_idw[$sess] > max_idw)) && max_idw=${sess_idw[$sess]}
 	done
 	icon_col=$((max_idw + 1))
+	((icon_col < 5)) && icon_col=5 # at least as wide as "Procs" header
 	for sess in "${!sess_icons[@]}"; do
 		pad_to_width "${sess_icons[$sess]}" "${sess_idw[$sess]}" "$icon_col"
 		sess_icons[$sess]="$REPLY"
 	done
 
-	# Output: session_name is the first space-delimited field (for --nth 1 matching)
+	# Sort sessions by activity (most recent first)
+	sorted_sessions=()
+	while IFS=$'\t' read -r _ sess; do
+		sorted_sessions+=("$sess")
+	done < <(
+		for s in "${!sess_activity_map[@]}"; do
+			printf '%s\t%s\n' "${sess_activity_map[$s]}" "$s"
+		done | sort -rn
+	)
+
+	# Output columns: icon | Session | Last | Procs | dir_icon | Path
+	# Session name is field 2 (for --nth 2 matching)
 	printf -v empty_icons '%*s' "$icon_col" ''
-	for sess in "${!sess_path_map[@]}"; do
+
+	# Header row (--header-lines 1 makes it non-selectable)
+	# Same format string as data rows for alignment
+	printf -v name_pad '%*s' "$((max_name - 7))" ''
+	printf '%s %s%s  %s  %s %s\n' \
+		"${C_DIM}${icon_session}${RESET}" \
+		"${C_DIM}Session${RESET}" \
+		"$name_pad" \
+		"${C_DIM}Procs${empty_icons:5}${RESET}" \
+		"${C_DIM}${icon_dir}${RESET}" \
+		"${C_DIM}Path${RESET}"
+
+	for sess in "${sorted_sessions[@]}"; do
 		short_path="${sess_path_map[$sess]/#$HOME/\~}"
-		printf -v padding '%*s' "$((max_name - ${#sess}))" ''
+		printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
 		icons="${sess_icons[$sess]:-$empty_icons}"
 
-		printf '%s %s%s  %s%s %s\n' \
-			"${C_MAUVE}${sess}${RESET}" \
+		printf '%s %s%s  %s  %s %s\n' \
 			"${C_MAUVE}${icon_session}${RESET}" \
-			"$padding" \
+			"${C_MAUVE}${sess}${RESET}" \
+			"$name_pad" \
 			"$icons" \
 			"${C_BLUE}${icon_dir}${RESET}" \
 			"${C_DIM}${short_path}${RESET}"
@@ -189,7 +214,8 @@ selected=$(
 		--listen "$PORT" \
 		--ansi \
 		--no-sort \
-		--nth 1 \
+		--nth 2 \
+		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
 		--border-label ' Sessions ' \
@@ -202,9 +228,9 @@ selected=$(
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
-# Session name is first space-delimited field (strip ANSI, take first word)
+# Session name is second space-delimited field (field 1 is icon)
 # shellcheck disable=SC2001
 session_name=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$selected")
-session_name="${session_name%% *}"
+session_name=$(awk '{print $2}' <<<"$session_name")
 [[ -n $session_name ]] && tmux switch-client -t "$session_name"
 exit 0
