@@ -173,19 +173,23 @@ if [[ ${1:-} == "--generate" ]]; then
 		"${C_DIM}${icon_dir}${RESET}" \
 		"${C_DIM}Path${RESET}"
 
-	for sess in "${sorted_sessions[@]}"; do
-		short_path="${sess_path_map[$sess]/#$HOME/\~}"
-		printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
-		icons="${sess_icons[$sess]:-$empty_icons}"
+	# Write to stdout and cache file (cache serves instant data on next open)
+	CACHE="/tmp/tmux-session-picker-${UID}"
+	{
+		for sess in "${sorted_sessions[@]}"; do
+			short_path="${sess_path_map[$sess]/#$HOME/\~}"
+			printf -v name_pad '%*s' "$((max_name - ${#sess}))" ''
+			icons="${sess_icons[$sess]:-$empty_icons}"
 
-		printf '%s %s%s  %s  %s %s\n' \
-			"${C_MAUVE}${icon_session}${RESET}" \
-			"${C_MAUVE}${sess}${RESET}" \
-			"$name_pad" \
-			"$icons" \
-			"${C_BLUE}${icon_dir}${RESET}" \
-			"${C_DIM}${short_path}${RESET}"
-	done
+			printf '%s %s%s  %s  %s %s\n' \
+				"${C_MAUVE}${icon_session}${RESET}" \
+				"${C_MAUVE}${sess}${RESET}" \
+				"$name_pad" \
+				"$icons" \
+				"${C_BLUE}${icon_dir}${RESET}" \
+				"${C_DIM}${short_path}${RESET}"
+		done
+	} | tee "$CACHE"
 	exit 0
 fi
 
@@ -196,11 +200,12 @@ fi
 SELF="$0"
 CURL=@curl@
 PORT=$((RANDOM % 10000 + 40000))
-THM_MANTLE=$(tmux show -gv @thm_mantle 2>/dev/null || echo '#181825')
+CACHE="/tmp/tmux-session-picker-${UID}"
 
 # Background reload loop: auto-killed when popup closes (same process group).
+# First reload at 0.1s replaces cached data with fresh.
 (
-	sleep 0.1 # fzf needs a moment to bind
+	sleep 0.1
 	"$CURL" -s -XPOST "localhost:$PORT" \
 		-d "reload($SELF --generate)" 2>/dev/null || true
 	while sleep 1; do
@@ -209,8 +214,9 @@ THM_MANTLE=$(tmux show -gv @thm_mantle 2>/dev/null || echo '#181825')
 	done
 ) &
 
+# Pipe cached data for instant display; background loop refreshes at 0.1s.
 selected=$(
-	"$SELF" --generate | "$FZF" \
+	cat "$CACHE" 2>/dev/null | "$FZF" \
 		--no-tmux --no-height \
 		--listen "$PORT" \
 		--ansi \
@@ -218,8 +224,8 @@ selected=$(
 		--nth 2 \
 		--header-lines 1 \
 		--layout reverse \
-		--color "bg:$THM_MANTLE,bg+:$THM_MANTLE" \
-		--no-border \
+		--border rounded \
+		--border-label ' Sessions ' \
 		--pointer '▸' \
 		--prompt '  ' \
 		--no-info \
