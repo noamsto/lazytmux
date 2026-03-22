@@ -21,9 +21,10 @@ CURL=@curl@
 # --- Helpers ---
 
 # _ansi_fg HEX — convert "#rrggbb" to ANSI 24-bit foreground escape
+# Sets REPLY (avoids subshell forks in hot path).
 _ansi_fg() {
 	local hex="${1#\#}"
-	printf '\033[38;2;%d;%d;%dm' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+	printf -v REPLY '\033[38;2;%d;%d;%dm' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
 }
 
 # --- Generate: output one line per session for fzf ---
@@ -37,13 +38,14 @@ generate() {
 	local icon_session="${PICKER_ICON_SESSION:-$(tmux show -gv @icon_session 2>/dev/null || echo '')}"
 
 	local C_MAUVE C_BLUE C_DIM RESET DIM
-	C_MAUVE=$(_ansi_fg "$thm_mauve")
-	C_BLUE=$(_ansi_fg "$thm_blue")
-	C_DIM=$(_ansi_fg "$thm_subtext_0")
+	_ansi_fg "$thm_mauve" && C_MAUVE="$REPLY"
+	_ansi_fg "$thm_blue" && C_BLUE="$REPLY"
+	_ansi_fg "$thm_subtext_0" && C_DIM="$REPLY"
 	RESET=$'\033[0m'
 	DIM=$'\033[2m'
 
-	# Claude state → ANSI color (theme-aware)
+	# Claude state → ANSI color (uses same hex values as lib-claude.sh setup_claude_colors,
+	# but as ANSI escapes instead of tmux #[fg=...] syntax for fzf compatibility)
 	local theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
 	local theme="dark"
 	if [[ -f $theme_file ]]; then
@@ -52,11 +54,19 @@ generate() {
 
 	local CC_W CC_K CC_P CC_D CC_I CC_E
 	if [[ $theme == "light" ]]; then
-		CC_W=$(_ansi_fg "#fe640b") CC_K=$(_ansi_fg "#04a5e5") CC_P=$(_ansi_fg "#179299")
-		CC_D=$(_ansi_fg "#40a02b") CC_I=$(_ansi_fg "#6c6f85") CC_E=$(_ansi_fg "#d20f39")
+		_ansi_fg "#fe640b" && CC_W="$REPLY"
+		_ansi_fg "#04a5e5" && CC_K="$REPLY"
+		_ansi_fg "#179299" && CC_P="$REPLY"
+		_ansi_fg "#40a02b" && CC_D="$REPLY"
+		_ansi_fg "#6c6f85" && CC_I="$REPLY"
+		_ansi_fg "#d20f39" && CC_E="$REPLY"
 	else
-		CC_W=$(_ansi_fg "#fab387") CC_K=$(_ansi_fg "#89dceb") CC_P=$(_ansi_fg "#94e2d5")
-		CC_D=$(_ansi_fg "#a6e3a1") CC_I=$(_ansi_fg "#6c7086") CC_E=$(_ansi_fg "#f38ba8")
+		_ansi_fg "#fab387" && CC_W="$REPLY"
+		_ansi_fg "#89dceb" && CC_K="$REPLY"
+		_ansi_fg "#94e2d5" && CC_P="$REPLY"
+		_ansi_fg "#a6e3a1" && CC_D="$REPLY"
+		_ansi_fg "#6c7086" && CC_I="$REPLY"
+		_ansi_fg "#f38ba8" && CC_E="$REPLY"
 	fi
 
 	# --- Claude status: bucket pane states by session ---
@@ -96,10 +106,14 @@ generate() {
 	done < <(tmux list-panes -a -F '#{session_name}	#{pane_current_command}')
 	unset sess_seen
 
-	# Build icon strings per session (process icons + claude status)
-	declare -A sess_icons sess_idw
-	while IFS=$'\t' read -r sess _; do
+	# Single tmux call: collect session data + build icons in one pass
+	declare -A sess_icons sess_idw sess_path_map
+	local max_name=0
+	while IFS=$'\t' read -r sess _ sess_path; do
 		[[ -n $sess ]] || continue
+		sess_path_map[$sess]="$sess_path"
+		((${#sess} > max_name)) && max_name=${#sess}
+
 		build_proc_icons "${sess_procs[$sess]:-}" "$MAX_ICONS"
 		local icons="$REPLY" idw=$REPLY_DW
 
@@ -125,7 +139,7 @@ generate() {
 
 		sess_icons[$sess]="$icons"
 		sess_idw[$sess]=$idw
-	done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
+	done < <(tmux list-sessions -F '#{session_name}	#{session_id}	#{session_path}')
 	unset sess_procs
 
 	# Pad icon column to uniform width
@@ -139,20 +153,11 @@ generate() {
 		sess_icons[$sess]="$REPLY"
 	done
 
-	# Collect sessions and find max name length
-	local max_name=0 sessions=()
-	while IFS=$'\t' read -r sess _; do
-		[[ -n $sess ]] || continue
-		sessions+=("$sess")
-		((${#sess} > max_name)) && max_name=${#sess}
-	done < <(tmux list-sessions -F '#{session_name}	#{session_id}')
-
 	# Output: key<TAB>display
 	local empty_icons
 	printf -v empty_icons '%*s' "$icon_col" ''
-	while IFS=$'\t' read -r sess sess_path; do
-		[[ -n $sess ]] || continue
-		local short_path="${sess_path/#$HOME/\~}"
+	for sess in "${!sess_path_map[@]}"; do
+		local short_path="${sess_path_map[$sess]/#$HOME/\~}"
 		local padding
 		printf -v padding '%*s' "$((max_name - ${#sess}))" ''
 		local icons="${sess_icons[$sess]:-$empty_icons}"
@@ -165,7 +170,7 @@ generate() {
 			"$icons" \
 			"${C_BLUE}${icon_dir}${RESET}" \
 			"${C_DIM}${short_path}${RESET}"
-	done < <(tmux list-sessions -F '#{session_name}	#{session_path}')
+	done
 }
 
 # --- Entry point ---
@@ -195,7 +200,7 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 REFRESH_PID=$!
-trap 'kill $REFRESH_PID 2>/dev/null; wait $REFRESH_PID 2>/dev/null' EXIT
+trap 'kill $REFRESH_PID 2>/dev/null; wait $REFRESH_PID 2>/dev/null || true' EXIT
 
 selected=$(
 	generate | "$FZF_TMUX" -p 70%,50% -- \
