@@ -32,7 +32,6 @@ selected=$(
 	"$SELF" --generate | "$FZF_TMUX" -p 70%,50% -- \
 		--listen "$PORT" \
 		--ansi \
-		--no-sort \
 		--nth 2 \
 		--header-lines 1 \
 		--layout reverse \
