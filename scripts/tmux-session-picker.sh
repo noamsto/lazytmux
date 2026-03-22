@@ -167,10 +167,10 @@ if [[ ${1:-} == "--generate" ]]; then
 fi
 
 # --- Picker mode: minimal startup ---
+# Runs inside display-popup so tmux stays responsive.
 # Libraries and tmux queries happen in --generate subprocess, not here.
 
 SELF="$0"
-FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
 # Background loop: reload fzf every 2s via its HTTP API.
@@ -184,9 +184,10 @@ PORT=$((RANDOM % 10000 + 40000))
 ) &
 disown
 
-# fzf starts empty, populates via start:reload.
+# fzf inherits the popup's TTY (no stdin redirect — /dev/null causes early exit).
+# Starts empty, populates via start:reload.
 selected=$(
-	"$FZF_TMUX" -p 70%,50% -- \
+	FZF_DEFAULT_COMMAND='' "$FZF" \
 		--listen "$PORT" \
 		--ansi \
 		--no-sort \
@@ -203,8 +204,7 @@ selected=$(
 		--padding 0,1 \
 		--bind "start:reload($SELF --generate)" \
 		--bind 'enter:accept' \
-		--bind 'esc:abort' \
-		</dev/null
+		--bind 'esc:abort'
 ) || true
 
 # Extract session name (first field before tab)

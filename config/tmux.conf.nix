@@ -256,7 +256,7 @@
     bind -n M-L next-window
 
     # Session/window pickers (wrappers pre-compute claude status)
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
+    bind s display-popup -E -w 70% -h 50% '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
 
     # Click session name in status bar to open session picker
