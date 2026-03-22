@@ -165,16 +165,14 @@ if [[ ${1:-} == "--generate" ]]; then
 	exit 0
 fi
 
-# --- Picker mode: minimal startup ---
-# Runs inside display-popup so tmux stays responsive.
+# --- Picker mode: minimal startup, fzf-tmux handles the popup ---
 # Libraries and tmux queries happen in --generate subprocess, not here.
 
 SELF="$0"
+FZF_TMUX="${FZF%fzf}fzf-tmux"
 
-# fzf inherits the popup's TTY (FZF_DEFAULT_COMMAND='' suppresses file walker).
-# Starts empty, populates via start:reload. ctrl-r for manual refresh.
 selected=$(
-	FZF_DEFAULT_COMMAND='' "$FZF" \
+	"$SELF" --generate | "$FZF_TMUX" -p 70%,50% -- \
 		--ansi \
 		--no-sort \
 		--delimiter '\t' \
@@ -188,7 +186,6 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
-		--bind "start:reload($SELF --generate)" \
 		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
