@@ -49,9 +49,14 @@ fi
 declare -a all_idx=()
 declare -A win_icons win_icon_dw win_display
 
-while IFS='|' read -r idx _; do
+while IFS='|' read -r idx pane_path _; do
 	target="${SESSION}:${idx}"
 	all_idx+=("$idx")
+
+	# Auto-detect git branch for window name
+	branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
+	cur_branch=$(tmux show -wqv -t "$target" @branch 2>/dev/null) || cur_branch=""
+	[[ $branch != "$cur_branch" ]] && tmux set -qw -t "$target" @branch "$branch"
 
 	# Collect unique processes across all panes in this window
 	declare -A seen=()
@@ -86,7 +91,7 @@ while IFS='|' read -r idx _; do
 	win_icons[$idx]="$icon"
 	win_icon_dw[$idx]=$icon_dw
 	win_display[$idx]="$display"
-done < <(tmux list-windows -t "$SESSION" -F '#{window_index}|')
+done < <(tmux list-windows -t "$SESSION" -F '#{window_index}|#{pane_current_path}|')
 
 # Set active pane icon for top-right display
 active_proc=$(tmux display-message -t "$SESSION" -p '#{pane_current_command}' 2>/dev/null) || true

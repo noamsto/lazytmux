@@ -276,7 +276,8 @@
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
-    bind-key "y" display-popup -E -d '#{pane_current_path}' -w 90% -h 90% yazi
+    # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
+    bind-key "y" new-window -S -n yazi -c '#{pane_current_path}' yazi
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
@@ -336,6 +337,7 @@
 
     # Hooks to reflow windows across status lines
     set-hook -g after-new-window        'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g window-unlinked         'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
@@ -397,7 +399,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit])}
+        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop])}
     '';
     meta.mainProgram = "tmux";
   };
