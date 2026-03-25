@@ -3,7 +3,7 @@
 # Called by Claude Code hooks to track session state
 # Usage: claude-status-update <state> [--pane PANE_ID] [--session SESSION_NAME]
 #
-# States: processing, waiting, done, idle, error
+# States: processing, waiting, done, idle, compacting, error
 # Environment: Uses $TMUX_PANE and tmux to detect session if not provided
 
 set -euo pipefail

@@ -217,6 +217,27 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
         ]
       }
     ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update processing"}
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update error"}
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update error"}
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

@@ -402,14 +402,24 @@ func buildProcIcons(procs []string, maxCount int) (string, int) {
 
 // iconCellWidth returns the display width of an icon string.
 // Nerd font PUA (E000-F8FF, F0000+) = 1 cell, emoji/other = 2 cells.
+// Zero-width characters (variation selectors, ZWJ, combining marks) = 0 cells.
 func iconCellWidth(s string) int {
 	w := 0
 	for _, r := range s {
-		if (r >= 0xE000 && r <= 0xF8FF) || r >= 0xF0000 {
+		switch {
+		case r == 0xFE0E || r == 0xFE0F: // variation selectors
+			// zero width
+		case r == 0x200D: // zero-width joiner
+			// zero width
+		case r >= 0x0300 && r <= 0x036F: // combining diacritical marks
+			// zero width
+		case r >= 0x20D0 && r <= 0x20FF: // combining marks for symbols
+			// zero width
+		case (r >= 0xE000 && r <= 0xF8FF) || r >= 0xF0000:
 			w++ // nerd font PUA = 1 cell
-		} else if r > 0x7F {
+		case r > 0x7F:
 			w += 2 // emoji/other = 2 cells
-		} else {
+		default:
 			w++ // ASCII = 1 cell
 		}
 	}
