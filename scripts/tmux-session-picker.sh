@@ -29,7 +29,7 @@ PORT=$((RANDOM % 10000 + 40000))
 ) &
 
 selected=$(
-	"$SELF" --generate | "$FZF_TMUX" -p 70%,50% -- \
+	"$SELF" --generate | "$FZF_TMUX" -p 80%,60% -- \
 		--listen "$PORT" \
 		--ansi \
 		--nth 2 \

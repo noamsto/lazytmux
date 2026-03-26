@@ -2,7 +2,7 @@
 # Window picker: Go binary generates ANSI output, fzf-tmux provides the popup.
 # Background refresh every 1s via /dev/tcp. Preview shows pane content.
 
-# shellcheck disable=SC2016  # Single-quoted strings are intentional (fzf --preview/--bind)
+# shellcheck disable=SC2016,SC2001  # SC2016: fzf --preview/--bind use single quotes; SC2001: ANSI regex needs sed
 set -euo pipefail
 
 FZF=@fzf@
@@ -10,6 +10,17 @@ FZF=@fzf@
 if [[ ${1:-} == "--generate" ]]; then
 	exec @picker_generate@ --windows
 fi
+
+# Extract "session:window_index" from a picker line.
+# Session name is always field 2 (after icon/tree), window index from "N: name".
+extract_target() {
+	local clean
+	clean=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$1")
+	local sess win
+	sess=$(awk '{print $2}' <<<"$clean")
+	win=$(grep -oP '\b\d+(?=:)' <<<"$clean" | head -1)
+	echo "${sess}:${win}"
+}
 
 SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
@@ -28,12 +39,27 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
+# Helper script for preview — extracts target and captures pane.
+PREVIEW_CMD='
+	clean=$(echo {} | sed "s/\x1b\[[0-9;]*m//g")
+	sess=$(echo "$clean" | awk "{print \$2}")
+	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
+	tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
+'
+
+# Helper for ctrl-x kill
+KILL_CMD='
+	clean=$(echo {} | sed "s/\x1b\[[0-9;]*m//g")
+	sess=$(echo "$clean" | awk "{print \$2}")
+	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
+	tmux kill-window -t "${sess}:${win}" 2>/dev/null
+'
+
 selected=$(
-	"$SELF" --generate | "$FZF_TMUX" -p 85%,75% -- \
+	"$SELF" --generate | "$FZF_TMUX" -p 90%,85% -- \
 		--listen "$PORT" \
 		--ansi \
-		--delimiter '\t' \
-		--with-nth 2 \
+		--nth 2,5 \
 		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
@@ -43,16 +69,16 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
-		--preview 'tmux capture-pane -t {1} -p -e 2>/dev/null' \
+		--preview "$PREVIEW_CMD" \
 		--preview-window 'right:50%:wrap:follow' \
 		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'ctrl-/:toggle-preview' \
-		--bind "ctrl-x:execute-silent(tmux kill-window -t {1})+reload($SELF --generate)" \
+		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
 
-# Extract target (before TAB)
-target=$(cut -f1 <<<"$selected")
-[[ -n $target ]] && tmux switch-client -t "$target"
+[[ -z $selected ]] && exit 0
+target=$(extract_target "$selected")
+[[ -n $target && $target != ":" ]] && tmux switch-client -t "$target"
 exit 0

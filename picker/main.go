@@ -309,15 +309,17 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
-	// Output uses TAB to separate hidden target from visible content.
-	// fzf --delimiter '\t' --with-nth 2 hides col 1 (target).
+	// No hidden columns — every row includes session name for extraction.
+	// Continuation rows show session name dimmed + tree connectors.
+	// Extraction: strip ANSI → field 2 = session, grep "N:" = window index.
 
-	// Header (empty target)
+	// Header
 	sessPad := strings.Repeat(" ", max(0, maxSessName-7))
 	procsPad := emptyIcons[min(5, len(emptyIcons)):]
 	winPad := strings.Repeat(" ", max(0, maxWinLabel-6))
-	fmt.Printf("\t%s%s  %s  %s%s  %s\n",
-		cDim+iSess+" Session"+reset,
+	fmt.Printf("%s %s%s  %s  %s%s  %s\n",
+		cDim+iSess+reset,
+		cDim+"Session"+reset,
 		sessPad,
 		cDim+"Procs"+procsPad+reset,
 		cDim+"Window"+reset,
@@ -328,21 +330,26 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	// Rows
 	ri := 0
 	for _, g := range groups {
+		lastWi := len(g.windows) - 1
 		for wi, w := range g.windows {
 			r := allRows[ri]
 			ri++
 
-			target := fmt.Sprintf("%s:%d", w.session, w.index)
-
-			// Session name: show on first window, blank on continuation
+			// Session column: icon + name (first), tree connector (continuation)
+			// Session name is ALWAYS present for extraction (dimmed on continuation)
 			var sessCol string
 			if wi == 0 {
-				sessCol = cMauve + iSess + " " + w.session + reset
+				sessCol = cMauve + iSess + reset + " " + cMauve + w.session + reset
 				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
 			} else {
-				// Indent continuation with tree connector
-				sessCol = cDim + "  " + reset
-				sessCol += strings.Repeat(" ", max(0, maxSessName-1))
+				var tree string
+				if wi == lastWi {
+					tree = "╰─"
+				} else {
+					tree = "├─"
+				}
+				sessCol = cDim + tree + " " + w.session + reset
+				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
 			}
 
 			icons := r.icons
@@ -357,7 +364,6 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			} else {
 				winDisplay = r.winLabel
 			}
-			// Pad window label for branch alignment
 			winDisplay += strings.Repeat(" ", max(0, maxWinLabel-len(r.winLabel)))
 
 			// Branch (truncate long names)
@@ -370,8 +376,7 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = cBlue + iBranch + reset + " " + cFaint + br + reset
 			}
 
-			fmt.Printf("%s\t%s  %s  %s  %s\n",
-				target,
+			fmt.Printf("%s  %s  %s  %s\n",
 				sessCol,
 				icons,
 				winDisplay,
