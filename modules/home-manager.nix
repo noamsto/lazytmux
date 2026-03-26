@@ -210,13 +210,16 @@ in {
           echo "tmux not found in /etc/profiles/per-user/$USER/bin or ~/.nix-profile/bin" >&2
           exit 1
         fi
-        # Only start if not already running
-        if "$TMUX_BIN" has-session 2>/dev/null; then
-          echo "tmux server already running, skipping"
-          exit 0
-        fi
-        # Remove stale socket left by a dead server (causes "server exited unexpectedly")
         SOCK="''${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/default"
+        # Check if server is already running (retry once — server may be mid-startup)
+        for _ in 1 2; do
+          if "$TMUX_BIN" has-session 2>/dev/null; then
+            echo "tmux server already running, skipping"
+            exit 0
+          fi
+          sleep 2
+        done
+        # Socket exists but server isn't responding — stale, remove it
         rm -f "$SOCK"
         exec "$TMUX_BIN" new -s ${lib.escapeShellArg cfg.startupSession.name} -c ${lib.escapeShellArg cfg.startupSession.directory} -d
       '';
