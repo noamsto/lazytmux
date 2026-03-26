@@ -289,8 +289,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	// SESSION is always field 2 for extraction. Window rows have "N:" pattern.
 	// Session rows have no "N:" — extraction returns just session name.
 
-	// Header
-	fmt.Printf(" %s\n", cDim+"Sessions & Windows"+reset)
+	// Header (empty target before TAB)
+	fmt.Printf("\t %s\n", cDim+"Sessions & Windows"+reset)
 
 	for _, g := range groups {
 		rows := winRows[g.name]
@@ -308,8 +308,9 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			}
 		}
 
-		// Session header row
-		fmt.Printf("%s %s %s%s%s\n",
+		// Session header row — target is just session name
+		fmt.Printf("%s\t%s %s %s%s%s\n",
+			g.name,
 			cMauve+iSess+reset,
 			cMauve+g.name+reset,
 			cDim+"("+reset,
@@ -363,8 +364,11 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			fmt.Printf("  %s %s %s %s %s%s\n",
-				dim+g.name+reset,
+			// TAB-separated: target \t visible content
+			// fzf --delimiter '\t' --with-nth 2 hides target
+			target := fmt.Sprintf("%s:%d", g.name, w.index)
+			fmt.Printf("%s\t  %s %s %s %s%s\n",
+				target,
 				cDim+tree+reset,
 				activeMarker,
 				winLabel,

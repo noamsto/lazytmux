@@ -29,40 +29,24 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
-# Extraction: strip ANSI → detect row type.
-# Session rows: no ├─/╰─ → field 2 = session name → switch to session
-# Window rows: has ├─/╰─ → field 1 = session name, grep N: = window index
-# (Session name is dim but present on window rows for extraction)
-
-PREVIEW_CMD='bash -c '"'"'
-	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	if echo "$clean" | grep -qP "[├╰]─"; then
-		sess=$(echo "$clean" | awk "{print \$1}")
-		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
-		tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
-	else
-		sess=$(echo "$clean" | awk "{print \$2}")
-		tmux capture-pane -t "$sess" -p -e 2>/dev/null
-	fi
-'"'"' {}'
-
+# Target is field 1 (before TAB). {1} in fzf extracts it.
+# Session rows: "session_name"  Window rows: "session_name:window_index"
+PREVIEW_CMD='bash -c '"'"'tmux capture-pane -t "$0" -p -e 2>/dev/null'"'"' {1}'
 KILL_CMD='bash -c '"'"'
-	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	if echo "$clean" | grep -qP "[├╰]─"; then
-		sess=$(echo "$clean" | awk "{print \$1}")
-		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
-		tmux kill-window -t "${sess}:${win}" 2>/dev/null
+	target="$0"
+	if [[ "$target" == *:* ]]; then
+		tmux kill-window -t "$target" 2>/dev/null
 	else
-		sess=$(echo "$clean" | awk "{print \$2}")
-		tmux kill-session -t "$sess" 2>/dev/null
+		tmux kill-session -t "$target" 2>/dev/null
 	fi
-'"'"' {}'
+'"'"' {1}'
 
 selected=$(
 	"$SELF" --generate | "$FZF_TMUX" -p 90%,85% -- \
 		--listen "$PORT" \
 		--ansi \
-		--nth 1..3 \
+		--delimiter '\t' \
+		--with-nth 2 \
 		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
@@ -82,14 +66,6 @@ selected=$(
 ) || true
 
 [[ -z $selected ]] && exit 0
-
-clean=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$selected")
-if echo "$clean" | grep -qP '[├╰]─'; then
-	sess=$(awk '{print $1}' <<<"$clean")
-	win=$(grep -oP '\d+(?=:)' <<<"$clean" | head -1)
-	tmux switch-client -t "${sess}:${win}"
-else
-	sess=$(awk '{print $2}' <<<"$clean")
-	tmux switch-client -t "$sess"
-fi
+target=$(cut -f1 <<<"$selected")
+[[ -n $target ]] && tmux switch-client -t "$target"
 exit 0
