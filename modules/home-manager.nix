@@ -216,7 +216,8 @@ in {
           exit 0
         fi
         # Remove stale socket left by a dead server (causes "server exited unexpectedly")
-        "$TMUX_BIN" kill-server 2>/dev/null || true
+        SOCK="''${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/default"
+        rm -f "$SOCK"
         exec "$TMUX_BIN" new -s ${lib.escapeShellArg cfg.startupSession.name} -c ${lib.escapeShellArg cfg.startupSession.directory} -d
       '';
     in {
