@@ -344,7 +344,7 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			// Active indicator: green dot, only in multi-window sessions
 			activeMarker := " "
 			if w.active && multiWin {
-				activeMarker = cGreen + "●" + reset
+				activeMarker = cGreen + "·" + reset
 			}
 
 			// Icons
@@ -363,10 +363,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			// Concealed session name for extraction (\033[8m = hidden text)
-			hidden := "\033[8m" + g.name + reset
 			fmt.Printf("  %s %s %s %s %s%s\n",
-				hidden,
+				dim+g.name+reset,
 				cDim+tree+reset,
 				activeMarker,
 				winLabel,

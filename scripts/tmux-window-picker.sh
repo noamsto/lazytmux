@@ -29,29 +29,32 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
-# Preview: bash -c required (fzf inherits fish). Handles both row types.
+# Extraction: strip ANSI → detect row type.
+# Session rows: no ├─/╰─ → field 2 = session name → switch to session
+# Window rows: has ├─/╰─ → field 1 = session name, grep N: = window index
+# (Session name is dim but present on window rows for extraction)
+
 PREVIEW_CMD='bash -c '"'"'
 	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	if echo "$clean" | grep -qP "\d+:"; then
+	if echo "$clean" | grep -qP "[├╰]─"; then
 		sess=$(echo "$clean" | awk "{print \$1}")
 		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
 		tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
 	else
 		sess=$(echo "$clean" | awk "{print \$2}")
-		tmux capture-pane -t "${sess}" -p -e 2>/dev/null
+		tmux capture-pane -t "$sess" -p -e 2>/dev/null
 	fi
 '"'"' {}'
 
-# Kill: session row kills session, window row kills window
 KILL_CMD='bash -c '"'"'
 	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	if echo "$clean" | grep -qP "\d+:"; then
+	if echo "$clean" | grep -qP "[├╰]─"; then
 		sess=$(echo "$clean" | awk "{print \$1}")
 		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
 		tmux kill-window -t "${sess}:${win}" 2>/dev/null
 	else
 		sess=$(echo "$clean" | awk "{print \$2}")
-		tmux kill-session -t "${sess}" 2>/dev/null
+		tmux kill-session -t "$sess" 2>/dev/null
 	fi
 '"'"' {}'
 
@@ -80,15 +83,12 @@ selected=$(
 
 [[ -z $selected ]] && exit 0
 
-# Extract target: session rows have no "N:", window rows do.
 clean=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$selected")
-if echo "$clean" | grep -qP '\d+:'; then
-	# Window row: field 1 is session name, grep for window index
+if echo "$clean" | grep -qP '[├╰]─'; then
 	sess=$(awk '{print $1}' <<<"$clean")
 	win=$(grep -oP '\d+(?=:)' <<<"$clean" | head -1)
 	tmux switch-client -t "${sess}:${win}"
 else
-	# Session row: field 2 is session name
 	sess=$(awk '{print $2}' <<<"$clean")
 	tmux switch-client -t "$sess"
 fi
