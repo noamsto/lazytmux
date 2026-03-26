@@ -199,9 +199,15 @@ in {
       # Stable script that doesn't embed nix store paths — prevents unit file churn
       tmux-startup-script = pkgs.writeShellScript "tmux-startup" ''
         # Resolve tmux from user profile (avoids hardcoded store paths in the unit)
-        TMUX_BIN="$HOME/.nix-profile/bin/tmux"
-        if [ ! -x "$TMUX_BIN" ]; then
-          echo "tmux not found at $TMUX_BIN" >&2
+        # Try per-user profile (NixOS/home-manager) then nix-profile (nix-env)
+        for candidate in "/etc/profiles/per-user/$USER/bin/tmux" "$HOME/.nix-profile/bin/tmux"; do
+          if [ -x "$candidate" ]; then
+            TMUX_BIN="$candidate"
+            break
+          fi
+        done
+        if [ -z "''${TMUX_BIN:-}" ]; then
+          echo "tmux not found in /etc/profiles/per-user/$USER/bin or ~/.nix-profile/bin" >&2
           exit 1
         fi
         # Only start if not already running
