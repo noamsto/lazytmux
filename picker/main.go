@@ -335,21 +335,23 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			r := allRows[ri]
 			ri++
 
-			// Session column: icon + name (first), tree connector (continuation)
-			// Session name is ALWAYS present for extraction (dimmed on continuation)
+			// Tree connector on every row. Session name on first, dimmed on rest.
+			var tree string
+			if wi == lastWi {
+				tree = "╰─"
+			} else {
+				tree = "├─"
+			}
+
 			var sessCol string
 			if wi == 0 {
-				sessCol = cMauve + iSess + reset + " " + cMauve + w.session + reset
+				sessCol = cMauve + iSess + " " + w.session + reset
 				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
+				sessCol += " " + cDim + tree + reset
 			} else {
-				var tree string
-				if wi == lastWi {
-					tree = "╰─"
-				} else {
-					tree = "├─"
-				}
-				sessCol = cDim + tree + " " + w.session + reset
+				sessCol = cDim + "  " + w.session + reset
 				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
+				sessCol += " " + cDim + tree + reset
 			}
 
 			icons := r.icons

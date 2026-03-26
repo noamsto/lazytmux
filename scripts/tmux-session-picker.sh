@@ -2,7 +2,7 @@
 # Session picker: Go binary generates ANSI output, fzf-tmux provides the popup.
 # Background refresh every 1s via /dev/tcp. ctrl-x kills sessions, ctrl-/ toggles preview.
 
-# shellcheck disable=SC2016  # Single-quoted strings are intentional (fzf --preview/--bind)
+# shellcheck disable=SC2016,SC2001  # SC2016: fzf uses single-quoted commands; SC2001: ANSI regex needs sed
 set -euo pipefail
 
 FZF=@fzf@
@@ -28,6 +28,17 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
+# Preview and kill commands — must use bash (fzf inherits user's fish shell)
+PREVIEW_CMD='bash -c '"'"'
+	sess=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g" | awk "{print \$2}")
+	tmux capture-pane -t "$sess" -p -e 2>/dev/null
+'"'"' {}'
+
+KILL_CMD='bash -c '"'"'
+	sess=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g" | awk "{print \$2}")
+	tmux kill-session -t "$sess" 2>/dev/null
+'"'"' {}'
+
 selected=$(
 	"$SELF" --generate | "$FZF_TMUX" -p 80%,60% -- \
 		--listen "$PORT" \
@@ -42,12 +53,11 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
-		--preview 'sess=$(echo {} | sed "s/\x1b\[[0-9;]*m//g" | awk "{print \$2}"); tmux capture-pane -t "$sess" -p -e 2>/dev/null' \
-		--preview-window 'right:50%:wrap:hidden' \
+		--preview "$PREVIEW_CMD" \
+		--preview-window 'right:50%:wrap:follow:hidden' \
 		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'ctrl-/:toggle-preview' \
-		--bind 'focus:refresh-preview' \
-		--bind "ctrl-x:execute-silent(sess=\$(echo {} | sed 's/\x1b\[[0-9;]*m//g' | awk '{print \$2}'); tmux kill-session -t \"\$sess\")+reload($SELF --generate)" \
+		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true

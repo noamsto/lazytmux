@@ -39,21 +39,20 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
-# Helper script for preview — extracts target and captures pane.
-PREVIEW_CMD='
-	clean=$(echo {} | sed "s/\x1b\[[0-9;]*m//g")
+# Preview and kill commands — must use bash (fzf inherits user's fish shell)
+PREVIEW_CMD='bash -c '"'"'
+	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
 	sess=$(echo "$clean" | awk "{print \$2}")
 	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
 	tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
-'
+'"'"' {}'
 
-# Helper for ctrl-x kill
-KILL_CMD='
-	clean=$(echo {} | sed "s/\x1b\[[0-9;]*m//g")
+KILL_CMD='bash -c '"'"'
+	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
 	sess=$(echo "$clean" | awk "{print \$2}")
 	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
 	tmux kill-window -t "${sess}:${win}" 2>/dev/null
-'
+'"'"' {}'
 
 selected=$(
 	"$SELF" --generate | "$FZF_TMUX" -p 90%,85% -- \
