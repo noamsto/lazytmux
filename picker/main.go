@@ -309,18 +309,20 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
-	// Header
+	// Output uses TAB to separate hidden target from visible content.
+	// fzf --delimiter '\t' --with-nth 2 hides col 1 (target).
+
+	// Header (empty target)
 	sessPad := strings.Repeat(" ", max(0, maxSessName-7))
 	procsPad := emptyIcons[min(5, len(emptyIcons)):]
-	fmt.Printf("%-8s %s %s%s  %s  %s  %s %s\n",
-		"",
-		cDim+iSess+reset,
-		cDim+"Session"+reset,
+	winPad := strings.Repeat(" ", max(0, maxWinLabel-6))
+	fmt.Printf("\t%s%s  %s  %s%s  %s\n",
+		cDim+iSess+" Session"+reset,
 		sessPad,
 		cDim+"Procs"+procsPad+reset,
 		cDim+"Window"+reset,
-		cDim+iBranch+reset,
-		cDim+"Branch"+reset,
+		winPad,
+		cDim+iBranch+" Branch"+reset,
 	)
 
 	// Rows
@@ -330,24 +332,17 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			r := allRows[ri]
 			ri++
 
-			// Hidden target for fzf selection (col 1)
-			target := fmt.Sprintf("%-8s", fmt.Sprintf("%s:%d", w.session, w.index))
+			target := fmt.Sprintf("%s:%d", w.session, w.index)
 
 			// Session name: show on first window, blank on continuation
-			var sessDisplay string
+			var sessCol string
 			if wi == 0 {
-				sessDisplay = cMauve + w.session + reset
-				sessDisplay += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
+				sessCol = cMauve + iSess + " " + w.session + reset
+				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
 			} else {
-				sessDisplay = strings.Repeat(" ", maxSessName)
-			}
-
-			// Session icon: show on first window only
-			var sessIcon string
-			if wi == 0 {
-				sessIcon = cMauve + iSess + reset
-			} else {
-				sessIcon = " " // icon placeholder (1 cell for nerd font)
+				// Indent continuation with tree connector
+				sessCol = cDim + "  " + reset
+				sessCol += strings.Repeat(" ", max(0, maxSessName-1))
 			}
 
 			icons := r.icons
@@ -362,6 +357,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			} else {
 				winDisplay = r.winLabel
 			}
+			// Pad window label for branch alignment
+			winDisplay += strings.Repeat(" ", max(0, maxWinLabel-len(r.winLabel)))
 
 			// Branch (truncate long names)
 			var branchDisplay string
@@ -373,10 +370,9 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = cBlue + iBranch + reset + " " + cFaint + br + reset
 			}
 
-			fmt.Printf("%s %s %s  %s  %s  %s\n",
+			fmt.Printf("%s\t%s  %s  %s  %s\n",
 				target,
-				sessIcon,
-				sessDisplay,
+				sessCol,
 				icons,
 				winDisplay,
 				branchDisplay,

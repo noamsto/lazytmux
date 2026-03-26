@@ -29,11 +29,11 @@ PORT=$((RANDOM % 10000 + 40000))
 ) &
 
 selected=$(
-	"$SELF" --generate | "$FZF_TMUX" -p 80%,70% -- \
+	"$SELF" --generate | "$FZF_TMUX" -p 85%,75% -- \
 		--listen "$PORT" \
 		--ansi \
-		--with-nth 2.. \
-		--nth 2,5 \
+		--delimiter '\t' \
+		--with-nth 2 \
 		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
@@ -43,17 +43,16 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
-		--preview 'tmux capture-pane -t "$(echo {} | awk "{print \$1}")" -p -e 2>/dev/null' \
-		--preview-window 'right:50%:wrap' \
+		--preview 'tmux capture-pane -t {1} -p -e 2>/dev/null' \
+		--preview-window 'right:50%:wrap:follow' \
 		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'ctrl-/:toggle-preview' \
-		--bind 'focus:refresh-preview' \
 		--bind "ctrl-x:execute-silent(tmux kill-window -t {1})+reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
 
-# Extract target (col 1: "session:index")
-target=$(awk '{print $1}' <<<"$selected")
+# Extract target (before TAB)
+target=$(cut -f1 <<<"$selected")
 [[ -n $target ]] && tmux switch-client -t "$target"
 exit 0
