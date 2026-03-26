@@ -217,7 +217,6 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	bold := "\033[1m"
 
 	// Group by session
 	type sessGroup struct {
@@ -312,11 +311,13 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 		// Session header row
 		fmt.Printf("%s %s %s%s%s\n",
 			cMauve+iSess+reset,
-			cMauve+bold+g.name+reset,
+			cMauve+g.name+reset,
 			cDim+"("+reset,
 			cFaint+activeWin+reset,
 			cDim+")"+reset,
 		)
+
+		multiWin := len(rows) > 1
 
 		// Window rows under this session
 		for wi, r := range rows {
@@ -340,12 +341,10 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				winLabel += " 󰁌"
 			}
 
-			// Active window is bold green
-			var winDisplay string
-			if w.active {
-				winDisplay = cGreen + bold + winLabel + reset
-			} else {
-				winDisplay = winLabel
+			// Active indicator: green dot, only in multi-window sessions
+			activeMarker := " "
+			if w.active && multiWin {
+				activeMarker = cGreen + "●" + reset
 			}
 
 			// Icons
@@ -364,11 +363,13 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			// Hidden session name for extraction (dimmed, before tree)
-			fmt.Printf("  %s %s %s %s%s\n",
-				cDim+g.name+reset,
+			// Concealed session name for extraction (\033[8m = hidden text)
+			hidden := "\033[8m" + g.name + reset
+			fmt.Printf("  %s %s %s %s %s%s\n",
+				hidden,
 				cDim+tree+reset,
-				winDisplay,
+				activeMarker,
+				winLabel,
 				icons,
 				branchDisplay,
 			)
