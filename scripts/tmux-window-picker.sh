@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Window picker: Go binary generates ANSI output, fzf-tmux provides the popup.
-# Background refresh every 1s via /dev/tcp. Preview shows pane content.
+# Window picker: tree view with session headers and window rows.
+# Go binary generates ANSI output, fzf-tmux provides the popup.
+# Background refresh every 1s. Preview shows pane content.
 
-# shellcheck disable=SC2016,SC2001  # SC2016: fzf --preview/--bind use single quotes; SC2001: ANSI regex needs sed
+# shellcheck disable=SC2016,SC2001  # SC2016: fzf uses single-quoted commands; SC2001: ANSI regex needs sed
 set -euo pipefail
 
 FZF=@fzf@
@@ -10,17 +11,6 @@ FZF=@fzf@
 if [[ ${1:-} == "--generate" ]]; then
 	exec @picker_generate@ --windows
 fi
-
-# Extract "session:window_index" from a picker line.
-# Session name is always field 2 (after icon/tree), window index from "N: name".
-extract_target() {
-	local clean
-	clean=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$1")
-	local sess win
-	sess=$(awk '{print $2}' <<<"$clean")
-	win=$(grep -oP '\b\d+(?=:)' <<<"$clean" | head -1)
-	echo "${sess}:${win}"
-}
 
 SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
@@ -39,26 +29,37 @@ PORT=$((RANDOM % 10000 + 40000))
 	done
 ) &
 
-# Preview and kill commands — must use bash (fzf inherits user's fish shell)
+# Preview: bash -c required (fzf inherits fish). Handles both row types.
 PREVIEW_CMD='bash -c '"'"'
 	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	sess=$(echo "$clean" | awk "{print \$2}")
-	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
-	tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
+	if echo "$clean" | grep -qP "\d+:"; then
+		sess=$(echo "$clean" | awk "{print \$1}")
+		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
+		tmux capture-pane -t "${sess}:${win}" -p -e 2>/dev/null
+	else
+		sess=$(echo "$clean" | awk "{print \$2}")
+		tmux capture-pane -t "${sess}" -p -e 2>/dev/null
+	fi
 '"'"' {}'
 
+# Kill: session row kills session, window row kills window
 KILL_CMD='bash -c '"'"'
 	clean=$(echo "$0" | sed "s/\x1b\[[0-9;]*m//g")
-	sess=$(echo "$clean" | awk "{print \$2}")
-	win=$(echo "$clean" | grep -oP "\b\d+(?=:)" | head -1)
-	tmux kill-window -t "${sess}:${win}" 2>/dev/null
+	if echo "$clean" | grep -qP "\d+:"; then
+		sess=$(echo "$clean" | awk "{print \$1}")
+		win=$(echo "$clean" | grep -oP "\d+(?=:)" | head -1)
+		tmux kill-window -t "${sess}:${win}" 2>/dev/null
+	else
+		sess=$(echo "$clean" | awk "{print \$2}")
+		tmux kill-session -t "${sess}" 2>/dev/null
+	fi
 '"'"' {}'
 
 selected=$(
 	"$SELF" --generate | "$FZF_TMUX" -p 90%,85% -- \
 		--listen "$PORT" \
 		--ansi \
-		--nth 2,5 \
+		--nth 1..3 \
 		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
@@ -78,6 +79,17 @@ selected=$(
 ) || true
 
 [[ -z $selected ]] && exit 0
-target=$(extract_target "$selected")
-[[ -n $target && $target != ":" ]] && tmux switch-client -t "$target"
+
+# Extract target: session rows have no "N:", window rows do.
+clean=$(sed 's/\x1b\[[0-9;]*m//g' <<<"$selected")
+if echo "$clean" | grep -qP '\d+:'; then
+	# Window row: field 1 is session name, grep for window index
+	sess=$(awk '{print $1}' <<<"$clean")
+	win=$(grep -oP '\d+(?=:)' <<<"$clean" | head -1)
+	tmux switch-client -t "${sess}:${win}"
+else
+	# Session row: field 2 is session name
+	sess=$(awk '{print $2}' <<<"$clean")
+	tmux switch-client -t "$sess"
+fi
 exit 0
