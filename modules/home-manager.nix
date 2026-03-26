@@ -215,6 +215,8 @@ in {
           echo "tmux server already running, skipping"
           exit 0
         fi
+        # Remove stale socket left by a dead server (causes "server exited unexpectedly")
+        "$TMUX_BIN" kill-server 2>/dev/null || true
         exec "$TMUX_BIN" new -s ${lib.escapeShellArg cfg.startupSession.name} -c ${lib.escapeShellArg cfg.startupSession.directory} -d
       '';
     in {
