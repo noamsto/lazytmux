@@ -1,8 +1,14 @@
 // tmux-picker-generate outputs ANSI-colored session/window lists for fzf.
 // It replaces the bash --generate function for speed (~4ms vs ~85ms).
+//
+// Usage:
+//
+//	tmux-picker-generate              # session mode (default)
+//	tmux-picker-generate --windows    # window mode
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,14 +17,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"encoding/json"
 )
 
 // Build-time constants injected via icons_generated.go:
 //   iconMap, fallbackIcon, maxIconsPicker
 //   claudeSpinnerFrames, claudeIconWaiting, claudeIconCompacting,
 //   claudeIconDone, claudeIconIdle, claudeIconError
-//   iconSession, iconDir (defaults, overridden by env/tmux)
+//   iconSession, iconDir, iconBranch (defaults, overridden by env/tmux)
 
 // Staleness thresholds (seconds)
 const (
@@ -49,37 +54,65 @@ type sessionData struct {
 	claude   claudeCounts
 }
 
+type windowData struct {
+	session  string
+	index    int
+	name     string
+	zoomed   bool
+	branch   string
+	active   bool // currently active window in its session
+	procs    []string
+	claude   claudeCounts
+}
+
 type claudeCounts struct {
 	waiting, compacting, processing, done, idle, errorCnt int
 	allStale                                              bool
 }
 
+// claudePaneInfo holds parsed pane file data with window-level targeting.
+type claudePaneInfo struct {
+	session string
+	winIdx  int
+	state   string
+	ts      int64
+	stale   bool
+}
+
 func main() {
+	windowMode := len(os.Args) > 1 && os.Args[1] == "--windows"
+
 	// Run tmux calls + file reads in parallel
-	type sessResult struct {
-		sessions []sessionData
-	}
 	type optsResult struct {
 		opts map[string]string
 	}
-	sessCh := make(chan sessResult, 1)
 	optsCh := make(chan optsResult, 1)
-
-	go func() {
-		sessCh <- sessResult{collectSessions()}
-	}()
 	go func() {
 		optsCh <- optsResult{readTmuxOpts()}
 	}()
-	claude := collectClaude() // file reads, runs concurrently with tmux calls
+
+	claudePanes := collectClaudePanes()
 	theme := detectTheme()
 
-	sr := <-sessCh
 	or := <-optsCh
-	sessions := sr.sessions
 	tmuxOpts := or.opts
 
+	if windowMode {
+		renderWindows(tmuxOpts, claudePanes, theme)
+	} else {
+		renderSessions(tmuxOpts, claudePanes, theme)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session mode
+// ---------------------------------------------------------------------------
+
+func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) {
+	sessions := collectSessions()
+	claude := aggregateClaudeBySession(claudePanes)
 	mergeClaude(sessions, claude)
+
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
@@ -92,7 +125,6 @@ func main() {
 	reset := "\033[0m"
 	dim := "\033[2m"
 
-	// Sort by most recently attached, then alphabetically as tiebreaker.
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].activity != sessions[j].activity {
 			return sessions[i].activity > sessions[j].activity
@@ -100,9 +132,8 @@ func main() {
 		return sessions[i].name < sessions[j].name
 	})
 
-	// Build icon strings and compute column widths
 	type rendered struct {
-		sess *sessionData
+		sess  *sessionData
 		icons string
 		iconDW int
 	}
@@ -115,25 +146,7 @@ func main() {
 			maxName = len(s.name)
 		}
 		icons, dw := buildProcIcons(s.procs, maxIconsPicker)
-
-		// Append claude state icon
-		state := claudePriority(s.claude)
-		if state != "" {
-			icon := claudeStateIcon(state)
-			stale := s.claude.allStale
-			var cc string
-			if stale {
-				cc = dim
-			} else {
-				colors := claudeColors[theme]
-				if hex, ok := colors[state]; ok {
-					cc = ansiFg(hex)
-				}
-			}
-			icons += cc + icon + reset + " "
-			dw += 2
-		}
-
+		icons, dw = appendClaudeIcon(icons, dw, s.claude, theme, dim, reset)
 		rows[i] = rendered{sess: &sessions[i], icons: icons, iconDW: dw}
 		if dw > maxIconDW {
 			maxIconDW = dw
@@ -141,15 +154,12 @@ func main() {
 	}
 
 	iconCol := maxIconDW + 1
-	if iconCol < 5 { // at least as wide as "Procs" header
+	if iconCol < 5 {
 		iconCol = 5
 	}
-
-	// Pad icons to uniform width
 	for i := range rows {
 		rows[i].icons = padToWidth(rows[i].icons, rows[i].iconDW, iconCol)
 	}
-
 	emptyIcons := strings.Repeat(" ", iconCol)
 
 	// Header
@@ -164,7 +174,6 @@ func main() {
 		cDim+"Path"+reset,
 	)
 
-	// Session rows
 	home := os.Getenv("HOME")
 	for _, r := range rows {
 		shortPath := r.sess.path
@@ -187,7 +196,199 @@ func main() {
 	}
 }
 
-// collectSessions runs tmux list-panes -a and aggregates by session.
+// ---------------------------------------------------------------------------
+// Window mode
+// ---------------------------------------------------------------------------
+
+func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) {
+	windows := collectWindows()
+	claudeByWin := aggregateClaudeByWindow(claudePanes)
+	mergeClaudeWindows(windows, claudeByWin)
+
+	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
+	thmGreen := envOrMap("THM_GREEN", tmuxOpts, "@thm_green", "#a6e3a1")
+	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
+	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
+	thmOverlay1 := envOrMap("THM_OVERLAY_1", tmuxOpts, "@thm_overlay_1", "#7f849c")
+	iBranch := envOrMap("PICKER_ICON_BRANCH", tmuxOpts, "@icon_branch", iconBranch)
+	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
+
+	cMauve := ansiFg(thmMauve)
+	cGreen := ansiFg(thmGreen)
+	cBlue := ansiFg(thmBlue)
+	cDim := ansiFg(thmSubtext0)
+	cFaint := ansiFg(thmOverlay1)
+	reset := "\033[0m"
+	dim := "\033[2m"
+	bold := "\033[1m"
+
+	// Sort: sessions by activity desc, windows by index within session
+	sort.Slice(windows, func(i, j int) bool {
+		if windows[i].session != windows[j].session {
+			return windows[i].session < windows[j].session
+		}
+		return windows[i].index < windows[j].index
+	})
+
+	// Group by session, sort session groups by most recent activity
+	type sessGroup struct {
+		name     string
+		activity int64
+		windows  []*windowData
+	}
+	groupMap := make(map[string]*sessGroup)
+	for i := range windows {
+		w := &windows[i]
+		g, ok := groupMap[w.session]
+		if !ok {
+			g = &sessGroup{name: w.session}
+			groupMap[w.session] = g
+		}
+		g.windows = append(g.windows, w)
+	}
+
+	// Get session activity for sorting
+	sessActivity := collectSessionActivity()
+	groups := make([]*sessGroup, 0, len(groupMap))
+	for _, g := range groupMap {
+		g.activity = sessActivity[g.name]
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].activity != groups[j].activity {
+			return groups[i].activity > groups[j].activity
+		}
+		return groups[i].name < groups[j].name
+	})
+
+	// Build icon strings and measure column widths
+	type renderedWin struct {
+		win      *windowData
+		icons    string
+		iconDW   int
+		winLabel string
+	}
+	var allRows []renderedWin
+	maxIconDW := 0
+	maxWinLabel := 0 // "idx: name [zoomed]"
+	maxSessName := 0
+
+	for _, g := range groups {
+		if len(g.name) > maxSessName {
+			maxSessName = len(g.name)
+		}
+		for _, w := range g.windows {
+			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
+			icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
+
+			name := w.name
+			if len(name) > 20 {
+				name = name[:18] + "…"
+			}
+			winLabel := fmt.Sprintf("%d: %s", w.index, name)
+			if w.zoomed {
+				winLabel += " 󰁌"
+			}
+			if len(winLabel) > maxWinLabel {
+				maxWinLabel = len(winLabel)
+			}
+
+			allRows = append(allRows, renderedWin{win: w, icons: icons, iconDW: dw, winLabel: winLabel})
+			if dw > maxIconDW {
+				maxIconDW = dw
+			}
+		}
+	}
+
+	iconCol := maxIconDW + 1
+	if iconCol < 5 {
+		iconCol = 5
+	}
+	for i := range allRows {
+		allRows[i].icons = padToWidth(allRows[i].icons, allRows[i].iconDW, iconCol)
+	}
+	emptyIcons := strings.Repeat(" ", iconCol)
+
+	// Header
+	sessPad := strings.Repeat(" ", max(0, maxSessName-7))
+	procsPad := emptyIcons[min(5, len(emptyIcons)):]
+	fmt.Printf("%-8s %s %s%s  %s  %s  %s %s\n",
+		"",
+		cDim+iSess+reset,
+		cDim+"Session"+reset,
+		sessPad,
+		cDim+"Procs"+procsPad+reset,
+		cDim+"Window"+reset,
+		cDim+iBranch+reset,
+		cDim+"Branch"+reset,
+	)
+
+	// Rows
+	ri := 0
+	for _, g := range groups {
+		for wi, w := range g.windows {
+			r := allRows[ri]
+			ri++
+
+			// Hidden target for fzf selection (col 1)
+			target := fmt.Sprintf("%-8s", fmt.Sprintf("%s:%d", w.session, w.index))
+
+			// Session name: show on first window, blank on continuation
+			var sessDisplay string
+			if wi == 0 {
+				sessDisplay = cMauve + w.session + reset
+				sessDisplay += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
+			} else {
+				sessDisplay = strings.Repeat(" ", maxSessName)
+			}
+
+			// Session icon: show on first window only
+			var sessIcon string
+			if wi == 0 {
+				sessIcon = cMauve + iSess + reset
+			} else {
+				sessIcon = " " // icon placeholder (1 cell for nerd font)
+			}
+
+			icons := r.icons
+			if icons == "" {
+				icons = emptyIcons
+			}
+
+			// Window label with active highlighting
+			var winDisplay string
+			if w.active {
+				winDisplay = cGreen + bold + r.winLabel + reset
+			} else {
+				winDisplay = r.winLabel
+			}
+
+			// Branch (truncate long names)
+			var branchDisplay string
+			if w.branch != "" {
+				br := w.branch
+				if len(br) > 40 {
+					br = br[:38] + "…"
+				}
+				branchDisplay = cBlue + iBranch + reset + " " + cFaint + br + reset
+			}
+
+			fmt.Printf("%s %s %s  %s  %s  %s\n",
+				target,
+				sessIcon,
+				sessDisplay,
+				icons,
+				winDisplay,
+				branchDisplay,
+			)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Data collection
+// ---------------------------------------------------------------------------
+
 func collectSessions() []sessionData {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
 		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{pane_current_command}").Output()
@@ -237,16 +438,128 @@ func collectSessions() []sessionData {
 	return sessions
 }
 
-// collectClaude reads /tmp/claude-status/panes/* and returns per-session counts.
-func collectClaude() map[string]*claudeCounts {
+func collectSessionActivity() map[string]int64 {
+	out, err := exec.Command("tmux", "list-sessions", "-F",
+		"#{session_name}\t#{session_last_attached}").Output()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]int64)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		act, _ := strconv.ParseInt(parts[1], 10, 64)
+		m[parts[0]] = act
+	}
+	return m
+}
+
+// stripTmuxColors removes tmux #[...] style markup and leading/trailing spaces.
+func stripTmuxColors(s string) string {
+	var sb strings.Builder
+	i := 0
+	for i < len(s) {
+		if i+1 < len(s) && s[i] == '#' && s[i+1] == '[' {
+			// Skip until closing ]
+			j := strings.IndexByte(s[i:], ']')
+			if j >= 0 {
+				i += j + 1
+				continue
+			}
+		}
+		sb.WriteByte(s[i])
+		i++
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func collectWindows() []windowData {
+	// Fetch both @branch and pane path basename. The window_name contains
+	// icons/colors from automatic-rename-format so we reconstruct a clean name.
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}").Output()
+	if err != nil {
+		return nil
+	}
+
+	type winKey struct {
+		sess string
+		idx  int
+	}
+	type winInfo struct {
+		name   string
+		zoomed bool
+		active bool
+		branch string
+		seen   map[string]bool
+		procs  []string
+	}
+	m := make(map[winKey]*winInfo)
+	// Preserve ordering
+	var order []winKey
+
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 7)
+		if len(parts) < 6 {
+			continue
+		}
+		sess := parts[0]
+		idx, _ := strconv.Atoi(parts[1])
+		wName := stripTmuxColors(parts[2])
+		zoomed := parts[3] == "1"
+		proc := parts[4]
+		active := parts[5] == "1"
+		branch := ""
+		if len(parts) >= 7 {
+			branch = stripTmuxColors(parts[6])
+		}
+
+		k := winKey{sess, idx}
+		wi, ok := m[k]
+		if !ok {
+			wi = &winInfo{name: wName, zoomed: zoomed, active: active, branch: branch, seen: make(map[string]bool)}
+			m[k] = wi
+			order = append(order, k)
+		}
+		if proc != "" && !wi.seen[proc] {
+			wi.seen[proc] = true
+			wi.procs = append(wi.procs, proc)
+		}
+	}
+
+	windows := make([]windowData, 0, len(order))
+	for _, k := range order {
+		wi := m[k]
+		windows = append(windows, windowData{
+			session: k.sess,
+			index:   k.idx,
+			name:    wi.name,
+			zoomed:  wi.zoomed,
+			active:  wi.active,
+			branch:  wi.branch,
+			procs:   wi.procs,
+		})
+	}
+	return windows
+}
+
+// ---------------------------------------------------------------------------
+// Claude status
+// ---------------------------------------------------------------------------
+
+func collectClaudePanes() []claudePaneInfo {
 	dir := "/tmp/claude-status/panes"
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 
+	// Build pane_id -> (session, window_index) mapping
+	paneMap := buildPaneMap()
 	now := time.Now().Unix()
-	result := make(map[string]*claudeCounts)
+	var result []claudePaneInfo
 
 	for _, e := range entries {
 		if e.IsDir() {
@@ -275,33 +588,100 @@ func collectClaude() map[string]*claudeCounts {
 			continue
 		}
 
-		cc, ok := result[session]
-		if !ok {
-			cc = &claudeCounts{allStale: true}
-			result[session] = cc
-		}
-
 		stale := isStale(state, now, timestamp)
-		if !stale {
-			cc.allStale = false
+
+		// Try to resolve window index from pane map
+		winIdx := -1
+		if pm, ok := paneMap[e.Name()]; ok {
+			winIdx = pm.winIdx
 		}
 
-		switch state {
-		case "waiting":
-			cc.waiting++
-		case "compacting":
-			cc.compacting++
-		case "processing":
-			cc.processing++
-		case "done":
-			cc.done++
-		case "idle":
-			cc.idle++
-		case "error":
-			cc.errorCnt++
-		}
+		result = append(result, claudePaneInfo{
+			session: session,
+			winIdx:  winIdx,
+			state:   state,
+			ts:      timestamp,
+			stale:   stale,
+		})
 	}
 	return result
+}
+
+type paneMapping struct {
+	session string
+	winIdx  int
+}
+
+func buildPaneMap() map[string]paneMapping {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{pane_id}\t#{session_name}\t#{window_index}").Output()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]paneMapping)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		paneID := strings.TrimPrefix(parts[0], "%")
+		idx, _ := strconv.Atoi(parts[2])
+		m[paneID] = paneMapping{session: parts[1], winIdx: idx}
+	}
+	return m
+}
+
+func aggregateClaudeBySession(panes []claudePaneInfo) map[string]*claudeCounts {
+	result := make(map[string]*claudeCounts)
+	for _, p := range panes {
+		cc, ok := result[p.session]
+		if !ok {
+			cc = &claudeCounts{allStale: true}
+			result[p.session] = cc
+		}
+		if !p.stale {
+			cc.allStale = false
+		}
+		addClaudeState(cc, p.state)
+	}
+	return result
+}
+
+func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
+	result := make(map[string]*claudeCounts)
+	for _, p := range panes {
+		if p.winIdx < 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", p.session, p.winIdx)
+		cc, ok := result[key]
+		if !ok {
+			cc = &claudeCounts{allStale: true}
+			result[key] = cc
+		}
+		if !p.stale {
+			cc.allStale = false
+		}
+		addClaudeState(cc, p.state)
+	}
+	return result
+}
+
+func addClaudeState(cc *claudeCounts, state string) {
+	switch state {
+	case "waiting":
+		cc.waiting++
+	case "compacting":
+		cc.compacting++
+	case "processing":
+		cc.processing++
+	case "done":
+		cc.done++
+	case "idle":
+		cc.idle++
+	case "error":
+		cc.errorCnt++
+	}
 }
 
 func isStale(state string, now, ts int64) bool {
@@ -331,6 +711,18 @@ func mergeClaude(sessions []sessionData, claude map[string]*claudeCounts) {
 	for i := range sessions {
 		if cc, ok := claude[sessions[i].name]; ok {
 			sessions[i].claude = *cc
+		}
+	}
+}
+
+func mergeClaudeWindows(windows []windowData, claude map[string]*claudeCounts) {
+	if claude == nil {
+		return
+	}
+	for i := range windows {
+		key := fmt.Sprintf("%s:%d", windows[i].session, windows[i].index)
+		if cc, ok := claude[key]; ok {
+			windows[i].claude = *cc
 		}
 	}
 }
@@ -376,7 +768,30 @@ func claudeStateIcon(state string) string {
 	return ""
 }
 
-// buildProcIcons builds a space-separated icon string from process names.
+func appendClaudeIcon(icons string, dw int, cc claudeCounts, theme, dim, reset string) (string, int) {
+	state := claudePriority(cc)
+	if state == "" {
+		return icons, dw
+	}
+	icon := claudeStateIcon(state)
+	var color string
+	if cc.allStale {
+		color = dim
+	} else {
+		colors := claudeColors[theme]
+		if hex, ok := colors[state]; ok {
+			color = ansiFg(hex)
+		}
+	}
+	icons += color + icon + reset + " "
+	dw += 2
+	return icons, dw
+}
+
+// ---------------------------------------------------------------------------
+// Icon helpers
+// ---------------------------------------------------------------------------
+
 func buildProcIcons(procs []string, maxCount int) (string, int) {
 	var sb strings.Builder
 	dw := 0
@@ -434,6 +849,10 @@ func padToWidth(s string, currentWidth, targetWidth int) string {
 	return s + strings.Repeat(" ", pad)
 }
 
+// ---------------------------------------------------------------------------
+// Theme / tmux helpers
+// ---------------------------------------------------------------------------
+
 func ansiFg(hex string) string {
 	hex = strings.TrimPrefix(hex, "#")
 	if len(hex) != 6 {
@@ -463,7 +882,6 @@ func detectTheme() string {
 	return cfg.Theme
 }
 
-// readTmuxOpts reads all global tmux options in a single call.
 func readTmuxOpts() map[string]string {
 	out, err := exec.Command("tmux", "show", "-g").Output()
 	if err != nil {
@@ -471,10 +889,9 @@ func readTmuxOpts() map[string]string {
 	}
 	m := make(map[string]string)
 	for _, line := range strings.Split(string(out), "\n") {
-		// Format: "option-name value" or "@user_option \"value\""
 		if i := strings.IndexByte(line, ' '); i > 0 {
 			v := strings.TrimRight(line[i+1:], " \t\r")
-			v = strings.Trim(v, "\"") // tmux wraps values in quotes
+			v = strings.Trim(v, "\"")
 			m[line[:i]] = v
 		}
 	}
@@ -490,4 +907,3 @@ func envOrMap(envKey string, tmuxOpts map[string]string, tmuxOpt, fallback strin
 	}
 	return fallback
 }
-

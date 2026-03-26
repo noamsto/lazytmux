@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Session picker: Go binary generates ANSI output, fzf-tmux provides the popup.
-# Background refresh every 1s via /dev/tcp.
+# Background refresh every 1s via /dev/tcp. ctrl-x kills sessions, ctrl-/ toggles preview.
 
+# shellcheck disable=SC2016  # Single-quoted strings are intentional (fzf --preview/--bind)
 set -euo pipefail
 
 FZF=@fzf@
@@ -41,7 +42,12 @@ selected=$(
 		--no-info \
 		--margin 0 \
 		--padding 0,1 \
+		--preview 'sess=$(echo {} | sed "s/\x1b\[[0-9;]*m//g" | awk "{print \$2}"); tmux capture-pane -t "$sess" -p -e 2>/dev/null' \
+		--preview-window 'right:50%:wrap:hidden' \
 		--bind "ctrl-r:reload($SELF --generate)" \
+		--bind 'ctrl-/:toggle-preview' \
+		--bind 'focus:refresh-preview' \
+		--bind "ctrl-x:execute-silent(sess=\$(echo {} | sed 's/\x1b\[[0-9;]*m//g' | awk '{print \$2}'); tmux kill-session -t \"\$sess\")+reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true

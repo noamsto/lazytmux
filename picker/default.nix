@@ -30,6 +30,7 @@
     // Default icons (overridden by env vars or tmux options at runtime)
     var iconSession = ""
     var iconDir = ""
+    var iconBranch = ""
   '';
 
   # Combine Go source with generated icons file
