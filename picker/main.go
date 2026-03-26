@@ -207,30 +207,19 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmGreen := envOrMap("THM_GREEN", tmuxOpts, "@thm_green", "#a6e3a1")
-	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
 	thmOverlay1 := envOrMap("THM_OVERLAY_1", tmuxOpts, "@thm_overlay_1", "#7f849c")
-	iBranch := envOrMap("PICKER_ICON_BRANCH", tmuxOpts, "@icon_branch", iconBranch)
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
 
 	cMauve := ansiFg(thmMauve)
 	cGreen := ansiFg(thmGreen)
-	cBlue := ansiFg(thmBlue)
 	cDim := ansiFg(thmSubtext0)
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
 	bold := "\033[1m"
 
-	// Sort: sessions by activity desc, windows by index within session
-	sort.Slice(windows, func(i, j int) bool {
-		if windows[i].session != windows[j].session {
-			return windows[i].session < windows[j].session
-		}
-		return windows[i].index < windows[j].index
-	})
-
-	// Group by session, sort session groups by most recent activity
+	// Group by session
 	type sessGroup struct {
 		name     string
 		activity int64
@@ -247,7 +236,7 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 		g.windows = append(g.windows, w)
 	}
 
-	// Get session activity for sorting
+	// Sort session groups by activity desc
 	sessActivity := collectSessionActivity()
 	groups := make([]*sessGroup, 0, len(groupMap))
 	for _, g := range groupMap {
@@ -260,17 +249,22 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 		}
 		return groups[i].name < groups[j].name
 	})
+	// Sort windows within each group by index
+	for _, g := range groups {
+		sort.Slice(g.windows, func(i, j int) bool {
+			return g.windows[i].index < g.windows[j].index
+		})
+	}
 
-	// Build icon strings and measure column widths
+	// Pre-compute all display strings and measure widths
 	type renderedWin struct {
 		win      *windowData
 		icons    string
 		iconDW   int
-		winLabel string
+		winLabel string // "N: name [zoomed]"
 	}
 	var allRows []renderedWin
 	maxIconDW := 0
-	maxWinLabel := 0 // "idx: name [zoomed]"
 	maxSessName := 0
 
 	for _, g := range groups {
@@ -289,9 +283,6 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			if w.zoomed {
 				winLabel += " 󰁌"
 			}
-			if len(winLabel) > maxWinLabel {
-				maxWinLabel = len(winLabel)
-			}
 
 			allRows = append(allRows, renderedWin{win: w, icons: icons, iconDW: dw, winLabel: winLabel})
 			if dw > maxIconDW {
@@ -301,33 +292,29 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 	}
 
 	iconCol := maxIconDW + 1
-	if iconCol < 5 {
-		iconCol = 5
+	if iconCol < 3 {
+		iconCol = 3
 	}
 	for i := range allRows {
 		allRows[i].icons = padToWidth(allRows[i].icons, allRows[i].iconDW, iconCol)
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
-	// No hidden columns — every row includes session name for extraction.
-	// Continuation rows show session name dimmed + tree connectors.
-	// Extraction: strip ANSI → field 2 = session, grep "N:" = window index.
+	// Layout: session name (padded) | icons | tree + window name | branch
+	// Every row has session name for extraction (dimmed on continuation rows).
+	// Matches session picker icon rendering: separate color spans for icon and text.
 
-	// Header
+	// Header (matches session picker pattern: icon in own color span)
 	sessPad := strings.Repeat(" ", max(0, maxSessName-7))
-	procsPad := emptyIcons[min(5, len(emptyIcons)):]
-	winPad := strings.Repeat(" ", max(0, maxWinLabel-6))
-	fmt.Printf("%s %s%s  %s  %s%s  %s\n",
+	fmt.Printf("%s %s%s %s %s\n",
 		cDim+iSess+reset,
 		cDim+"Session"+reset,
 		sessPad,
-		cDim+"Procs"+procsPad+reset,
+		emptyIcons,
 		cDim+"Window"+reset,
-		winPad,
-		cDim+iBranch+" Branch"+reset,
 	)
 
-	// Rows
+	// Data rows
 	ri := 0
 	for _, g := range groups {
 		lastWi := len(g.windows) - 1
@@ -335,7 +322,24 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			r := allRows[ri]
 			ri++
 
-			// Tree connector on every row. Session name on first, dimmed on rest.
+			// Session icon + name (separate ANSI spans — matches session picker)
+			var sessIcon, sessName string
+			if wi == 0 {
+				sessIcon = cMauve + iSess + reset
+				sessName = cMauve + w.session + reset
+			} else {
+				sessIcon = " " // placeholder for icon width
+				sessName = cDim + w.session + reset
+			}
+			sessPad := strings.Repeat(" ", max(0, maxSessName-len(w.session)))
+
+			// Icons
+			icons := r.icons
+			if icons == "" {
+				icons = emptyIcons
+			}
+
+			// Tree connector + window label
 			var tree string
 			if wi == lastWi {
 				tree = "╰─"
@@ -343,44 +347,29 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				tree = "├─"
 			}
 
-			var sessCol string
-			if wi == 0 {
-				sessCol = cMauve + iSess + " " + w.session + reset
-				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
-				sessCol += " " + cDim + tree + reset
-			} else {
-				sessCol = cDim + "  " + w.session + reset
-				sessCol += strings.Repeat(" ", max(0, maxSessName-len(w.session)))
-				sessCol += " " + cDim + tree + reset
-			}
-
-			icons := r.icons
-			if icons == "" {
-				icons = emptyIcons
-			}
-
-			// Window label with active highlighting
 			var winDisplay string
 			if w.active {
 				winDisplay = cGreen + bold + r.winLabel + reset
 			} else {
 				winDisplay = r.winLabel
 			}
-			winDisplay += strings.Repeat(" ", max(0, maxWinLabel-len(r.winLabel)))
 
-			// Branch (truncate long names)
+			// Branch (compact, no icon to save space)
 			var branchDisplay string
 			if w.branch != "" {
 				br := w.branch
-				if len(br) > 40 {
-					br = br[:38] + "…"
+				if len(br) > 35 {
+					br = br[:33] + "…"
 				}
-				branchDisplay = cBlue + iBranch + reset + " " + cFaint + br + reset
+				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			fmt.Printf("%s  %s  %s  %s\n",
-				sessCol,
+			fmt.Printf("%s %s%s %s %s %s%s\n",
+				sessIcon,
+				sessName,
+				sessPad,
 				icons,
+				cDim+tree+reset,
 				winDisplay,
 				branchDisplay,
 			)
