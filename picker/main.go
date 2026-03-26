@@ -320,19 +320,11 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 
 		multiWin := len(rows) > 1
 
-		// Window rows under this session
-		for wi, r := range rows {
+		// Window rows: "─ session : window_name  icons  branch"
+		// Use consistent "─" connector (not ├─/╰─) so filtering doesn't break tree
+		for _, r := range rows {
 			w := r.win
 
-			// Tree connector
-			var tree string
-			if wi == len(rows)-1 {
-				tree = "╰─"
-			} else {
-				tree = "├─"
-			}
-
-			// Window name
 			name := w.name
 			if len(name) > 25 {
 				name = name[:23] + "…"
@@ -342,19 +334,17 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				winLabel += " 󰁌"
 			}
 
-			// Active indicator: green dot, only in multi-window sessions
+			// Active indicator: only in multi-window sessions
 			activeMarker := " "
 			if w.active && multiWin {
-				activeMarker = cGreen + "·" + reset
+				activeMarker = cGreen + "▸" + reset
 			}
 
-			// Icons
 			icons := r.icons
 			if icons == "" {
 				icons = emptyIcons
 			}
 
-			// Branch
 			var branchDisplay string
 			if w.branch != "" {
 				br := w.branch
@@ -364,17 +354,15 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			// TAB-separated: target \t visible content
-			// fzf --delimiter '\t' --with-nth 2 hides target
+			// Layout: "─ session : window  icons  branch"
 			target := fmt.Sprintf("%s:%d", g.name, w.index)
-			fmt.Printf("%s\t  %s %s %s %s%s\n",
-				target,
-				cDim+tree+reset,
-				activeMarker,
+			line := fmt.Sprintf(" %s %s %s %s",
+				cDim+"─ "+g.name+reset+" "+activeMarker,
 				winLabel,
 				icons,
 				branchDisplay,
 			)
+			fmt.Printf("%s\t%s\n", target, line)
 		}
 	}
 }
