@@ -27,24 +27,27 @@ SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
-# Generate command based on mode
-GEN_ALL="$SELF --generate"
-GEN_CLAUDE="$SELF --generate --claude"
-
-# Initial generate command
+# Mode file: background refresh reads this to know current mode
+MODE_FILE=$(mktemp)
+trap 'rm -f "$MODE_FILE"' EXIT
 if ((CLAUDE_MODE)); then
-	GEN_INIT="$GEN_CLAUDE"
+	echo "claude" >"$MODE_FILE"
 	LABEL=" 󰒲 Claude Windows "
 else
-	GEN_INIT="$GEN_ALL"
+	echo "all" >"$MODE_FILE"
 	LABEL=" Windows "
 fi
 
-# Background refresh via /dev/tcp (no curl dependency).
+# Background refresh reads mode file to reload with correct filter
 (
 	sleep 0.3
 	while sleep 1; do
-		body="reload($GEN_INIT)"
+		mode=$(cat "$MODE_FILE" 2>/dev/null || echo "all")
+		if [[ $mode == "claude" ]]; then
+			body="reload($SELF --generate --claude)"
+		else
+			body="reload($SELF --generate)"
+		fi
 		exec 3<>/dev/tcp/127.0.0.1/"$PORT" 2>/dev/null || exit 0
 		printf 'POST / HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n%s' \
 			"${#body}" "$body" >&3
@@ -54,7 +57,6 @@ fi
 ) &
 
 # Target is field 1 (before TAB). {1} in fzf extracts it.
-# Session rows: "session_name"  Window rows: "session_name:window_index"
 PREVIEW_CMD='bash -c '"'"'tmux capture-pane -t "$0" -p -e 2>/dev/null'"'"' {1}'
 KILL_CMD='bash -c '"'"'
 	target="$0"
@@ -64,6 +66,13 @@ KILL_CMD='bash -c '"'"'
 		tmux kill-session -t "$target" 2>/dev/null
 	fi
 '"'"' {1}'
+
+# Mode switch commands write to mode file then reload
+SWITCH_CLAUDE="execute-silent(echo claude > $MODE_FILE)+reload($SELF --generate --claude)+change-border-label( 󰒲 Claude Windows )"
+SWITCH_ALL="execute-silent(echo all > $MODE_FILE)+reload($SELF --generate)+change-border-label( Windows )"
+
+GEN_INIT="$SELF --generate"
+((CLAUDE_MODE)) && GEN_INIT="$SELF --generate --claude"
 
 selected=$(
 	$GEN_INIT | "$FZF_TMUX" -p 90%,85% -- \
@@ -84,11 +93,11 @@ selected=$(
 		--margin 0 \
 		--padding 0,1 \
 		--preview "$PREVIEW_CMD" \
-		--preview-window 'right:50%:wrap:+999' \
-		--bind "ctrl-r:reload($GEN_ALL)+change-border-label( Windows )" \
-		--bind "ctrl-a:reload($GEN_CLAUDE)+change-border-label( 󰒲 Claude Windows )" \
+		--preview-window 'right:50%:wrap' \
+		--bind "ctrl-r:$SWITCH_ALL" \
+		--bind "ctrl-a:$SWITCH_CLAUDE" \
 		--bind 'ctrl-/:toggle-preview' \
-		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($GEN_INIT)" \
+		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
