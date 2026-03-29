@@ -49,7 +49,7 @@ selected=$(
 		--border rounded \
 		--border-label ' Sessions ' \
 		--list-label ' ^x kill · ^/ preview · ^r refresh ' \
-		--list-label-pos bottom \
+		--list-label-pos 2:bottom \
 		--pointer '▸' \
 		--prompt '  ' \
 		--no-info \
