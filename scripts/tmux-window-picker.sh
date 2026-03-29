@@ -51,6 +51,7 @@ selected=$(
 		--layout reverse \
 		--border rounded \
 		--border-label ' Windows ' \
+		--list-border bottom \
 		--list-label ' ^x kill · ^/ preview · ^r refresh ' \
 		--list-label-pos 2:bottom \
 		--pointer '▸' \
