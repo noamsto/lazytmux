@@ -48,6 +48,8 @@ selected=$(
 		--layout reverse \
 		--border rounded \
 		--border-label ' Sessions ' \
+		--list-label ' ^x kill · ^/ preview · ^r refresh ' \
+		--list-label-pos bottom \
 		--pointer '▸' \
 		--prompt '  ' \
 		--no-info \
