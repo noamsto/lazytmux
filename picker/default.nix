@@ -45,7 +45,7 @@ in
     pname = "tmux-picker-generate";
     version = "0.1.0";
     inherit src;
-    vendorHash = null; # no external dependencies
+    vendorHash = "sha256-gGs19TTxci8a3adA4CJOKs/IHDhqojjpxH9WueDInLk=";
     ldflags = ["-s" "-w"]; # strip debug info for smaller binary + faster startup
     # Binary name matches pname (Go module produces "picker" by default)
     postInstall = ''

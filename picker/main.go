@@ -102,6 +102,16 @@ func main() {
 	or := <-optsCh
 	tmuxOpts := or.opts
 
+	tuiMode := args["--tui"]
+
+	if tuiMode {
+		if err := runTUI(windowMode, claudeOnly); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if windowMode {
 		renderWindows(tmuxOpts, claudePanes, theme, claudeOnly)
 	} else {
@@ -352,8 +362,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			w := r.win
 
 			name := w.name
-			if len(name) > 25 {
-				name = name[:23] + "…"
+			if len(name) > 40 {
+				name = name[:38] + "…"
 			}
 			winLabel := fmt.Sprintf("%d: %s", w.index, name)
 			if w.zoomed {
@@ -372,7 +382,7 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			}
 
 			var branchDisplay string
-			if w.branch != "" {
+			if w.branch != "" && w.branch != w.name {
 				br := w.branch
 				if len(br) > 35 {
 					br = br[:33] + "…"
