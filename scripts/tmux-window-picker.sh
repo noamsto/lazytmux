@@ -38,11 +38,21 @@ else
 	LABEL=" Windows "
 fi
 
-# Background refresh reads mode file to reload with correct filter
+# Background refresh: only reload when output changes (preserves preview scroll)
+HASH_FILE=$(mktemp)
+trap 'rm -f "$MODE_FILE" "$HASH_FILE"' EXIT
 (
-	sleep 0.3
-	while sleep 1; do
+	sleep 1
+	while sleep 2; do
 		mode=$(cat "$MODE_FILE" 2>/dev/null || echo "all")
+		if [[ $mode == "claude" ]]; then
+			new=$("$SELF" --generate --claude 2>/dev/null | md5sum)
+		else
+			new=$("$SELF" --generate 2>/dev/null | md5sum)
+		fi
+		old=$(cat "$HASH_FILE" 2>/dev/null || echo "")
+		[[ $new == "$old" ]] && continue
+		echo "$new" >"$HASH_FILE"
 		if [[ $mode == "claude" ]]; then
 			body="reload($SELF --generate --claude)"
 		else

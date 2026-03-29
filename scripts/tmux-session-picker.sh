@@ -15,10 +15,16 @@ SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
-# Background refresh via /dev/tcp (no curl dependency).
+# Background refresh: only reload when output changes (preserves preview scroll)
+HASH_FILE=$(mktemp)
+trap 'rm -f "$HASH_FILE"' EXIT
 (
-	sleep 0.3
-	while sleep 1; do
+	sleep 1
+	while sleep 2; do
+		new=$("$SELF" --generate 2>/dev/null | md5sum)
+		old=$(cat "$HASH_FILE" 2>/dev/null || echo "")
+		[[ $new == "$old" ]] && continue
+		echo "$new" >"$HASH_FILE"
 		body="reload($SELF --generate)"
 		exec 3<>/dev/tcp/127.0.0.1/"$PORT" 2>/dev/null || exit 0
 		printf 'POST / HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n%s' \
