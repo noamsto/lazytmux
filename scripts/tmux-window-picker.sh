@@ -95,7 +95,7 @@ selected=$(
 		--border rounded \
 		--border-label "$LABEL" \
 		--list-border bottom \
-		--list-label $' \e[2m^x\e[0m kill \e[2m·\e[0m \e[2m^/\e[0m preview \e[2m·\e[0m \e[2m^a\e[0m claude \e[2m·\e[0m \e[2m^r\e[0m refresh ' \
+		--list-label $' \e[2m^x\e[0m kill \e[2m·\e[0m \e[2m^/\e[0m preview \e[2m·\e[0m \e[2mM-jk\e[0m scroll \e[2m·\e[0m \e[2m^a\e[0m claude \e[2m·\e[0m \e[2m^r\e[0m refresh ' \
 		--list-label-pos 2:bottom \
 		--pointer '▸' \
 		--prompt '  ' \
@@ -108,6 +108,8 @@ selected=$(
 		--bind "ctrl-a:$SWITCH_CLAUDE" \
 		--bind 'ctrl-/:toggle-preview' \
 		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \
+		--bind 'alt-j:preview-down' \
+		--bind 'alt-k:preview-up' \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true
