@@ -49,7 +49,7 @@ selected=$(
 		--border rounded \
 		--border-label ' Sessions ' \
 		--list-border bottom \
-		--list-label ' ^x kill · ^/ preview · ^r refresh ' \
+		--list-label $' \e[2m^x\e[0m kill \e[2m·\e[0m \e[2m^/\e[0m preview \e[2m·\e[0m \e[2m^r\e[0m refresh ' \
 		--list-label-pos 2:bottom \
 		--pointer '▸' \
 		--prompt '  ' \
