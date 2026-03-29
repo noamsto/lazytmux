@@ -360,8 +360,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			}
 
 			target := fmt.Sprintf("%s:%d", g.name, w.index)
-			line := fmt.Sprintf(" %s %s %s %s %s",
-				cDim+tree+" "+g.name+reset,
+			line := fmt.Sprintf("  %s %s %s %s %s",
+				cDim+tree+reset,
 				activeMarker,
 				winLabel,
 				icons,
