@@ -57,7 +57,7 @@ selected=$(
 		--margin 0 \
 		--padding 0,1 \
 		--preview "$PREVIEW_CMD" \
-		--preview-window 'right:50%:wrap:hidden' \
+		--preview-window 'right:50%:wrap:+999:hidden' \
 		--bind "ctrl-r:reload($SELF --generate)" \
 		--bind 'ctrl-/:toggle-preview' \
 		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \

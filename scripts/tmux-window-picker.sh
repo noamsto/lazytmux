@@ -2,6 +2,10 @@
 # Window picker: tree view with session headers and window rows.
 # Go binary generates ANSI output, fzf-tmux provides the popup.
 # Background refresh every 1s. Preview shows pane content.
+#
+# Flags:
+#   --generate [--claude]  Output list for fzf (called by self/fzf reload)
+#   --claude               Start in claude-only mode (only sessions with active claude)
 
 # shellcheck disable=SC2016,SC2001  # SC2016: fzf uses single-quoted commands; SC2001: ANSI regex needs sed
 set -euo pipefail
@@ -9,18 +13,38 @@ set -euo pipefail
 FZF=@fzf@
 
 if [[ ${1:-} == "--generate" ]]; then
-	exec @picker_generate@ --windows
+	if [[ ${2:-} == "--claude" ]]; then
+		exec @picker_generate@ --windows --claude
+	else
+		exec @picker_generate@ --windows
+	fi
 fi
+
+CLAUDE_MODE=0
+[[ ${1:-} == "--claude" ]] && CLAUDE_MODE=1
 
 SELF="$0"
 FZF_TMUX="${FZF%fzf}fzf-tmux"
 PORT=$((RANDOM % 10000 + 40000))
 
+# Generate command based on mode
+GEN_ALL="$SELF --generate"
+GEN_CLAUDE="$SELF --generate --claude"
+
+# Initial generate command
+if ((CLAUDE_MODE)); then
+	GEN_INIT="$GEN_CLAUDE"
+	LABEL=" 󰒲 Claude Windows "
+else
+	GEN_INIT="$GEN_ALL"
+	LABEL=" Windows "
+fi
+
 # Background refresh via /dev/tcp (no curl dependency).
 (
 	sleep 0.3
 	while sleep 1; do
-		body="reload($SELF --generate)"
+		body="reload($GEN_INIT)"
 		exec 3<>/dev/tcp/127.0.0.1/"$PORT" 2>/dev/null || exit 0
 		printf 'POST / HTTP/1.0\r\nHost: localhost\r\nContent-Length: %d\r\n\r\n%s' \
 			"${#body}" "$body" >&3
@@ -42,7 +66,7 @@ KILL_CMD='bash -c '"'"'
 '"'"' {1}'
 
 selected=$(
-	"$SELF" --generate | "$FZF_TMUX" -p 90%,85% -- \
+	$GEN_INIT | "$FZF_TMUX" -p 90%,85% -- \
 		--listen "$PORT" \
 		--ansi \
 		--delimiter '\t' \
@@ -50,9 +74,9 @@ selected=$(
 		--header-lines 1 \
 		--layout reverse \
 		--border rounded \
-		--border-label ' Windows ' \
+		--border-label "$LABEL" \
 		--list-border bottom \
-		--list-label $' \e[2m^x\e[0m kill \e[2m·\e[0m \e[2m^/\e[0m preview \e[2m·\e[0m \e[2m^r\e[0m refresh ' \
+		--list-label $' \e[2m^x\e[0m kill \e[2m·\e[0m \e[2m^/\e[0m preview \e[2m·\e[0m \e[2m^a\e[0m claude \e[2m·\e[0m \e[2m^r\e[0m refresh ' \
 		--list-label-pos 2:bottom \
 		--pointer '▸' \
 		--prompt '  ' \
@@ -60,10 +84,11 @@ selected=$(
 		--margin 0 \
 		--padding 0,1 \
 		--preview "$PREVIEW_CMD" \
-		--preview-window 'right:50%:wrap' \
-		--bind "ctrl-r:reload($SELF --generate)" \
+		--preview-window 'right:50%:wrap:+999' \
+		--bind "ctrl-r:reload($GEN_ALL)+change-border-label( Windows )" \
+		--bind "ctrl-a:reload($GEN_CLAUDE)+change-border-label( 󰒲 Claude Windows )" \
 		--bind 'ctrl-/:toggle-preview' \
-		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($SELF --generate)" \
+		--bind "ctrl-x:execute-silent($KILL_CMD)+reload($GEN_INIT)" \
 		--bind 'enter:accept' \
 		--bind 'esc:abort'
 ) || true

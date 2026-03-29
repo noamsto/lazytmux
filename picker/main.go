@@ -80,7 +80,12 @@ type claudePaneInfo struct {
 }
 
 func main() {
-	windowMode := len(os.Args) > 1 && os.Args[1] == "--windows"
+	args := map[string]bool{}
+	for _, a := range os.Args[1:] {
+		args[a] = true
+	}
+	windowMode := args["--windows"]
+	claudeOnly := args["--claude"]
 
 	// Run tmux calls + file reads in parallel
 	type optsResult struct {
@@ -98,7 +103,7 @@ func main() {
 	tmuxOpts := or.opts
 
 	if windowMode {
-		renderWindows(tmuxOpts, claudePanes, theme)
+		renderWindows(tmuxOpts, claudePanes, theme, claudeOnly)
 	} else {
 		renderSessions(tmuxOpts, claudePanes, theme)
 	}
@@ -200,7 +205,7 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 // Window mode
 // ---------------------------------------------------------------------------
 
-func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) {
+func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, claudeOnly bool) {
 	windows := collectWindows()
 	claudeByWin := aggregateClaudeByWindow(claudePanes)
 	mergeClaudeWindows(windows, claudeByWin)
@@ -251,6 +256,28 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 		sort.Slice(g.windows, func(i, j int) bool {
 			return g.windows[i].index < g.windows[j].index
 		})
+	}
+
+	// Filter to sessions with active claude if --claude flag
+	if claudeOnly {
+		var filtered []*sessGroup
+		for _, g := range groups {
+			hasClaude := false
+			for _, w := range g.windows {
+				key := fmt.Sprintf("%s:%d", w.session, w.index)
+				if cc, ok := claudeByWin[key]; ok {
+					state := claudePriority(*cc)
+					if state != "" && state != "idle" {
+						hasClaude = true
+						break
+					}
+				}
+			}
+			if hasClaude {
+				filtered = append(filtered, g)
+			}
+		}
+		groups = filtered
 	}
 
 	// Pre-compute icons per window
