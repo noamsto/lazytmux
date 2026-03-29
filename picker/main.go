@@ -320,9 +320,8 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 
 		multiWin := len(rows) > 1
 
-		// Window rows: "─ session : window_name  icons  branch"
-		// Use consistent "─" connector (not ├─/╰─) so filtering doesn't break tree
-		for _, r := range rows {
+		// Window rows with tree connectors (├─/╰─)
+		for wi, r := range rows {
 			w := r.win
 
 			name := w.name
@@ -354,10 +353,16 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 				branchDisplay = "  " + cFaint + br + reset
 			}
 
-			// Layout: "─ session : window  icons  branch"
+			// Tree connector
+			tree := "├─"
+			if wi == len(rows)-1 {
+				tree = "╰─"
+			}
+
 			target := fmt.Sprintf("%s:%d", g.name, w.index)
-			line := fmt.Sprintf(" %s %s %s %s",
-				cDim+"─ "+g.name+reset+" "+activeMarker,
+			line := fmt.Sprintf(" %s %s %s %s %s",
+				cDim+tree+" "+g.name+reset,
+				activeMarker,
 				winLabel,
 				icons,
 				branchDisplay,
