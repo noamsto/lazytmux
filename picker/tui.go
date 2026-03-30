@@ -370,9 +370,9 @@ func (m tuiModel) renderHints() string {
 
 // --- Layout ---
 
-// portrait returns true when preview should be below the list (tall/narrow terminal).
+// portrait returns true when preview should be below the list (narrow terminal).
 func (m tuiModel) portrait() bool {
-	return m.height > m.width
+	return m.width < 2*m.height
 }
 
 // bodyHeight is the total height available for list + preview (excludes search/hints/borders).
