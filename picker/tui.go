@@ -155,11 +155,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case previewMsg:
 		if msg.target == m.currentTarget() {
+			sameTarget := msg.target == m.previewFor
 			m.previewRaw = msg.content
-			m.previewXOffset = 0
-			m.preview.SetContent(msg.content)
-			m.preview.SetYOffset(m.preview.TotalLineCount())
 			m.previewFor = msg.target
+			if sameTarget && m.previewXOffset > 0 {
+				m.applyPreviewXOffset()
+			} else {
+				m.previewXOffset = 0
+				m.preview.SetContent(msg.content)
+			}
+			if !sameTarget {
+				m.preview.SetYOffset(m.preview.TotalLineCount())
+			}
 		}
 		return m, nil
 
