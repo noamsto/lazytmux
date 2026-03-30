@@ -424,7 +424,11 @@ func (m tuiModel) listWidth() int {
 	if !m.showPreview || m.portrait() {
 		return iw
 	}
-	w := iw * 60 / 100
+	pct := 60
+	if m.windowMode {
+		pct = 70
+	}
+	w := iw * pct / 100
 	if w < 30 {
 		return 30
 	}
