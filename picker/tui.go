@@ -505,7 +505,7 @@ func (m tuiModel) withFilter() tuiModel {
 		if m.claudeOnly && !item.hasActiveClaude {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(item.plain), q) {
+		if q != "" && !fuzzyMatch(strings.ToLower(item.plain), q) {
 			continue
 		}
 		out = append(out, item)
@@ -856,4 +856,15 @@ func stripANSI(s string) string {
 		}
 	}
 	return out.String()
+}
+
+// fuzzyMatch returns true if all characters in pattern appear in s in order.
+func fuzzyMatch(s, pattern string) bool {
+	pi := 0
+	for _, c := range s {
+		if pi < len(pattern) && c == rune(pattern[pi]) {
+			pi++
+		}
+	}
+	return pi == len(pattern)
 }
