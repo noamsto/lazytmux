@@ -820,12 +820,12 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 			}
 
 			var branchStr string
-			if w.branch != "" && w.branch != w.name {
+			if w.branch != "" && w.branch != w.name && w.branch != "main" && w.branch != "master" {
 				br := w.branch
 				if len(br) > 35 {
 					br = br[:33] + "…"
 				}
-				branchStr = br
+				branchStr = iconBranch + " " + br
 			}
 
 			display := fmt.Sprintf("%s %s %s %s",

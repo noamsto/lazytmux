@@ -386,12 +386,12 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 			}
 
 			var branchDisplay string
-			if w.branch != "" && w.branch != w.name {
+			if w.branch != "" && w.branch != w.name && w.branch != "main" && w.branch != "master" {
 				br := w.branch
 				if len(br) > 35 {
 					br = br[:33] + "…"
 				}
-				branchDisplay = "  " + cFaint + br + reset
+				branchDisplay = "  " + cFaint + iconBranch + " " + br + reset
 			}
 
 			// Tree connector
