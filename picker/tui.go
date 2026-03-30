@@ -129,13 +129,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			m.preview = viewport.New(
 				viewport.WithWidth(m.previewWidth()),
-				viewport.WithHeight(m.contentHeight()),
+				viewport.WithHeight(m.previewHeight()),
 			)
 			m.preview.MouseWheelEnabled = true
 			m.ready = true
 		} else {
 			m.preview.SetWidth(m.previewWidth())
-			m.preview.SetHeight(m.contentHeight())
+			m.preview.SetHeight(m.previewHeight())
 		}
 		return m, m.loadPreviewCmd()
 
@@ -257,7 +257,11 @@ func (m tuiModel) View() tea.View {
 		var body string
 		if m.showPreview {
 			sep := m.renderSeparator()
-			body = lipgloss.JoinHorizontal(lipgloss.Top, listPane, sep, m.preview.View())
+			if m.portrait() {
+				body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
+			} else {
+				body = lipgloss.JoinHorizontal(lipgloss.Top, listPane, sep, m.preview.View())
+			}
 		} else {
 			body = listPane
 		}
@@ -277,7 +281,7 @@ func (m tuiModel) View() tea.View {
 }
 
 func (m tuiModel) renderList() string {
-	h := m.contentHeight()
+	h := m.listHeight()
 	w := m.listWidth()
 
 	selStyle := lipgloss.NewStyle().
@@ -305,14 +309,17 @@ func (m tuiModel) renderList() string {
 }
 
 func (m tuiModel) renderSeparator() string {
-	h := m.contentHeight()
+	sepColor := lipgloss.NewStyle().
+		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0"))
+	if m.portrait() {
+		return sepColor.Render(strings.Repeat("─", m.innerWidth()))
+	}
+	h := m.listHeight()
 	lines := make([]string, h)
 	for i := range lines {
 		lines[i] = "│"
 	}
-	return lipgloss.NewStyle().
-		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0")).
-		Render(strings.Join(lines, "\n"))
+	return sepColor.Render(strings.Join(lines, "\n"))
 }
 
 func (m tuiModel) renderSearch() string {
@@ -363,12 +370,27 @@ func (m tuiModel) renderHints() string {
 
 // --- Layout ---
 
-func (m tuiModel) contentHeight() int {
+// portrait returns true when preview should be below the list (tall/narrow terminal).
+func (m tuiModel) portrait() bool {
+	return m.height > m.width
+}
+
+// bodyHeight is the total height available for list + preview (excludes search/hints/borders).
+func (m tuiModel) bodyHeight() int {
 	h := m.height - 5 // search (3 with border) + bottom border (1) + hints (1)
 	if h < 5 {
 		return 5
 	}
 	return h
+}
+
+func (m tuiModel) listHeight() int {
+	bh := m.bodyHeight()
+	if !m.showPreview || !m.portrait() {
+		return bh
+	}
+	// Portrait: list gets top 50%, preview gets bottom 50% (minus 1 for separator)
+	return bh * 50 / 100
 }
 
 func (m tuiModel) innerWidth() int {
@@ -377,7 +399,7 @@ func (m tuiModel) innerWidth() int {
 
 func (m tuiModel) listWidth() int {
 	iw := m.innerWidth()
-	if !m.showPreview {
+	if !m.showPreview || m.portrait() {
 		return iw
 	}
 	w := iw * 50 / 100
@@ -388,7 +410,17 @@ func (m tuiModel) listWidth() int {
 }
 
 func (m tuiModel) previewWidth() int {
+	if m.portrait() {
+		return m.innerWidth()
+	}
 	return m.innerWidth() - m.listWidth() - 1 // -1 for separator
+}
+
+func (m tuiModel) previewHeight() int {
+	if !m.portrait() {
+		return m.bodyHeight()
+	}
+	return m.bodyHeight() - m.listHeight() - 1 // -1 for separator
 }
 
 func (m tuiModel) scrollStart(h int) int {
