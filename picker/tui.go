@@ -306,9 +306,9 @@ func (m tuiModel) renderList() string {
 	h := m.listHeight()
 	w := m.listWidth()
 
+	selBg := m.thmColor("@thm_surface_2", "#45475a", "#acb0be")
 	selStyle := lipgloss.NewStyle().
-		Background(m.thmColor("@thm_surface_2", "#45475a", "#acb0be")).
-		Foreground(m.thmColor("@thm_text", "#cdd6f4", "#4c4f69")).
+		Background(selBg).
 		MaxWidth(w)
 	truncStyle := lipgloss.NewStyle().MaxWidth(w)
 	start := m.scrollStart(h)
@@ -317,7 +317,7 @@ func (m tuiModel) renderList() string {
 	for i := start; i < start+h && i < len(m.visible); i++ {
 		item := m.visible[i]
 		if i == m.cursor {
-			lines = append(lines, selStyle.Render("▶ "+item.plain))
+			lines = append(lines, selStyle.Render("▶ "+item.display))
 		} else {
 			lines = append(lines, truncStyle.Render("  "+item.display))
 		}
