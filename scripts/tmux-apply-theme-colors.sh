@@ -3,6 +3,39 @@
 # Handles: pane borders, which-key popup, tmux-fingers hints
 # Runs at config load and on theme-toggle (via config re-source)
 
+# Convert #rrggbb hex to closest xterm-256 colour index.
+# tmux-fingers doesn't support hex colors, only "colourN" format.
+hex_to_256() {
+	local hex="${1#\#}"
+	local r=$((16#${hex:0:2})) g=$((16#${hex:2:2})) b=$((16#${hex:4:2}))
+
+	# 6x6x6 color cube (indices 16-231)
+	local ri=$(((r > 47) ? (r - 35) / 40 : 0))
+	local gi=$(((g > 47) ? (g - 35) / 40 : 0))
+	local bi=$(((b > 47) ? (b - 35) / 40 : 0))
+	local cube_idx=$((16 + 36 * ri + 6 * gi + bi))
+	# Reconstruct the cube color's actual RGB for distance check
+	local cube_r=$((ri ? 55 + ri * 40 : 0))
+	local cube_g=$((gi ? 55 + gi * 40 : 0))
+	local cube_b=$((bi ? 55 + bi * 40 : 0))
+	local cube_dist=$(((r - cube_r) ** 2 + (g - cube_g) ** 2 + (b - cube_b) ** 2))
+
+	# Greyscale ramp (232-255): 24 shades from #080808 to #eeeeee
+	local avg=$(((r + g + b) / 3))
+	local grey_idx=$(((avg - 8) * 24 / 247 + 232))
+	((grey_idx < 232)) && grey_idx=232
+	((grey_idx > 255)) && grey_idx=255
+	local grey_val=$((8 + (grey_idx - 232) * 10))
+	local grey_dist=$(((r - grey_val) ** 2 + (g - grey_val) ** 2 + (b - grey_val) ** 2))
+
+	# Pick whichever is closer
+	if ((grey_dist < cube_dist)); then
+		echo "$grey_idx"
+	else
+		echo "$cube_idx"
+	fi
+}
+
 # Read catppuccin color variables
 thm_crust=$(tmux show -gv @thm_crust 2>/dev/null | tr -d '"')
 thm_mantle=$(tmux show -gv @thm_mantle 2>/dev/null | tr -d '"')
@@ -26,8 +59,8 @@ tmux setw -g pane-border-format \
 tmux set -g @which-key-popup-bg "${thm_mantle}"
 tmux set -g @which-key-popup-fg "${thm_mauve}"
 
-# --- tmux-fingers hints ---
-tmux set -g @fingers-hint-style "fg=${thm_crust},bg=${thm_mauve},bold"
-tmux set -g @fingers-highlight-style "fg=${thm_peach},bg=${thm_surface_0}"
-tmux set -g @fingers-selected-hint-style "fg=${thm_crust},bg=${thm_green},bold"
-tmux set -g @fingers-selected-highlight-style "fg=${thm_teal},bg=${thm_surface_0}"
+# --- tmux-fingers hints (requires colourN format, not hex) ---
+tmux set -g @fingers-hint-style "fg=colour$(hex_to_256 "$thm_crust"),bg=colour$(hex_to_256 "$thm_mauve"),bold"
+tmux set -g @fingers-highlight-style "fg=colour$(hex_to_256 "$thm_peach"),bg=colour$(hex_to_256 "$thm_surface_0")"
+tmux set -g @fingers-selected-hint-style "fg=colour$(hex_to_256 "$thm_crust"),bg=colour$(hex_to_256 "$thm_green"),bold"
+tmux set -g @fingers-selected-highlight-style "fg=colour$(hex_to_256 "$thm_teal"),bg=colour$(hex_to_256 "$thm_surface_0")"
