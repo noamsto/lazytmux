@@ -896,7 +896,7 @@ func (m *tuiModel) applyPreviewXOffset() {
 	lines := strings.Split(m.previewRaw, "\n")
 	shifted := make([]string, len(lines))
 	for i, line := range lines {
-		shifted[i] = shiftLineLeft(line, m.previewXOffset)
+		shifted[i] = shiftLineLeft(line, m.previewXOffset) + "\033[0m"
 	}
 	m.preview.SetContent(strings.Join(shifted, "\n"))
 }
