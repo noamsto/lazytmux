@@ -2,3 +2,19 @@ result
 .direnv
 .pre-commit-config.yaml
 .claude/settings.local.json
+picker/icons_generated.go
+picker/picker
+
+# Sandbox/IDE artifacts
+.idea
+.vscode
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json
+.Trash-1000/

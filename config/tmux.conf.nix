@@ -106,7 +106,7 @@
     "tmux-update-icons"
     "tmux-branch-display"
     "tmux-dir-display"
-    "tmux-set-pane-border"
+    "tmux-apply-theme-colors"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -137,7 +137,11 @@
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
     # catppuccin theme
-    if-shell '[ -z "#{@catppuccin_flavor}" ]' 'set -g @catppuccin_flavor mocha'
+    # Detect theme from state file on first load (theme-toggle sets flavor before re-source)
+    if-shell '[ -z "#{@catppuccin_flavor}" ]' \
+      'if-shell "grep -q light ''${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json 2>/dev/null" \
+        "set -g @catppuccin_flavor latte" \
+        "set -g @catppuccin_flavor mocha"'
     set -g @catppuccin_status_background 'none'
     set -g @catppuccin_window_status_style 'none'
     set -g @catppuccin_window_flags 'icon'
@@ -163,8 +167,7 @@
     # which-key
     set -g @which-key-trigger "Space"
     set -g @which-key-config "${whichKeyConfig}"
-    set -g @which-key-popup-bg "#1e1e2e"
-    set -g @which-key-popup-fg "#cba6f7"
+    # which-key popup colors set dynamically by tmux-apply-theme-colors
   '';
 
   # --- Plugin run-shell loading ---
@@ -366,11 +369,7 @@
     set -wg automatic-rename on
     set -g automatic-rename-format "#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{b:pane_current_path}} #{@window_icon_display}"
 
-    # tmux-fingers (smart copy)
-    set -g @fingers-hint-style "fg=colour234,bg=colour183,bold"
-    set -g @fingers-highlight-style "fg=colour216,bg=colour236"
-    set -g @fingers-selected-hint-style "fg=colour234,bg=colour151,bold"
-    set -g @fingers-selected-highlight-style "fg=colour116,bg=colour236"
+    # tmux-fingers (smart copy) — hint colors set dynamically by tmux-apply-theme-colors
     set -g @fingers-pattern-0 "[A-Z]{2,}-[0-9]+"
     set -g @fingers-pattern-1 "[a-z][a-z_]*_[0-9a-hjkmnp-tv-z]{26}"
     set -g @fingers-pattern-2 "sha256-[A-Za-z0-9+/]{43}="
@@ -381,8 +380,8 @@
     # Only re-run fingers, not the full config, to avoid status bar flash
     set-hook -g client-attached[99] 'run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux'
 
-    # Set pane-border-format with expanded colors (must run after catppuccin loads)
-    run-shell "${script.tmux-set-pane-border}/bin/tmux-set-pane-border"
+    # Apply theme-dependent colors (must run after catppuccin loads)
+    run-shell "${script.tmux-apply-theme-colors}/bin/tmux-apply-theme-colors"
 
     # Synchronous reflow on config load so the window bar is ready before the user sees it
     run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
