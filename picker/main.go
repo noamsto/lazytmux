@@ -507,7 +507,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}").Output()
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}").Output()
 	if err != nil {
 		return nil
 	}
@@ -521,6 +521,7 @@ func collectWindows() []windowData {
 		zoomed bool
 		active bool
 		branch string
+		path   string // pane_current_path for git branch fallback
 		seen   map[string]bool
 		procs  []string
 	}
@@ -529,7 +530,7 @@ func collectWindows() []windowData {
 	var order []winKey
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 7)
+		parts := strings.SplitN(line, "\t", 8)
 		if len(parts) < 6 {
 			continue
 		}
@@ -543,17 +544,32 @@ func collectWindows() []windowData {
 		if len(parts) >= 7 {
 			branch = stripTmuxColors(parts[6])
 		}
+		panePath := ""
+		if len(parts) >= 8 {
+			panePath = parts[7]
+		}
 
 		k := winKey{sess, idx}
 		wi, ok := m[k]
 		if !ok {
-			wi = &winInfo{name: wName, zoomed: zoomed, active: active, branch: branch, seen: make(map[string]bool)}
+			wi = &winInfo{name: wName, zoomed: zoomed, active: active, branch: branch, path: panePath, seen: make(map[string]bool)}
 			m[k] = wi
 			order = append(order, k)
 		}
 		if proc != "" && !wi.seen[proc] {
 			wi.seen[proc] = true
 			wi.procs = append(wi.procs, proc)
+		}
+	}
+
+	// Fill missing branches by running git in the pane's working directory
+	for _, k := range order {
+		wi := m[k]
+		if wi.branch == "" && wi.path != "" {
+			cmd := exec.Command("git", "-C", wi.path, "branch", "--show-current")
+			if out, err := cmd.Output(); err == nil {
+				wi.branch = strings.TrimSpace(string(out))
+			}
 		}
 	}
 
