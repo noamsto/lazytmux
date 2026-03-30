@@ -434,6 +434,10 @@ func collectSessions() []sessionData {
 			continue
 		}
 		name, path, actStr, proc := parts[0], parts[1], parts[2], parts[3]
+		// Expand %h (tmux may store literal %h for home dir)
+		if home := os.Getenv("HOME"); home != "" {
+			path = strings.Replace(path, "%h", home, 1)
+		}
 		act, _ := strconv.ParseInt(actStr, 10, 64)
 
 		si, ok := m[name]
