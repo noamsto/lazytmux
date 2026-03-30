@@ -19,7 +19,8 @@ import (
 type listItem struct {
 	target          string // tmux target; "" = unselectable
 	display         string // ANSI-rendered display line
-	plain           string // display stripped of ANSI (cached for filter + width)
+	plain           string // display stripped of ANSI (cached for width)
+	searchText      string // filterable text (name, branch — no paths/icons)
 	isHeader        bool   // session header row
 	session         string // owning session name (for kill)
 	hasActiveClaude bool   // used for --claude filter
@@ -531,7 +532,7 @@ func (m tuiModel) withFilter() tuiModel {
 		if m.claudeOnly && !item.hasActiveClaude {
 			continue
 		}
-		if q != "" && !fuzzyMatch(strings.ToLower(item.plain), q) {
+		if q != "" && !fuzzyMatch(strings.ToLower(item.searchText), q) {
 			continue
 		}
 		out = append(out, item)
@@ -670,6 +671,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			target:          r.sess.name,
 			display:         display,
 			plain:           plain,
+			searchText:      r.sess.name,
 			session:         r.sess.name,
 			hasActiveClaude: isActiveState(claudePriority(r.sess.claude)),
 		})
@@ -775,6 +777,7 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 			target:          g.name,
 			display:         headerDisplay,
 			plain:           fmt.Sprintf("%s %s", iSess, g.name),
+			searchText:      g.name,
 			isHeader:        true,
 			session:         g.name,
 			hasActiveClaude: sessHasClaude,
@@ -836,10 +839,15 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 				plain += "  " + branchStr
 			}
 
+			search := g.name + " " + name
+			if branchStr != "" {
+				search += " " + branchStr
+			}
 			items = append(items, listItem{
 				target:          fmt.Sprintf("%s:%d", g.name, w.index),
 				display:         display,
 				plain:           plain,
+				searchText:      search,
 				session:         g.name,
 				hasActiveClaude: isActiveState(claudePriority(w.claude)),
 			})
