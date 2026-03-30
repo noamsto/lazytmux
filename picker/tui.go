@@ -426,7 +426,7 @@ func (m tuiModel) listWidth() int {
 	}
 	pct := 60
 	if m.windowMode {
-		pct = 70
+		pct = 45
 	}
 	w := iw * pct / 100
 	if w < 30 {
