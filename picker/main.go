@@ -921,6 +921,17 @@ func ansiFg(hex string) string {
 	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
 }
 
+func ansiBg(hex string) string {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return ""
+	}
+	r, _ := strconv.ParseUint(hex[0:2], 16, 8)
+	g, _ := strconv.ParseUint(hex[2:4], 16, 8)
+	b, _ := strconv.ParseUint(hex[4:6], 16, 8)
+	return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
+}
+
 func detectTheme() string {
 	xdg := os.Getenv("XDG_STATE_HOME")
 	if xdg == "" {

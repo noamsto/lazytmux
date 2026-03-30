@@ -63,13 +63,17 @@ type tuiModel struct {
 
 // thmColor reads a Catppuccin color from tmux options, falling back to defaults.
 func (m tuiModel) thmColor(tmuxOpt, darkFallback, lightFallback string) imgcolor.Color {
+	return lipgloss.Color(m.thmColorHex(tmuxOpt, darkFallback, lightFallback))
+}
+
+func (m tuiModel) thmColorHex(tmuxOpt, darkFallback, lightFallback string) string {
 	if v, ok := m.tmuxOpts[tmuxOpt]; ok && v != "" {
-		return lipgloss.Color(v)
+		return v
 	}
 	if m.theme == "light" {
-		return lipgloss.Color(lightFallback)
+		return lightFallback
 	}
-	return lipgloss.Color(darkFallback)
+	return darkFallback
 }
 
 // --- Messages ---
@@ -307,10 +311,14 @@ func (m tuiModel) renderList() string {
 	h := m.listHeight()
 	w := m.listWidth()
 
-	selBg := m.thmColor("@thm_surface_2", "#45475a", "#acb0be")
+	selBgHex := m.thmColorHex("@thm_surface_2", "#45475a", "#acb0be")
+	selBg := lipgloss.Color(selBgHex)
 	selStyle := lipgloss.NewStyle().
 		Background(selBg).
 		MaxWidth(w)
+	// ANSI reset (\033[0m) inside display strings kills the background.
+	// Replace resets with "reset fg + re-apply bg" so background persists.
+	selResetKeepBg := "\033[39m" + ansiBg(selBgHex) // reset fg only, re-set bg
 	truncStyle := lipgloss.NewStyle().MaxWidth(w)
 	start := m.scrollStart(h)
 
@@ -318,7 +326,8 @@ func (m tuiModel) renderList() string {
 	for i := start; i < start+h && i < len(m.visible); i++ {
 		item := m.visible[i]
 		if i == m.cursor {
-			lines = append(lines, selStyle.Render("▶ "+item.display))
+			patched := strings.ReplaceAll(item.display, "\033[0m", selResetKeepBg)
+			lines = append(lines, selStyle.Render("▶ "+patched))
 		} else {
 			lines = append(lines, truncStyle.Render("  "+item.display))
 		}
