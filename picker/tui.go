@@ -261,7 +261,14 @@ func (m tuiModel) View() tea.View {
 		} else {
 			body = listPane
 		}
-		content = lipgloss.JoinVertical(lipgloss.Left, m.renderSearch(), body, m.renderHints())
+		borderColor := m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0")
+		bordered := lipgloss.NewStyle().
+			Width(m.width).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderBottom(true).
+			BorderForeground(borderColor).
+			Render(body)
+		content = lipgloss.JoinVertical(lipgloss.Left, m.renderSearch(), bordered, m.renderHints())
 	}
 
 	v := tea.NewView(content)
@@ -357,7 +364,7 @@ func (m tuiModel) renderHints() string {
 // --- Layout ---
 
 func (m tuiModel) contentHeight() int {
-	h := m.height - 4 // search (3 with border) + hints (1)
+	h := m.height - 5 // search (3 with border) + bottom border (1) + hints (1)
 	if h < 5 {
 		return 5
 	}
@@ -373,7 +380,7 @@ func (m tuiModel) listWidth() int {
 	if !m.showPreview {
 		return iw
 	}
-	w := iw * 33 / 100
+	w := iw * 50 / 100
 	if w < 30 {
 		return 30
 	}
