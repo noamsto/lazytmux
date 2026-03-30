@@ -40,9 +40,11 @@ type tuiModel struct {
 	query string
 
 	// Preview
-	preview     viewport.Model
-	showPreview bool
-	previewFor  string // target currently loaded in preview
+	preview        viewport.Model
+	showPreview    bool
+	previewFor     string // target currently loaded in preview
+	previewRaw     string // unshifted content for horizontal scroll
+	previewXOffset int    // horizontal scroll offset (in cells)
 
 	// Refresh
 	lastStructHash string // ASCII-only hash; spinner changes don't affect it
@@ -153,6 +155,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case previewMsg:
 		if msg.target == m.currentTarget() {
+			m.previewRaw = msg.content
+			m.previewXOffset = 0
 			m.preview.SetContent(msg.content)
 			m.preview.SetYOffset(m.preview.TotalLineCount())
 			m.previewFor = msg.target
@@ -224,6 +228,17 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "alt+k":
 		m.preview.SetYOffset(m.preview.YOffset() - 3)
+
+	case "alt+l":
+		m.previewXOffset += 8
+		m.applyPreviewXOffset()
+
+	case "alt+h":
+		m.previewXOffset -= 8
+		if m.previewXOffset < 0 {
+			m.previewXOffset = 0
+		}
+		m.applyPreviewXOffset()
 
 	case "backspace":
 		if len(m.query) > 0 {
@@ -361,7 +376,7 @@ func (m tuiModel) renderHints() string {
 		hint("^x", "kill"),
 		hint("^a", "mode:"+mode),
 		hint("^/", "preview"),
-		hint("M-jk", "scroll"),
+		hint("M-hjkl", "scroll"),
 		hint("q", "quit"),
 	}
 
@@ -854,6 +869,53 @@ func stripANSI(s string) string {
 			out.WriteByte(s[i])
 			i++
 		}
+	}
+	return out.String()
+}
+
+// applyPreviewXOffset shifts preview content horizontally by previewXOffset visible cells.
+func (m *tuiModel) applyPreviewXOffset() {
+	if m.previewRaw == "" {
+		return
+	}
+	if m.previewXOffset == 0 {
+		m.preview.SetContent(m.previewRaw)
+		return
+	}
+	lines := strings.Split(m.previewRaw, "\n")
+	shifted := make([]string, len(lines))
+	for i, line := range lines {
+		shifted[i] = shiftLineLeft(line, m.previewXOffset)
+	}
+	m.preview.SetContent(strings.Join(shifted, "\n"))
+}
+
+// shiftLineLeft drops the first n visible cells from a line, preserving ANSI escapes.
+func shiftLineLeft(line string, n int) string {
+	var out strings.Builder
+	skipped := 0
+	i := 0
+	// First pass: skip n visible characters, keeping track of ANSI state
+	for i < len(line) && skipped < n {
+		if line[i] == '\033' && i+1 < len(line) && line[i+1] == '[' {
+			// ANSI escape — emit it (preserves color state) but don't count
+			j := i + 2
+			for j < len(line) && line[j] != 'm' {
+				j++
+			}
+			if j < len(line) {
+				j++ // skip 'm'
+			}
+			out.WriteString(line[i:j])
+			i = j
+		} else {
+			skipped++
+			i++
+		}
+	}
+	// Remainder
+	if i < len(line) {
+		out.WriteString(line[i:])
 	}
 	return out.String()
 }
