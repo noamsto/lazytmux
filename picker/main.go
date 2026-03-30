@@ -68,6 +68,7 @@ type windowData struct {
 type claudeCounts struct {
 	waiting, compacting, processing, done, idle, errorCnt int
 	allStale                                              bool
+	anyUnseen                                             bool
 }
 
 // claudePaneInfo holds parsed pane file data with window-level targeting.
@@ -77,6 +78,7 @@ type claudePaneInfo struct {
 	state   string
 	ts      int64
 	stale   bool
+	unseen  bool
 }
 
 func main() {
@@ -616,6 +618,7 @@ func collectClaudePanes() []claudePaneInfo {
 
 		var state, session string
 		var timestamp int64
+		var unseen bool
 		for _, line := range strings.Split(string(data), "\n") {
 			if k, v, ok := strings.Cut(line, "="); ok {
 				switch k {
@@ -625,6 +628,8 @@ func collectClaudePanes() []claudePaneInfo {
 					session = v
 				case "timestamp":
 					timestamp, _ = strconv.ParseInt(v, 10, 64)
+				case "unseen":
+					unseen = v == "1"
 				}
 			}
 		}
@@ -646,6 +651,7 @@ func collectClaudePanes() []claudePaneInfo {
 			state:   state,
 			ts:      timestamp,
 			stale:   stale,
+			unseen:  unseen,
 		})
 	}
 	return result
@@ -686,6 +692,9 @@ func aggregateClaudeBySession(panes []claudePaneInfo) map[string]*claudeCounts {
 		if !p.stale {
 			cc.allStale = false
 		}
+		if p.unseen {
+			cc.anyUnseen = true
+		}
 		addClaudeState(cc, p.state)
 	}
 	return result
@@ -705,6 +714,9 @@ func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
 		}
 		if !p.stale {
 			cc.allStale = false
+		}
+		if p.unseen {
+			cc.anyUnseen = true
 		}
 		addClaudeState(cc, p.state)
 	}
@@ -819,7 +831,8 @@ func appendClaudeIcon(icons string, dw int, cc claudeCounts, theme, dim, reset s
 	}
 	icon := claudeStateIcon(state)
 	var color string
-	if cc.allStale {
+	// Dim stale icons, but unseen overrides — stay bright until user looks
+	if cc.allStale && !cc.anyUnseen {
 		color = dim
 	} else {
 		colors := claudeColors[theme]

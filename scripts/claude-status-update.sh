@@ -73,9 +73,9 @@ done
 
 # Validate state
 case "$state" in
-processing | waiting | done | idle | compacting | error | clear | cleanup) ;;
+processing | waiting | done | idle | compacting | error | clear | cleanup | mark-seen) ;;
 *)
-	echo "Error: Invalid state '$state'. Use: processing, waiting, done, idle, compacting, clear, cleanup" >&2
+	echo "Error: Invalid state '$state'. Use: processing, waiting, done, idle, compacting, clear, cleanup, mark-seen" >&2
 	exit 1
 	;;
 esac
@@ -85,6 +85,50 @@ if [[ $state == "cleanup" ]]; then
 	cleanup_stale_panes
 	# Force immediate tmux refresh
 	if [[ -n ${TMUX:-} ]]; then
+		tmux refresh-client -S 2>/dev/null || true
+	fi
+	exit 0
+fi
+
+# Handle mark-seen: clear unseen flag for all panes in the active window.
+# Called by tmux hooks on window/session switch.
+# Usage: claude-status-update mark-seen --session <name> --window <index>
+if [[ $state == "mark-seen" ]]; then
+	win_target=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--session)
+			shift
+			session_name="$1"
+			shift
+			;;
+		--window)
+			shift
+			win_target="$1"
+			shift
+			;;
+		*) shift ;;
+		esac
+	done
+	[[ -n $session_name && -n $win_target ]] || exit 0
+	[[ -d $PANES_DIR ]] || exit 0
+	# Get pane IDs in the target window
+	declare -A target_panes
+	while IFS= read -r pid; do
+		target_panes["${pid#%}"]=1
+	done < <(tmux list-panes -t "${session_name}:${win_target}" -F '#{pane_id}' 2>/dev/null)
+	# Remove unseen flag from matching pane files
+	changed=false
+	for pf in "$PANES_DIR"/*; do
+		[[ -f $pf ]] || continue
+		pane_file="${pf##*/}"
+		[[ -n ${target_panes[$pane_file]+x} ]] || continue
+		grep -q '^unseen=1$' "$pf" || continue
+		# Rewrite without the unseen line
+		grep -v '^unseen=' "$pf" >"${pf}.tmp" && mv "${pf}.tmp" "$pf"
+		changed=true
+	done
+	if $changed && [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true
 	fi
 	exit 0
@@ -129,12 +173,23 @@ if [[ $state == "processing" && -f "$PANES_DIR/$pane_file" ]]; then
 	esac
 fi
 
+# For terminal states (done/error/waiting), check if the pane's window is
+# currently focused. If not, mark as unseen so the status bar can show an
+# attention indicator that persists through staleness dimming.
+unseen_line=""
+case "$state" in
+done | error | waiting)
+	win_active=$(tmux display-message -t "$pane_id" -p '#{window_active}' 2>/dev/null) || win_active="1"
+	[[ $win_active == "0" ]] && unseen_line=$'\n'"unseen=1"
+	;;
+esac
+
 # Write pane state with timestamp
 printf -v _now '%(%s)T' -1
 cat >"$PANES_DIR/$pane_file" <<EOF
 state=$state
 timestamp=$_now
-session=$session_name
+session=$session_name${unseen_line}
 EOF
 
 # Force immediate tmux status bar refresh (if in tmux)

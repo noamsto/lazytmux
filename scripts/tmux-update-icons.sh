@@ -21,7 +21,7 @@ while IFS=$'\t' read -r pane_id win_idx; do
 	pane_to_win["${pane_id#%}"]="$win_idx"
 done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}')
 
-declare -A win_claude_state win_claude_stale
+declare -A win_claude_state win_claude_stale win_claude_unseen
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
@@ -31,16 +31,17 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		read_pane_state "$pf" || continue
 		state="$REPLY"
 		stale=$REPLY_STALE
+		unseen=$REPLY_UNSEEN
 		# Priority merge: error > waiting > compacting > processing > done > idle
-		# Staleness tracks the winning state's pane
+		# Staleness and unseen track the winning state's pane
 		current="${win_claude_state[$win_idx]:-}"
 		case "$state" in
-		error) win_claude_state[$win_idx]="error" win_claude_stale[$win_idx]=$stale ;;
-		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_stale[$win_idx]=$stale ;;
-		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_stale[$win_idx]=$stale ;;
-		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="processing" win_claude_stale[$win_idx]=$stale ;;
-		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_stale[$win_idx]=$stale ;;
-		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_stale[$win_idx]=$stale ;;
+		error) win_claude_state[$win_idx]="error" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="processing" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
 		esac
 	done
 fi
@@ -79,7 +80,7 @@ while IFS='|' read -r idx pane_path _; do
 	# Append colored claude status icon (shares the icon column)
 	c_state="${win_claude_state[$idx]:-}"
 	display="${proc_icon_str}"
-	claude_colored_icon "$c_state" "${win_claude_stale[$idx]:-0}"
+	claude_colored_icon "$c_state" "${win_claude_stale[$idx]:-0}" "${win_claude_unseen[$idx]:-0}"
 	if [[ -n $REPLY ]]; then
 		icon+="$REPLY"
 		((icon_dw += 2)) # 1-cell nerd font icon + 1 space

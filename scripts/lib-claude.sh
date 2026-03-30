@@ -23,17 +23,21 @@ CLAUDE_STALE_ERROR=120
 
 # read_pane_state PANE_FILE_PATH
 # Reads a pane state file and checks staleness.
-# Sets REPLY to the state string, REPLY_STALE to 0 or 1.
+# Sets REPLY to the state string, REPLY_STALE to 0 or 1, REPLY_UNSEEN to 0 or 1.
+# Unseen means the agent reached a terminal state while the user was in another
+# window. It persists through staleness — the icon stays bright until the user
+# focuses that window.
 # Returns 1 if file doesn't exist or has no state.
 read_pane_state() {
 	local pane_file="$1"
 	[[ -f $pane_file ]] || return 1
 
-	local state="" timestamp="" key val
+	local state="" timestamp="" unseen="" key val
 	while IFS='=' read -r key val; do
 		case "$key" in
 		state) state="$val" ;;
 		timestamp) timestamp="$val" ;;
+		unseen) unseen="$val" ;;
 		esac
 	done <"$pane_file"
 
@@ -50,6 +54,9 @@ read_pane_state() {
 		error) ((age > CLAUDE_STALE_ERROR)) && REPLY_STALE=1 ;;
 		esac
 	fi
+
+	REPLY_UNSEEN=0
+	[[ $unseen == "1" ]] && REPLY_UNSEEN=1
 
 	REPLY="$state"
 }
@@ -87,10 +94,11 @@ setup_claude_colors() {
 	C_R="#[fg=default]"
 }
 
-# claude_colored_icon STATE [STALE]
+# claude_colored_icon STATE [STALE] [UNSEEN]
 # Returns tmux-colored icon string for a state.
 # Sets REPLY to "#[fg=...]ICON#[fg=default] " or empty if unknown.
-# If STALE=1, uses dim color (C_I) instead of the state's color.
+# If STALE=1 and UNSEEN=0, uses dim color (C_I) instead of the state's color.
+# If UNSEEN=1, keeps bright color regardless of staleness.
 # Must call setup_claude_colors first.
 claude_colored_icon() {
 	local icon color
@@ -121,7 +129,8 @@ claude_colored_icon() {
 		;;
 	*) REPLY="" && return ;;
 	esac
-	[[ ${2:-0} == 1 ]] && color=$C_I
+	# Dim stale icons, but unseen overrides — stay bright until user looks
+	[[ ${2:-0} == 1 && ${3:-0} != 1 ]] && color=$C_I
 	REPLY="${color}${icon}${C_R} "
 }
 

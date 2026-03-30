@@ -347,6 +347,10 @@
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
 
+    # Clear unseen claude status flags when user focuses a window
+    set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{session_name} --window #{window_index}"'
+    set-hook -g client-session-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{session_name} --window #{window_index}"'
+
     # Pane borders
     setw -g pane-border-status top
     setw -g pane-border-format "━━━━━"
