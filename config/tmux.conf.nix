@@ -139,7 +139,7 @@
     # catppuccin theme
     # Detect theme from state file on first load (theme-toggle sets flavor before re-source)
     if-shell '[ -z "#{@catppuccin_flavor}" ]' \
-      'if-shell "grep -q light ''${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json 2>/dev/null" \
+      'if-shell "grep -q light \"$HOME/.local/state/theme-state.json\" 2>/dev/null" \
         "set -g @catppuccin_flavor latte" \
         "set -g @catppuccin_flavor mocha"'
     set -g @catppuccin_status_background 'none'
