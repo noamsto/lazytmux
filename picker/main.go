@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // Build-time constants injected via icons_generated.go:
@@ -873,14 +875,27 @@ func buildProcIcons(procs []string, maxCount int) (string, int) {
 }
 
 // iconCellWidth returns the display width of an icon string.
-// Nerd font PUA (E000-F8FF, F0000+) = 1 cell, emoji/other = 2 cells.
-// Zero-width characters (variation selectors, ZWJ, combining marks) = 0 cells.
+// go-runewidth gets nerd font PUA wrong (reports 0) and doesn't handle
+// VS16 emoji promotion (❄️ = 2 cells in kitty, runewidth says 1).
+// So we handle PUA and emoji+VS16 ourselves, defer the rest to runewidth.
 func iconCellWidth(s string) int {
+	runes := []rune(s)
 	w := 0
-	for _, r := range s {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
-		case r == 0xFE0E || r == 0xFE0F: // variation selectors
-			// zero width
+		case r == 0xFE0E: // text variation selector — preceding char stays narrow
+			// zero width (already counted preceding rune as narrow via runewidth)
+		case r == 0xFE0F: // emoji variation selector — promotes preceding char to 2 cells
+			// The preceding rune was counted by runewidth (typically 1 for dingbats).
+			// Kitty renders VS16-promoted glyphs as 2 cells, so add the difference.
+			if i > 0 {
+				prev := runes[i-1]
+				prevW := runewidth.RuneWidth(prev)
+				if prevW < 2 {
+					w += 2 - prevW
+				}
+			}
 		case r == 0x200D: // zero-width joiner
 			// zero width
 		case r >= 0x0300 && r <= 0x036F: // combining diacritical marks
@@ -889,10 +904,8 @@ func iconCellWidth(s string) int {
 			// zero width
 		case (r >= 0xE000 && r <= 0xF8FF) || r >= 0xF0000:
 			w++ // nerd font PUA = 1 cell
-		case r > 0x7F:
-			w += 2 // emoji/other = 2 cells
 		default:
-			w++ // ASCII = 1 cell
+			w += runewidth.RuneWidth(r)
 		}
 	}
 	return w
