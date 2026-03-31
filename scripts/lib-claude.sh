@@ -9,7 +9,8 @@ CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
 CLAUDE_ICON_DONE="󰸞"
 CLAUDE_ICON_IDLE="󰒲"
-CLAUDE_ICON_ERROR="󰅚" # nerd: nf-md-close_circle_outline
+CLAUDE_ICON_ERROR="󰅚"  # nerd: nf-md-close_circle_outline
+CLAUDE_ICON_DENIED="󰔟" # same clock as waiting, different color
 
 # Timestamp cache (set once per script invocation)
 printf -v CLAUDE_NOW '%(%s)T' -1
@@ -20,6 +21,7 @@ CLAUDE_STALE_COMPACTING=60
 CLAUDE_STALE_PROCESSING=300
 CLAUDE_STALE_DONE=60
 CLAUDE_STALE_ERROR=120
+CLAUDE_STALE_DENIED=60
 
 # read_pane_state PANE_FILE_PATH
 # Reads a pane state file and checks staleness.
@@ -52,6 +54,7 @@ read_pane_state() {
 		processing) ((age > CLAUDE_STALE_PROCESSING)) && REPLY_STALE=1 ;;
 		done) ((age > CLAUDE_STALE_DONE)) && REPLY_STALE=1 ;;
 		error) ((age > CLAUDE_STALE_ERROR)) && REPLY_STALE=1 ;;
+		denied) ((age > CLAUDE_STALE_DENIED)) && REPLY_STALE=1 ;;
 		esac
 	fi
 
@@ -72,6 +75,7 @@ claude_state_icon() {
 	done) REPLY="$CLAUDE_ICON_DONE" ;;
 	idle) REPLY="$CLAUDE_ICON_IDLE" ;;
 	error) REPLY="$CLAUDE_ICON_ERROR" ;;
+	denied) REPLY="$CLAUDE_ICON_DENIED" ;;
 	*) REPLY="" ;;
 	esac
 }
@@ -87,9 +91,9 @@ setup_claude_colors() {
 	fi
 
 	if [[ $theme == "light" ]]; then
-		C_W="#[fg=#fe640b]" C_K="#[fg=#04a5e5]" C_P="#[fg=#179299]" C_D="#[fg=#40a02b]" C_I="#[fg=#6c6f85]" C_E="#[fg=#d20f39]"
+		C_W="#[fg=#fe640b]" C_K="#[fg=#04a5e5]" C_P="#[fg=#179299]" C_D="#[fg=#40a02b]" C_I="#[fg=#6c6f85]" C_E="#[fg=#d20f39]" C_DN="#[fg=#df8e1d]"
 	else
-		C_W="#[fg=#fab387]" C_K="#[fg=#89dceb]" C_P="#[fg=#94e2d5]" C_D="#[fg=#a6e3a1]" C_I="#[fg=#6c7086]" C_E="#[fg=#f38ba8]"
+		C_W="#[fg=#fab387]" C_K="#[fg=#89dceb]" C_P="#[fg=#94e2d5]" C_D="#[fg=#a6e3a1]" C_I="#[fg=#6c7086]" C_E="#[fg=#f38ba8]" C_DN="#[fg=#f9e2af]"
 	fi
 	C_R="#[fg=default]"
 }
@@ -127,6 +131,10 @@ claude_colored_icon() {
 		icon="$CLAUDE_ICON_ERROR"
 		color=$C_E
 		;;
+	denied)
+		icon="$CLAUDE_ICON_DENIED"
+		color=$C_DN
+		;;
 	*) REPLY="" && return ;;
 	esac
 	# Dim stale icons, but unseen overrides — stay bright until user looks
@@ -134,15 +142,17 @@ claude_colored_icon() {
 	REPLY="${color}${icon}${C_R} "
 }
 
-# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR
+# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR DENIED
 # Given counts per state, returns the highest-priority non-zero state.
 # Sets REPLY to state string, empty if all zero.
 claude_priority_state() {
-	local w=$1 k=$2 p=$3 d=$4 i=$5 e=${6:-0}
+	local w=$1 k=$2 p=$3 d=$4 i=$5 e=${6:-0} dn=${7:-0}
 	if ((e > 0)); then
 		REPLY="error"
 	elif ((w > 0)); then
 		REPLY="waiting"
+	elif ((dn > 0)); then
+		REPLY="denied"
 	elif ((k > 0)); then
 		REPLY="compacting"
 	elif ((p > 0)); then

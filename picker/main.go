@@ -24,7 +24,7 @@ import (
 // Build-time constants injected via icons_generated.go:
 //   iconMap, fallbackIcon, maxIconsPicker
 //   claudeSpinnerFrames, claudeIconWaiting, claudeIconCompacting,
-//   claudeIconDone, claudeIconIdle, claudeIconError
+//   claudeIconDone, claudeIconIdle, claudeIconError, claudeIconDenied
 //   iconSession, iconDir, iconBranch (defaults, overridden by env/tmux)
 
 // Staleness thresholds (seconds)
@@ -34,17 +34,18 @@ const (
 	staleProcessing = 300
 	staleDone       = 60
 	staleError      = 120
+	staleDenied     = 60
 )
 
 // Catppuccin hex colors per theme
 var claudeColors = map[string]map[string]string{
 	"dark": {
 		"waiting": "#fab387", "compacting": "#89dceb", "processing": "#94e2d5",
-		"done": "#a6e3a1", "idle": "#6c7086", "error": "#f38ba8",
+		"done": "#a6e3a1", "idle": "#6c7086", "error": "#f38ba8", "denied": "#f9e2af",
 	},
 	"light": {
 		"waiting": "#fe640b", "compacting": "#04a5e5", "processing": "#179299",
-		"done": "#40a02b", "idle": "#6c6f85", "error": "#d20f39",
+		"done": "#40a02b", "idle": "#6c6f85", "error": "#d20f39", "denied": "#df8e1d",
 	},
 }
 
@@ -68,7 +69,7 @@ type windowData struct {
 }
 
 type claudeCounts struct {
-	waiting, compacting, processing, done, idle, errorCnt int
+	waiting, compacting, processing, done, idle, errorCnt, denied int
 	allStale                                              bool
 	anyUnseen                                             bool
 }
@@ -739,6 +740,8 @@ func addClaudeState(cc *claudeCounts, state string) {
 		cc.idle++
 	case "error":
 		cc.errorCnt++
+	case "denied":
+		cc.denied++
 	}
 }
 
@@ -758,6 +761,8 @@ func isStale(state string, now, ts int64) bool {
 		return age > staleDone
 	case "error":
 		return age > staleError
+	case "denied":
+		return age > staleDenied
 	}
 	return false
 }
@@ -792,6 +797,9 @@ func claudePriority(c claudeCounts) string {
 	if c.waiting > 0 {
 		return "waiting"
 	}
+	if c.denied > 0 {
+		return "denied"
+	}
 	if c.compacting > 0 {
 		return "compacting"
 	}
@@ -822,6 +830,8 @@ func claudeStateIcon(state string) string {
 		return claudeIconIdle
 	case "error":
 		return claudeIconError
+	case "denied":
+		return claudeIconDenied
 	}
 	return ""
 }

@@ -119,13 +119,15 @@ to write state files that the status bar reads every second.
 | Indicator | Meaning |
 |-----------|---------|
 | Spinner animation | **Processing** — Claude is actively working |
-| Clock icon | **Waiting** — permission prompt needs your input |
+| Clock icon (orange) | **Waiting** — permission prompt needs your input |
+| Clock icon (yellow) | **Denied** — auto mode denied a command |
 | Compress icon | **Compacting** — context compaction in progress |
 | Checkmark | **Done** — Claude finished the last task |
+| X icon (red) | **Error** — tool or stop failure |
 | Sleep icon | **Idle** — waiting for your next prompt |
 
 When multiple panes have Claude running, the window and session indicators show the
-highest-priority state (waiting > compacting > processing > done > idle).
+highest-priority state (waiting > denied > compacting > processing > done > idle).
 
 ### Hooks Configuration
 
@@ -221,6 +223,13 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
       {
         "hooks": [
           {"type": "command", "command": "claude-status-update processing"}
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update denied"}
         ]
       }
     ],

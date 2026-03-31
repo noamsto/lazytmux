@@ -212,6 +212,9 @@
     set -ga update-environment TERMINFO
     set -ga update-environment TERMINFO_DIRS
 
+    # Flicker-free rendering for Claude Code (alt-screen with virtualized scrollback)
+    set-environment -g CLAUDE_CODE_NO_FLICKER 1
+
     # Timing
     set -s escape-time 0
     set -g repeat-time 300

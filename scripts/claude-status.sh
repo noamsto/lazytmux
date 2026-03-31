@@ -24,7 +24,7 @@ source @lib_claude@
 
 # --- Counting ---
 
-count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 total=0
+count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 total=0
 all_stale=1  # assume stale until a non-stale pane proves otherwise
 any_unseen=0 # set if any pane has unseen=1
 
@@ -37,6 +37,7 @@ tally_state() {
 	done) ((count_done++)) || true ;;
 	idle) ((count_idle++)) || true ;;
 	error) ((count_error++)) || true ;;
+	denied) ((count_denied++)) || true ;;
 	esac
 	[[ $REPLY_STALE == 1 ]] || all_stale=0
 	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1
@@ -67,7 +68,7 @@ count_for_session() {
 }
 
 get_priority_state() {
-	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle" "$count_error"
+	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle" "$count_error" "$count_denied"
 }
 
 # --- Output Formatting ---
@@ -100,6 +101,7 @@ format_output() {
 		[[ $count_processing -eq 0 ]] || parts+=("$count_processing processing")
 		[[ $count_waiting -eq 0 ]] || parts+=("$count_waiting waiting")
 		[[ $count_compacting -eq 0 ]] || parts+=("$count_compacting compacting")
+		[[ $count_denied -eq 0 ]] || parts+=("$count_denied denied")
 		[[ $count_error -eq 0 ]] || parts+=("$count_error error")
 		[[ $count_done -eq 0 ]] || parts+=("$count_done done")
 		[[ $count_idle -eq 0 ]] || parts+=("$count_idle idle")
@@ -117,6 +119,7 @@ format_output() {
 		done) gum_color=151 label="$count_done done" ;;
 		idle) gum_color=245 label="$count_idle idle" ;;
 		error) gum_color=196 label="$count_error error" ;;
+		denied) gum_color=220 label="$count_denied denied" ;;
 		esac
 		gum style --foreground "$gum_color" "$icon $label" 2>/dev/null || echo "$icon $label"
 		;;

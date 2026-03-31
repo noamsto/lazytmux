@@ -3,7 +3,7 @@
 # Called by Claude Code hooks to track session state
 # Usage: claude-status-update <state> [--pane PANE_ID] [--session SESSION_NAME]
 #
-# States: processing, waiting, done, idle, compacting, error
+# States: processing, waiting, done, idle, compacting, error, denied
 # Environment: Uses $TMUX_PANE and tmux to detect session if not provided
 
 set -euo pipefail
@@ -73,9 +73,9 @@ done
 
 # Validate state
 case "$state" in
-processing | waiting | done | idle | compacting | error | clear | cleanup | mark-seen) ;;
+processing | waiting | done | idle | compacting | error | denied | clear | cleanup | mark-seen) ;;
 *)
-	echo "Error: Invalid state '$state'. Use: processing, waiting, done, idle, compacting, clear, cleanup, mark-seen" >&2
+	echo "Error: Invalid state '$state'. Use: processing, waiting, done, idle, compacting, denied, clear, cleanup, mark-seen" >&2
 	exit 1
 	;;
 esac
@@ -169,7 +169,7 @@ if [[ $state == "processing" && -f "$PANES_DIR/$pane_file" ]]; then
 		}
 	done <"$PANES_DIR/$pane_file"
 	case "$cur_state" in
-	waiting | error) exit 0 ;;
+	waiting | error | denied) exit 0 ;;
 	esac
 fi
 
@@ -178,7 +178,7 @@ fi
 # attention indicator that persists through staleness dimming.
 unseen_line=""
 case "$state" in
-done | error | waiting)
+done | error | waiting | denied)
 	win_active=$(tmux display-message -t "$pane_id" -p '#{window_active}' 2>/dev/null) || win_active="1"
 	[[ $win_active == "0" ]] && unseen_line=$'\n'"unseen=1"
 	;;
