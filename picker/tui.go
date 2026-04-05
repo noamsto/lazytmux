@@ -315,12 +315,10 @@ func (m tuiModel) renderList() string {
 	selBgHex := m.thmColorHex("@thm_surface_2", "#45475a", "#acb0be")
 	selBg := lipgloss.Color(selBgHex)
 	selStyle := lipgloss.NewStyle().
-		Background(selBg).
-		MaxWidth(w)
+		Background(selBg)
 	// ANSI reset (\033[0m) inside display strings kills the background.
 	// Replace resets with "reset fg + re-apply bg" so background persists.
 	selResetKeepBg := "\033[39m" + ansiBg(selBgHex) // reset fg only, re-set bg
-	truncStyle := lipgloss.NewStyle().MaxWidth(w)
 	start := m.scrollStart(h)
 
 	lines := make([]string, 0, h)
@@ -328,9 +326,10 @@ func (m tuiModel) renderList() string {
 		item := m.visible[i]
 		if i == m.cursor {
 			patched := strings.ReplaceAll(item.display, "\033[0m", selResetKeepBg)
-			lines = append(lines, selStyle.Render("▶ "+patched))
+			line := fitVisibleWidth("▶ "+patched, w)
+			lines = append(lines, selStyle.Render(line))
 		} else {
-			lines = append(lines, truncStyle.Render("  "+item.display))
+			lines = append(lines, fitVisibleWidth("  "+item.display, w))
 		}
 	}
 	empty := strings.Repeat(" ", w)
@@ -1052,6 +1051,40 @@ func truncateVisibleWidth(line string, maxCells int) string {
 	}
 	out.WriteString("\033[0m")
 	return out.String()
+}
+
+// fitVisibleWidth truncates or pads a line to exactly targetCells visible cells,
+// using VS16-aware width measurement. This replaces lipgloss MaxWidth/Width which
+// uses go-runewidth (measures ❄️ as 1 cell instead of 2).
+func fitVisibleWidth(line string, targetCells int) string {
+	truncated := truncateVisibleWidth(line, targetCells)
+	cells := visibleWidth(truncated)
+	if cells < targetCells {
+		return truncated + strings.Repeat(" ", targetCells-cells)
+	}
+	return truncated
+}
+
+// visibleWidth returns the display width of a string, skipping ANSI escapes
+// and using VS16-aware cell width measurement.
+func visibleWidth(s string) int {
+	runes := []rune(s)
+	cells := 0
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\033' && i+1 < len(runes) && runes[i+1] == '[' {
+			j := i + 2
+			for j < len(runes) && runes[j] != 'm' {
+				j++
+			}
+			if j < len(runes) {
+				j++
+			}
+			i = j - 1
+			continue
+		}
+		cells += contextCellWidth(runes, i)
+	}
+	return cells
 }
 
 // ---------------------------------------------------------------------------
