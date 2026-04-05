@@ -1,7 +1,0 @@
-{
-  "items": [
-    { "key": "g", "type": "popup", "command": "lazygit", "description": "lazygit" },
-    { "key": "b", "type": "popup", "command": "btop", "description": "btop" },
-    { "key": "y", "type": "tmux", "command": "new-window -S -n yazi -c '#{pane_current_path}' yazi", "description": "yazi" }
-  ]
-}

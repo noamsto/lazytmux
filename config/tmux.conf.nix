@@ -45,19 +45,6 @@
     };
   };
 
-  which-key = pkgs.tmuxPlugins.mkTmuxPlugin {
-    pluginName = "tmux-which-key";
-    version = "2026-02-25";
-    src = pkgs.fetchFromGitHub {
-      owner = "Nucc";
-      repo = "tmux-which-key";
-      rev = "151227fe1ec40cd5e8a17b34a5d08dda9e1ef3fd";
-      sha256 = "sha256-Cm+5Qg5Afzr29JI8UMKk2iKS625T1a/48+DpIYm5Nec=";
-    };
-  };
-
-  whichKeyConfig = pkgs.writeText "which-key.json" (builtins.readFile ./which-key.json);
-
   # --- Shared libraries (sourced, not executed) ---
   mkLib = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -165,10 +152,6 @@
     set -g @continuum-restore 'on'
     set -g @continuum-save-interval '10'
 
-    # which-key
-    set -g @which-key-trigger "Space"
-    set -g @which-key-config "${whichKeyConfig}"
-    # which-key popup colors set dynamically by tmux-apply-theme-colors
   '';
 
   # --- Plugin run-shell loading ---
@@ -180,7 +163,6 @@
     run-shell ${tmuxPlugins.vim-tmux-navigator}/share/tmux-plugins/vim-tmux-navigator/vim-tmux-navigator.tmux
     run-shell ${tmuxPlugins.tmux-fzf}/share/tmux-plugins/tmux-fzf/main.tmux
     run-shell ${tmuxPlugins.continuum}/share/tmux-plugins/continuum/continuum.tmux
-    run-shell ${which-key}/share/tmux-plugins/tmux-which-key/which-key.tmux
   '';
 
   # --- Generated tmux.conf ---
