@@ -532,21 +532,74 @@ func (m tuiModel) withFilter() tuiModel {
 		return m
 	}
 
-	var out []listItem
+	// Claude-only filter without search — no scoring needed
+	if q == "" {
+		var out []listItem
+		for _, item := range m.allItems {
+			if item.isHeader {
+				out = append(out, item)
+				continue
+			}
+			if m.claudeOnly && !item.hasActiveClaude {
+				continue
+			}
+			out = append(out, item)
+		}
+		m.visible = pruneOrphanHeaders(out)
+		return m
+	}
+
+	// Score and filter matchable items
+	type scored struct {
+		item  listItem
+		score int
+	}
+	var matches []scored
 	for _, item := range m.allItems {
 		if item.isHeader {
-			out = append(out, item)
 			continue
 		}
 		if m.claudeOnly && !item.hasActiveClaude {
 			continue
 		}
-		if q != "" && !fuzzyMatch(strings.ToLower(item.searchText), q) {
-			continue
+		s := fuzzyScore(strings.ToLower(item.searchText), q)
+		if s >= 0 {
+			matches = append(matches, scored{item: item, score: s})
 		}
-		out = append(out, item)
 	}
-	m.visible = pruneOrphanHeaders(out)
+
+	// Sort by score descending; stable preserves original order for ties
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].score > matches[j].score
+	})
+
+	if m.windowMode {
+		// Re-group under session headers, ordered by best child score
+		headerMap := make(map[string]listItem)
+		for _, item := range m.allItems {
+			if item.isHeader {
+				headerMap[item.session] = item
+			}
+		}
+		seen := make(map[string]bool)
+		var out []listItem
+		for _, match := range matches {
+			if !seen[match.item.session] {
+				seen[match.item.session] = true
+				if h, ok := headerMap[match.item.session]; ok {
+					out = append(out, h)
+				}
+			}
+			out = append(out, match.item)
+		}
+		m.visible = out
+	} else {
+		out := make([]listItem, len(matches))
+		for i, match := range matches {
+			out[i] = match.item
+		}
+		m.visible = out
+	}
 	return m
 }
 
@@ -948,13 +1001,148 @@ func shiftLineLeft(line string, n int) string {
 	return out.String()
 }
 
-// fuzzyMatch returns true if all characters in pattern appear in s in order.
-func fuzzyMatch(s, pattern string) bool {
+// ---------------------------------------------------------------------------
+// Fuzzy scoring (fzf-style)
+//
+// Two-pass alignment: forward scan finds the end of the first valid match,
+// backward scan from that end finds a tighter start. Scoring uses fzf's
+// constants: boundary/consecutive bonuses, gap penalties, first-char multiplier.
+// ---------------------------------------------------------------------------
+
+// Scoring constants (matching fzf).
+const (
+	fzfScoreMatch        = 16
+	fzfScoreGapStart     = -3
+	fzfScoreGapExtension = -1
+
+	fzfBonusConsecutive        = 4  // -(scoreGapStart + scoreGapExtension)
+	fzfBonusBoundary           = 8  // scoreMatch / 2
+	fzfBonusBoundaryWhite      = 10 // boundary + 2
+	fzfBonusBoundaryDelimiter  = 9  // boundary + 1
+	fzfBonusNonWord            = 8
+	fzfBonusCamelCase          = 7  // boundary + scoreGapExtension
+	fzfBonusFirstCharMultiplier = 2
+)
+
+type charClass int8
+
+const (
+	charWhite charClass = iota
+	charDelimiter
+	charNonWord
+	charLower
+	charUpper
+	charNumber
+)
+
+func classOf(c byte) charClass {
+	switch {
+	case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		return charWhite
+	case c == '/' || c == ',' || c == ';' || c == ':':
+		return charDelimiter
+	case c >= 'a' && c <= 'z':
+		return charLower
+	case c >= 'A' && c <= 'Z':
+		return charUpper
+	case c >= '0' && c <= '9':
+		return charNumber
+	default:
+		return charNonWord // covers '-', '_', '.', etc.
+	}
+}
+
+func charBonus(prev, curr charClass) int {
+	if curr >= charLower { // letter or digit
+		switch prev {
+		case charWhite:
+			return fzfBonusBoundaryWhite
+		case charDelimiter:
+			return fzfBonusBoundaryDelimiter
+		case charNonWord:
+			return fzfBonusBoundary
+		}
+	}
+	if prev == charLower && curr == charUpper {
+		return fzfBonusCamelCase
+	}
+	if prev != charNumber && curr == charNumber {
+		return fzfBonusCamelCase
+	}
+	if curr <= charNonWord {
+		return fzfBonusNonWord
+	}
+	return 0
+}
+
+// fuzzyScore returns a relevance score (>=0) if all characters in pattern
+// appear in text in order, or -1 if there is no match.
+func fuzzyScore(text, pattern string) int {
+	if len(pattern) == 0 {
+		return 0
+	}
+
+	// Forward pass: verify match exists, find end position.
 	pi := 0
-	for _, c := range s {
-		if pi < len(pattern) && c == rune(pattern[pi]) {
+	endIdx := 0
+	for i := 0; i < len(text) && pi < len(pattern); i++ {
+		if text[i] == pattern[pi] {
+			endIdx = i
 			pi++
 		}
 	}
-	return pi == len(pattern)
+	if pi < len(pattern) {
+		return -1
+	}
+
+	// Backward pass: from endIdx, find a tighter alignment.
+	pos := make([]int, len(pattern))
+	pi = len(pattern) - 1
+	for i := endIdx; i >= 0 && pi >= 0; i-- {
+		if text[i] == pattern[pi] {
+			pos[pi] = i
+			pi--
+		}
+	}
+
+	// Score the alignment.
+	score := 0
+	prevBonus := 0
+	consecutive := 0
+
+	for k, idx := range pos {
+		var prev charClass
+		if idx == 0 {
+			prev = charWhite // start of string acts as whitespace boundary
+		} else {
+			prev = classOf(text[idx-1])
+		}
+		b := charBonus(prev, classOf(text[idx]))
+
+		score += fzfScoreMatch
+
+		// Consecutive bonus propagation: carry forward the better of the
+		// ongoing-run bonus and the fixed consecutive bonus.
+		if k > 0 && pos[k]-pos[k-1] == 1 {
+			consecutive++
+			cb := max(fzfBonusConsecutive, prevBonus)
+			if b >= fzfBonusBoundary {
+				cb = max(cb, b)
+			}
+			b = cb
+		} else if k > 0 {
+			gap := pos[k] - pos[k-1] - 1
+			score += fzfScoreGapStart + fzfScoreGapExtension*(gap-1)
+			consecutive = 0
+		}
+
+		if k == 0 {
+			score += b * fzfBonusFirstCharMultiplier
+		} else {
+			score += b
+		}
+		prevBonus = b
+	}
+
+	return score
 }
