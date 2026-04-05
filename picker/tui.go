@@ -954,7 +954,8 @@ func stripANSI(s string) string {
 	return out.String()
 }
 
-// applyPreviewXOffset shifts preview content horizontally by previewXOffset visible cells.
+// applyPreviewXOffset shifts preview content horizontally by previewXOffset visible cells,
+// then truncates each line to the preview width to prevent wrapping changes.
 func (m *tuiModel) applyPreviewXOffset() {
 	if m.previewRaw == "" {
 		return
@@ -963,41 +964,78 @@ func (m *tuiModel) applyPreviewXOffset() {
 		m.preview.SetContent(m.previewRaw)
 		return
 	}
+	pw := m.previewWidth()
 	lines := strings.Split(m.previewRaw, "\n")
 	shifted := make([]string, len(lines))
 	for i, line := range lines {
-		shifted[i] = shiftLineLeft(line, m.previewXOffset) + "\033[0m"
+		shifted[i] = truncateVisibleWidth(shiftLineLeft(line, m.previewXOffset), pw)
 	}
 	m.preview.SetContent(strings.Join(shifted, "\n"))
 }
 
 // shiftLineLeft drops the first n visible cells from a line, preserving ANSI escapes.
 func shiftLineLeft(line string, n int) string {
+	runes := []rune(line)
 	var out strings.Builder
 	skipped := 0
 	i := 0
-	// First pass: skip n visible characters, keeping track of ANSI state
-	for i < len(line) && skipped < n {
-		if line[i] == '\033' && i+1 < len(line) && line[i+1] == '[' {
-			// ANSI escape — emit it (preserves color state) but don't count
+	// First pass: skip n visible cells, keeping ANSI escapes (preserves color state)
+	for i < len(runes) && skipped < n {
+		if runes[i] == '\033' && i+1 < len(runes) && runes[i+1] == '[' {
+			// ANSI escape — emit it but don't count as visible
 			j := i + 2
-			for j < len(line) && line[j] != 'm' {
+			for j < len(runes) && runes[j] != 'm' {
 				j++
 			}
-			if j < len(line) {
+			if j < len(runes) {
 				j++ // skip 'm'
 			}
-			out.WriteString(line[i:j])
+			for _, r := range runes[i:j] {
+				out.WriteRune(r)
+			}
 			i = j
 		} else {
-			skipped++
+			w := runeCellWidth(runes[i])
+			skipped += w
 			i++
 		}
 	}
 	// Remainder
-	if i < len(line) {
-		out.WriteString(line[i:])
+	for _, r := range runes[i:] {
+		out.WriteRune(r)
 	}
+	return out.String()
+}
+
+// truncateVisibleWidth truncates a line to maxCells visible cells, preserving ANSI escapes.
+func truncateVisibleWidth(line string, maxCells int) string {
+	runes := []rune(line)
+	var out strings.Builder
+	cells := 0
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\033' && i+1 < len(runes) && runes[i+1] == '[' {
+			// ANSI escape — always emit, zero visible width
+			j := i + 2
+			for j < len(runes) && runes[j] != 'm' {
+				j++
+			}
+			if j < len(runes) {
+				j++
+			}
+			for _, r := range runes[i:j] {
+				out.WriteRune(r)
+			}
+			i = j - 1
+			continue
+		}
+		w := runeCellWidth(runes[i])
+		if cells+w > maxCells {
+			break
+		}
+		out.WriteRune(runes[i])
+		cells += w
+	}
+	out.WriteString("\033[0m")
 	return out.String()
 }
 

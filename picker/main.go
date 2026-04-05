@@ -884,6 +884,25 @@ func buildProcIcons(procs []string, maxCount int) (string, int) {
 	return sb.String(), dw
 }
 
+// runeCellWidth returns the display width of a single rune, handling nerd font
+// PUA (1 cell) and deferring to go-runewidth for everything else.
+func runeCellWidth(r rune) int {
+	switch {
+	case r == 0xFE0E || r == 0xFE0F: // variation selectors (handled contextually in iconCellWidth)
+		return 0
+	case r == 0x200D: // zero-width joiner
+		return 0
+	case r >= 0x0300 && r <= 0x036F: // combining diacritical marks
+		return 0
+	case r >= 0x20D0 && r <= 0x20FF: // combining marks for symbols
+		return 0
+	case (r >= 0xE000 && r <= 0xF8FF) || r >= 0xF0000:
+		return 1 // nerd font PUA = 1 cell
+	default:
+		return runewidth.RuneWidth(r)
+	}
+}
+
 // iconCellWidth returns the display width of an icon string.
 // go-runewidth gets nerd font PUA wrong (reports 0) and doesn't handle
 // VS16 emoji promotion (❄️ = 2 cells in kitty, runewidth says 1).
@@ -893,30 +912,16 @@ func iconCellWidth(s string) int {
 	w := 0
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-		switch {
-		case r == 0xFE0E: // text variation selector — preceding char stays narrow
-			// zero width (already counted preceding rune as narrow via runewidth)
-		case r == 0xFE0F: // emoji variation selector — promotes preceding char to 2 cells
-			// The preceding rune was counted by runewidth (typically 1 for dingbats).
-			// Kitty renders VS16-promoted glyphs as 2 cells, so add the difference.
-			if i > 0 {
-				prev := runes[i-1]
-				prevW := runewidth.RuneWidth(prev)
-				if prevW < 2 {
-					w += 2 - prevW
-				}
+		if r == 0xFE0F && i > 0 {
+			// emoji variation selector — promotes preceding char to 2 cells
+			prev := runes[i-1]
+			prevW := runewidth.RuneWidth(prev)
+			if prevW < 2 {
+				w += 2 - prevW
 			}
-		case r == 0x200D: // zero-width joiner
-			// zero width
-		case r >= 0x0300 && r <= 0x036F: // combining diacritical marks
-			// zero width
-		case r >= 0x20D0 && r <= 0x20FF: // combining marks for symbols
-			// zero width
-		case (r >= 0xE000 && r <= 0xF8FF) || r >= 0xF0000:
-			w++ // nerd font PUA = 1 cell
-		default:
-			w += runewidth.RuneWidth(r)
+			continue
 		}
+		w += runeCellWidth(r)
 	}
 	return w
 }
