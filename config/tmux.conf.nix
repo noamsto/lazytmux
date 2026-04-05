@@ -339,6 +339,8 @@
     set-hook -gu client-resized
     set-hook -gu after-new-session
     set-hook -gu client-session-changed
+    set-hook -gu pane-exited
+
     # Also clear hooks from older config versions that may linger
     set-hook -gu window-linked
     set-hook -gu window-unlinked
@@ -356,6 +358,9 @@
 
     # Smart copy-mode exit: clean up Claude Code transcript viewer when leaving copy-mode
     set-hook -g pane-mode-changed 'if-shell -F "#{&&:#{==:#{pane_mode},},#{==:#{@claude-copy-mode},1}}" "set-option -p -u @claude-copy-mode ; send-keys Escape"'
+
+    # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
+    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id}"'
 
     # Clear unseen claude status flags when user focuses a window
     set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{session_name} --window #{window_index}"'
