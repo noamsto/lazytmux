@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // listItem is one row in the picker list.
@@ -973,6 +974,21 @@ func (m *tuiModel) applyPreviewXOffset() {
 	m.preview.SetContent(strings.Join(shifted, "\n"))
 }
 
+// contextCellWidth returns the display width of runes[i], accounting for VS16
+// emoji promotion (e.g. ❄️ = ❄ + VS16 renders as 2 cells in Kitty).
+func contextCellWidth(runes []rune, i int) int {
+	r := runes[i]
+	if r == 0xFE0F && i > 0 {
+		prev := runes[i-1]
+		prevW := runewidth.RuneWidth(prev)
+		if prevW < 2 {
+			return 2 - prevW
+		}
+		return 0
+	}
+	return runeCellWidth(r)
+}
+
 // shiftLineLeft drops the first n visible cells from a line, preserving ANSI escapes.
 func shiftLineLeft(line string, n int) string {
 	runes := []rune(line)
@@ -995,8 +1011,7 @@ func shiftLineLeft(line string, n int) string {
 			}
 			i = j
 		} else {
-			w := runeCellWidth(runes[i])
-			skipped += w
+			skipped += contextCellWidth(runes, i)
 			i++
 		}
 	}
@@ -1028,7 +1043,7 @@ func truncateVisibleWidth(line string, maxCells int) string {
 			i = j - 1
 			continue
 		}
-		w := runeCellWidth(runes[i])
+		w := contextCellWidth(runes, i)
 		if cells+w > maxCells {
 			break
 		}
