@@ -50,8 +50,7 @@ func parseWorktreesPorcelain(output, repoRoot, defaultBranch string) []Worktree 
 	var worktrees []Worktree
 	var currentPath string
 
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(output, "\n") {
 		switch {
 		case strings.HasPrefix(line, "worktree "):
 			currentPath = strings.TrimPrefix(line, "worktree ")
@@ -168,7 +167,7 @@ func detectStale(repoRoot, defaultBranch string, worktrees []Worktree) {
 // into a set of branch names. It handles *, +, and space prefixes.
 func parseBranchList(output string) map[string]bool {
 	branches := make(map[string]bool)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if len(line) < 3 {
 			continue
 		}
