@@ -15,12 +15,28 @@ MAX_ICONS=@MAX_ICONS@
 
 setup_claude_colors
 
-# --- Claude status: read pane files, bucket by window index ---
-declare -A pane_to_win
-while IFS=$'\t' read -r pane_id win_idx; do
-	pane_to_win["${pane_id#%}"]="$win_idx"
-done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}')
+# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
+declare -A pane_to_win win_procs win_pane_path win_cur_branch
+active_pane_proc=""
+while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active; do
+	pane_to_win["${pane_id#%}"]="$idx"
+	# First pane_path per window wins (active pane comes first from list-panes)
+	if [[ -z ${win_pane_path[$idx]+x} ]]; then
+		win_pane_path[$idx]="$pane_path"
+		win_cur_branch[$idx]="$cur_branch"
+	fi
+	# Track the session's active pane command (active pane in active window)
+	[[ $pane_active == 1 && $window_active == 1 ]] && active_pane_proc="$proc"
+	# Collect unique processes per window
+	[[ -z $proc ]] && continue
+	existing="${win_procs[$idx]:-}"
+	case " $existing " in
+	*" $proc "*) ;;
+	*) win_procs[$idx]="${existing:+$existing }$proc" ;;
+	esac
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}	#{pane_current_path}	#{pane_current_command}	#{@branch}	#{pane_active}	#{window_active}')
 
+# --- Claude status: read pane files, bucket by window index ---
 declare -A win_claude_state win_claude_stale win_claude_unseen
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
@@ -46,33 +62,29 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 	done
 fi
 
-# --- First pass: compute process icons + claude per window, measure display widths ---
+# --- Compute process icons + claude per window, measure display widths ---
 declare -a all_idx=()
 declare -A win_icons win_icon_dw win_display
 
-while IFS='|' read -r idx pane_path _; do
-	target="${SESSION}:${idx}"
+# Collect all tmux set commands to batch via `tmux source -`
+tmux_cmds=""
+
+for idx in "${!win_pane_path[@]}"; do
 	all_idx+=("$idx")
+	pane_path="${win_pane_path[$idx]}"
+	target="${SESSION}:${idx}"
 
-	# Auto-detect git branch for window name
+	# Auto-detect git branch and root — always check branch (3ms), cache root
 	branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
-	cur_branch=$(tmux show -wqv -t "$target" @branch 2>/dev/null) || cur_branch=""
-	[[ $branch != "$cur_branch" ]] && tmux set -qw -t "$target" @branch "$branch"
+	if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
+		tmux_cmds+="set -qw -t '$target' @branch '$branch'"$'\n'
+		# Re-derive git root when branch changes (different repo or worktree)
+		git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
+		tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
+	fi
 
-	# Collect unique processes across all panes in this window
-	declare -A seen=()
-	procs=""
-	while IFS= read -r proc; do
-		[[ -z $proc ]] && continue
-		if [[ -z ${seen[$proc]+x} ]]; then
-			seen[$proc]=1
-			procs+="${procs:+ }$proc"
-		fi
-	done < <(tmux list-panes -t "$target" -F '#{pane_current_command}' 2>/dev/null)
-	unset seen
-
-	# Build process icons
-	build_proc_icons "$procs" "$MAX_ICONS"
+	# Build process icons from batched data
+	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
 	proc_icon_str="${REPLY% }"
 	icon="$REPLY"
 	icon_dw=$REPLY_DW
@@ -92,11 +104,10 @@ while IFS='|' read -r idx pane_path _; do
 	win_icons[$idx]="$icon"
 	win_icon_dw[$idx]=$icon_dw
 	win_display[$idx]="$display"
-done < <(tmux list-windows -t "$SESSION" -F '#{window_index}|#{pane_current_path}|')
+done
 
-# Set active pane icon for top-right display
-active_proc=$(tmux display-message -t "$SESSION" -p '#{pane_current_command}' 2>/dev/null) || true
-tmux set -q -t "$SESSION" @active_pane_icon "${ICON_MAP[$active_proc]:-}"
+# Set active pane icon for top-right display (from batched data)
+tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '${ICON_MAP[$active_pane_proc]:-}'"$'\n'
 
 # --- Second pass: set unpadded + padded icon variables ---
 # Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
@@ -105,9 +116,12 @@ for idx in "${all_idx[@]}"; do
 	target="${SESSION}:${idx}"
 
 	# Unpadded (for window names — process icons + colored claude)
-	tmux set -qw -t "$target" @window_icon_display "${win_display[$idx]}"
+	tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$idx]}'"$'\n'
 
 	# Padded (for status bar — process icons + claude, fixed width)
 	pad_to_width "${win_icons[$idx]}" "${win_icon_dw[$idx]}" "$TARGET_DW"
-	tmux set -qw -t "$target" @window_icon_padded "$REPLY"
+	tmux_cmds+="set -qw -t '$target' @window_icon_padded '$REPLY'"$'\n'
 done
+
+# Batch all tmux set commands in a single IPC call
+printf '%s' "$tmux_cmds" | tmux source -

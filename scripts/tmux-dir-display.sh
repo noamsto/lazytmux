@@ -5,22 +5,20 @@
 
 pane_path="$2"
 
-# Get git root
-git_root=""
-if [[ -n $pane_path ]] && [[ -d $pane_path ]]; then
+# Get git root — cached in @git_root by tmux-update-icons, fallback to git call
+git_root="$3"
+if [[ -z $git_root ]] && [[ -n $pane_path ]] && [[ -d $pane_path ]]; then
 	git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null)
 fi
 
 # Show relative path from git root
-if [[ -n $git_root ]]; then
+if [[ -n $git_root && $pane_path == "$git_root"* ]]; then
 	if [[ $pane_path == "$git_root" ]]; then
 		echo "./"
 	else
-		# Get relative path and prefix with ./
-		rel_path="${pane_path#"$git_root"/}"
-		echo "./$rel_path"
+		echo "./${pane_path#"$git_root"/}"
 	fi
 else
-	# Not in git repo, show basename
-	echo "${pane_path##*/}"
+	# Not in git repo or stale cache — show with ~ for $HOME
+	echo "${pane_path/#"$HOME"/\~}"
 fi
