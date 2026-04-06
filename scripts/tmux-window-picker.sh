@@ -14,7 +14,7 @@ ARGS="--tui --windows"
 TITLE=" Windows "
 if [[ ${1:-} == "--claude" ]]; then
 	ARGS="$ARGS --claude"
-	TITLE=" 󰒲 Claude Windows "
+	TITLE=" 🧠 Claude Windows "
 fi
 
 BORDER_FG=$(tmux show -gv @thm_overlay_1 2>/dev/null || echo "#7f849c")
