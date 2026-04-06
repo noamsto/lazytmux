@@ -446,6 +446,7 @@ wt_remove() {
 	log ""
 	log "Removing worktree: $worktree_path"
 	if git -C "$repo_root" worktree remove "$worktree_path"; then
+		zoxide remove "$worktree_path" 2>/dev/null || true
 		log_success "Worktree removed"
 		echo ""
 		echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -617,6 +618,7 @@ wt_clean() {
 		# Remove worktree
 		local git_error
 		if git_error=$(git -C "$repo_root" worktree remove "$worktree_path" 2>&1); then
+			zoxide remove "$worktree_path" 2>/dev/null || true
 			echo "  ✓ Removed worktree"
 		else
 			echo "  ❌ Failed: $git_error"

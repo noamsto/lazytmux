@@ -26,9 +26,9 @@ PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
 # --- Single pass: collect window data + pane processes ---
 declare -a indices
-declare -A win_procs # keyed by window_index, space-separated unique procs
-max_text_len=0       # capped at 20, for multi-line padded column width
-max_text_len_raw=0   # uncapped, for split-point calculation
+declare -A win_procs    # keyed by window_index, space-separated unique procs
+declare -A win_text_len # per-window text length (for single-line total)
+max_text_len=0          # capped at 30, for multi-line padded column width
 total=0
 has_zoom=0
 has_truncated=0
@@ -44,7 +44,7 @@ while IFS='|' read -r idx branch pane_path zoomed; do
 		dirname=${pane_path##*/}
 		text_len=${#dirname}
 	fi
-	((text_len > max_text_len_raw)) && max_text_len_raw=$text_len
+	win_text_len[$idx]=$text_len
 	capped=$text_len
 	((capped > 30)) && {
 		has_truncated=1
@@ -71,10 +71,15 @@ unset win_seen
 # Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
 max_icon_width=$((MAX_ICONS * 3 + 2))
 declare -A win_icon_str
+# Sum actual single-line width: per-window text + icon + separators
+# Single-line format: IDX(idx_width) + ": "(2) + text + " "(1) + unpadded_icon
+# No column padding — each window takes only its natural width.
+total_single_width=0
 
 for idx in "${indices[@]}"; do
 	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
 	icon_str="$REPLY"
+	((total_single_width += ${win_text_len[$idx]} + REPLY_DW))
 	pad_to_width "$icon_str" "$REPLY_DW" "$max_icon_width"
 	win_icon_str[$idx]="$REPLY"
 done
@@ -88,14 +93,16 @@ zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 ellipsis_extra=0
 ((has_truncated)) && ellipsis_extra=1
-# Slot base: IDX(idx_width) + ": "(2) + TEXT(P) + " "(1) + ICON(max_icon_width)
-# P = max_text_len + 2(zoom) + ellipsis_extra
 SEP_WIDTH=3 # " │ "
-slot_base_raw=$((max_text_len_raw + 2 + idx_width + 3 + max_icon_width))
+# Single-line total: sum of per-window (text + icon) + fixed overhead per window + separators
+# Fixed per window: idx_width + ": "(2) + " "(1) = idx_width + 3
+total_single_width=$((total_single_width + total * (idx_width + 3) + (total - 1) * SEP_WIDTH))
+# Multi-line uses padded columns for alignment
+# P = max_text_len + 2(zoom) + ellipsis_extra
 slot_base=$((max_text_len + 2 + ellipsis_extra + idx_width + 3 + max_icon_width))
 
-# Single-line check: N items + (N-1) separators
-if ((total * slot_base_raw + (total - 1) * SEP_WIDTH + zoom_extra <= available)); then
+# Single-line check: actual total width + zoom
+if ((total_single_width + zoom_extra <= available)); then
 	needs_multiline=0
 else
 	needs_multiline=1
@@ -162,38 +169,29 @@ ICON='#{@window_icon_padded}'
 TEXT='#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{=30:#{b:pane_current_path}}#{?#{==:#{=30:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
+# All paths set session-level formats (tmux's all-or-nothing array override).
+# Always copy FMT0 from global to preserve line 0 (session/branch/dir/claude).
+FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
+[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
+
+# Multi-line format fragments (used by elif and else branches)
+P=$((max_text_len + 2 + ellipsis_extra))
+TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
+IDX="#{p${idx_width}:window_index}"
+ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
+
 if ((!needs_multiline && current_line == 0)); then
-	# Single line: clear ALL session-level format overrides to fall back to global.
-	# tmux treats session-level status-format as all-or-nothing: setting any index
-	# at session level overrides ALL indices. So we must unset all of them.
-	tmux set -u -t "$SESSION" status-format[0] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
-	# tmux leaves an empty array container after unsetting all indices — clear it too
-	tmux set -u -t "$SESSION" status-format 2>/dev/null || true
+	# Single line: use global window format (unpadded, no tree prefix changes needed)
+	FMT1=$(tmux show -gv status-format[1] 2>/dev/null)
+	tmux set -t "$SESSION" status-format[1] "$FMT1"
+	tmux set -t "$SESSION" status-format[2] ""
+	tmux set -t "$SESSION" status-format[3] ""
 elif ((current_line == 0)); then
-	# Preserve status-format[0] at session level (all-or-nothing override)
-	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
-	P=$((max_text_len + 2 + ellipsis_extra))
-	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
-	IDX="#{p${idx_width}:window_index}"
-	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
 	tmux set -t "$SESSION" status-format[1] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
 	tmux set -t "$SESSION" status-format[2] ""
 	tmux set -t "$SESSION" status-format[3] ""
 else
-	# Preserve status-format[0] at session level (all-or-nothing override)
-	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
-
-	P=$((max_text_len + 2 + ellipsis_extra))
-	TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
-	IDX="#{p${idx_width}:window_index}"
-	ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
-
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
 	tmux set -t "$SESSION" status-format[1] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}"

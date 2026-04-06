@@ -904,24 +904,16 @@ func runeCellWidth(r rune) int {
 }
 
 // iconCellWidth returns the display width of an icon string.
-// go-runewidth gets nerd font PUA wrong (reports 0) and doesn't handle
-// VS16 emoji promotion (❄️ = 2 cells in kitty, runewidth says 1).
-// So we handle PUA and emoji+VS16 ourselves, defer the rest to runewidth.
+// go-runewidth gets nerd font PUA wrong (reports 0), so we fix that.
+// VS16 emoji promotion (❄️ = 2 cells in kitty) is NOT applied because
+// tmux uses wcwidth() which ignores VS16 — our widths must match tmux's
+// cursor tracking, not Kitty's rendering. Avoid VS16 emoji in icons;
+// use nerd font equivalents instead (see process-icons.nix).
 func iconCellWidth(s string) int {
 	runes := []rune(s)
 	w := 0
 	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if r == 0xFE0F && i > 0 {
-			// emoji variation selector — promotes preceding char to 2 cells
-			prev := runes[i-1]
-			prevW := runewidth.RuneWidth(prev)
-			if prevW < 2 {
-				w += 2 - prevW
-			}
-			continue
-		}
-		w += runeCellWidth(r)
+		w += runeCellWidth(runes[i])
 	}
 	return w
 }
