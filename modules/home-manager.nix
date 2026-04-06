@@ -9,7 +9,8 @@
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
   };
-  wtPkg = import ../wt {inherit pkgs;};
+  wt-explorer = import ../wt-explorer {inherit pkgs;};
+  wtPkg = import ../wt {inherit pkgs wt-explorer;};
 in {
   options.programs.lazytmux = {
     enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";

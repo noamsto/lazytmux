@@ -6,6 +6,7 @@
 SKIP_PROMPT=false
 QUIET=false
 NO_SWITCH=false
+INTERACTIVE=false
 
 # Colors for non-gum output
 RED='\033[0;31m'
@@ -58,6 +59,7 @@ Usage:
   wt list               List all worktrees
   wt remove <branch>    Remove worktree + kill window
   wt clean              Remove stale worktrees (merged, squash-merged, deleted)
+  wt clean -i           Interactive explorer: inspect worktrees, force-remove
   wt help               Show this help
 
 Model: Session = Project, Window = Worktree
@@ -634,7 +636,7 @@ wt_clean() {
 			echo "$line"
 		done
 		echo ""
-		echo "Tip: use 'git worktree remove --force <path>' for worktrees with uncommitted changes"
+		echo "Tip: use 'wt clean -i' to interactively explore and force-remove"
 	fi
 
 	if [[ $cleaned -gt 0 ]]; then
@@ -725,6 +727,10 @@ main() {
 			QUIET=true
 			shift
 			;;
+		-i | --interactive)
+			INTERACTIVE=true
+			shift
+			;;
 		-n | --no-switch)
 			NO_SWITCH=true
 			shift
@@ -732,10 +738,11 @@ main() {
 		-*)
 			# Handle combined short flags like -yqn
 			local flags="${1#-}"
-			if [[ $flags =~ ^[yqn]+$ ]]; then
+			if [[ $flags =~ ^[yqni]+$ ]]; then
 				[[ $flags == *y* ]] && SKIP_PROMPT=true
 				[[ $flags == *q* ]] && QUIET=true
 				[[ $flags == *n* ]] && NO_SWITCH=true
+				[[ $flags == *i* ]] && INTERACTIVE=true
 				shift
 			else
 				args+=("$1")
@@ -759,7 +766,11 @@ main() {
 		wt_remove "${args[1]:-}"
 		;;
 	clean | prune)
-		wt_clean
+		if [[ $INTERACTIVE == "true" ]]; then
+			exec wt-explorer "$(get_repo_root)"
+		else
+			wt_clean
+		fi
 		;;
 	z)
 		wt_z "${args[1]:-}"
