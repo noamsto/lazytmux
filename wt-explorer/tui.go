@@ -9,17 +9,15 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Catppuccin Mocha palette.
 var (
-	colorRed    = lipgloss.Color("#f38ba8")
-	colorGreen  = lipgloss.Color("#a6e3a1")
-	colorBlue   = lipgloss.Color("#89b4fa")
-	colorDim    = lipgloss.Color("#6c7086")
-	colorText   = lipgloss.Color("#cdd6f4")
-	colorPeach  = lipgloss.Color("#fab387")
+	colorRed   = lipgloss.Color("#f38ba8")
+	colorGreen = lipgloss.Color("#a6e3a1")
+	colorBlue  = lipgloss.Color("#89b4fa")
+	colorDim   = lipgloss.Color("#6c7086")
+	colorText  = lipgloss.Color("#cdd6f4")
+	colorPeach = lipgloss.Color("#fab387")
 )
 
-// Styles.
 var (
 	staleStyle     = lipgloss.NewStyle().Foreground(colorRed)
 	selectedStyle  = lipgloss.NewStyle().Foreground(colorGreen)
@@ -32,37 +30,36 @@ var (
 )
 
 type model struct {
-	repoRoot      string
-	worktrees     []Worktree
-	visible       []int // indices into worktrees after filtering
-	cursor        int
-	selected      map[int]bool
-	detailsLoaded map[int]bool
-	query         string
-	preview       viewport.Model
-	width         int
-	height        int
-	ready         bool
-	confirmMsg    string
-	confirmForce  bool
-	statusMsg     string
+	repoRoot     string
+	worktrees    []Worktree
+	visible      []int
+	cursor       int
+	selected     map[int]bool
+	query        string
+	preview      viewport.Model
+	width        int
+	height       int
+	ready        bool
+	confirmMsg   string
+	confirmForce bool
+	statusMsg    string
+	staleCount   int
+}
+
+// detailsLoadedMsg is sent when async detail loading completes.
+type detailsLoadedMsg struct {
+	index int
 }
 
 func runTUI(repoRoot string, worktrees []Worktree) error {
 	m := model{
-		repoRoot:      repoRoot,
-		worktrees:     worktrees,
-		selected:      make(map[int]bool),
-		detailsLoaded: make(map[int]bool),
-		preview:       viewport.New(),
+		repoRoot: repoRoot,
+		worktrees: worktrees,
+		selected:  make(map[int]bool),
+		preview:   viewport.New(),
 	}
-
-	// The first item has details pre-loaded by main.go.
-	if len(worktrees) > 0 {
-		m.detailsLoaded[0] = true
-	}
-
 	m.filterVisible()
+	m.recomputeStaleCount()
 
 	p := tea.NewProgram(m)
 	_, err := p.Run()
@@ -70,6 +67,13 @@ func runTUI(repoRoot string, worktrees []Worktree) error {
 }
 
 func (m model) Init() tea.Cmd {
+	// Kick off async detail load for the first item
+	if len(m.visible) > 0 {
+		idx := m.visible[0]
+		if !m.worktrees[idx].DetailsLoaded {
+			return m.loadDetailsCmd(idx)
+		}
+	}
 	return nil
 }
 
@@ -80,7 +84,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.updatePreviewSize()
-		m.loadCurrentDetails()
+		return m, nil
+
+	case detailsLoadedMsg:
+		m.worktrees[msg.index].DetailsLoaded = true
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -91,7 +98,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// Confirmation mode: only y/n.
 	if m.confirmMsg != "" {
 		switch msg.String() {
 		case "y", "Y":
@@ -111,18 +117,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.query != "" {
 			m.query = ""
 			m.filterVisible()
-			m.loadCurrentDetails()
-			return m, nil
+			return m, m.ensureDetailsLoaded()
 		}
 		return m, tea.Quit
 
 	case "up", "k":
-		m.moveCursor(-1)
-		return m, nil
+		return m, m.moveCursor(-1)
 
 	case "down", "j":
-		m.moveCursor(1)
-		return m, nil
+		return m, m.moveCursor(1)
 
 	case " ":
 		if len(m.visible) > 0 {
@@ -155,44 +158,48 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.query) > 0 {
 			m.query = m.query[:len(m.query)-1]
 			m.filterVisible()
-			m.loadCurrentDetails()
+			return m, m.ensureDetailsLoaded()
 		}
 		return m, nil
 
 	default:
-		// Printable character: append to search.
 		key := msg.Key()
 		if key.Text != "" && key.Mod == 0 {
 			m.query += key.Text
 			m.filterVisible()
-			m.loadCurrentDetails()
+			return m, m.ensureDetailsLoaded()
 		}
 		return m, nil
 	}
 }
 
-func (m *model) moveCursor(delta int) {
+func (m *model) moveCursor(delta int) tea.Cmd {
 	if len(m.visible) == 0 {
-		return
+		return nil
 	}
 	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor >= len(m.visible) {
-		m.cursor = len(m.visible) - 1
-	}
-	m.loadCurrentDetails()
+	m.cursor = max(0, min(m.cursor, len(m.visible)-1))
+	return m.ensureDetailsLoaded()
 }
 
-func (m *model) loadCurrentDetails() {
+// ensureDetailsLoaded returns a Cmd to load details for the cursor item if needed.
+func (m *model) ensureDetailsLoaded() tea.Cmd {
 	if len(m.visible) == 0 {
-		return
+		return nil
 	}
 	idx := m.visible[m.cursor]
-	if !m.detailsLoaded[idx] {
-		loadWorktreeDetails(&m.worktrees[idx])
-		m.detailsLoaded[idx] = true
+	if !m.worktrees[idx].DetailsLoaded {
+		return m.loadDetailsCmd(idx)
+	}
+	return nil
+}
+
+// loadDetailsCmd returns a Cmd that loads worktree details in a goroutine.
+func (m *model) loadDetailsCmd(idx int) tea.Cmd {
+	wt := &m.worktrees[idx]
+	return func() tea.Msg {
+		loadWorktreeDetails(wt)
+		return detailsLoadedMsg{index: idx}
 	}
 }
 
@@ -262,9 +269,8 @@ func (m *model) executeDelete() {
 	}
 
 	if removed > 0 {
-		// Rebuild worktrees slice.
 		var newWorktrees []Worktree
-		indexMap := make(map[int]int) // old index -> new index
+		indexMap := make(map[int]int)
 		for i, wt := range m.worktrees {
 			if !removedSet[i] {
 				indexMap[i] = len(newWorktrees)
@@ -272,24 +278,17 @@ func (m *model) executeDelete() {
 			}
 		}
 
-		// Rebuild maps with new indices.
 		newSelected := make(map[int]bool)
 		for oldIdx := range m.selected {
 			if newIdx, ok := indexMap[oldIdx]; ok {
 				newSelected[newIdx] = true
 			}
 		}
-		newDetailsLoaded := make(map[int]bool)
-		for oldIdx := range m.detailsLoaded {
-			if newIdx, ok := indexMap[oldIdx]; ok {
-				newDetailsLoaded[newIdx] = true
-			}
-		}
 
 		m.worktrees = newWorktrees
 		m.selected = newSelected
-		m.detailsLoaded = newDetailsLoaded
 		m.filterVisible()
+		m.recomputeStaleCount()
 	}
 
 	switch {
@@ -302,6 +301,15 @@ func (m *model) executeDelete() {
 	}
 }
 
+func (m *model) recomputeStaleCount() {
+	m.staleCount = 0
+	for i := range m.worktrees {
+		if m.worktrees[i].IsStale() {
+			m.staleCount++
+		}
+	}
+}
+
 func (m *model) updatePreviewSize() {
 	previewW, previewH := m.previewDimensions()
 	m.preview = viewport.New(
@@ -310,29 +318,15 @@ func (m *model) updatePreviewSize() {
 	)
 }
 
-// listWidth returns the width of the left list pane.
 func (m *model) listWidth() int {
 	w := m.width * 3 / 5
-	if w < 30 {
-		w = 30
-	}
-	if w > m.width-20 {
-		w = m.width - 20
-	}
-	return w
+	return max(30, min(w, m.width-20))
 }
 
 func (m *model) previewDimensions() (int, int) {
 	lw := m.listWidth()
-	pw := m.width - lw - 3 // 3 for " | " separator
-	if pw < 10 {
-		pw = 10
-	}
-	// Height: total - search header (2) - column headers (1) - separator (1) - help (1) - status (1) = 6
-	ph := m.height - 6
-	if ph < 3 {
-		ph = 3
-	}
+	pw := max(10, m.width-lw-3)
+	ph := max(3, m.height-6)
 	return pw, ph
 }
 
@@ -352,56 +346,47 @@ func (m model) View() tea.View {
 func (m *model) renderFull() string {
 	var b strings.Builder
 
-	// Search box.
 	searchLine := dimStyle.Render("filter: ") + m.query
 	if m.query == "" {
 		searchLine = dimStyle.Render("filter: (type to search)")
 	}
-	searchHeader := borderStyle.Render("── Search " + strings.Repeat("─", max(0, m.width-10)))
-	b.WriteString(searchHeader + "\n")
+	b.WriteString(borderStyle.Render("── Search " + strings.Repeat("─", max(0, m.width-10))) + "\n")
 	b.WriteString(searchLine + "\n")
 
-	// Column headers.
 	lw := m.listWidth()
 	_, ph := m.previewDimensions()
 
-	listHeader := padRight(headerStyle.Render(" Worktrees"), lw)
-	previewHeader := headerStyle.Render(" Details")
-	b.WriteString(listHeader + borderStyle.Render(" │ ") + previewHeader + "\n")
+	b.WriteString(padRight(headerStyle.Render(" Worktrees"), lw) + borderStyle.Render(" │ ") + headerStyle.Render(" Details") + "\n")
 
-	// Build list lines.
 	listLines := m.renderListLines(lw, ph)
 
-	// Build preview content.
 	previewContent := m.renderPreview()
 	m.preview.SetContent(previewContent)
 	previewRendered := m.preview.View()
 	previewLines := strings.Split(previewRendered, "\n")
 
-	// Side by side.
 	for i := range ph {
 		var left, right string
 		if i < len(listLines) {
 			left = listLines[i]
 		}
 		left = padRight(left, lw)
-
 		if i < len(previewLines) {
 			right = previewLines[i]
 		}
-
 		b.WriteString(left + borderStyle.Render(" │ ") + right + "\n")
 	}
 
-	// Help line.
 	b.WriteString(borderStyle.Render(strings.Repeat("─", m.width)) + "\n")
 	b.WriteString(dimStyle.Render("up/down navigate  space select  a sel stale  d/D delete  q quit") + "\n")
 
-	// Status or confirmation.
 	if m.confirmMsg != "" {
 		b.WriteString(warnStyle.Render(m.confirmMsg))
+	} else if m.statusMsg != "" {
+		b.WriteString(statusBarStyle.Render(m.statusMsg))
 	} else {
-		b.WriteString(m.renderStatusLine())
+		b.WriteString(statusBarStyle.Render(fmt.Sprintf("%d worktrees, %d stale, %d selected",
+			len(m.worktrees), m.staleCount, len(m.selected))))
 	}
 
 	return b.String()
@@ -410,7 +395,6 @@ func (m *model) renderFull() string {
 func (m *model) renderListLines(width, height int) []string {
 	lines := make([]string, 0, height)
 
-	// Scroll window.
 	start := 0
 	if m.cursor >= height {
 		start = m.cursor - height + 1
@@ -427,28 +411,24 @@ func (m *model) renderListLines(width, height int) []string {
 		wt := m.worktrees[idx]
 		var line strings.Builder
 
-		// Cursor.
 		if i == m.cursor {
 			line.WriteString(cursorStyle.Render("> "))
 		} else {
 			line.WriteString("  ")
 		}
 
-		// Selection checkmark.
 		if m.selected[idx] {
 			line.WriteString(selectedStyle.Render("✓"))
 		} else {
 			line.WriteString(" ")
 		}
 
-		// Stale marker.
 		if wt.IsStale() {
 			line.WriteString(staleStyle.Render("●"))
 		} else {
 			line.WriteString(" ")
 		}
 
-		// Branch name.
 		line.WriteString(" ")
 		if i == m.cursor {
 			line.WriteString(cursorStyle.Render(wt.Branch))
@@ -456,7 +436,6 @@ func (m *model) renderListLines(width, height int) []string {
 			line.WriteString(wt.Branch)
 		}
 
-		// Stale reason tag.
 		if wt.IsStale() {
 			line.WriteString(" ")
 			line.WriteString(staleStyle.Render("[" + wt.StaleReason + "]"))
@@ -465,7 +444,6 @@ func (m *model) renderListLines(width, height int) []string {
 		lines = append(lines, truncateToWidth(line.String(), width))
 	}
 
-	// Pad with empty lines.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
@@ -490,7 +468,7 @@ func (m *model) renderPreview() string {
 		b.WriteString(headerStyle.Render("Stale:  ") + staleStyle.Render(wt.StaleReason) + "\n")
 	}
 
-	if !m.detailsLoaded[idx] {
+	if !wt.DetailsLoaded {
 		b.WriteString("\n" + dimStyle.Render("Loading details..."))
 		return b.String()
 	}
@@ -526,23 +504,6 @@ func (m *model) renderPreview() string {
 	return b.String()
 }
 
-func (m *model) renderStatusLine() string {
-	if m.statusMsg != "" {
-		return statusBarStyle.Render(m.statusMsg)
-	}
-
-	total := len(m.worktrees)
-	stale := 0
-	for i := range m.worktrees {
-		if m.worktrees[i].IsStale() {
-			stale++
-		}
-	}
-	sel := len(m.selected)
-	return statusBarStyle.Render(fmt.Sprintf("%d worktrees, %d stale, %d selected", total, stale, sel))
-}
-
-// padRight pads a string with spaces to the given visible width.
 func padRight(s string, width int) string {
 	w := lipgloss.Width(s)
 	if w >= width {
@@ -551,15 +512,36 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-w)
 }
 
-// truncateToWidth truncates a string to fit within the given visible width.
+// truncateToWidth trims a string (possibly containing ANSI escapes) to fit
+// within the given visible width, using a linear left-to-right scan.
 func truncateToWidth(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w <= width {
+	if lipgloss.Width(s) <= width {
 		return s
 	}
 	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes)) > width {
-		runes = runes[:len(runes)-1]
+	// Build from left, tracking visible width
+	var result []rune
+	visW := 0
+	inEscape := false
+	for _, r := range runes {
+		if r == '\x1b' {
+			inEscape = true
+			result = append(result, r)
+			continue
+		}
+		if inEscape {
+			result = append(result, r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		rw := lipgloss.Width(string(r))
+		if visW+rw > width {
+			break
+		}
+		visW += rw
+		result = append(result, r)
 	}
-	return string(runes)
+	return string(result)
 }

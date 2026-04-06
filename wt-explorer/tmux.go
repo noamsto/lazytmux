@@ -7,7 +7,7 @@ import (
 )
 
 // killTmuxWindow finds and kills the tmux window associated with a worktree path.
-// Matches by @worktree window option first, then falls back to pane_current_path.
+// Matches by @worktree option first, then falls back to pane_current_path.
 // No-op if tmux is not running or window not found.
 func killTmuxWindow(repoRoot, worktreePath string) {
 	sessionName := filepath.Base(repoRoot)
@@ -16,28 +16,21 @@ func killTmuxWindow(repoRoot, worktreePath string) {
 		return
 	}
 
-	// Try matching by @worktree option
-	if idx := findWindowByFormat(sessionName, "#{window_index}\t#{@worktree}", worktreePath); idx != "" {
-		_ = exec.Command("tmux", "kill-window", "-t", sessionName+":"+idx).Run()
+	// Single list-windows call with both match fields
+	out, err := exec.Command("tmux", "list-windows", "-t", sessionName,
+		"-F", "#{window_index}\t#{@worktree}\t#{pane_current_path}").Output()
+	if err != nil {
 		return
 	}
 
-	// Fallback: match by pane working directory
-	if idx := findWindowByFormat(sessionName, "#{window_index}\t#{pane_current_path}", worktreePath); idx != "" {
-		_ = exec.Command("tmux", "kill-window", "-t", sessionName+":"+idx).Run()
-	}
-}
-
-func findWindowByFormat(session, format, matchPath string) string {
-	out, err := exec.Command("tmux", "list-windows", "-t", session, "-F", format).Output()
-	if err != nil {
-		return ""
-	}
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		idx, path, ok := strings.Cut(line, "\t")
-		if ok && path == matchPath {
-			return idx
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[1] == worktreePath || parts[2] == worktreePath {
+			_ = exec.Command("tmux", "kill-window", "-t", sessionName+":"+parts[0]).Run()
+			return
 		}
 	}
-	return ""
 }

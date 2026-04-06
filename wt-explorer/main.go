@@ -25,7 +25,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Fetch and prune to get accurate remote state (non-fatal)
 	_ = fetchPrune(repoRoot)
 
 	worktrees, err := listWorktrees(repoRoot, defaultBranch)
@@ -41,7 +40,6 @@ func main() {
 
 	detectStale(repoRoot, defaultBranch, worktrees)
 
-	// Sort: stale first, then alphabetical by branch name
 	sort.Slice(worktrees, func(i, j int) bool {
 		si := worktrees[i].IsStale()
 		sj := worktrees[j].IsStale()
@@ -50,11 +48,6 @@ func main() {
 		}
 		return worktrees[i].Branch < worktrees[j].Branch
 	})
-
-	// Load details for the first item (will be initially selected in TUI)
-	if len(worktrees) > 0 {
-		loadWorktreeDetails(&worktrees[0])
-	}
 
 	if err := runTUI(repoRoot, worktrees); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
