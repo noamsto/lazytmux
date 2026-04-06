@@ -18,7 +18,7 @@ alt_screen="${pane_info#* }"
 # (CLAUDE_CODE_NO_FLICKER=1). Without alt-screen, scrollback is already in tmux.
 # Need ps -t to filter by TTY; pgrep can't do this
 # shellcheck disable=SC2009
-if [[ $alt_screen == "1" ]] && ps -o comm= -t "$tty" 2>/dev/null | grep -qE '^(claude|claude-code)$'; then
+if [[ $alt_screen == "1" ]] && ps -o comm= -t "$tty" 2>/dev/null | grep -qE '^(\.?claude(-code)?(-wrapped)?)$'; then
 	tmux set-option -p @claude-copy-mode 1
 	tmux send-keys C-o
 	sleep 0.3
