@@ -169,29 +169,32 @@ ICON='#{@window_icon_padded}'
 TEXT='#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{=30:#{b:pane_current_path}}#{?#{==:#{=30:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 
-# All paths set session-level formats (tmux's all-or-nothing array override).
-# Always copy FMT0 from global to preserve line 0 (session/branch/dir/claude).
-FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
-[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
-
-# Multi-line format fragments (used by elif and else branches)
+# Multi-line format fragments
 P=$((max_text_len + 2 + ellipsis_extra))
 TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
 ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
 
 if ((!needs_multiline && current_line == 0)); then
-	# Single line: use global window format (unpadded, no tree prefix changes needed)
-	FMT1=$(tmux show -gv status-format[1] 2>/dev/null)
-	tmux set -t "$SESSION" status-format[1] "$FMT1"
-	tmux set -t "$SESSION" status-format[2] ""
-	tmux set -t "$SESSION" status-format[3] ""
+	# Single line: clear ALL session-level format overrides to fall back to global.
+	# tmux treats session-level status-format as all-or-nothing: setting any index
+	# at session level overrides ALL indices. So we must unset all of them.
+	tmux set -u -t "$SESSION" status-format[0] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
+	tmux set -u -t "$SESSION" status-format 2>/dev/null || true
 elif ((current_line == 0)); then
+	# Multi-line: must set session-level formats (copy FMT0 from global for line 0)
+	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
+	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	tmux set -t "$SESSION" status-format[1] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
 	tmux set -t "$SESSION" status-format[2] ""
 	tmux set -t "$SESSION" status-format[3] ""
 else
+	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
+	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
 	tmux set -t "$SESSION" status-format[1] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}"

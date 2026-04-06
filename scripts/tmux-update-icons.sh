@@ -107,7 +107,9 @@ for idx in "${!win_pane_path[@]}"; do
 done
 
 # Set active pane icon for top-right display (from batched data)
-tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '${ICON_MAP[$active_pane_proc]:-}'"$'\n'
+active_icon=""
+[[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
+tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
 
 # --- Second pass: set unpadded + padded icon variables ---
 # Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
