@@ -36,6 +36,7 @@ type model struct {
 	cursor       int
 	selected     map[int]bool
 	query        string
+	searching    bool // true = typing into search bar
 	preview      viewport.Model
 	width        int
 	height       int
@@ -98,6 +99,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Confirmation mode: only y/anything-else
 	if m.confirmMsg != "" {
 		switch msg.String() {
 		case "y", "Y":
@@ -109,6 +111,41 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Search mode: typing goes into the filter
+	if m.searching {
+		return m.handleSearchKey(msg)
+	}
+
+	// Normal mode: navigation and actions
+	return m.handleNormalKey(msg)
+}
+
+func (m model) handleSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "enter":
+		m.searching = false
+		return m, nil
+	case "backspace":
+		if len(m.query) > 0 {
+			m.query = m.query[:len(m.query)-1]
+			m.filterVisible()
+			return m, m.ensureDetailsLoaded()
+		}
+		return m, nil
+	default:
+		key := msg.Key()
+		if key.Text != "" && key.Mod == 0 {
+			m.query += key.Text
+			m.filterVisible()
+			return m, m.ensureDetailsLoaded()
+		}
+		return m, nil
+	}
+}
+
+func (m model) handleNormalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -120,6 +157,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.ensureDetailsLoaded()
 		}
 		return m, tea.Quit
+
+	case "/":
+		m.searching = true
+		return m, nil
 
 	case "up", "k":
 		return m, m.moveCursor(-1)
@@ -153,24 +194,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "D":
 		m.startDelete(true)
 		return m, nil
-
-	case "backspace":
-		if len(m.query) > 0 {
-			m.query = m.query[:len(m.query)-1]
-			m.filterVisible()
-			return m, m.ensureDetailsLoaded()
-		}
-		return m, nil
-
-	default:
-		key := msg.Key()
-		if key.Text != "" && key.Mod == 0 {
-			m.query += key.Text
-			m.filterVisible()
-			return m, m.ensureDetailsLoaded()
-		}
-		return m, nil
 	}
+
+	return m, nil
 }
 
 func (m *model) moveCursor(delta int) tea.Cmd {
@@ -346,9 +372,13 @@ func (m model) View() tea.View {
 func (m *model) renderFull() string {
 	var b strings.Builder
 
-	searchLine := dimStyle.Render("filter: ") + m.query
-	if m.query == "" {
-		searchLine = dimStyle.Render("filter: (type to search)")
+	var searchLine string
+	if m.searching {
+		searchLine = cursorStyle.Render("/") + m.query + cursorStyle.Render("│")
+	} else if m.query != "" {
+		searchLine = dimStyle.Render("/") + m.query
+	} else {
+		searchLine = dimStyle.Render("/ to search")
 	}
 	b.WriteString(borderStyle.Render("── Search " + strings.Repeat("─", max(0, m.width-10))) + "\n")
 	b.WriteString(searchLine + "\n")
@@ -378,7 +408,11 @@ func (m *model) renderFull() string {
 	}
 
 	b.WriteString(borderStyle.Render(strings.Repeat("─", m.width)) + "\n")
-	b.WriteString(dimStyle.Render("up/down navigate  space select  a sel stale  d/D delete  q quit") + "\n")
+	if m.searching {
+		b.WriteString(dimStyle.Render("type to filter  enter/esc accept  q clear+quit") + "\n")
+	} else {
+		b.WriteString(dimStyle.Render("j/k navigate  space select  a sel stale  d/D delete  / search  q quit") + "\n")
+	}
 
 	if m.confirmMsg != "" {
 		b.WriteString(warnStyle.Render(m.confirmMsg))
