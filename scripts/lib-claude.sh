@@ -73,7 +73,7 @@ claude_state_icon() {
 	waiting) REPLY="$CLAUDE_ICON_WAITING" ;;
 	compacting) REPLY="$CLAUDE_ICON_COMPACTING" ;;
 	done) REPLY="$CLAUDE_ICON_DONE" ;;
-	idle) REPLY="" ;;
+	idle) REPLY="$CLAUDE_ICON_IDLE" ;;
 	error) REPLY="$CLAUDE_ICON_ERROR" ;;
 	denied) REPLY="$CLAUDE_ICON_DENIED" ;;
 	*) REPLY="" ;;
@@ -124,7 +124,8 @@ claude_colored_icon() {
 		color=$C_D
 		;;
 	idle)
-		REPLY="" && return
+		icon="$CLAUDE_ICON_IDLE"
+		color=$C_I
 		;;
 	error)
 		icon="$CLAUDE_ICON_ERROR"

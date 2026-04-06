@@ -827,7 +827,7 @@ func claudeStateIcon(state string) string {
 	case "done":
 		return claudeIconDone
 	case "idle":
-		return ""
+		return claudeIconIdle
 	case "error":
 		return claudeIconError
 	case "denied":
