@@ -127,7 +127,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		return m, m.moveCursor(1)
 
-	case " ":
+	case "space", " ":
 		if len(m.visible) > 0 {
 			idx := m.visible[m.cursor]
 			if m.selected[idx] {
@@ -458,47 +458,53 @@ func (m *model) renderPreview() string {
 
 	idx := m.visible[m.cursor]
 	wt := m.worktrees[idx]
+	pw, _ := m.previewDimensions()
+	sep := dimStyle.Render(strings.Repeat("─", max(0, pw-1)))
 
 	var b strings.Builder
 
-	b.WriteString(headerStyle.Render("Branch: ") + wt.Branch + "\n")
-	b.WriteString(headerStyle.Render("Path:   ") + wt.Path + "\n")
+	// Header: branch + path
+	b.WriteString(headerStyle.Render("  " + wt.Branch) + "\n")
+	b.WriteString(dimStyle.Render("  " + wt.Path) + "\n")
 
 	if wt.IsStale() {
-		b.WriteString(headerStyle.Render("Stale:  ") + staleStyle.Render(wt.StaleReason) + "\n")
+		b.WriteString(staleStyle.Render("  ● " + wt.StaleReason) + "\n")
 	}
 
 	if !wt.DetailsLoaded {
-		b.WriteString("\n" + dimStyle.Render("Loading details..."))
+		b.WriteString("\n" + dimStyle.Render("  Loading..."))
 		return b.String()
 	}
 
-	b.WriteString("\n")
+	b.WriteString(sep + "\n")
 
+	// Status indicators — compact one-line summary
+	dirtyLabel := dimStyle.Render("  clean")
 	if wt.DirtyFiles > 0 {
-		b.WriteString(warnStyle.Render(fmt.Sprintf("Dirty files: %d", wt.DirtyFiles)) + "\n")
-	} else {
-		b.WriteString(dimStyle.Render("Dirty files: 0") + "\n")
+		dirtyLabel = warnStyle.Render(fmt.Sprintf("  %d dirty file(s)", wt.DirtyFiles))
 	}
+	b.WriteString(dirtyLabel + "\n")
 
-	b.WriteString("\n")
-
+	unpushedLabel := dimStyle.Render("  pushed")
 	if len(wt.UnpushedLog) > 0 {
-		b.WriteString(warnStyle.Render("Unpushed commits:") + "\n")
+		unpushedLabel = warnStyle.Render(fmt.Sprintf("  %d unpushed commit(s)", len(wt.UnpushedLog)))
+	}
+	b.WriteString(unpushedLabel + "\n")
+
+	// Unpushed commit details
+	if len(wt.UnpushedLog) > 0 {
+		b.WriteString(sep + "\n")
+		b.WriteString(headerStyle.Render("  Unpushed") + "\n")
 		for _, line := range wt.UnpushedLog {
-			b.WriteString("  " + warnStyle.Render(line) + "\n")
+			b.WriteString(dimStyle.Render("  ") + line + "\n")
 		}
-	} else {
-		b.WriteString(dimStyle.Render("Unpushed commits: none") + "\n")
 	}
 
-	b.WriteString("\n")
-
+	// Last commit
 	if wt.LastCommit != "" {
-		b.WriteString(headerStyle.Render("Last commit:") + "\n")
-		b.WriteString("  " + wt.LastCommit + "\n")
-	} else {
-		b.WriteString(dimStyle.Render("Last commit: none") + "\n")
+		b.WriteString(sep + "\n")
+		b.WriteString(headerStyle.Render("  Last commit") + "\n")
+		b.WriteString(dimStyle.Render("  ") + wt.LastCommit + "\n")
 	}
 
 	return b.String()
