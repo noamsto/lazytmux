@@ -8,8 +8,8 @@
   # Custom / project-specific
   claude = "🧠";
   amp = "⚡";
-  nh = "󰖐"; # nf-md-snowflake (nerd font, 1 cell — emoji ❄️ misaligns in tmux)
-  "process-compose" = "󰒓"; # nf-md-cog (nerd font, 1 cell — emoji ⚙️ misaligns in tmux)
+  nh = "❄️";
+  "process-compose" = "⚙️";
 
   # Shells (fish excluded — default shell, too noisy)
   bash = "";
@@ -57,7 +57,7 @@
   apt = "";
   brew = "";
   dnf = "";
-  nix = "󰖐"; # nf-md-snowflake
+  nix = "❄️";
   npm = "";
   pacman = "";
   paru = "";
