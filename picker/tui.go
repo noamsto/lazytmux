@@ -229,7 +229,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cursor = m.firstSelectable(0)
 		return m, m.loadPreviewCmd()
 
-	case "ctrl+/":
+	case "ctrl+/", "ctrl+_":
 		m.showPreview = !m.showPreview
 		if m.ready {
 			m.preview.SetWidth(m.previewWidth())
