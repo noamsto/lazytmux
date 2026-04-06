@@ -4,6 +4,7 @@ result
 .claude/settings.local.json
 picker/icons_generated.go
 picker/picker
+wt-explorer/wt-explorer
 
 # Sandbox/IDE artifacts
 .idea
