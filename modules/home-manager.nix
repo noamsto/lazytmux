@@ -129,6 +129,7 @@ in {
           complete -c wt -f -s y -l yes -d 'Skip confirmation prompts'
           complete -c wt -f -s q -l quiet -d 'Quiet mode (only output path)'
           complete -c wt -f -s n -l no-switch -d 'Skip tmux window operations'
+          complete -c wt -f -s i -l interactive -d 'Interactive TUI mode (for clean)'
 
           # Subcommands
           complete -c wt -f -n '__fish_use_subcommand' -a 'list' -d 'List worktrees'
