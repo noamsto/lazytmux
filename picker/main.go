@@ -888,7 +888,7 @@ func buildProcIcons(procs []string, maxCount int) (string, int) {
 // PUA (1 cell) and deferring to go-runewidth for everything else.
 func runeCellWidth(r rune) int {
 	switch {
-	case r == 0xFE0E || r == 0xFE0F: // variation selectors (handled contextually in iconCellWidth)
+	case r == 0xFE0E || r == 0xFE0F: // variation selectors
 		return 0
 	case r == 0x200D: // zero-width joiner
 		return 0
@@ -904,23 +904,12 @@ func runeCellWidth(r rune) int {
 }
 
 // iconCellWidth returns the display width of an icon string.
-// go-runewidth gets nerd font PUA wrong (reports 0) and doesn't handle
-// VS16 emoji promotion (❄️ = 2 cells in kitty, runewidth says 1).
-// So we handle PUA and emoji+VS16 ourselves, defer the rest to runewidth.
+// VS16 emoji are stripped at build time (process-icons.nix) to avoid lipgloss
+// width miscalculation (charmbracelet/lipgloss#55, #562).
 func iconCellWidth(s string) int {
 	runes := []rune(s)
 	w := 0
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if r == 0xFE0F && i > 0 {
-			// emoji variation selector — promotes preceding char to 2 cells
-			prev := runes[i-1]
-			prevW := runewidth.RuneWidth(prev)
-			if prevW < 2 {
-				w += 2 - prevW
-			}
-			continue
-		}
+	for _, r := range runes {
 		w += runeCellWidth(r)
 	}
 	return w

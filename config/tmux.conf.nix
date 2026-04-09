@@ -19,7 +19,21 @@
 
   # Process name → icon mapping (separate file for easy editing)
   # extraProcessIcons overrides defaults when keys collide
-  processIcons = (import ./process-icons.nix) // extraProcessIcons;
+  processIcons = let
+    raw = (import ./process-icons.nix) // extraProcessIcons;
+    # VS16 (U+FE0F) emoji cause width miscalculation in lipgloss/go-runewidth
+    # (charmbracelet/lipgloss#55, #562). Use text presentation (no VS16) instead.
+    vs16Icons = lib.filterAttrs (_: v: lib.hasInfix "️" v) raw; # "️" = U+FE0F (invisible)
+    vs16Names = builtins.attrNames vs16Icons;
+  in
+    if vs16Names != []
+    then
+      builtins.throw ''
+        process-icons: VS16 emoji (U+FE0F) cause alignment bugs in the picker.
+        Strip the trailing ️ from: ${builtins.concatStringsSep ", " vs16Names}
+        See: charmbracelet/lipgloss#55
+      ''
+    else raw;
   fallbackIcon = "";
   maxIcons = "2";
   maxIconsPicker = "5";

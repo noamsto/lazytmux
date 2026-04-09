@@ -8,8 +8,8 @@
   # Custom / project-specific
   claude = "🧠";
   amp = "⚡";
-  nh = "❄️";
-  "process-compose" = "⚙️";
+  nh = "❄";
+  "process-compose" = "⚙";
 
   # Shells (fish excluded — default shell, too noisy)
   bash = "";
@@ -57,7 +57,7 @@
   apt = "";
   brew = "";
   dnf = "";
-  nix = "❄️";
+  nix = "❄";
   npm = "";
   pacman = "";
   paru = "";
