@@ -461,6 +461,9 @@ func collectSessions() []sessionData {
 
 	sessions := make([]sessionData, 0, len(m))
 	for name, si := range m {
+		if strings.HasPrefix(name, "scratch-") {
+			continue
+		}
 		sessions = append(sessions, sessionData{
 			name:     name,
 			path:     si.path,

@@ -283,6 +283,9 @@
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
+    bind -n C-a run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
+    bind -n C-s if-shell 'case "#{session_name}" in scratch-*) true;; *) false;; esac' '${""}' \
+      'display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_name}"'
 
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs
