@@ -2,6 +2,9 @@
   pkgs,
   lib,
   extraProcessIcons ? {},
+  # Terminal emulator name ("ghostty", "kitty", or null for custom)
+  # Controls terminal-features and terminal-overrides in tmux.conf
+  terminalEmulator ? null,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -136,6 +139,31 @@
 
   inherit (pkgs) tmuxPlugins;
 
+  # Terminal-specific tmux settings derived from the emulator name.
+  # Each emulator needs: RGB true-color override + extended-keys feature.
+  termSettings =
+    if terminalEmulator == "ghostty"
+    then {
+      termPattern = "xterm-ghostty*";
+      features = "RGB:extkeys";
+    }
+    else if terminalEmulator == "kitty"
+    then {
+      termPattern = "xterm-kitty*";
+      features = "RGB:extkeys";
+    }
+    else {
+      # Fallback: no emulator-specific overrides
+      termPattern = null;
+      features = null;
+    };
+
+  # Generated terminal-features line (empty string when no emulator configured)
+  terminalConfig =
+    if termSettings.termPattern != null
+    then "set -as terminal-features '${termSettings.termPattern}:${termSettings.features}'\n    "
+    else "";
+
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
     # catppuccin theme
@@ -219,8 +247,7 @@
 
     # Extended keyboard + clipboard
     set -g extended-keys on
-    set -as terminal-features 'xterm-kitty*:extkeys'
-    set -s set-clipboard on
+    ${terminalConfig}set -s set-clipboard on
     set -s copy-command 'wl-copy'
 
     # Prefix: backtick
@@ -257,6 +284,7 @@
     unbind '"'
     bind _ split-window -v -c "#{pane_current_path}"
     bind c new-window -c "#{pane_current_path}"
+    bind p display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_id}"
 
     # Resize panes
     bind -r -T prefix M-Up    resize-pane -U 5

@@ -5,9 +5,50 @@
   ...
 }: let
   cfg = config.programs.lazytmux;
+
+  # Per-emulator defaults derived from the pkg in pkgs.
+  # Using `pkgs ? <name>` avoids eval errors when the pkg isn't in the set.
+  emulatorDefaults = {
+    ghostty = {
+      available = pkgs ? ghostty;
+      term = "xterm-ghostty";
+      termProgram = "ghostty";
+      terminfoPath = lib.optionalString (pkgs ? ghostty) "${pkgs.ghostty}/share/terminfo";
+    };
+    kitty = {
+      available = pkgs ? kitty;
+      term = "xterm-kitty";
+      termProgram = "kitty";
+      terminfoPath = lib.optionalString (pkgs ? kitty) "${pkgs.kitty}/share/terminfo";
+    };
+  };
+
+  # Resolved emulator config (null when emulator = null or unknown)
+  emulatorCfg =
+    if cfg.startupSession.terminal.emulator != null
+    then emulatorDefaults.${cfg.startupSession.terminal.emulator} or null
+    else null;
+
+  # Effective env values: emulator preset wins over manual options
+  effectiveTerm =
+    if emulatorCfg != null
+    then emulatorCfg.term
+    else cfg.startupSession.terminal.term;
+
+  effectiveTermProgram =
+    if emulatorCfg != null
+    then emulatorCfg.termProgram
+    else cfg.startupSession.terminal.termProgram;
+
+  effectiveTerminfoPath =
+    if emulatorCfg != null
+    then emulatorCfg.terminfoPath
+    else cfg.startupSession.terminal.terminfoPath;
+
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
+    terminalEmulator = cfg.startupSession.terminal.emulator;
   };
   wt-explorer = import ../wt-explorer {inherit pkgs;};
   wtPkg = import ../wt {inherit pkgs wt-explorer;};
@@ -54,10 +95,22 @@ in {
       };
 
       terminal = {
+        emulator = lib.mkOption {
+          type = lib.types.nullOr (lib.types.enum ["ghostty" "kitty"]);
+          default = null;
+          description = ''
+            Terminal emulator preset. When set, auto-configures TERM,
+            TERM_PROGRAM, TERMINFO, and tmux terminal-features/overrides
+            for the chosen emulator. The emulator package must be available
+            in pkgs. Set to null to configure terminal options manually.
+          '';
+          example = "ghostty";
+        };
+
         term = lib.mkOption {
           type = lib.types.str;
           default = "xterm-256color";
-          description = "TERM value for the tmux session";
+          description = "TERM value for the tmux session (ignored when emulator is set)";
         };
 
         colorterm = lib.mkOption {
@@ -69,19 +122,34 @@ in {
         termProgram = lib.mkOption {
           type = lib.types.str;
           default = "";
-          description = "TERM_PROGRAM value (e.g. 'kitty')";
+          description = "TERM_PROGRAM value (ignored when emulator is set)";
         };
 
         terminfoPath = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
           default = null;
-          description = "Path to terminfo directory (e.g. pkgs.kitty + '/share/terminfo')";
+          description = "Path to terminfo directory (ignored when emulator is set)";
         };
       };
     };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions =
+      lib.optional (
+        cfg.startupSession.terminal.emulator
+        != null
+        && emulatorCfg != null
+        && !emulatorCfg.available
+      ) {
+        assertion = false;
+        message = ''
+          programs.lazytmux.startupSession.terminal.emulator = "${cfg.startupSession.terminal.emulator}"
+          but pkgs.${cfg.startupSession.terminal.emulator} is not available.
+          Add it to your packages or set terminal.emulator = null and configure manually.
+        '';
+      };
+
     home = {
       packages =
         [tmuxConfig.tmux-wrapped]
@@ -235,14 +303,14 @@ in {
         Environment =
           [
             "COLORTERM=${cfg.startupSession.terminal.colorterm}"
-            "TERM=${cfg.startupSession.terminal.term}"
+            "TERM=${effectiveTerm}"
             "TMUX_TMPDIR=%t"
           ]
-          ++ lib.optionals (cfg.startupSession.terminal.termProgram != "") [
-            "TERM_PROGRAM=${cfg.startupSession.terminal.termProgram}"
+          ++ lib.optionals (effectiveTermProgram != "") [
+            "TERM_PROGRAM=${effectiveTermProgram}"
           ]
-          ++ lib.optionals (cfg.startupSession.terminal.terminfoPath != null) [
-            "TERMINFO=${cfg.startupSession.terminal.terminfoPath}"
+          ++ lib.optionals (effectiveTerminfoPath != null && effectiveTerminfoPath != "") [
+            "TERMINFO=${effectiveTerminfoPath}"
           ];
       };
 
