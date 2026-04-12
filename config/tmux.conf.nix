@@ -2,9 +2,10 @@
   pkgs,
   lib,
   extraProcessIcons ? {},
-  # Terminal emulator name ("ghostty", "kitty", or null for custom)
-  # Controls terminal-features and terminal-overrides in tmux.conf
-  terminalEmulator ? null,
+  # TERM string of the outer terminal emulator (e.g. "xterm-ghostty", "xterm-kitty").
+  # When set, adds a terminal-features line for RGB true-color + extended keys.
+  # Null when no emulator preset is active (manual terminal config).
+  terminalTerm ? null,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -139,30 +140,11 @@
 
   inherit (pkgs) tmuxPlugins;
 
-  # Terminal-specific tmux settings derived from the emulator name.
-  # Each emulator needs: RGB true-color override + extended-keys feature.
-  termSettings =
-    if terminalEmulator == "ghostty"
-    then {
-      termPattern = "xterm-ghostty*";
-      features = "RGB:extkeys";
-    }
-    else if terminalEmulator == "kitty"
-    then {
-      termPattern = "xterm-kitty*";
-      features = "RGB:extkeys";
-    }
-    else {
-      # Fallback: no emulator-specific overrides
-      termPattern = null;
-      features = null;
-    };
-
-  # Generated terminal-features line (empty string when no emulator configured)
+  # terminal-features line for the outer terminal, derived from its TERM string.
+  # Pattern uses a wildcard suffix to match version variants (e.g. "xterm-ghostty*").
   terminalConfig =
-    if termSettings.termPattern != null
-    then "set -as terminal-features '${termSettings.termPattern}:${termSettings.features}'\n    "
-    else "";
+    lib.optionalString (terminalTerm != null)
+    "set -as terminal-features '${terminalTerm}*:RGB:extkeys'\n    ";
 
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
@@ -284,7 +266,8 @@
     unbind '"'
     bind _ split-window -v -c "#{pane_current_path}"
     bind c new-window -c "#{pane_current_path}"
-    bind p display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_id}"
+    bind p if-shell 'case "#{session_name}" in scratch-*) true;; *) false;; esac' '${""}' \
+      'display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_name}"'
 
     # Resize panes
     bind -r -T prefix M-Up    resize-pane -U 5

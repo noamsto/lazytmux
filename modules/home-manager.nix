@@ -6,24 +6,31 @@
 }: let
   cfg = config.programs.lazytmux;
 
-  # Per-emulator defaults derived from the pkg in pkgs.
-  # Using `pkgs ? <name>` avoids eval errors when the pkg isn't in the set.
+  # Per-emulator defaults. terminfoPath uses an if-expression (not lib.optionalString)
+  # because Nix evaluates function arguments strictly — the string interpolation would
+  # force pkgs.<name> even when the condition is false.
   emulatorDefaults = {
     ghostty = {
       available = pkgs ? ghostty;
       term = "xterm-ghostty";
       termProgram = "ghostty";
-      terminfoPath = lib.optionalString (pkgs ? ghostty) "${pkgs.ghostty}/share/terminfo";
+      terminfoPath =
+        if pkgs ? ghostty
+        then "${pkgs.ghostty}/share/terminfo"
+        else null;
     };
     kitty = {
       available = pkgs ? kitty;
       term = "xterm-kitty";
       termProgram = "kitty";
-      terminfoPath = lib.optionalString (pkgs ? kitty) "${pkgs.kitty}/share/terminfo";
+      terminfoPath =
+        if pkgs ? kitty
+        then "${pkgs.kitty}/share/terminfo"
+        else null;
     };
   };
 
-  # Resolved emulator config (null when emulator = null or unknown)
+  # Resolved emulator config (null when emulator = null)
   emulatorCfg =
     if cfg.startupSession.terminal.emulator != null
     then emulatorDefaults.${cfg.startupSession.terminal.emulator} or null
@@ -48,7 +55,12 @@
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
-    terminalEmulator = cfg.startupSession.terminal.emulator;
+    # Pass the resolved TERM string so tmux.conf can derive terminal-features
+    # without needing to re-encode emulator names. Null when no preset is active.
+    terminalTerm =
+      if emulatorCfg != null
+      then emulatorCfg.term
+      else null;
   };
   wt-explorer = import ../wt-explorer {inherit pkgs;};
   wtPkg = import ../wt {inherit pkgs wt-explorer;};
@@ -139,7 +151,6 @@ in {
       lib.optional (
         cfg.startupSession.terminal.emulator
         != null
-        && emulatorCfg != null
         && !emulatorCfg.available
       ) {
         assertion = false;
@@ -309,7 +320,7 @@ in {
           ++ lib.optionals (effectiveTermProgram != "") [
             "TERM_PROGRAM=${effectiveTermProgram}"
           ]
-          ++ lib.optionals (effectiveTerminfoPath != null && effectiveTerminfoPath != "") [
+          ++ lib.optionals (effectiveTerminfoPath != null) [
             "TERMINFO=${effectiveTerminfoPath}"
           ];
       };
