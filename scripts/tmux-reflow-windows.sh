@@ -16,6 +16,11 @@ SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
 MAX_ICONS=@MAX_ICONS@
 
+# Scratch sessions manage their own status bar (hints bar); skip reflow.
+case "$SESSION" in
+scratch-*) exit 0 ;;
+esac
+
 # Fast-path: skip if window count + width unchanged since last reflow
 cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
 if [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
