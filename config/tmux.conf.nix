@@ -113,6 +113,7 @@
     "tmux-dir-display"
     "tmux-apply-theme-colors"
     "claude-copy-mode"
+    "tmux-scratchpad"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -266,8 +267,7 @@
     unbind '"'
     bind _ split-window -v -c "#{pane_current_path}"
     bind c new-window -c "#{pane_current_path}"
-    bind p if-shell 'case "#{session_name}" in scratch-*) true;; *) false;; esac' '${""}' \
-      'display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_name}"'
+    bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
 
     # Resize panes
     bind -r -T prefix M-Up    resize-pane -U 5
@@ -284,8 +284,7 @@
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
     bind -n C-a run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
-    bind -n C-s if-shell 'case "#{session_name}" in scratch-*) true;; *) false;; esac' '${""}' \
-      'display-popup -E -w 80% -h 80% -x C -y C "tmux new-session -A -s scratch-#{session_name}"'
+    bind -n C-s run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
 
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs

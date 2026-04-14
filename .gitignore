@@ -2,7 +2,6 @@ result
 .direnv
 .pre-commit-config.yaml
 .claude/settings.local.json
-picker/icons_generated.go
 picker/picker
 wt-explorer/wt-explorer
 
