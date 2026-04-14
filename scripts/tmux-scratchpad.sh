@@ -10,12 +10,13 @@ set -euo pipefail
 if [[ ${1:-} == --attach ]]; then
 	SCRATCH="scratch-${2:-}"
 	# Re-apply hints bar every open so reflow overwrites don't stick.
-	# || true: non-fatal if any set fails (e.g. session briefly missing).
-	tmux set -t "$SCRATCH" status-position bottom || true
-	tmux set -t "$SCRATCH" status 1 || true
-	tmux set -t "$SCRATCH" status-style "bg=#{@thm_bg}" || true
-	tmux set -t "$SCRATCH" "status-format[0]" \
-		'#[align=center,fg=#{@thm_lavender}]` d#[fg=#{@thm_overlay_1}]:hide  #[fg=#{@thm_lavender}]exit#[fg=#{@thm_overlay_1}]:close' || true
+	# Batch via tmux source (1 socket call instead of 4).
+	printf '%s\n' \
+		"set -t '$SCRATCH' status-position bottom" \
+		"set -t '$SCRATCH' status 1" \
+		"set -t '$SCRATCH' status-style 'bg=#{@thm_bg}'" \
+		"set -t '$SCRATCH' status-format[0] '#[align=center,fg=#{@thm_lavender}]\` d#[fg=#{@thm_overlay_1}]:hide  #[fg=#{@thm_lavender}]exit#[fg=#{@thm_overlay_1}]:close'" |
+		tmux source - 2>/dev/null || true
 	# new-session -A is the correct way to attach inside a display-popup
 	# (attach-session doesn't work reliably in popup PTY context).
 	exec tmux new-session -A -s "$SCRATCH"

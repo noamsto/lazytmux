@@ -651,14 +651,10 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 			return previewMsg{content: "(no preview available)", target: t}
 		}
 		content := strings.TrimRight(string(out), "\n ")
-		// Reset background at end of each line to prevent ANSI color bleeding into
-		// empty viewport padding cells (e.g. opencode's black input area leaking
-		// into the row below it).
-		lines := strings.Split(content, "\n")
-		for i, line := range lines {
-			lines[i] = line + "\033[49m"
-		}
-		return previewMsg{content: strings.Join(lines, "\n"), target: t}
+		// Reset background at end of each line to prevent ANSI color bleeding
+		// into empty viewport padding cells (e.g. opencode's black input area).
+		content = strings.ReplaceAll(content, "\n", "\033[49m\n") + "\033[49m"
+		return previewMsg{content: content, target: t}
 	}
 }
 
