@@ -91,7 +91,6 @@ func main() {
 	}
 	windowMode := args["--windows"]
 	claudeOnly := args["--claude"]
-	scratchOnly := args["--scratch"]
 
 	// Run tmux calls + file reads in parallel
 	type optsResult struct {
@@ -111,7 +110,7 @@ func main() {
 	tuiMode := args["--tui"]
 
 	if tuiMode {
-		if err := runTUI(windowMode, claudeOnly, scratchOnly); err != nil {
+		if err := runTUI(windowMode, claudeOnly, false); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

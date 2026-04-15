@@ -284,8 +284,6 @@
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
     bind -n C-a run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
-    bind -n C-s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --scratch'
-
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs
 

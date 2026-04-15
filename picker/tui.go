@@ -396,19 +396,23 @@ func (m tuiModel) renderHints() string {
 		return key.Render(k) + dim.Render(":"+desc)
 	}
 
-	mode := "all"
+	highlight := lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b"))
+
+	claudeLabel := "claude"
 	if m.claudeOnly {
-		mode = lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b")).Render("claude")
-	} else if m.scratchOnly {
-		mode = lipgloss.NewStyle().Foreground(m.thmColor("@thm_yellow", "#f9e2af", "#df8e1d")).Render("scratch")
+		claudeLabel = highlight.Render(claudeLabel)
+	}
+	scratchLabel := "scratch"
+	if m.scratchOnly {
+		scratchLabel = highlight.Render(scratchLabel)
 	}
 
 	parts := []string{
 		hint("^jk/↑↓", "nav"),
 		hint("enter", "open"),
 		hint("^x", "kill"),
-		hint("^a", "mode:"+mode),
-		hint("^s", "scratch"),
+		hint("^a", claudeLabel),
+		hint("^s", scratchLabel),
 		hint("^/", "preview"),
 		hint("M-hjkl", "scroll"),
 		hint("q", "quit"),
