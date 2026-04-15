@@ -110,7 +110,7 @@ func main() {
 	tuiMode := args["--tui"]
 
 	if tuiMode {
-		if err := runTUI(windowMode, claudeOnly, false); err != nil {
+		if err := runTUI(windowMode, claudeOnly); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

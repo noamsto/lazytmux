@@ -94,7 +94,7 @@ type previewMsg struct {
 
 // --- Entry point ---
 
-func runTUI(windowMode, claudeOnly, scratchOnly bool) error {
+func runTUI(windowMode, claudeOnly bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
 	panes := collectClaudePanes()
@@ -109,7 +109,6 @@ func runTUI(windowMode, claudeOnly, scratchOnly bool) error {
 	m := tuiModel{
 		windowMode:     windowMode,
 		claudeOnly:     claudeOnly,
-		scratchOnly:    scratchOnly,
 		showPreview:    true,
 		theme:          theme,
 		tmuxOpts:       opts,
@@ -546,23 +545,25 @@ func (m tuiModel) currentTarget() string {
 
 // --- Filter ---
 
+// itemVisible reports whether an item passes the current mode filters
+// (scratch/claude). Headers are always visible (pruned separately).
+func (m tuiModel) itemVisible(item listItem) bool {
+	if m.scratchOnly && !item.isScratch {
+		return false
+	}
+	if !m.scratchOnly && item.isScratch {
+		return false
+	}
+	if m.claudeOnly && !item.hasActiveClaude {
+		return false
+	}
+	return true
+}
+
 func (m tuiModel) withFilter() tuiModel {
 	q := strings.ToLower(m.query)
-	hasMode := m.claudeOnly || m.scratchOnly
-	if q == "" && !hasMode {
-		// No filter active — show all non-scratch sessions (default)
-		var out []listItem
-		for _, item := range m.allItems {
-			if item.isScratch {
-				continue
-			}
-			out = append(out, item)
-		}
-		m.visible = pruneOrphanHeaders(out)
-		return m
-	}
 
-	// Mode filter without search — no scoring needed
+	// No search query — filter by mode only
 	if q == "" {
 		var out []listItem
 		for _, item := range m.allItems {
@@ -570,13 +571,7 @@ func (m tuiModel) withFilter() tuiModel {
 				out = append(out, item)
 				continue
 			}
-			if m.scratchOnly && !item.isScratch {
-				continue
-			}
-			if !m.scratchOnly && item.isScratch {
-				continue
-			}
-			if m.claudeOnly && !item.hasActiveClaude {
+			if !m.itemVisible(item) {
 				continue
 			}
 			out = append(out, item)
@@ -595,13 +590,7 @@ func (m tuiModel) withFilter() tuiModel {
 		if item.isHeader {
 			continue
 		}
-		if m.scratchOnly && !item.isScratch {
-			continue
-		}
-		if !m.scratchOnly && item.isScratch {
-			continue
-		}
-		if m.claudeOnly && !item.hasActiveClaude {
+		if !m.itemVisible(item) {
 			continue
 		}
 		s := fuzzyScore(strings.ToLower(item.searchText), q)
