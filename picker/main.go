@@ -91,6 +91,7 @@ func main() {
 	}
 	windowMode := args["--windows"]
 	claudeOnly := args["--claude"]
+	scratchOnly := args["--scratch"]
 
 	// Run tmux calls + file reads in parallel
 	type optsResult struct {
@@ -110,7 +111,7 @@ func main() {
 	tuiMode := args["--tui"]
 
 	if tuiMode {
-		if err := runTUI(windowMode, claudeOnly); err != nil {
+		if err := runTUI(windowMode, claudeOnly, scratchOnly); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -129,7 +130,14 @@ func main() {
 // ---------------------------------------------------------------------------
 
 func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) {
-	sessions := collectSessions()
+	allSessions := collectSessions()
+	// fzf mode: exclude scratch sessions
+	sessions := make([]sessionData, 0, len(allSessions))
+	for _, s := range allSessions {
+		if !strings.HasPrefix(s.name, "scratch-") {
+			sessions = append(sessions, s)
+		}
+	}
 	claude := aggregateClaudeBySession(claudePanes)
 	mergeClaude(sessions, claude)
 
@@ -461,9 +469,6 @@ func collectSessions() []sessionData {
 
 	sessions := make([]sessionData, 0, len(m))
 	for name, si := range m {
-		if strings.HasPrefix(name, "scratch-") {
-			continue
-		}
 		sessions = append(sessions, sessionData{
 			name:     name,
 			path:     si.path,

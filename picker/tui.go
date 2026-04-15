@@ -24,6 +24,7 @@ type listItem struct {
 	isHeader        bool   // session header row
 	session         string // owning session name (for kill)
 	hasActiveClaude bool   // used for --claude filter
+	isScratch       bool   // scratch-* session
 }
 
 // tuiModel is the bubbletea model for the picker.
@@ -34,8 +35,9 @@ type tuiModel struct {
 	cursor   int
 
 	// Modes
-	windowMode bool
-	claudeOnly bool
+	windowMode  bool
+	claudeOnly  bool
+	scratchOnly bool
 
 	// Search
 	query string
@@ -92,7 +94,7 @@ type previewMsg struct {
 
 // --- Entry point ---
 
-func runTUI(windowMode, claudeOnly bool) error {
+func runTUI(windowMode, claudeOnly, scratchOnly bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
 	panes := collectClaudePanes()
@@ -107,6 +109,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 	m := tuiModel{
 		windowMode:     windowMode,
 		claudeOnly:     claudeOnly,
+		scratchOnly:    scratchOnly,
 		showPreview:    true,
 		theme:          theme,
 		tmuxOpts:       opts,
@@ -224,6 +227,18 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+a":
 		m.claudeOnly = !m.claudeOnly
+		if m.claudeOnly {
+			m.scratchOnly = false
+		}
+		m = m.withFilter()
+		m.cursor = m.firstSelectable(0)
+		return m, m.loadPreviewCmd()
+
+	case "ctrl+s":
+		m.scratchOnly = !m.scratchOnly
+		if m.scratchOnly {
+			m.claudeOnly = false
+		}
 		m = m.withFilter()
 		m.cursor = m.firstSelectable(0)
 		return m, m.loadPreviewCmd()
@@ -384,6 +399,8 @@ func (m tuiModel) renderHints() string {
 	mode := "all"
 	if m.claudeOnly {
 		mode = lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b")).Render("claude")
+	} else if m.scratchOnly {
+		mode = lipgloss.NewStyle().Foreground(m.thmColor("@thm_yellow", "#f9e2af", "#df8e1d")).Render("scratch")
 	}
 
 	parts := []string{
@@ -391,6 +408,7 @@ func (m tuiModel) renderHints() string {
 		hint("enter", "open"),
 		hint("^x", "kill"),
 		hint("^a", "mode:"+mode),
+		hint("^s", "scratch"),
 		hint("^/", "preview"),
 		hint("M-hjkl", "scroll"),
 		hint("q", "quit"),
@@ -526,17 +544,32 @@ func (m tuiModel) currentTarget() string {
 
 func (m tuiModel) withFilter() tuiModel {
 	q := strings.ToLower(m.query)
-	if q == "" && !m.claudeOnly {
-		m.visible = m.allItems
+	hasMode := m.claudeOnly || m.scratchOnly
+	if q == "" && !hasMode {
+		// No filter active — show all non-scratch sessions (default)
+		var out []listItem
+		for _, item := range m.allItems {
+			if item.isScratch {
+				continue
+			}
+			out = append(out, item)
+		}
+		m.visible = pruneOrphanHeaders(out)
 		return m
 	}
 
-	// Claude-only filter without search — no scoring needed
+	// Mode filter without search — no scoring needed
 	if q == "" {
 		var out []listItem
 		for _, item := range m.allItems {
 			if item.isHeader {
 				out = append(out, item)
+				continue
+			}
+			if m.scratchOnly && !item.isScratch {
+				continue
+			}
+			if !m.scratchOnly && item.isScratch {
 				continue
 			}
 			if m.claudeOnly && !item.hasActiveClaude {
@@ -556,6 +589,12 @@ func (m tuiModel) withFilter() tuiModel {
 	var matches []scored
 	for _, item := range m.allItems {
 		if item.isHeader {
+			continue
+		}
+		if m.scratchOnly && !item.isScratch {
+			continue
+		}
+		if !m.scratchOnly && item.isScratch {
 			continue
 		}
 		if m.claudeOnly && !item.hasActiveClaude {
@@ -739,6 +778,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			searchText:      r.sess.name,
 			session:         r.sess.name,
 			hasActiveClaude: isActiveState(claudePriority(r.sess.claude)),
+			isScratch:       strings.HasPrefix(r.sess.name, "scratch-"),
 		})
 	}
 	return items
