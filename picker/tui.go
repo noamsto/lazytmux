@@ -763,8 +763,32 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 		}
 	}
 
+	// Build header row
+	hdrCPU := "CPU"
+	hdrMem := "Mem"
+	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-len(hdrCPU)))
+	hdrMemPad := strings.Repeat(" ", max(0, maxMem-len(hdrMem)))
+	hdrRes := hdrCPUPad + hdrCPU + " / " + hdrMem + hdrMemPad
+	hdrDisplay := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
+		cDim+iSess+reset,
+		cDim+"Session"+reset,
+		strings.Repeat(" ", max(0, maxName-7)),
+		cDim+padToWidth("Procs", 5, iconCol)+reset,
+		cDim+hdrRes+reset,
+		cDim+iDir+reset,
+		cDim+"Path"+reset,
+	)
+	hdrPlain := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
+		iSess, "Session", strings.Repeat(" ", max(0, maxName-7)),
+		padToWidth("Procs", 5, iconCol), hdrRes, iDir, "Path",
+	)
+
 	home := os.Getenv("HOME")
-	items := make([]listItem, 0, len(rows))
+	items := make([]listItem, 0, len(rows)+1)
+	items = append(items, listItem{
+		display: hdrDisplay,
+		plain:   hdrPlain,
+	})
 	for i, r := range rows {
 		pad := strings.Repeat(" ", max(0, maxName-len(r.sess.name)))
 		icons := r.icons
