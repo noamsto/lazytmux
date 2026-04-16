@@ -697,6 +697,10 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	claudeMap := aggregateClaudeBySession(claudePanes)
 	mergeClaude(sessions, claudeMap)
 
+	// Resource collection runs in parallel with rendering prep (uses cached ps data)
+	resCh := make(chan map[string]sessionResources, 1)
+	go func() { resCh <- collectSessionResources(sessions) }()
+
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
@@ -706,6 +710,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	cMauve := ansiFg(thmMauve)
 	cBlue := ansiFg(thmBlue)
 	cDim := ansiFg(thmSubtext0)
+	rc := newResourceColors(tmuxOpts)
 	reset := "\033[0m"
 	dim := "\033[2m"
 
@@ -741,9 +746,26 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
+	mergeResources(sessions, <-resCh)
+
+	// Pre-compute CPU and MEM strings separately so the "/" aligns
+	cpuStrs := make([]string, len(rows))
+	memStrs := make([]string, len(rows))
+	maxCPU, maxMem := 0, 0
+	for i, r := range rows {
+		cpuStrs[i] = formatCPU(r.sess.cpuPct)
+		memStrs[i] = formatMem(r.sess.memMB)
+		if len(cpuStrs[i]) > maxCPU {
+			maxCPU = len(cpuStrs[i])
+		}
+		if len(memStrs[i]) > maxMem {
+			maxMem = len(memStrs[i])
+		}
+	}
+
 	home := os.Getenv("HOME")
 	items := make([]listItem, 0, len(rows))
-	for _, r := range rows {
+	for i, r := range rows {
 		pad := strings.Repeat(" ", max(0, maxName-len(r.sess.name)))
 		icons := r.icons
 		if icons == "" {
@@ -753,16 +775,24 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 		if home != "" && strings.HasPrefix(shortPath, home) {
 			shortPath = "~" + shortPath[len(home):]
 		}
-		display := fmt.Sprintf("%s %s%s  %s  %s %s",
+		cpuPad := strings.Repeat(" ", max(0, maxCPU-len(cpuStrs[i])))
+		memPad := strings.Repeat(" ", max(0, maxMem-len(memStrs[i])))
+		display := fmt.Sprintf("%s %s%s  %s  %s%s %s %s%s  %s %s",
 			cMauve+iSess+reset,
 			cMauve+r.sess.name+reset,
 			pad,
 			icons,
+			cpuPad,
+			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
+			cDim+"/"+reset,
+			rc.memColor(r.sess.memMB)+memStrs[i]+reset,
+			memPad,
 			cBlue+iDir+reset,
 			cDim+shortPath+reset,
 		)
-		plain := fmt.Sprintf("%s %s%s  %s  %s %s",
-			iSess, r.sess.name, pad, stripANSI(icons), iDir, shortPath,
+		resPlain := cpuPad + cpuStrs[i] + " / " + memStrs[i] + memPad
+		plain := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
+			iSess, r.sess.name, pad, stripANSI(icons), resPlain, iDir, shortPath,
 		)
 		items = append(items, listItem{
 			target:          r.sess.name,

@@ -13,9 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -54,7 +56,10 @@ type sessionData struct {
 	path     string
 	activity int64
 	procs    []string // unique process names
+	panePIDs []int    // shell PIDs for resource collection
 	claude   claudeCounts
+	cpuPct   float64 // total CPU% across all descendant processes
+	memMB    float64 // total RSS in MiB across all descendant processes
 }
 
 type windowData struct {
@@ -140,6 +145,10 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 	claude := aggregateClaudeBySession(claudePanes)
 	mergeClaude(sessions, claude)
 
+	// Resource collection runs in parallel with rendering prep
+	resCh := make(chan map[string]sessionResources, 1)
+	go func() { resCh <- collectSessionResources(sessions) }()
+
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
@@ -189,20 +198,45 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
+	// Wait for resource data
+	mergeResources(sessions, <-resCh)
+
+	// Pre-compute CPU and MEM strings separately so the "/" aligns
+	cpuStrs := make([]string, len(rows))
+	memStrs := make([]string, len(rows))
+	maxCPU, maxMem := 0, 0
+	for i, r := range rows {
+		cpuStrs[i] = formatCPU(r.sess.cpuPct)
+		memStrs[i] = formatMem(r.sess.memMB)
+		if len(cpuStrs[i]) > maxCPU {
+			maxCPU = len(cpuStrs[i])
+		}
+		if len(memStrs[i]) > maxMem {
+			maxMem = len(memStrs[i])
+		}
+	}
+
+	rc := newResourceColors(tmuxOpts)
+
 	// Header
 	namePad := strings.Repeat(" ", max(0, maxName-7))
 	procsPad := emptyIcons[min(5, len(emptyIcons)):]
-	fmt.Printf("%s %s%s  %s  %s %s\n",
+	resColWidth := maxCPU + 3 + maxMem // "cpu" + " / " + "mem"
+	resHeader := "CPU / Mem"
+	resHdrPad := strings.Repeat(" ", max(0, resColWidth-len(resHeader)))
+	fmt.Printf("%s %s%s  %s  %s%s  %s %s\n",
 		cDim+iSess+reset,
 		cDim+"Session"+reset,
 		namePad,
 		cDim+"Procs"+procsPad+reset,
+		cDim+resHeader+reset,
+		resHdrPad,
 		cDim+iDir+reset,
 		cDim+"Path"+reset,
 	)
 
 	home := os.Getenv("HOME")
-	for _, r := range rows {
+	for i, r := range rows {
 		shortPath := r.sess.path
 		if home != "" && strings.HasPrefix(shortPath, home) {
 			shortPath = "~" + shortPath[len(home):]
@@ -212,11 +246,18 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 		if icons == "" {
 			icons = emptyIcons
 		}
-		fmt.Printf("%s %s%s  %s  %s %s\n",
+		cpuPad := strings.Repeat(" ", max(0, maxCPU-len(cpuStrs[i])))
+		memPad := strings.Repeat(" ", max(0, maxMem-len(memStrs[i])))
+		fmt.Printf("%s %s%s  %s  %s%s %s %s%s  %s %s\n",
 			cMauve+iSess+reset,
 			cMauve+r.sess.name+reset,
 			pad,
 			icons,
+			cpuPad,
+			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
+			cDim+"/"+reset,
+			rc.memColor(r.sess.memMB)+memStrs[i]+reset,
+			memPad,
 			cBlue+iDir+reset,
 			cDim+shortPath+reset,
 		)
@@ -427,7 +468,7 @@ func renderWindows(tmuxOpts map[string]string, claudePanes []claudePaneInfo, the
 
 func collectSessions() []sessionData {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{pane_current_command}").Output()
+		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{pane_current_command}\t#{pane_pid}").Output()
 	if err != nil {
 		return nil
 	}
@@ -437,12 +478,13 @@ func collectSessions() []sessionData {
 		activity int64
 		seen     map[string]bool
 		procs    []string
+		panePIDs []int
 	}
 	m := make(map[string]*sessInfo)
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 4 {
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
 			continue
 		}
 		name, path, actStr, proc := parts[0], parts[1], parts[2], parts[3]
@@ -464,6 +506,9 @@ func collectSessions() []sessionData {
 			si.seen[proc] = true
 			si.procs = append(si.procs, proc)
 		}
+		if pid, err := strconv.Atoi(parts[4]); err == nil && pid > 0 {
+			si.panePIDs = append(si.panePIDs, pid)
+		}
 	}
 
 	sessions := make([]sessionData, 0, len(m))
@@ -473,6 +518,7 @@ func collectSessions() []sessionData {
 			path:     si.path,
 			activity: si.activity,
 			procs:    si.procs,
+			panePIDs: si.panePIDs,
 		})
 	}
 	return sessions
@@ -599,6 +645,174 @@ func collectWindows() []windowData {
 		})
 	}
 	return windows
+}
+
+// ---------------------------------------------------------------------------
+// Resource usage (CPU + memory per session)
+// ---------------------------------------------------------------------------
+
+// sessionResources holds aggregated CPU and memory for a session.
+type sessionResources struct {
+	cpuPct float64
+	memMB  float64
+}
+
+// resourceCache holds the last result to avoid re-running ps every 1s tick.
+var resourceCache struct {
+	sync.Mutex
+	result map[string]sessionResources
+	ts     time.Time
+}
+
+const resourceCacheTTL = 5 * time.Second
+
+// collectSessionResources returns per-session CPU% and RSS by walking the
+// process tree from each tmux pane PID. Runs ps once and builds a parent→children
+// map to sum all descendants. Results are cached for 5s since resource data
+// changes slowly relative to the 1s TUI refresh rate.
+func collectSessionResources(sessions []sessionData) map[string]sessionResources {
+	resourceCache.Lock()
+	if time.Since(resourceCache.ts) < resourceCacheTTL && resourceCache.result != nil {
+		cached := resourceCache.result
+		resourceCache.Unlock()
+		return cached
+	}
+	resourceCache.Unlock()
+
+	sessionPIDs := make(map[string][]int, len(sessions))
+	for _, s := range sessions {
+		if len(s.panePIDs) > 0 {
+			sessionPIDs[s.name] = s.panePIDs
+		}
+	}
+
+	psOut, err := exec.Command("ps", "-eo", "pid,ppid,pcpu,rss", "--no-headers").Output()
+	if err != nil {
+		return nil
+	}
+
+	children := make(map[int][]int)
+	type procInfo struct {
+		cpu float64
+		rss int64 // KiB
+	}
+	procs := make(map[int]*procInfo)
+
+	for _, line := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, _ := strconv.Atoi(fields[0])
+		ppid, _ := strconv.Atoi(fields[1])
+		cpu, _ := strconv.ParseFloat(fields[2], 64)
+		rss, _ := strconv.ParseInt(fields[3], 10, 64)
+		if pid <= 0 {
+			continue
+		}
+		procs[pid] = &procInfo{cpu: cpu, rss: rss}
+		children[ppid] = append(children[ppid], pid)
+	}
+
+	result := make(map[string]sessionResources, len(sessionPIDs))
+	for sess, pids := range sessionPIDs {
+		var totalCPU float64
+		var totalRSS int64
+		for _, root := range pids {
+			queue := []int{root}
+			for len(queue) > 0 {
+				cur := queue[0]
+				queue = queue[1:]
+				if p, ok := procs[cur]; ok {
+					totalCPU += p.cpu
+					totalRSS += p.rss
+				}
+				queue = append(queue, children[cur]...)
+			}
+		}
+		result[sess] = sessionResources{
+			cpuPct: totalCPU,
+			memMB:  float64(totalRSS) / 1024.0,
+		}
+	}
+
+	resourceCache.Lock()
+	resourceCache.result = result
+	resourceCache.ts = time.Now()
+	resourceCache.Unlock()
+
+	return result
+}
+
+func mergeResources(sessions []sessionData, res map[string]sessionResources) {
+	for i := range sessions {
+		if r, ok := res[sessions[i].name]; ok {
+			sessions[i].cpuPct = r.cpuPct
+			sessions[i].memMB = r.memMB
+		}
+	}
+}
+
+// formatCPU returns a compact CPU% string.
+func formatCPU(cpuPct float64) string {
+	if cpuPct < 10 {
+		return fmt.Sprintf("%.1f%%", cpuPct)
+	}
+	return fmt.Sprintf("%.0f%%", cpuPct)
+}
+
+// formatMem returns a compact memory string (M or G).
+func formatMem(memMB float64) string {
+	if memMB < 1024 {
+		return fmt.Sprintf("%.0fM", memMB)
+	}
+	return fmt.Sprintf("%.1fG", memMB/1024.0)
+}
+
+// resourceColors holds themed ANSI color codes for resource level coloring.
+type resourceColors struct {
+	low, med, high, crit string
+}
+
+func newResourceColors(tmuxOpts map[string]string) resourceColors {
+	return resourceColors{
+		low:  ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")),
+		med:  ansiFg(envOrMap("THM_YELLOW", tmuxOpts, "@thm_yellow", "#f9e2af")),
+		high: ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387")),
+		crit: ansiFg(envOrMap("THM_RED", tmuxOpts, "@thm_red", "#f38ba8")),
+	}
+}
+
+var numCPU = float64(runtime.NumCPU())
+
+// cpuColor thresholds scale with core count:
+// low: <10% of total, med: <25%, high: <60%, crit: ≥60%
+func (rc resourceColors) cpuColor(pct float64) string {
+	ratio := pct / (numCPU * 100)
+	switch {
+	case ratio < 0.10:
+		return rc.low
+	case ratio < 0.25:
+		return rc.med
+	case ratio < 0.60:
+		return rc.high
+	default:
+		return rc.crit
+	}
+}
+
+// memColor thresholds are absolute — memory pressure is memory pressure.
+func (rc resourceColors) memColor(mb float64) string {
+	switch {
+	case mb < 256:
+		return rc.low
+	case mb < 1024:
+		return rc.med
+	case mb < 4096:
+		return rc.high
+	default:
+		return rc.crit
+	}
 }
 
 // ---------------------------------------------------------------------------
