@@ -16,5 +16,4 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@v3
       - uses: DeterminateSystems/flakehub-cache-action@main
       - run: nix build .#default
-      - run: nix build .#wt
       - run: nix flake check
