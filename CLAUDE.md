@@ -4,19 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lazytmux is an opinionated tmux configuration delivered as a Nix flake. It wraps the tmux binary with a baked-in config so there's no dotfile management. Key features: Catppuccin theme, multi-line status bar with auto-reflow, per-window Nerd Font process icons, real-time Claude Code status integration, fzf session/window pickers, and a `wt` git worktree manager.
+Lazytmux is an opinionated tmux configuration delivered as a Nix flake. It wraps the tmux binary with a baked-in config so there's no dotfile management. Key features: Catppuccin theme, multi-line status bar with auto-reflow, per-window Nerd Font process icons, real-time Claude Code status integration, and fzf session/window pickers.
 
 ## Build and Test
 
 ```bash
 nix build .              # Build wrapped tmux (output: ./result/bin/tmux)
-nix build .#wt           # Build wt worktree manager separately
 nix flake check          # Run all flake checks (includes pre-commit hooks)
 ```
 
 After building, reload the running tmux with `prefix + r` (which sources `~/.config/tmux/tmux.conf`, a symlink managed by the home-manager module).
 
-There are no unit tests. CI runs `nix build .#default`, `nix build .#wt`, and `nix flake check`.
+There are no unit tests. CI runs `nix build .#default` and `nix flake check`.
 
 ## Pre-commit Hooks
 
@@ -75,11 +74,11 @@ Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when 
 
 ### Home-Manager Module
 
-`modules/home-manager.nix` provides `programs.lazytmux` with options for `enable`, `wt.enable`, `skills.enable`, and `startupSession` (systemd service). The activation script reloads tmux config and reflows all sessions after `home-manager switch`.
+`modules/home-manager.nix` provides `programs.lazytmux` with options for `enable`, `worktrunk.enable`, `skills.enable`, and `startupSession` (systemd service). The activation script reloads tmux config and reflows all sessions after `home-manager switch`.
 
-### `wt` — Git Worktree Manager
+### Worktree Management
 
-Separate Nix package (`wt/default.nix` → `wt/wt.sh`). Model: one tmux session per repo, one window per worktree. Runtime deps: git, tmux, gum, zoxide. Worktrees created at `.worktrees/<branch>` inside repo root.
+Git worktree management is handled by the third-party `worktrunk` tool, configured via the home-manager module's `worktrunk.enable` option.
 
 ## Key Conventions
 
