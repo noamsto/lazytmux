@@ -83,6 +83,14 @@ in {
       };
     };
 
+    worktrunk = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether to install worktrunk and configure tmux integration hooks";
+      };
+    };
+
     skills = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -164,7 +172,8 @@ in {
     home = {
       packages =
         [tmuxConfig.tmux-wrapped]
-        ++ lib.optionals cfg.wt.enable [wtPkg];
+        ++ lib.optionals cfg.wt.enable [wtPkg]
+        ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk];
 
       file = lib.mkIf cfg.skills.enable (
         lib.mapAttrs' (name: _: {
@@ -265,6 +274,39 @@ in {
 
           # Branch completions for smart mode (all branches, shown at top level)
           complete -c wt -f -n '__fish_use_subcommand' -a '(__wt_list_all_branches)'
+        '';
+      };
+
+      "worktrunk/config.toml" = lib.mkIf cfg.worktrunk.enable {
+        text = ''
+          worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
+
+          [post-switch]
+          tmux = """
+          [ -z "$TMUX" ] && exit 0
+          SESSION=$(tmux display-message -p '#{session_name}')
+          WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
+            | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
+          if [ -n "$WIN" ]; then
+            tmux select-window -t "$SESSION:$WIN"
+          else
+            tmux new-window -a -t "$SESSION" -c "{{ worktree_path }}"
+            tmux set-option -t "$SESSION" -w @worktree "{{ worktree_path }}"
+            tmux set-option -t "$SESSION" -w @branch "{{ branch | sanitize }}"
+          fi
+          """
+          zoxide = """
+          command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
+          """
+
+          [post-remove]
+          tmux = """
+          [ -z "$TMUX" ] && exit 0
+          SESSION=$(tmux display-message -p '#{session_name}')
+          WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
+            | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
+          [ -n "$WIN" ] && tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+          """
         '';
       };
 
