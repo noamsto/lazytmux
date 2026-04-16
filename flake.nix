@@ -49,12 +49,8 @@
             ];
         };
 
-        packages = let
-          wt-explorer = import ./wt-explorer {inherit pkgs;};
-        in {
+        packages = {
           default = tmuxConfig.tmux-wrapped;
-          inherit wt-explorer;
-          wt = import ./wt {inherit pkgs wt-explorer;};
         };
       };
 
