@@ -12,6 +12,7 @@ if [[ ${1:-} == --attach ]]; then
 	# Re-apply hints bar every open so reflow overwrites don't stick.
 	# Batch via tmux source (1 socket call instead of 4).
 	printf '%s\n' \
+		"set -t '$SCRATCH' detach-on-destroy on" \
 		"set -t '$SCRATCH' status-position bottom" \
 		"set -t '$SCRATCH' status 1" \
 		"set -t '$SCRATCH' status-style 'bg=#{@thm_bg}'" \
