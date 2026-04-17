@@ -755,9 +755,6 @@ func mergeResources(sessions []sessionData, res map[string]sessionResources) {
 
 // formatCPU returns a compact CPU% string.
 func formatCPU(cpuPct float64) string {
-	if cpuPct < 10 {
-		return fmt.Sprintf("%.1f%%", cpuPct)
-	}
 	return fmt.Sprintf("%.0f%%", cpuPct)
 }
 
