@@ -503,13 +503,10 @@ func (m tuiModel) moveCursor(delta int) tuiModel {
 	c := m.cursor
 	for {
 		c += delta
-		if c < 0 {
-			c = 0
-			break
-		}
-		if c >= n {
-			c = n - 1
-			break
+		if c < 0 || c >= n {
+			// Ran past the edge — keep the current cursor rather than
+			// landing on a non-selectable title/header row.
+			return m
 		}
 		if m.isSelectable(m.visible[c]) {
 			break
