@@ -89,6 +89,14 @@ in {
       };
     };
 
+    opencode = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether to install OpenCode status plugin into ~/.config/opencode/plugin";
+      };
+    };
+
     startupSession = {
       enable = lib.mkEnableOption "systemd service to start a tmux session on login";
 
@@ -164,12 +172,16 @@ in {
         [tmuxConfig.tmux-wrapped]
         ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk];
 
-      file = lib.mkIf cfg.skills.enable (
-        lib.mapAttrs' (name: _: {
-          name = ".claude/skills/${name}";
-          value.source = ../skills/${name};
-        }) (builtins.readDir ../skills)
-      );
+      file =
+        lib.optionalAttrs cfg.skills.enable (
+          lib.mapAttrs' (name: _: {
+            name = ".claude/skills/${name}";
+            value.source = ../skills/${name};
+          }) (builtins.readDir ../skills)
+        )
+        // lib.optionalAttrs cfg.opencode.enable {
+          ".config/opencode/plugin/opencode-status.ts".source = ../plugins/opencode-status.ts;
+        };
 
       # Reload tmux config + reflow all sessions after profile switch.
       # The config embeds full /nix/store paths, so reloading makes the running

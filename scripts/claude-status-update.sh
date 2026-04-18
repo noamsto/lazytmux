@@ -38,8 +38,7 @@ cleanup_stale_panes() {
 		if [[ -z ${pane_commands[$pane_file]+x} ]]; then
 			# Pane no longer exists in tmux
 			should_remove=true
-		elif [[ ${pane_commands[$pane_file]} != "claude" ]]; then
-			# Pane exists but is no longer running claude
+		elif [[ ${pane_commands[$pane_file]} != "claude" && ${pane_commands[$pane_file]} != "opencode" ]]; then
 			should_remove=true
 		fi
 

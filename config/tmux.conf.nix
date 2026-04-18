@@ -255,8 +255,8 @@
     # Clear screen
     bind -n M-l send-keys 'C-l'
 
-    # Shift+Enter: process-aware newline for Claude Code / Amp
-    bind -n S-Enter if-shell "ps -o comm= -t '#{pane_tty}' | grep -qE '^(amp|bun)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
+    # Shift+Enter: process-aware newline for Claude Code / Amp / OpenCode
+    bind -n S-Enter if-shell "ps -o comm= -t '#{pane_tty}' | grep -qE '^(amp|bun|opencode)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
 
     # Pane splitting (| and _)
     unbind %
@@ -280,7 +280,6 @@
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
-    bind -n C-a run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs
 

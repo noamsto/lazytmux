@@ -2,7 +2,7 @@
 
 # lazytmux
 
-**Opinionated tmux configuration with Claude Code integration.**
+**Opinionated tmux configuration with Claude Code & OpenCode integration.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
 
@@ -48,10 +48,10 @@ This installs a `tmux` wrapper that automatically loads the configuration. Your 
 |---------|-------------|
 | **Catppuccin Mocha theme** | Consistent colors across status bar and pane borders |
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
-| **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, etc.) |
-| **Claude Code status** | Real-time spinner/icon in status bar and session/window pickers |
+| **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, OpenCode, etc.) |
+| **AI agent status** | Real-time spinner/icon in status bar for Claude Code and OpenCode |
 | **Git branch display** | Current branch shown in the top status line |
-| **fzf pickers** | Session and window pickers with Claude status per entry |
+| **fzf pickers** | Session and window pickers with AI status per entry |
 | **vim-tmux-navigator** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes |
 | **tmux-fingers** | Smart copy with hints for URLs, hashes, file paths, JIRA tickets |
 | **resurrect + continuum** | Auto-save every 10 min with restore on start |
@@ -106,11 +106,11 @@ cd "$(wt -yqn feature-branch)"
 
 ---
 
-## Claude Code Integration
+## AI Agent Status Integration
 
-The status bar and pickers show the Claude Code state for each pane, window, and session
-in real time. Claude Code hooks call `claude-status-update` (bundled in the wrapper's PATH)
-to write state files that the status bar reads every second.
+The status bar and pickers show the AI agent state for each pane, window, and session
+in real time. Both Claude Code and OpenCode are supported via `claude-status-update`
+(bundled in the wrapper's PATH), which writes state files the status bar reads every second.
 
 ### Status Indicators
 
@@ -118,18 +118,18 @@ to write state files that the status bar reads every second.
 
 | Indicator | Meaning |
 |-----------|---------|
-| Spinner animation | **Processing** — Claude is actively working |
+| Spinner animation | **Processing** — agent is actively working |
 | Clock icon (orange) | **Waiting** — permission prompt needs your input |
 | Clock icon (yellow) | **Denied** — auto mode denied a command |
 | Compress icon | **Compacting** — context compaction in progress |
-| Checkmark | **Done** — Claude finished the last task |
+| Checkmark | **Done** — agent finished the last task |
 | X icon (red) | **Error** — tool or stop failure |
 | Sleep icon | **Idle** — waiting for your next prompt |
 
-When multiple panes have Claude running, the window and session indicators show the
+When multiple panes have agents running, the window and session indicators show the
 highest-priority state (waiting > denied > compacting > processing > done > idle).
 
-### Hooks Configuration
+### Claude Code Hooks
 
 Paste this into `~/.claude/settings.json` (merge with existing `hooks` if present).
 The commands use bare names (`claude-status-update`) because they are on PATH via the tmux wrapper.
@@ -259,6 +259,38 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
 ```
 
 </details>
+
+### OpenCode Plugin
+
+OpenCode uses a [plugin system](https://opencode.ai/docs/plugins/) instead of JSON hooks.
+Lazytmux ships a plugin at `plugins/opencode-status.ts` that maps OpenCode events to
+`claude-status-update` calls.
+
+**With home-manager** (automatic): the plugin is installed to `~/.config/opencode/plugin/`
+by default. Disable with `programs.lazytmux.opencode.enable = false`.
+
+**Manual install**: symlink or copy the plugin file:
+
+```bash
+mkdir -p ~/.config/opencode/plugin
+cp plugins/opencode-status.ts ~/.config/opencode/plugin/
+```
+
+The plugin maps OpenCode events as follows:
+
+| OpenCode Event | Status |
+|----------------|--------|
+| `session.created` | cleanup + idle |
+| `session.idle` | done |
+| `session.error` | error |
+| `session.deleted` | clear |
+| `session.compacted` | processing |
+| `tool.execute.before/after` | processing |
+| `permission.asked` | waiting |
+| `permission.replied` | processing |
+| `message.updated` | processing |
+
+### State Files
 
 State files are written to `/tmp/claude-status/` and cleaned up automatically.
 Stale states (e.g. a `processing` state older than 15 seconds) are resolved automatically

@@ -7,6 +7,7 @@
 {
   # Custom / project-specific
   claude = "🧠";
+  opencode = "🧠";
   amp = "⚡";
   nh = "❄";
   "process-compose" = "⚙";
