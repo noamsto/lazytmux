@@ -85,8 +85,8 @@ window_name=<name>
 window_index=<N>
 window_layout=<tmux layout string>
 pane_count=<N>
-pane[0]_cwd=<abs path>
-pane[1]_cwd=<abs path>
+pane_0_cwd=<abs path>
+pane_1_cwd=<abs path>
 ...
 ```
 
@@ -97,11 +97,11 @@ timestamp=<ms>
 display_name=<session name> (<N windows>)
 session_name=<name>
 window_count=<N>
-win[0]_name=<name>
-win[0]_index=<N>
-win[0]_layout=<layout string>
-win[0]_pane_count=<N>
-win[0]_pane[0]_cwd=<abs>
+win_0_name=<name>
+win_0_index=<N>
+win_0_layout=<layout string>
+win_0_pane_count=<N>
+win_0_pane_0_cwd=<abs>
 ...
 ```
 
@@ -162,7 +162,7 @@ After any capture, if the entry count exceeds 10, the oldest file (lowest timest
 
 ### Window restore
 
-- If `session_name` resolves to a live session: `new-window -t <session> -n <name> -c <pane[0]_cwd>`, then for each additional pane run `split-window` with that pane's cwd. Apply the captured `window_layout` via `select-layout <layout>`.
+- If `session_name` resolves to a live session: `new-window -t <session> -n <name> -c <pane_0_cwd>`, then for each additional pane run `split-window` with that pane's cwd. Apply the captured `window_layout` via `select-layout <layout>`.
 - If the session is gone: promote to session-level restore with just this one window.
 
 ### Session restore
