@@ -97,6 +97,37 @@ in {
       };
     };
 
+    claudeIntegration = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Expose claude-status-update, claude-status, and claude-copy-mode on
+          PATH via home.packages. Needed when Claude Code hooks (or any tool
+          that calls them by bare name) run in a shell that doesn't inherit
+          the tmux wrapper's PATH — e.g. a fish login shell, which resets
+          PATH, or a direnv-loaded devshell.
+        '';
+      };
+    };
+
+    popupTools = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop];
+      defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop]";
+      description = ''
+        Tools installed via home.packages so popup keybindings
+        (prefix+K/S → sesh, prefix+g → lazygit, prefix+b → btop,
+        prefix+y → yazi) resolve in shells that don't inherit the tmux
+        wrapper's PATH prepends — e.g. fish login shells opened by
+        display-popup, or direnv-loaded devshells.
+
+        Set to [] to opt out entirely, or drop individual entries if you
+        install those tools elsewhere (home-manager errors if two
+        different derivations install the same file).
+      '';
+    };
+
     startupSession = {
       enable = lib.mkEnableOption "systemd service to start a tmux session on login";
 
@@ -170,7 +201,13 @@ in {
     home = {
       packages =
         [tmuxConfig.tmux-wrapped]
-        ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk];
+        ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
+        ++ lib.optionals cfg.claudeIntegration.enable [
+          tmuxConfig.script.claude-status-update
+          tmuxConfig.script.claude-status
+          tmuxConfig.script.claude-copy-mode
+        ]
+        ++ cfg.popupTools;
 
       file =
         lib.optionalAttrs cfg.skills.enable (
