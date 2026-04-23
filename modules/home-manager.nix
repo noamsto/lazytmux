@@ -265,12 +265,30 @@ in {
           echo "tmux not found in /etc/profiles/per-user/$USER/bin or ~/.nix-profile/bin" >&2
           exit 1
         fi
-        # Only start if not already running
-        if "$TMUX_BIN" has-session 2>/dev/null; then
-          echo "tmux server already running, skipping"
+
+        SESSION=${lib.escapeShellArg cfg.startupSession.name}
+
+        # Exact-match check (`=name`) — default is prefix match, which would
+        # incorrectly skip creation if e.g. `foo-bar` existed when SESSION=foo.
+        if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+          echo "tmux session $SESSION already running, skipping"
           exit 0
         fi
-        exec "$TMUX_BIN" new -s ${lib.escapeShellArg cfg.startupSession.name} -c ${lib.escapeShellArg cfg.startupSession.directory} -d
+
+        # Try to create the session. If creation fails but the session now
+        # exists anyway, something else won the race to create it — most
+        # commonly tmux-continuum's auto-restore, which creates sessions
+        # while loading tmux.conf on server start. Treat that as success.
+        if "$TMUX_BIN" new -s "$SESSION" -c ${lib.escapeShellArg cfg.startupSession.directory} -d; then
+          exit 0
+        fi
+
+        if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+          echo "tmux session $SESSION exists (created by another source), continuing"
+          exit 0
+        fi
+
+        exit 1
       '';
     in {
       Unit = {
