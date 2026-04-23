@@ -163,6 +163,18 @@ else
 	tmux_cmds+=("set -t '$SESSION' status 2")
 fi
 
+# Single-line branch collapses into the same batch as an atomic unset of the
+# whole session-level status-format array. Doing this as one command matters:
+# tmux treats session-level status-format as all-or-nothing (any set index
+# suppresses global for ALL indices), so unsetting [0], [1], [2], [3] in
+# separate tmux calls creates a visible intermediate where [0] is unset but
+# [1..3] are still set — line 0 renders blank and the session name flashes
+# away. The per-index unsets that used to live here are redundant with the
+# bare `status-format` unset below.
+if ((!needs_multiline && current_line == 0)); then
+	tmux_cmds+=("set -u -t '$SESSION' status-format")
+fi
+
 # Execute batched simple commands + early redraw so layout appears immediately
 {
 	printf '%s\n' "${tmux_cmds[@]}"
@@ -180,17 +192,12 @@ TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
 ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
 
+# Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
+# single quotes (e.g. '#{session_name}') that break outer-single-quoted
+# batched commands. See commit 60421e7.
 if ((!needs_multiline && current_line == 0)); then
-	# Single line: clear ALL session-level format overrides to fall back to global.
-	# tmux treats session-level status-format as all-or-nothing: setting any index
-	# at session level overrides ALL indices. So we must unset all of them.
-	tmux set -u -t "$SESSION" status-format[0] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[1] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[2] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format[3] 2>/dev/null || true
-	tmux set -u -t "$SESSION" status-format 2>/dev/null || true
+	: # handled via batched unset above
 elif ((current_line == 0)); then
-	# Multi-line: must set session-level formats (copy FMT0 from global for line 0)
 	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
 	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	tmux set -t "$SESSION" status-format[1] \
