@@ -243,7 +243,7 @@
     unbind-key -T copy-mode-vi v
     bind-key -T copy-mode-vi v send -X begin-selection
     bind-key -T copy-mode-vi C-v send -X rectangle-toggle
-    bind-key -T copy-mode-vi 'y' send -X copy-selection
+    bind-key -T copy-mode-vi 'y' send -X copy-pipe
 
     # Copy mode styling (tmux 3.6+)
     set -g copy-mode-position-style "bg=#{@thm_surface_0},fg=#{@thm_mauve}"
