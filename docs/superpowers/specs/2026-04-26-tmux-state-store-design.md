@@ -1,8 +1,9 @@
-# Tmux State Store: Unified Persistence and Undo
+# tmux-state: Unified Persistence, Undo, and History Explorer
 
 **Date:** 2026-04-26
 **Status:** Draft
-**Repo:** `~/Data/git/lazytmux`
+**Primary repo:** `~/Data/git/noamsto/tmux-state` (new, to be created)
+**Integrating repo:** `~/Data/git/lazytmux` (consumes `tmux-state` as a flake input)
 
 **Supersedes:**
 - `2026-04-19-undo-closed-windows-design.md` (close-event undo, bash, `/tmp` storage)
@@ -11,12 +12,31 @@
 
 ## Overview
 
-A single Go binary, `tmux-state`, replaces `tmux-resurrect`, `tmux-continuum`, and the previously-spec'd `tmux-undo` feature. It records tmux server activity to a SQLite event store with content-addressed scrollback files, exposing two complementary user-facing flows:
+A standalone Go binary, `tmux-state`, replaces `tmux-resurrect`, `tmux-continuum`, and the previously-spec'd `tmux-undo` feature. The binary lives in its own repository (`noamsto/tmux-state`) and is consumed by lazytmux as a flake input — same pattern as `worktrunk`. It speaks raw tmux protocol and ships zero lazytmux-specific knowledge; lazytmux supplies the keybindings, hook wiring, and home-manager options that integrate it.
+
+It records tmux server activity to a SQLite event store with content-addressed scrollback files, exposing three complementary user-facing flows:
 
 1. **Persistence** — periodic snapshots (every 60s + on structural-change hooks) restored automatically on tmux server start, through a smart filter that drops stale, idle, and duplicate entries.
 2. **Undo** — close-event captures (`pane-died`, `window-unlinked`, `session-closed`) restored on demand via `prefix + u` (pop newest) or `prefix + U` (picker).
+3. **Explore** — a Bubble Tea TUI (`prefix + E`) for browsing the full event history with manifest preview, scrollback peek, filter, and per-unit (session/window/pane) restore.
 
-Both flows share one event store, one filter library, one set of tmux interaction primitives, and one binary.
+All three flows share one event store, one filter library, one set of tmux interaction primitives, and one binary.
+
+## Repo Boundaries
+
+| Concern | `tmux-state` repo | `lazytmux` repo |
+|---|---|---|
+| Go binary, SQLite store, scrollback CAS, restore engine | ✓ | — |
+| Bubble Tea explorer TUI | ✓ | — |
+| `tmux` shell-out wrapper, output parsers | ✓ | — |
+| Smart filter (pure functions) | ✓ | — |
+| Default config (allow-list, thresholds) | ✓ ships with sensible defaults | overrides via flake input args |
+| `tmux.conf` `set-hook` lines, keybindings | — | ✓ in `config/tmux.conf.nix` |
+| home-manager options block (`programs.lazytmux.persist`) | — | ✓ in `modules/home-manager.nix` |
+| systemd user timer + service | — | ✓ written by home-manager from `programs.lazytmux.persist` options |
+| Removal of `@resurrect-*` / `@continuum-*` lines | — | ✓ |
+
+Other tmux users (not on lazytmux) consume `tmux-state` directly: `nix run github:noamsto/tmux-state -- save`, plus a small example tmux.conf snippet in the repo's README.
 
 ## Motivation
 
@@ -28,14 +48,15 @@ Both flows share one event store, one filter library, one set of tmux interactio
 ## Scope and Non-Goals
 
 **In scope:**
-- Single Go binary `tmux-state` with subcommands: `save`, `capture-event`, `restore`, `undo`, `pick`, `list`, `prune`, `gc`, `version`.
+- Single Go binary `tmux-state` with subcommands: `save`, `capture-event`, `index-update`, `restore`, `undo`, `pick`, `explore`, `list`, `prune`, `gc`, `version`.
 - Periodic snapshot via systemd user timer + immediate snapshot on structural-change hooks.
 - Close-event capture via `pane-died`, `window-unlinked`, `session-closed` hooks with "outermost wins" dedup.
 - SQLite event store at `$XDG_DATA_HOME/lazytmux/state.db`.
 - Content-addressed scrollback files at `$XDG_DATA_HOME/lazytmux/scrollbacks/<sha256>.zst` with refcount-based GC.
 - Smart restore filter (dedup vs running server, stale-session age, idle-shell drop, idle-window drop, stale-snapshot age).
 - Three restore modes: `auto`, `interactive`, `off`.
-- Keybindings: `prefix + u` (undo pop), `prefix + U` (undo picker), `prefix + R` (snapshot picker), `prefix + Ctrl-s` (save now).
+- Bubble Tea history explorer (`tmux-state explore`) with split-pane list + detail, filter mode, scrollback preview, per-unit restore.
+- Keybindings: `prefix + u` (undo pop), `prefix + U` (undo picker), `prefix + R` (snapshot picker), `prefix + E` (history explorer TUI), `prefix + Ctrl-s` (save now).
 - Allow-list-gated command re-launch on restore (`nvim`, `htop`, `lazygit`, …).
 - Home-manager options for all thresholds and modes.
 - Removal of `tmux-resurrect` / `tmux-continuum` plugin loads and configuration from `config/tmux.conf.nix`.
@@ -88,7 +109,8 @@ Both flows share one event store, one filter library, one set of tmux interactio
 | `internal/filter` | Smart-filter predicates (dedup, idle, stale). Pure functions, easy to test. |
 | `internal/scrollback` | Content-addressed compressed scrollback files. Hash, refcount, GC. |
 | `internal/tmux` | Wraps `exec.Command("tmux", ...)`. Output parsing, safe argument passing. |
-| `internal/picker` | `fzf` invocation and result formatting for undo/snapshot pickers. |
+| `internal/picker` | `fzf` invocation and result formatting for fast undo/snapshot pickers. |
+| `internal/explore` | Bubble Tea TUI for the `explore` subcommand: split-pane history browser with manifest detail and scrollback preview. |
 | `internal/config` | Config loading (env vars, CLI flags). |
 | `internal/log` | Structured logging via `log/slog`. |
 
@@ -310,14 +332,14 @@ The orphaned scrollback files (refcount = 0) are reaped by `gc` (see below).
 Hooks wired in `config/tmux.conf.nix`:
 
 ```tmux
-set-hook -g pane-died          'run-shell -b "${tmux-state}/bin/tmux-state capture-event pane-died          --pane=#{hook_pane} --window=#{hook_window} --session=#{hook_session}"'
-set-hook -g window-unlinked    'run-shell -b "${tmux-state}/bin/tmux-state capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
-set-hook -g session-closed     'run-shell -b "${tmux-state}/bin/tmux-state capture-event session-closed     --session=#{hook_session}"'
+set-hook -g pane-died          'run-shell -b "${tmux-state-bin} capture-event pane-died          --pane=#{hook_pane} --window=#{hook_window} --session=#{hook_session}"'
+set-hook -g window-unlinked    'run-shell -b "${tmux-state-bin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
+set-hook -g session-closed     'run-shell -b "${tmux-state-bin} capture-event session-closed     --session=#{hook_session}"'
 
 # live index maintenance
-set-hook -g window-linked         'run-shell -b "${tmux-state}/bin/tmux-state index-update --session=#{hook_session}"'
-set-hook -g window-renamed        'run-shell -b "${tmux-state}/bin/tmux-state index-update --session=#{hook_session}"'
-set-hook -g window-layout-changed 'run-shell -b "${tmux-state}/bin/tmux-state index-update --session=#{hook_session}"'
+set-hook -g window-linked         'run-shell -b "${tmux-state-bin} index-update --session=#{hook_session}"'
+set-hook -g window-renamed        'run-shell -b "${tmux-state-bin} index-update --session=#{hook_session}"'
+set-hook -g window-layout-changed 'run-shell -b "${tmux-state-bin} index-update --session=#{hook_session}"'
 ```
 
 `capture-event` reads from `live_index` (since the unit is gone or going), assembles a manifest, applies cascade dedup, and inserts an event row. No scrollback capture for close events — the pane process is dead, and `tmux capture-pane` against a missing pane fails. (We could capture scrollback eagerly in `index-update`, but every-event scrollback writes are too expensive for marginal value. Persistence covers the "I want my scrollback back" use case.)
@@ -329,7 +351,7 @@ set-hook -g window-layout-changed 'run-shell -b "${tmux-state}/bin/tmux-state in
 `config/tmux.conf.nix` adds, after all session/window setup:
 
 ```tmux
-run-shell -b '${tmux-state}/bin/tmux-state restore --auto'
+run-shell -b '${tmux-state-bin} restore --auto'
 ```
 
 `restore --auto` behavior:
@@ -352,6 +374,82 @@ run-shell -b '${tmux-state}/bin/tmux-state restore --auto'
 Both run `tmux-state pick --kind=<close|snapshot>`, which opens a `display-popup` running `fzf` over event rows. Each row is rendered with `id`, `ts` (humanized), summary (e.g., `"session 'lazytmux' (3 windows, 7 panes)"`).
 
 For snapshots, the smart filter is applied and the result is shown as a checklist (toggleable per session/window/pane). For close events, the user just selects an event to restore — no filter.
+
+### `prefix + E` (History Explorer TUI)
+
+`tmux-state explore` — opens a Bubble Tea TUI in `display-popup -E -w 90% -h 80%`. Designed for *browsing* history rather than restoring one specific thing fast.
+
+**Layout:**
+
+```
+┌──────────────────────────────────┬───────────────────────────────────┐
+│ Events (j/k, /, f)                │ Detail                            │
+├──────────────────────────────────┤                                   │
+│ ▶ 2026-04-26 14:03  snapshot      │ Kind: snapshot                    │
+│   2026-04-26 14:01  pane-died     │ Saved: 2026-04-26 14:03:11        │
+│   2026-04-26 13:59  snapshot      │ Reason: timer                     │
+│   2026-04-26 13:55  session-closed│ Sessions: 3                       │
+│   2026-04-26 13:50  snapshot      │ Windows:  9                       │
+│   ...                             │ Panes:    21                      │
+│                                   │                                   │
+│                                   │ ▾ session lazytmux  (last_attached│
+│                                   │   ▾ window 1: main                │
+│                                   │     ◇ pane 1: nvim    /home/noams │
+│                                   │     ◇ pane 2: bash    /home/noams │
+│                                   │   ▸ window 2: build               │
+│                                   │ ▸ session work                    │
+│                                   │ ▸ session test                    │
+│                                   │                                   │
+│                                   │ Scrollback preview (s):           │
+│                                   │   [last 20 lines of selected pane]│
+│                                   │                                   │
+│ Keys: enter=restore  d=delete    │                                   │
+│       s=scrollback  /=filter      │                                   │
+│       r=refresh     q=quit        │                                   │
+└──────────────────────────────────┴───────────────────────────────────┘
+```
+
+**Components (Bubble Tea models):**
+
+- **Event list** (left) — sorted by `ts DESC`. Filterable by kind, time range, session name. Supports `/` for incremental search across all visible columns.
+- **Detail pane** (right) — top: event metadata (kind, ts, reason, host, parent_event_id). Middle: collapsible tree of session/window/pane structure parsed from `manifest_json`. Bottom: optional scrollback preview (last N lines of zstd-decompressed file).
+- **Status bar** — keybinding hints, current filter expression, total/visible event counts.
+
+**Keybindings:**
+
+| Key | Action |
+|---|---|
+| `j`/`k` or `↓`/`↑` | Move selection |
+| `g`/`G` | Top / bottom |
+| `enter` | Restore the highlighted unit (whole event, OR selected sub-tree node if cursor is on a pane/window) |
+| `space` | Toggle expansion of session/window node in detail tree |
+| `s` | Toggle scrollback preview for the highlighted pane |
+| `/` | Filter mode (incremental) |
+| `f` | Cycle filter: all / snapshots only / close events only |
+| `d` | Delete highlighted event (with confirmation) |
+| `r` | Refresh (re-query DB) |
+| `?` | Help overlay |
+| `q` / `esc` | Quit |
+
+**Per-unit restore semantics:**
+
+When the cursor is on a sub-tree node (session/window/pane within a snapshot), `enter` restores *only* that unit, not the whole event. Internally this builds a one-element restore plan.
+
+For a pane node: same as `prefix + u` would do for that single pane.
+For a window node: re-create the window with all its panes.
+For a session node: re-create the session with all its windows.
+For an event-level row: re-create everything in that event (modulo dedup).
+
+**Scrollback preview:**
+
+Reads `event_scrollbacks.scrollback_sha`, decompresses the file, displays the last 20 lines (`tail -n 20`-equivalent in Go) inline. Toggle with `s` to expand to last 200 lines. Avoids loading huge scrollbacks into memory at once via streaming zstd decode.
+
+**Implementation notes:**
+
+- `internal/explore` package owns the TUI. Uses `github.com/charmbracelet/bubbletea` + `github.com/charmbracelet/lipgloss` + `github.com/charmbracelet/bubbles/list` for the left pane.
+- Read-only against the DB by default. Delete action acquires the write flock.
+- Updates are reactive: a periodic `tea.Tick` re-queries event count; if changed, prompts user with "new events available, press `r` to refresh." Avoids surprise mutations under the cursor.
+- Tested via Bubble Tea's `teatest` harness for golden-output assertions on the rendered frames.
 
 ### Smart Filter
 
@@ -481,25 +579,26 @@ run-shell ${tmuxPlugins.continuum}/share/tmux-plugins/continuum/continuum.tmux
 
 ```tmux
 # tmux-state hooks (set-hook is replace-by-name on reload, no stacking)
-set-hook -g session-created       'run-shell -b "${tmux-state}/bin/tmux-state save --reason=hook:session-created"'
-set-hook -g window-linked         'run-shell -b "${tmux-state}/bin/tmux-state save --reason=hook:window-linked"'
-set-hook -g client-detached       'run-shell -b "${tmux-state}/bin/tmux-state save --reason=hook:client-detached"'
+set-hook -g session-created       'run-shell -b "${tmux-state-bin} save --reason=hook:session-created"'
+set-hook -g window-linked         'run-shell -b "${tmux-state-bin} save --reason=hook:window-linked"'
+set-hook -g client-detached       'run-shell -b "${tmux-state-bin} save --reason=hook:client-detached"'
 
-set-hook -g pane-died             'run-shell -b "${tmux-state}/bin/tmux-state capture-event pane-died          --pane=#{hook_pane} --window=#{hook_window} --session=#{hook_session}"'
-set-hook -g window-unlinked       'run-shell -b "${tmux-state}/bin/tmux-state capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
-set-hook -g session-closed        'run-shell -b "${tmux-state}/bin/tmux-state capture-event session-closed     --session=#{hook_session}"'
+set-hook -g pane-died             'run-shell -b "${tmux-state-bin} capture-event pane-died          --pane=#{hook_pane} --window=#{hook_window} --session=#{hook_session}"'
+set-hook -g window-unlinked       'run-shell -b "${tmux-state-bin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
+set-hook -g session-closed        'run-shell -b "${tmux-state-bin} capture-event session-closed     --session=#{hook_session}"'
 
-set-hook -g window-renamed        'run-shell -b "${tmux-state}/bin/tmux-state index-update --session=#{hook_session}"'
-set-hook -g window-layout-changed 'run-shell -b "${tmux-state}/bin/tmux-state index-update --session=#{hook_session}"'
+set-hook -g window-renamed        'run-shell -b "${tmux-state-bin} index-update --session=#{hook_session}"'
+set-hook -g window-layout-changed 'run-shell -b "${tmux-state-bin} index-update --session=#{hook_session}"'
 
 # Auto-restore (runs once at config load)
-run-shell -b '${tmux-state}/bin/tmux-state restore --auto'
+run-shell -b '${tmux-state-bin} restore --auto'
 
 # Keybindings
-bind   u    run-shell '${tmux-state}/bin/tmux-state undo --pop'
-bind   U    run-shell '${tmux-state}/bin/tmux-state pick --kind=close'
-bind   R    run-shell '${tmux-state}/bin/tmux-state pick --kind=snapshot'
-bind C-s    run-shell '${tmux-state}/bin/tmux-state save --reason=keybinding'
+bind   u    run-shell '${tmux-state-bin} undo --pop'
+bind   U    run-shell '${tmux-state-bin} pick --kind=close'
+bind   R    run-shell '${tmux-state-bin} pick --kind=snapshot'
+bind   E    display-popup -E -w 90% -h 80% '${tmux-state-bin} explore'
+bind C-s    run-shell '${tmux-state-bin} save --reason=keybinding'
 ```
 
 ### config/tmux.conf.nix Substitution
@@ -533,7 +632,7 @@ systemd.user.services.lazytmux-state-save = {
   Unit.Description = "Save tmux state";
   Service = {
     Type = "oneshot";
-    ExecStart = "${tmux-state}/bin/tmux-state save --reason=timer";
+    ExecStart = "${tmux-state-bin} save --reason=timer";
   };
 };
 
@@ -550,52 +649,67 @@ systemd.user.services.lazytmux-state-gc = {
   Unit.Description = "tmux state store garbage collection";
   Service = {
     Type = "oneshot";
-    ExecStart = "${tmux-state}/bin/tmux-state gc";
+    ExecStart = "${tmux-state-bin} gc";
   };
 };
 ```
 
 ## Implementation: Go Module
 
-### Layout
+The Go source lives at the **root** of the new `tmux-state` repo (not inside lazytmux).
+
+### Repo Layout
 
 ```
-go.mod                                        — module github.com/noamsto/lazytmux
-go.sum
-cmd/tmux-state/main.go                        — CLI entry, subcommand dispatch
-internal/
-  config/config.go                            — env + flag loading
-  config/config_test.go
-  log/log.go                                  — slog setup, log file rotation
-  store/store.go                              — DB open, migrations, prepared statements
-  store/store_test.go
-  store/migrations/0001_initial.sql
-  store/migrations/embed.go                   — go:embed
-  snapshot/snapshot.go                        — read live server → manifest
-  snapshot/parse.go                           — parse `tmux ... -F` output
-  snapshot/parse_test.go                      — table-driven on canned tmux output
-  snapshot/save.go                            — save flow (fingerprint, scrollback capture, insert)
-  snapshot/save_test.go
-  closeevent/capture.go                       — capture-event subcommand
-  closeevent/capture_test.go
-  closeevent/index.go                         — live_index maintenance
-  restore/plan.go                             — plan builder
-  restore/plan_test.go
-  restore/apply.go                            — execute plan
-  restore/apply_test.go                       — uses fake tmux client
-  filter/filter.go                            — pure functions, easy to test
-  filter/filter_test.go
-  scrollback/store.go                         — CAS, refcount, GC
-  scrollback/store_test.go
-  tmux/client.go                              — exec wrapper, format-string passing
-  tmux/client_test.go                         — fake binary harness
-  tmux/parse.go                               — output parsing helpers
-  picker/picker.go                            — fzf invocation
-  picker/format.go                            — row rendering for fzf
-testutil/
-  tmuxserver.go                               — start/stop a real tmux server in /tmp
-  tmuxserver_test.go
-integration_test.go                           — end-to-end: save → kill server → restore → assert
+tmux-state/                                   — git@github.com:noamsto/tmux-state.git
+  go.mod                                      — module github.com/noamsto/tmux-state
+  go.sum
+  flake.nix                                   — exposes the package + a default app
+  README.md                                   — install, configure, vanilla-tmux usage
+  examples/
+    tmux.conf                                 — minimal hook + keybinding wiring for non-lazytmux users
+  cmd/tmux-state/main.go                      — CLI entry, subcommand dispatch (cobra)
+  internal/
+    config/config.go                          — env + flag + TOML loading
+    config/config_test.go
+    log/log.go                                — slog setup, log file rotation
+    store/store.go                            — DB open, migrations, prepared statements
+    store/store_test.go
+    store/migrations/0001_initial.sql
+    store/migrations/embed.go                 — go:embed
+    snapshot/snapshot.go                      — read live server → manifest
+    snapshot/parse.go                         — parse `tmux ... -F` output
+    snapshot/parse_test.go                    — table-driven on canned tmux output
+    snapshot/save.go                          — save flow (fingerprint, scrollback capture, insert)
+    snapshot/save_test.go
+    closeevent/capture.go                     — capture-event subcommand
+    closeevent/capture_test.go
+    closeevent/index.go                       — live_index maintenance
+    restore/plan.go                           — plan builder (used by both restore and explore)
+    restore/plan_test.go
+    restore/apply.go                          — execute plan
+    restore/apply_test.go                     — uses fake tmux client
+    filter/filter.go                          — pure functions, easy to test
+    filter/filter_test.go
+    scrollback/store.go                       — CAS, refcount, GC
+    scrollback/store_test.go
+    tmux/client.go                            — exec wrapper, format-string passing
+    tmux/client_test.go                       — fake binary harness
+    tmux/parse.go                             — output parsing helpers
+    picker/picker.go                          — fzf invocation (fast pickers)
+    picker/format.go                          — row rendering for fzf
+    explore/                                  — Bubble Tea TUI (history explorer)
+      explore.go                              — Program entry, top-level Model
+      events_list.go                          — left-pane list model
+      detail.go                               — right-pane detail/tree model
+      filter.go                               — filter expression parsing
+      keys.go                                 — keymap
+      style.go                                — lipgloss styles
+      preview.go                              — scrollback streaming preview
+      explore_test.go                         — teatest golden-frame tests
+  testutil/
+    tmuxserver.go                             — start/stop a real tmux server in /tmp
+  integration_test.go                         — end-to-end: save → kill server → restore → assert
 ```
 
 ### Dependencies
@@ -605,6 +719,10 @@ integration_test.go                           — end-to-end: save → kill serv
 | `modernc.org/sqlite` | Pure-Go SQLite (no CGO; clean Nix build, cross-compiles trivially) |
 | `github.com/spf13/cobra` | CLI framework — used in `worktrunk` precedent |
 | `github.com/klauspost/compress/zstd` | Pure-Go zstd for scrollback compression |
+| `github.com/charmbracelet/bubbletea` | TUI framework for the `explore` subcommand |
+| `github.com/charmbracelet/bubbles` | List/viewport/textinput components |
+| `github.com/charmbracelet/lipgloss` | TUI styling |
+| `github.com/charmbracelet/x/exp/teatest` | Golden-frame tests for the TUI |
 | `github.com/google/go-cmp/cmp` | Test diffing |
 | Standard library | `encoding/json`, `crypto/sha256`, `log/slog`, `os/exec`, `sync`, `context` |
 
@@ -615,32 +733,51 @@ integration_test.go                           — end-to-end: save → kill serv
 
 ### Nix Packaging
 
-`packages/tmux-state.nix`:
+In the **`tmux-state` repo's** `flake.nix`:
 
 ```nix
-{ buildGoModule, ... }:
+{
+  description = "Fast, smart tmux state persistence — replaces resurrect/continuum.";
 
-buildGoModule {
-  pname = "tmux-state";
-  version = "0.1.0";
-  src = ../.;
-  vendorHash = "sha256-...";
-  subPackages = [ "cmd/tmux-state" ];
-  doCheck = true;                # runs go test ./... at build time
-  meta.mainProgram = "tmux-state";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.flake-parts.url = "github:hercules-ci/flake-parts";
+
+  outputs = inputs @ { flake-parts, ... }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      perSystem = { pkgs, ... }: {
+        packages.default = pkgs.buildGoModule {
+          pname = "tmux-state";
+          version = "0.1.0";
+          src = ./.;
+          vendorHash = "sha256-...";       # filled in at build time
+          subPackages = [ "cmd/tmux-state" ];
+          doCheck = true;                  # runs go test ./...
+          meta.mainProgram = "tmux-state";
+        };
+        apps.default.program = "${self.packages.${system}.default}/bin/tmux-state";
+      };
+    };
 }
 ```
 
-`flake.nix` adds:
+In the **`lazytmux` repo's** `flake.nix`:
 
 ```nix
-packages = {
-  default = tmuxConfig.tmux-wrapped;
-  tmux-state = pkgs.callPackage ./packages/tmux-state.nix { };
-};
+inputs.tmux-state.url = "github:noamsto/tmux-state";
+inputs.tmux-state.inputs.nixpkgs.follows = "nixpkgs";
 ```
 
-`config/tmux.conf.nix` references `${tmux-state}/bin/tmux-state` via the same store-path interpolation pattern used for shell scripts.
+And in `config/tmux.conf.nix`, accept it as an arg:
+
+```nix
+{ pkgs, lib, tmux-state, ... }:
+# ...
+let
+  tmux-state-bin = "${tmux-state.packages.${pkgs.system}.default}/bin/tmux-state";
+in
+# referenced as ${tmux-state-bin} in hooks and keybindings, same store-path interpolation pattern as scripts
+```
 
 ### Go Coding Conventions
 
@@ -663,7 +800,9 @@ packages = {
 
 ## Testing
 
-### Unit Tests (`go test ./...`)
+All Go tests run inside the `tmux-state` repo (`go test ./...`). The lazytmux side has no Go code; lazytmux validation is `nix flake check` + the manual checklist below.
+
+### Unit Tests (`go test ./...` in tmux-state)
 
 Per-package tests for:
 - `internal/snapshot/parse_test.go` — table-driven on canned `tmux list-panes -F '...'` output strings, including weird cases (newlines in commands, unicode in window names, empty cwd).
@@ -671,8 +810,9 @@ Per-package tests for:
 - `internal/restore/plan_test.go` — given a manifest, assert action sequence.
 - `internal/scrollback/store_test.go` — write same content twice → one file; refcount + GC.
 - `internal/store/store_test.go` — open, migrate, insert, query, prune; uses `:memory:` SQLite.
+- `internal/explore/explore_test.go` — `teatest` golden-frame tests for navigation, filter mode, sub-tree expansion, scrollback preview toggle.
 
-### Integration Test (`go test -run TestIntegration`)
+### Integration Test (`go test -run TestIntegration` in tmux-state)
 
 A single end-to-end test in `integration_test.go`:
 1. Start a fresh tmux server on a tmp socket.
@@ -700,19 +840,38 @@ Skipped under `go test -short`. Wrapped with `t.TempDir()` + `defer cleanup`.
 9. `prefix + U` shows close-event picker; selecting an entry restores it.
 10. `prefix + R` shows snapshot picker with smart-filter pre-applied.
 11. `prefix + Ctrl-s` triggers an immediate save; verify new event row.
-12. Save throttling: open 10 windows in quick succession, verify ≤ ceil(elapsed/30) snapshot rows.
-13. GC: manually delete event rows, run `tmux-state gc`, verify scrollback files reaped.
-14. Rebuild survival: `home-manager switch`, verify timer + hooks still functional.
-15. Generation rollback: `home-manager switch --rollback`, verify older binary operates on existing DB or fails cleanly.
-16. `nix flake check` passes (Go source goes through gofmt + golangci-lint).
+12. `prefix + E` opens the explore TUI; navigation (`j/k`, `g/G`) works; events list matches DB.
+13. Explore TUI filter mode (`/`) narrows the list incrementally; `f` cycles kind filter.
+14. Explore TUI per-unit restore: place cursor on a pane node inside an event, press `enter`, verify only that pane is restored.
+15. Explore TUI scrollback preview: `s` shows last 20 lines for highlighted pane; toggle to expand to 200.
+16. Explore TUI delete (`d`): event row removed, scrollback files reaped on next `gc`.
+17. Save throttling: open 10 windows in quick succession, verify ≤ ceil(elapsed/30) snapshot rows.
+18. GC: manually delete event rows, run `tmux-state gc`, verify scrollback files reaped.
+19. Rebuild survival: `home-manager switch`, verify timer + hooks still functional.
+20. Generation rollback: `home-manager switch --rollback`, verify older binary operates on existing DB or fails cleanly.
+21. `nix flake check` (lazytmux side) and `go test ./... && go vet ./... && golangci-lint run` (tmux-state side) both pass.
 
 ## Migration & Rollout
 
-Single PR, single commit (or two — one for the binary, one for the wiring change, if review wants smaller diffs).
+Two-repo bootstrap, then one wiring PR:
 
-- One-line release note: "Replaces tmux-resurrect/continuum and tmux-undo (unimplemented spec) with `tmux-state` Go binary backed by SQLite."
-- User runs `home-manager switch`; activation script reloads tmux config; first save runs ~2 min after timer fires.
-- Existing `~/.local/share/tmux/resurrect/` saves are NOT read. Documented in the release note. User can manually delete the directory if desired.
+1. **Phase 1 — `tmux-state` repo bootstrap.**
+   - Create `github.com/noamsto/tmux-state` (empty repo).
+   - Initial commit: `flake.nix`, `go.mod`, `cmd/tmux-state/main.go` skeleton, `internal/log`, `internal/store` with migration 0001, README, examples/tmux.conf.
+   - Subsequent PRs: build out each `internal/` package per the layout above. Tests gate every PR.
+   - Release v0.1.0 once `save`, `restore --auto`, `undo --pop`, and `pick` work end-to-end (explore can ship in v0.2.0).
+
+2. **Phase 2 — `lazytmux` integration PR.**
+   - Add `tmux-state` flake input.
+   - Update `config/tmux.conf.nix`: hook wiring, keybindings, removal of `@resurrect-*` / `@continuum-*` lines and the `continuum_save.sh` invocation.
+   - Update `modules/home-manager.nix`: new `programs.lazytmux.persist` options block, systemd timer + service, GC timer.
+   - Update CLAUDE.md to mention `tmux-state` as the persistence layer.
+
+3. **Phase 3 — explore (optional, after v0.1.0).** Add the Bubble Tea TUI, `prefix + E` binding, `tmux-state explore` subcommand.
+
+Existing `~/.local/share/tmux/resurrect/` saves are NOT read. Documented in the lazytmux PR release note. User can manually delete the directory if desired.
+
+User-facing rollout: `home-manager switch`; activation script reloads tmux config; first save runs ~2 min after timer fires.
 
 ## Future Work (Not In This Spec)
 
@@ -720,5 +879,6 @@ Single PR, single commit (or two — one for the binary, one for the wiring chan
 - Per-session restore-mode override: `set -t <session> @persist-mode interactive` to override the global `restoreMode`.
 - Cross-host snapshot portability via cwd remap rules (`/home/old/path` → `/home/new/path` substitution at restore time).
 - Snapshot diff/compaction: store snapshot N as a delta from snapshot N-1 to reduce DB size for users with very stable layouts.
-- Web UI for browsing history (lazytmux project lite).
-- Search across history: full-text search of pane scrollback contents (`scrollbacks` table + FTS5 virtual table).
+- FTS5 over the `scrollbacks` table for full-text search of pane scrollback contents from the `explore` TUI.
+- Web UI for browsing history (separate frontend over the same SQLite store).
+- Auto-publish `tmux-state` to nixpkgs once stable.
