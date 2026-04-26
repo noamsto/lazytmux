@@ -1,4 +1,4 @@
-# tmux-state: Unified Persistence, Undo, and History Explorer
+# tmux-state: Unified Persistence and Undo (with lazytmux/picker history mode)
 
 **Date:** 2026-04-26
 **Status:** Draft
@@ -14,22 +14,27 @@
 
 A standalone Go binary, `tmux-state`, replaces `tmux-resurrect`, `tmux-continuum`, and the previously-spec'd `tmux-undo` feature. The binary lives in its own repository (`noamsto/tmux-state`) and is consumed by lazytmux as a flake input — same pattern as `worktrunk`. It speaks raw tmux protocol and ships zero lazytmux-specific knowledge; lazytmux supplies the keybindings, hook wiring, and home-manager options that integrate it.
 
-It records tmux server activity to a SQLite event store with content-addressed scrollback files, exposing three complementary user-facing flows:
+It records tmux server activity to a SQLite event store with content-addressed scrollback files, exposing two user-facing flows from the standalone binary:
 
 1. **Persistence** — periodic snapshots (every 60s + on structural-change hooks) restored automatically on tmux server start, through a smart filter that drops stale, idle, and duplicate entries.
 2. **Undo** — close-event captures (`pane-died`, `window-unlinked`, `session-closed`) restored on demand via `prefix + u` (pop newest) or `prefix + U` (picker).
-3. **Explore** — a Bubble Tea TUI (`prefix + E`) for browsing the full event history with manifest preview, scrollback peek, filter, and per-unit (session/window/pane) restore.
 
-All three flows share one event store, one filter library, one set of tmux interaction primitives, and one binary.
+A third flow — **rich history exploration with theme-aware split-pane TUI, scrollback preview, and search** — lives in the existing `lazytmux/picker` Go module (Bubble Tea v2, theme integration, viewport preview, Claude-status awareness). A new `--state` mode in `lazytmux/picker` queries `tmux-state list --json` (or imports the Go store package directly) and reuses the existing rendering pipeline. This avoids duplicating Bubble Tea + theme + icon work that already exists in lazytmux.
+
+For non-lazytmux users, `tmux-state pick --kind=close|snapshot` provides a simple `fzf`-based picker that works with vanilla tmux.
+
+All flows share one event store, one filter library, one set of tmux interaction primitives.
 
 ## Repo Boundaries
 
 | Concern | `tmux-state` repo | `lazytmux` repo |
 |---|---|---|
 | Go binary, SQLite store, scrollback CAS, restore engine | ✓ | — |
-| Bubble Tea explorer TUI | ✓ | — |
 | `tmux` shell-out wrapper, output parsers | ✓ | — |
 | Smart filter (pure functions) | ✓ | — |
+| Simple fzf pickers (`pick --kind=…`) for vanilla-tmux users | ✓ | — |
+| `list --json` machine-readable history output | ✓ | — |
+| Rich Bubble Tea history explorer (theme + preview + search + Claude-status) | — | ✓ extends existing `lazytmux/picker` module with `--state` mode |
 | Default config (allow-list, thresholds) | ✓ ships with sensible defaults | overrides via flake input args |
 | `tmux.conf` `set-hook` lines, keybindings | — | ✓ in `config/tmux.conf.nix` |
 | home-manager options block (`programs.lazytmux.persist`) | — | ✓ in `modules/home-manager.nix` |
@@ -48,15 +53,14 @@ Other tmux users (not on lazytmux) consume `tmux-state` directly: `nix run githu
 ## Scope and Non-Goals
 
 **In scope:**
-- Single Go binary `tmux-state` with subcommands: `save`, `capture-event`, `index-update`, `restore`, `undo`, `pick`, `explore`, `list`, `prune`, `gc`, `version`.
+- Single Go binary `tmux-state` with subcommands: `save`, `capture-event`, `index-update`, `restore`, `undo`, `pick`, `list` (with `--json`), `prune`, `gc`, `version`.
 - Periodic snapshot via systemd user timer + immediate snapshot on structural-change hooks.
 - Close-event capture via `pane-died`, `window-unlinked`, `session-closed` hooks with "outermost wins" dedup.
 - SQLite event store at `$XDG_DATA_HOME/lazytmux/state.db`.
 - Content-addressed scrollback files at `$XDG_DATA_HOME/lazytmux/scrollbacks/<sha256>.zst` with refcount-based GC.
 - Smart restore filter (dedup vs running server, stale-session age, idle-shell drop, idle-window drop, stale-snapshot age).
 - Three restore modes: `auto`, `interactive`, `off`.
-- Bubble Tea history explorer (`tmux-state explore`) with split-pane list + detail, filter mode, scrollback preview, per-unit restore.
-- Keybindings: `prefix + u` (undo pop), `prefix + U` (undo picker), `prefix + R` (snapshot picker), `prefix + E` (history explorer TUI), `prefix + Ctrl-s` (save now).
+- Keybindings: `prefix + u` (undo pop), `prefix + U` (undo picker), `prefix + R` (snapshot picker), `prefix + E` (rich history explorer; routes to `lazytmux/picker --state`), `prefix + Ctrl-s` (save now).
 - Allow-list-gated command re-launch on restore (`nvim`, `htop`, `lazygit`, …).
 - Home-manager options for all thresholds and modes.
 - Removal of `tmux-resurrect` / `tmux-continuum` plugin loads and configuration from `config/tmux.conf.nix`.
@@ -110,7 +114,7 @@ Other tmux users (not on lazytmux) consume `tmux-state` directly: `nix run githu
 | `internal/scrollback` | Content-addressed compressed scrollback files. Hash, refcount, GC. |
 | `internal/tmux` | Wraps `exec.Command("tmux", ...)`. Output parsing, safe argument passing. |
 | `internal/picker` | `fzf` invocation and result formatting for fast undo/snapshot pickers. |
-| `internal/explore` | Bubble Tea TUI for the `explore` subcommand: split-pane history browser with manifest detail and scrollback preview. |
+| `pkg/store`, `pkg/restore`, `pkg/scrollback` | Re-exports of internal packages under `pkg/` so `lazytmux/picker` (or any external consumer) can import the store/restore/scrollback APIs directly without shelling out. |
 | `internal/config` | Config loading (env vars, CLI flags). |
 | `internal/log` | Structured logging via `log/slog`. |
 
@@ -375,81 +379,23 @@ Both run `tmux-state pick --kind=<close|snapshot>`, which opens a `display-popup
 
 For snapshots, the smart filter is applied and the result is shown as a checklist (toggleable per session/window/pane). For close events, the user just selects an event to restore — no filter.
 
-### `prefix + E` (History Explorer TUI)
+### `prefix + E` (History Explorer — lives in `lazytmux/picker`)
 
-`tmux-state explore` — opens a Bubble Tea TUI in `display-popup -E -w 90% -h 80%`. Designed for *browsing* history rather than restoring one specific thing fast.
+The rich history explorer is **not** in `tmux-state`. It is a new mode added to the existing `lazytmux/picker` Go module (Bubble Tea v2, Catppuccin theme integration, viewport-based preview, search/filter, Claude-status awareness already present in `picker/main.go` and `picker/tui.go`).
 
-**Layout:**
+**Why the split:** `lazytmux/picker` is heavily lazytmux-coupled (reads `/tmp/claude-status/panes/`, uses `iconMap` from `process-icons.nix`, reads `@thm_*` tmux options, theme detection from `theme-state.json`). Putting an explorer inside `tmux-state` would either (a) duplicate all that infrastructure, or (b) drag lazytmux-specific code into a tool meant to be vanilla-tmux compatible. Extending `lazytmux/picker` with a `--state` mode is strictly less code and gives users the same theme/icon/Claude experience they already have for session and window pickers.
 
-```
-┌──────────────────────────────────┬───────────────────────────────────┐
-│ Events (j/k, /, f)                │ Detail                            │
-├──────────────────────────────────┤                                   │
-│ ▶ 2026-04-26 14:03  snapshot      │ Kind: snapshot                    │
-│   2026-04-26 14:01  pane-died     │ Saved: 2026-04-26 14:03:11        │
-│   2026-04-26 13:59  snapshot      │ Reason: timer                     │
-│   2026-04-26 13:55  session-closed│ Sessions: 3                       │
-│   2026-04-26 13:50  snapshot      │ Windows:  9                       │
-│   ...                             │ Panes:    21                      │
-│                                   │                                   │
-│                                   │ ▾ session lazytmux  (last_attached│
-│                                   │   ▾ window 1: main                │
-│                                   │     ◇ pane 1: nvim    /home/noams │
-│                                   │     ◇ pane 2: bash    /home/noams │
-│                                   │   ▸ window 2: build               │
-│                                   │ ▸ session work                    │
-│                                   │ ▸ session test                    │
-│                                   │                                   │
-│                                   │ Scrollback preview (s):           │
-│                                   │   [last 20 lines of selected pane]│
-│                                   │                                   │
-│ Keys: enter=restore  d=delete    │                                   │
-│       s=scrollback  /=filter      │                                   │
-│       r=refresh     q=quit        │                                   │
-└──────────────────────────────────┴───────────────────────────────────┘
-```
+**`tmux-state` exposes only what the picker needs:**
 
-**Components (Bubble Tea models):**
+- `tmux-state list --json` — emits all events as one JSON array per line (`{"id":7,"ts":1745700000000,"kind":"snapshot","reason":"timer","manifest":{...}}`), suitable for a one-shot picker query.
+- `tmux-state list --json --follow` (optional, can be deferred) — streams new events as they're inserted, for live updates.
+- `tmux-state restore --from-event=<id>` — restores a specific event by id, no smart filter (user explicitly chose).
+- `tmux-state restore --from-event=<id> --target=session=<name>` (or `--target=window=<sess:idx>`, `--target=pane=<sess:idx.pane>`) — restores a single sub-unit of an event.
+- The `internal/store`, `internal/restore`, and `internal/scrollback` packages are exported (`pkg/...`) so `lazytmux/picker` can import them directly instead of shelling out, if desired.
 
-- **Event list** (left) — sorted by `ts DESC`. Filterable by kind, time range, session name. Supports `/` for incremental search across all visible columns.
-- **Detail pane** (right) — top: event metadata (kind, ts, reason, host, parent_event_id). Middle: collapsible tree of session/window/pane structure parsed from `manifest_json`. Bottom: optional scrollback preview (last N lines of zstd-decompressed file).
-- **Status bar** — keybinding hints, current filter expression, total/visible event counts.
+**`lazytmux/picker --state` UX (target spec, designed in lazytmux's own future plan):** split-pane list + detail with manifest tree, scrollback preview via existing `viewport.Model`, search via existing `query` field, theme via existing `tmuxOpts`. `prefix + E` in lazytmux's tmux conf maps to `display-popup -E ... 'tmux-picker-generate --state'`.
 
-**Keybindings:**
-
-| Key | Action |
-|---|---|
-| `j`/`k` or `↓`/`↑` | Move selection |
-| `g`/`G` | Top / bottom |
-| `enter` | Restore the highlighted unit (whole event, OR selected sub-tree node if cursor is on a pane/window) |
-| `space` | Toggle expansion of session/window node in detail tree |
-| `s` | Toggle scrollback preview for the highlighted pane |
-| `/` | Filter mode (incremental) |
-| `f` | Cycle filter: all / snapshots only / close events only |
-| `d` | Delete highlighted event (with confirmation) |
-| `r` | Refresh (re-query DB) |
-| `?` | Help overlay |
-| `q` / `esc` | Quit |
-
-**Per-unit restore semantics:**
-
-When the cursor is on a sub-tree node (session/window/pane within a snapshot), `enter` restores *only* that unit, not the whole event. Internally this builds a one-element restore plan.
-
-For a pane node: same as `prefix + u` would do for that single pane.
-For a window node: re-create the window with all its panes.
-For a session node: re-create the session with all its windows.
-For an event-level row: re-create everything in that event (modulo dedup).
-
-**Scrollback preview:**
-
-Reads `event_scrollbacks.scrollback_sha`, decompresses the file, displays the last 20 lines (`tail -n 20`-equivalent in Go) inline. Toggle with `s` to expand to last 200 lines. Avoids loading huge scrollbacks into memory at once via streaming zstd decode.
-
-**Implementation notes:**
-
-- `internal/explore` package owns the TUI. Uses `github.com/charmbracelet/bubbletea` + `github.com/charmbracelet/lipgloss` + `github.com/charmbracelet/bubbles/list` for the left pane.
-- Read-only against the DB by default. Delete action acquires the write flock.
-- Updates are reactive: a periodic `tea.Tick` re-queries event count; if changed, prompts user with "new events available, press `r` to refresh." Avoids surprise mutations under the cursor.
-- Tested via Bubble Tea's `teatest` harness for golden-output assertions on the rendered frames.
+**For non-lazytmux users:** `tmux-state pick --kind=close|snapshot` (the simple fzf wrapper) plus `tmux-state list --json | jq '...'` covers basic exploration. No fancy TUI.
 
 ### Smart Filter
 
@@ -597,7 +543,7 @@ run-shell -b '${tmux-state-bin} restore --auto'
 bind   u    run-shell '${tmux-state-bin} undo --pop'
 bind   U    run-shell '${tmux-state-bin} pick --kind=close'
 bind   R    run-shell '${tmux-state-bin} pick --kind=snapshot'
-bind   E    display-popup -E -w 90% -h 80% '${tmux-state-bin} explore'
+bind   E    display-popup -E -w 90% -h 80% '${tmux-picker-generate-bin} --state'
 bind C-s    run-shell '${tmux-state-bin} save --reason=keybinding'
 ```
 
@@ -685,7 +631,7 @@ tmux-state/                                   — git@github.com:noamsto/tmux-st
     closeevent/capture.go                     — capture-event subcommand
     closeevent/capture_test.go
     closeevent/index.go                       — live_index maintenance
-    restore/plan.go                           — plan builder (used by both restore and explore)
+    restore/plan.go                           — plan builder (used by restore and exposed via pkg/restore)
     restore/plan_test.go
     restore/apply.go                          — execute plan
     restore/apply_test.go                     — uses fake tmux client
@@ -698,15 +644,10 @@ tmux-state/                                   — git@github.com:noamsto/tmux-st
     tmux/parse.go                             — output parsing helpers
     picker/picker.go                          — fzf invocation (fast pickers)
     picker/format.go                          — row rendering for fzf
-    explore/                                  — Bubble Tea TUI (history explorer)
-      explore.go                              — Program entry, top-level Model
-      events_list.go                          — left-pane list model
-      detail.go                               — right-pane detail/tree model
-      filter.go                               — filter expression parsing
-      keys.go                                 — keymap
-      style.go                                — lipgloss styles
-      preview.go                              — scrollback streaming preview
-      explore_test.go                         — teatest golden-frame tests
+  pkg/                                        — re-exports for external consumers (lazytmux/picker)
+    store/store.go                            — re-export of internal/store
+    restore/restore.go                        — re-export of internal/restore
+    scrollback/scrollback.go                  — re-export of internal/scrollback
   testutil/
     tmuxserver.go                             — start/stop a real tmux server in /tmp
   integration_test.go                         — end-to-end: save → kill server → restore → assert
@@ -719,10 +660,6 @@ tmux-state/                                   — git@github.com:noamsto/tmux-st
 | `modernc.org/sqlite` | Pure-Go SQLite (no CGO; clean Nix build, cross-compiles trivially) |
 | `github.com/spf13/cobra` | CLI framework — used in `worktrunk` precedent |
 | `github.com/klauspost/compress/zstd` | Pure-Go zstd for scrollback compression |
-| `github.com/charmbracelet/bubbletea` | TUI framework for the `explore` subcommand |
-| `github.com/charmbracelet/bubbles` | List/viewport/textinput components |
-| `github.com/charmbracelet/lipgloss` | TUI styling |
-| `github.com/charmbracelet/x/exp/teatest` | Golden-frame tests for the TUI |
 | `github.com/google/go-cmp/cmp` | Test diffing |
 | Standard library | `encoding/json`, `crypto/sha256`, `log/slog`, `os/exec`, `sync`, `context` |
 
@@ -810,7 +747,7 @@ Per-package tests for:
 - `internal/restore/plan_test.go` — given a manifest, assert action sequence.
 - `internal/scrollback/store_test.go` — write same content twice → one file; refcount + GC.
 - `internal/store/store_test.go` — open, migrate, insert, query, prune; uses `:memory:` SQLite.
-- `internal/explore/explore_test.go` — `teatest` golden-frame tests for navigation, filter mode, sub-tree expansion, scrollback preview toggle.
+- (Rich explorer TUI tests live in lazytmux/picker, not here.)
 
 ### Integration Test (`go test -run TestIntegration` in tmux-state)
 
@@ -840,16 +777,12 @@ Skipped under `go test -short`. Wrapped with `t.TempDir()` + `defer cleanup`.
 9. `prefix + U` shows close-event picker; selecting an entry restores it.
 10. `prefix + R` shows snapshot picker with smart-filter pre-applied.
 11. `prefix + Ctrl-s` triggers an immediate save; verify new event row.
-12. `prefix + E` opens the explore TUI; navigation (`j/k`, `g/G`) works; events list matches DB.
-13. Explore TUI filter mode (`/`) narrows the list incrementally; `f` cycles kind filter.
-14. Explore TUI per-unit restore: place cursor on a pane node inside an event, press `enter`, verify only that pane is restored.
-15. Explore TUI scrollback preview: `s` shows last 20 lines for highlighted pane; toggle to expand to 200.
-16. Explore TUI delete (`d`): event row removed, scrollback files reaped on next `gc`.
-17. Save throttling: open 10 windows in quick succession, verify ≤ ceil(elapsed/30) snapshot rows.
-18. GC: manually delete event rows, run `tmux-state gc`, verify scrollback files reaped.
-19. Rebuild survival: `home-manager switch`, verify timer + hooks still functional.
-20. Generation rollback: `home-manager switch --rollback`, verify older binary operates on existing DB or fails cleanly.
-21. `nix flake check` (lazytmux side) and `go test ./... && go vet ./... && golangci-lint run` (tmux-state side) both pass.
+12. `tmux-state list --json` emits valid JSON one event per line; can be piped through `jq`.
+13. Save throttling: open 10 windows in quick succession, verify ≤ ceil(elapsed/30) snapshot rows.
+14. GC: manually delete event rows, run `tmux-state gc`, verify scrollback files reaped.
+15. Rebuild survival: `home-manager switch`, verify timer + hooks still functional.
+16. Generation rollback: `home-manager switch --rollback`, verify older binary operates on existing DB or fails cleanly.
+17. `nix flake check` (lazytmux side) and `go test ./... && go vet ./... && golangci-lint run` (tmux-state side) both pass.
 
 ## Migration & Rollout
 
@@ -859,7 +792,7 @@ Two-repo bootstrap, then one wiring PR:
    - Create `github.com/noamsto/tmux-state` (empty repo).
    - Initial commit: `flake.nix`, `go.mod`, `cmd/tmux-state/main.go` skeleton, `internal/log`, `internal/store` with migration 0001, README, examples/tmux.conf.
    - Subsequent PRs: build out each `internal/` package per the layout above. Tests gate every PR.
-   - Release v0.1.0 once `save`, `restore --auto`, `undo --pop`, and `pick` work end-to-end (explore can ship in v0.2.0).
+   - Release v0.1.0 once `save`, `restore --auto`, `undo --pop`, `pick`, and `list --json` work end-to-end. `pkg/` re-exports added once lazytmux/picker integration starts (Phase 3).
 
 2. **Phase 2 — `lazytmux` integration PR.**
    - Add `tmux-state` flake input.
@@ -867,7 +800,7 @@ Two-repo bootstrap, then one wiring PR:
    - Update `modules/home-manager.nix`: new `programs.lazytmux.persist` options block, systemd timer + service, GC timer.
    - Update CLAUDE.md to mention `tmux-state` as the persistence layer.
 
-3. **Phase 3 — explore (optional, after v0.1.0).** Add the Bubble Tea TUI, `prefix + E` binding, `tmux-state explore` subcommand.
+3. **Phase 3 — `lazytmux/picker --state` mode (in lazytmux repo, after v0.1.0).** Extend the existing `picker/main.go` and `picker/tui.go` with a state-history mode that imports `github.com/noamsto/tmux-state/pkg/store` (or shells out to `tmux-state list --json`), reuses Catppuccin theming and the existing `viewport.Model` preview, and binds to `prefix + E`. Spec'd separately in lazytmux's plans dir.
 
 Existing `~/.local/share/tmux/resurrect/` saves are NOT read. Documented in the lazytmux PR release note. User can manually delete the directory if desired.
 
@@ -879,6 +812,6 @@ User-facing rollout: `home-manager switch`; activation script reloads tmux confi
 - Per-session restore-mode override: `set -t <session> @persist-mode interactive` to override the global `restoreMode`.
 - Cross-host snapshot portability via cwd remap rules (`/home/old/path` → `/home/new/path` substitution at restore time).
 - Snapshot diff/compaction: store snapshot N as a delta from snapshot N-1 to reduce DB size for users with very stable layouts.
-- FTS5 over the `scrollbacks` table for full-text search of pane scrollback contents from the `explore` TUI.
+- FTS5 over the `scrollbacks` table for full-text search of pane scrollback contents from `lazytmux/picker --state`.
 - Web UI for browsing history (separate frontend over the same SQLite store).
 - Auto-publish `tmux-state` to nixpkgs once stable.
