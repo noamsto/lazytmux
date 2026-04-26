@@ -262,6 +262,9 @@
     bind c new-window -c "#{pane_current_path}"
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
 
+    # Yank pane's current working directory to system clipboard
+    bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
+
     # Resize panes
     bind -r -T prefix M-Up    resize-pane -U 5
     bind -r -T prefix M-Down  resize-pane -D 5
@@ -389,6 +392,12 @@
     set -g @fingers-pattern-1 "[a-z][a-z_]*_[0-9a-hjkmnp-tv-z]{26}"
     set -g @fingers-pattern-2 "sha256-[A-Za-z0-9+/]{43}="
     set -g @fingers-pattern-3 "sha256:[0-9a-z]{52}"
+    set -g @fingers-pattern-4 "[0-9A-HJKMNP-TV-Z]{26}"
+    set -g @fingers-pattern-5 "([0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}"
+    set -g @fingers-pattern-6 "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    set -g @fingers-pattern-7 "arn:[a-z0-9-]+:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:-]+"
+    set -g @fingers-pattern-8 "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
+    set -g @fingers-pattern-9 "([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Re-init fingers on attach (workaround for tmux-fingers colors)
