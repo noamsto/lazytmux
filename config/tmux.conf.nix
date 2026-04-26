@@ -112,7 +112,6 @@
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-apply-theme-colors"
-    "claude-copy-mode"
     "tmux-scratchpad"
   ];
 
@@ -249,9 +248,6 @@
     set -g copy-mode-position-style "bg=#{@thm_surface_0},fg=#{@thm_mauve}"
     set -g copy-mode-selection-style "bg=#{@thm_mauve},fg=#{@thm_bg}"
 
-    # Smart copy-mode: auto-dumps Claude Code transcript before entering
-    bind-key [ run-shell '${script.claude-copy-mode}/bin/claude-copy-mode enter'
-
     # Clear screen
     bind -n M-l send-keys 'C-l'
 
@@ -358,9 +354,6 @@
     set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-
-    # Smart copy-mode exit: clean up Claude Code transcript viewer when leaving copy-mode
-    set-hook -g pane-mode-changed 'if-shell -F "#{&&:#{==:#{pane_mode},},#{==:#{@claude-copy-mode},1}}" "set-option -p -u @claude-copy-mode ; send-keys Escape"'
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
     set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id}"'

@@ -102,11 +102,11 @@ in {
         type = lib.types.bool;
         default = false;
         description = ''
-          Expose claude-status-update, claude-status, and claude-copy-mode on
-          PATH via home.packages. Needed when Claude Code hooks (or any tool
-          that calls them by bare name) run in a shell that doesn't inherit
-          the tmux wrapper's PATH — e.g. a fish login shell, which resets
-          PATH, or a direnv-loaded devshell.
+          Expose claude-status-update and claude-status on PATH via
+          home.packages. Needed when Claude Code hooks (or any tool that
+          calls them by bare name) run in a shell that doesn't inherit the
+          tmux wrapper's PATH — e.g. a fish login shell, which resets PATH,
+          or a direnv-loaded devshell.
         '';
       };
     };
@@ -205,7 +205,6 @@ in {
         ++ lib.optionals cfg.claudeIntegration.enable [
           tmuxConfig.script.claude-status-update
           tmuxConfig.script.claude-status
-          tmuxConfig.script.claude-copy-mode
         ]
         ++ cfg.popupTools;
 
