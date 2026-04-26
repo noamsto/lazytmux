@@ -1,7 +1,7 @@
 # Session Persistence (Resurrect/Continuum Replacement)
 
 **Date:** 2026-04-26
-**Status:** Draft
+**Status:** Superseded by `2026-04-26-tmux-state-store-design.md` (unified with undo-closed-windows, SQLite-backed, Go implementation)
 **Repo:** `~/Data/git/lazytmux`
 
 ## Overview

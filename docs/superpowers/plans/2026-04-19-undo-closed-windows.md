@@ -1,5 +1,7 @@
 # Undo Closed Windows Implementation Plan
 
+> **Status:** Superseded by the unified plan derived from `docs/superpowers/specs/2026-04-26-tmux-state-store-design.md`. Do not implement this plan as-is — undo functionality is folded into the state-store design (SQLite-backed, Go implementation, shared with periodic snapshots).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `prefix+u` (quick pop) and `prefix+U` (picker) to re-open recently closed tmux sessions, windows, and panes.

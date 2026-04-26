@@ -1,7 +1,7 @@
 # Undo for Closed Sessions, Windows, and Panes
 
 **Date:** 2026-04-19
-**Status:** Approved
+**Status:** Superseded by `2026-04-26-tmux-state-store-design.md` (unified with session persistence, SQLite-backed, Go implementation)
 **Repo:** `~/Data/git/lazytmux`
 
 ## Overview
