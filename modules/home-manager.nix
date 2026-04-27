@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  tmux-state-pkg ? null,
   ...
 }: let
   cfg = config.programs.lazytmux;
@@ -78,6 +79,46 @@ in {
         type = lib.types.bool;
         default = false;
         description = "Whether to install worktrunk and configure tmux integration hooks";
+      };
+    };
+
+    persist = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether to enable tmux-state persistence (snapshots, undo, auto-restore).
+          Default off during Phase 2a soak — flip to true on a single host first,
+          observe for a week, then make default after Phase 2b lands the
+          resurrect/continuum removal.
+        '';
+      };
+
+      saveInterval = lib.mkOption {
+        type = lib.types.int;
+        default = 60;
+        description = "Seconds between periodic saves (systemd timer cadence).";
+      };
+
+      restoreMode = lib.mkOption {
+        type = lib.types.enum ["auto" "interactive" "off"];
+        default = "off";
+        description = ''
+          Behavior on tmux server start. "off" disables auto-restore (safe default
+          during soak — manual `prefix + R` still works). "auto" applies the smart
+          filter and restores. "interactive" prompts via picker (not implemented in
+          tmux-state v0.1.0 — falls back to "off").
+        '';
+      };
+
+      package = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = tmux-state-pkg;
+        defaultText = lib.literalExpression "inputs.tmux-state.packages.\${system}.default";
+        description = ''
+          The tmux-state package to use. Defaults to the flake input. Set to a
+          different derivation to override (e.g. a local checkout for dev).
+        '';
       };
     };
 
