@@ -6,6 +6,10 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     git-hooks-nix.url = "github:cachix/git-hooks.nix";
     git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
+    tmux-state = {
+      url = "github:noamsto/tmux-state";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {flake-parts, ...}:
@@ -55,7 +59,11 @@
       };
 
       flake = {
-        homeManagerModules.default = import ./modules/home-manager.nix;
+        homeManagerModules.default = {pkgs, ...} @ args:
+          import ./modules/home-manager.nix (args
+            // {
+              tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
+            });
       };
     };
 }
