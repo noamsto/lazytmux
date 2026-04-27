@@ -70,16 +70,19 @@
     else ''
 
       # === tmux-state (Phase 2a, opt-in via programs.lazytmux.persist) ===
-      set-hook -g session-created       'run-shell -b "${tmuxStateBin} save --reason=hook:session-created"'
-      set-hook -g window-linked         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
-      set-hook -g client-detached       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
+      # Use index [99] so persist hooks coexist with lazytmux's index-0 hooks
+      # (e.g. tmux-reflow-windows on window-unlinked). Same pattern as
+      # claude-status-update + tmux-fingers in config/tmux.conf.nix.
+      set-hook -g session-created[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:session-created"'
+      set-hook -g window-linked[99]         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
+      set-hook -g client-detached[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
 
-      set-hook -g pane-died             'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
-      set-hook -g window-unlinked       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
-      set-hook -g session-closed        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
+      set-hook -g pane-died[99]             'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
+      set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
+      set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
-      set-hook -g window-renamed        'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
-      set-hook -g window-layout-changed 'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
+      set-hook -g window-renamed[99]        'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
+      set-hook -g window-layout-changed[99] 'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
 
       ${lib.optionalString (cfg.persist.restoreMode == "auto") ''
         run-shell -b '${tmuxStateBin} restore --auto'
