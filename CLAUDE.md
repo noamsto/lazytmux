@@ -80,6 +80,24 @@ Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when 
 
 Git worktree management is handled by the third-party `worktrunk` tool, configured via the home-manager module's `worktrunk.enable` option.
 
+### Persist (tmux-state)
+
+Optional: `programs.lazytmux.persist.enable = true` in home-manager config wires the
+[tmux-state](https://github.com/noamsto/tmux-state) Go binary as the persistence
+layer (replaces tmux-resurrect/tmux-continuum). Default off during Phase 2a soak;
+flip per-host once trusted, then make default after Phase 2b removes the old plugins.
+
+When enabled:
+- tmux hooks fire `tmux-state save` on structural change and
+  `tmux-state capture-event` on close.
+- systemd user timer runs `tmux-state save --reason=timer` every 60s.
+- Keybindings: `prefix + u` (undo pop), `prefix + U` (close-event picker),
+  `prefix + R` (snapshot picker), `prefix + Ctrl-s` (immediate save).
+- Storage: `$XDG_DATA_HOME/tmux-state/state.db` + scrollbacks dir.
+
+`@resurrect-*` and `@continuum-*` settings + plugin loads remain in
+`config/tmux.conf.nix` during Phase 2a — both run in parallel. Phase 2b removes them.
+
 ## Key Conventions
 
 - **Shell scripts are bash**, not fish (they run inside tmux's environment). User's interactive shell is fish.
