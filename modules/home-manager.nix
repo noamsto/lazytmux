@@ -282,6 +282,7 @@ in {
       packages =
         [tmuxConfig.tmux-wrapped]
         ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
+        ++ lib.optionals (cfg.persist.enable && cfg.persist.package != null) [cfg.persist.package]
         ++ lib.optionals cfg.claudeIntegration.enable [
           tmuxConfig.script.claude-status-update
           tmuxConfig.script.claude-status
