@@ -200,6 +200,7 @@
     set -g history-limit 1500000
     set -g base-index 1
     setw -g pane-base-index 1
+    set -g popup-border-lines rounded
 
     # === Plugin Configs (must be set before run-shell) ===
     ${pluginConfigs}
@@ -230,7 +231,9 @@
 
     # Extended keyboard + clipboard
     set -g extended-keys on
-    ${terminalConfig}set -s set-clipboard on
+    set -g extended-keys-format csi-u
+    ${terminalConfig}set -as terminal-features '*:hyperlinks'
+    set -s set-clipboard on
     set -s copy-command 'wl-copy'
 
     # Prefix: backtick
@@ -243,6 +246,7 @@
 
     # Vi copy mode
     setw -g mode-keys vi
+    set -g status-keys vi
     unbind-key -T copy-mode-vi v
     bind-key -T copy-mode-vi v send -X begin-selection
     bind-key -T copy-mode-vi C-v send -X rectangle-toggle
