@@ -6,6 +6,10 @@
   # When set, adds a terminal-features line for RGB true-color + extended keys.
   # Null when no emulator preset is active (manual terminal config).
   terminalTerm ? null,
+  # Additional tmux config text appended verbatim at the end of the generated
+  # tmux.conf. Used by the home-manager module to inject opt-in features
+  # (e.g. tmux-state hooks/keybindings) without polluting the base config.
+  extraConfText ? "",
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -410,6 +414,8 @@
     # Synchronous init on config load so icons + window bar are ready before the user sees it
     run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
     run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
+
+    ${extraConfText}
   '';
 
   # Config references ~/.config/tmux/tmux.conf (stable symlink managed by HM module)

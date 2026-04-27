@@ -53,6 +53,44 @@
     then emulatorCfg.terminfoPath
     else cfg.startupSession.terminal.terminfoPath;
 
+  # tmux-state binary path (null when persist is disabled or package missing).
+  # Resolving here keeps the conditional logic out of the conf string itself.
+  tmuxStateBin =
+    if cfg.persist.enable && cfg.persist.package != null
+    then "${cfg.persist.package}/bin/tmux-state"
+    else null;
+
+  # Persist (tmux-state) tmux.conf snippet. Empty string when disabled — appended
+  # verbatim to the generated tmux.conf via extraConfText. The hooks fire
+  # `tmux-state save` on structural change and `capture-event` on close so the
+  # daemon can correlate (window closed at T, last save at T-2s ⇒ replay row).
+  tmuxStateConf =
+    if tmuxStateBin == null
+    then ""
+    else ''
+
+      # === tmux-state (Phase 2a, opt-in via programs.lazytmux.persist) ===
+      set-hook -g session-created       'run-shell -b "${tmuxStateBin} save --reason=hook:session-created"'
+      set-hook -g window-linked         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
+      set-hook -g client-detached       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
+
+      set-hook -g pane-died             'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
+      set-hook -g window-unlinked       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
+      set-hook -g session-closed        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
+
+      set-hook -g window-renamed        'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
+      set-hook -g window-layout-changed 'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
+
+      ${lib.optionalString (cfg.persist.restoreMode == "auto") ''
+        run-shell -b '${tmuxStateBin} restore --auto'
+      ''}
+
+      bind   u    run-shell '${tmuxStateBin} undo --pop'
+      bind   U    run-shell '${tmuxStateBin} pick --kind=close'
+      bind   R    run-shell '${tmuxStateBin} pick --kind=snapshot'
+      bind C-s    run-shell '${tmuxStateBin} save --reason=keybinding'
+    '';
+
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
@@ -62,6 +100,7 @@
       if emulatorCfg != null
       then emulatorCfg.term
       else null;
+    extraConfText = tmuxStateConf;
   };
 in {
   options.programs.lazytmux = {
