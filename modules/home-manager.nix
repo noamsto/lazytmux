@@ -366,7 +366,9 @@ in {
     # Never restart on switch — killing the tmux server destroys all sessions and history.
     # The startup script is a stable wrapper that resolves tmux via ~/.nix-profile/bin,
     # so the unit file doesn't change when lazytmux is updated (preventing sd-switch restart).
-    systemd.user.services.tmux-startup = lib.mkIf cfg.startupSession.enable (let
+    systemd.user = let
+      persistEnabled = cfg.persist.enable && cfg.persist.package != null;
+
       # Stable script that doesn't embed nix store paths — prevents unit file churn
       tmux-startup-script = pkgs.writeShellScript "tmux-startup" ''
         # Resolve tmux from user profile (avoids hardcoded store paths in the unit)
@@ -407,35 +409,80 @@ in {
         exit 1
       '';
     in {
-      Unit = {
-        Description = "Start tmux server on login";
-        After = ["graphical-session.target"];
-        Wants = ["graphical-session.target"];
+      services = {
+        tmux-startup = lib.mkIf cfg.startupSession.enable {
+          Unit = {
+            Description = "Start tmux server on login";
+            After = ["graphical-session.target"];
+            Wants = ["graphical-session.target"];
+          };
+
+          Service = {
+            Type = "forking";
+            ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP COLORTERM TERM TERMINFO";
+            ExecStart = "${tmux-startup-script}";
+            RemainAfterExit = true;
+            TimeoutStopSec = "5s";
+            Environment =
+              [
+                "COLORTERM=${cfg.startupSession.terminal.colorterm}"
+                "TERM=${effectiveTerm}"
+                "TMUX_TMPDIR=%t"
+              ]
+              ++ lib.optionals (effectiveTermProgram != "") [
+                "TERM_PROGRAM=${effectiveTermProgram}"
+              ]
+              ++ lib.optionals (effectiveTerminfoPath != null) [
+                "TERMINFO=${effectiveTerminfoPath}"
+              ];
+          };
+
+          Install = {
+            WantedBy = ["graphical-session.target"];
+          };
+        };
+
+        # Periodic snapshot — fires `tmux-state save --reason=timer` so the
+        # daemon has a recent baseline even between structural-change hooks.
+        lazytmux-state-save = lib.mkIf persistEnabled {
+          Unit.Description = "Save tmux-state snapshot";
+          Service = {
+            Type = "oneshot";
+            ExecStart = "${cfg.persist.package}/bin/tmux-state save --reason=timer";
+          };
+        };
+
+        # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
+        # was already pruned). Cheap to run; safe to skip on missed firings.
+        lazytmux-state-gc = lib.mkIf persistEnabled {
+          Unit.Description = "tmux-state garbage collection";
+          Service = {
+            Type = "oneshot";
+            ExecStart = "${cfg.persist.package}/bin/tmux-state gc";
+          };
+        };
       };
 
-      Service = {
-        Type = "forking";
-        ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP COLORTERM TERM TERMINFO";
-        ExecStart = "${tmux-startup-script}";
-        RemainAfterExit = true;
-        TimeoutStopSec = "5s";
-        Environment =
-          [
-            "COLORTERM=${cfg.startupSession.terminal.colorterm}"
-            "TERM=${effectiveTerm}"
-            "TMUX_TMPDIR=%t"
-          ]
-          ++ lib.optionals (effectiveTermProgram != "") [
-            "TERM_PROGRAM=${effectiveTermProgram}"
-          ]
-          ++ lib.optionals (effectiveTerminfoPath != null) [
-            "TERMINFO=${effectiveTerminfoPath}"
-          ];
-      };
+      timers = {
+        lazytmux-state-save = lib.mkIf persistEnabled {
+          Unit.Description = "Periodic tmux-state snapshot";
+          Timer = {
+            OnBootSec = "2min";
+            OnUnitActiveSec = "${toString cfg.persist.saveInterval}s";
+            Unit = "lazytmux-state-save.service";
+          };
+          Install.WantedBy = ["timers.target"];
+        };
 
-      Install = {
-        WantedBy = ["graphical-session.target"];
+        lazytmux-state-gc = lib.mkIf persistEnabled {
+          Unit.Description = "tmux-state GC (orphan scrollback files)";
+          Timer = {
+            OnCalendar = "weekly";
+            Unit = "lazytmux-state-gc.service";
+          };
+          Install.WantedBy = ["timers.target"];
+        };
       };
-    });
+    };
   };
 }
