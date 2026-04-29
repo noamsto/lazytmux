@@ -204,7 +204,7 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 	// Pre-compute CPU and MEM strings separately so the "/" aligns
 	cpuStrs := make([]string, len(rows))
 	memStrs := make([]string, len(rows))
-	maxCPU, maxMem := 0, 0
+	maxCPU, maxMem := cpuColWidth(), 0
 	for i, r := range rows {
 		cpuStrs[i] = formatCPU(r.sess.cpuPct)
 		memStrs[i] = formatMem(r.sess.memMB)
@@ -756,6 +756,13 @@ func mergeResources(sessions []sessionData, res map[string]sessionResources) {
 // formatCPU returns a compact CPU% string.
 func formatCPU(cpuPct float64) string {
 	return fmt.Sprintf("%.0f%%", cpuPct)
+}
+
+// cpuColWidth returns the reserved column width for CPU%, sized to the
+// worst-case value (numCPU * 100%) so the column doesn't shift between
+// renders when usage crosses a digit boundary (e.g. 99% → 300%).
+func cpuColWidth() int {
+	return len(formatCPU(numCPU * 100))
 }
 
 // formatMem returns a compact memory string (M or G).

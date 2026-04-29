@@ -748,7 +748,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	// Pre-compute CPU and MEM strings separately so the "/" aligns
 	cpuStrs := make([]string, len(rows))
 	memStrs := make([]string, len(rows))
-	maxCPU, maxMem := 0, 0
+	maxCPU, maxMem := cpuColWidth(), 0
 	for i, r := range rows {
 		cpuStrs[i] = formatCPU(r.sess.cpuPct)
 		memStrs[i] = formatMem(r.sess.memMB)
