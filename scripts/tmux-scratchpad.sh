@@ -35,7 +35,11 @@ SELF="${BASH_SOURCE[0]}"
 # Create scratch session if needed (|| true so set -e doesn't fire on collision)
 tmux new-session -d -s "$SCRATCH" 2>/dev/null || true
 
+# Title doubles as a hint bar: key bindings are colored to stand out from
+# the descriptions. tmux interpolates #{@thm_*} format strings in -T.
+TITLE=" #[fg=#{@thm_lavender}]scratch: ${SESSION}#[fg=#{@thm_overlay_1}]  ·  #[fg=#{@thm_lavender}]\`d#[fg=#{@thm_overlay_1}] hide  ·  #[fg=#{@thm_lavender}]exit#[fg=#{@thm_overlay_1}] close "
+
 tmux display-popup -E -w 80% -h 80% -b rounded \
-	-T " scratch: ${SESSION} " \
+	-T "$TITLE" \
 	-S "fg=${BORDER_FG}" \
 	"'${SELF}' --attach '${SESSION}'"
