@@ -89,8 +89,11 @@
       ''}
 
       bind   u    run-shell '${tmuxStateBin} undo --pop'
-      bind   U    run-shell '${tmuxStateBin} pick --kind=close'
-      bind   R    run-shell '${tmuxStateBin} pick --kind=snapshot'
+      # FZF_DEFAULT_OPTS may contain --tmux=... (fzf's own popup), which crashes
+      # when tmux-state's fzf invocation is already inside display-popup -E.
+      # Strip it for these two bindings.
+      bind   U    display-popup -E -w 90% -h 85% -b rounded -T " Close events " 'env -u FZF_DEFAULT_OPTS ${tmuxStateBin} pick --kind=close'
+      bind   R    display-popup -E -w 90% -h 85% -b rounded -T " Snapshots "     'env -u FZF_DEFAULT_OPTS ${tmuxStateBin} pick --kind=snapshot'
       bind C-s    run-shell '${tmuxStateBin} save --reason=keybinding'
     '';
 
