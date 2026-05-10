@@ -10,18 +10,52 @@ declare -A ICON_MAP=(
 FALLBACK_ICON="@FALLBACK_ICON@"
 
 # _icon_cell_width CHAR
-# Determines display width of a single icon character from its Unicode codepoint.
-# Nerd Font PUA (U+E000-F8FF, U+F0000+): 1 cell. Emoji/other: 2 cells.
+# Determines display width of a single icon character to match tmux's measurement.
 # Sets _ICW to integer width (avoids clobbering REPLY used by callers).
+#
+# Rules (mirrors picker/main.go runeCellWidth, which delegates to go-runewidth):
+# - Nerd Font PUA → 1 cell
+# - Supplementary-plane emoji (U+1F000+) → 2 cells
+# - BMP characters with Emoji_Presentation=Yes (Unicode TR51) → 2 cells
+# - Everything else → 1 cell
+#
+# Without the BMP list, symbols like ⚙ (U+2699), ❄ (U+2744), ↯ (U+21AF) would be
+# miscounted as 2 cells, breaking icon-column padding for windows whose process
+# icons fall outside the supplementary-plane emoji range.
 _icon_cell_width() {
 	local -i cp
 	printf -v cp '%d' "'${1:0:1}"
 	if ((cp == 0)); then
 		_ICW=2 # unrecognized → assume wide
 	elif ((cp >= 0xE000 && cp <= 0xF8FF)) || ((cp >= 0xF0000)); then
-		_ICW=1
+		_ICW=1 # Nerd Font PUA
+	elif ((cp >= 0x1F000)); then
+		_ICW=2 # supplementary-plane emoji
+	elif ((cp >= 0x231A && cp <= 0x231B)) ||
+		((cp >= 0x23E9 && cp <= 0x23EC)) ||
+		((cp == 0x23F0 || cp == 0x23F3)) ||
+		((cp >= 0x25FD && cp <= 0x25FE)) ||
+		((cp >= 0x2614 && cp <= 0x2615)) ||
+		((cp >= 0x2648 && cp <= 0x2653)) ||
+		((cp == 0x267F || cp == 0x2693 || cp == 0x26A1)) ||
+		((cp >= 0x26AA && cp <= 0x26AB)) ||
+		((cp >= 0x26BD && cp <= 0x26BE)) ||
+		((cp >= 0x26C4 && cp <= 0x26C5)) ||
+		((cp == 0x26CE || cp == 0x26D4 || cp == 0x26EA)) ||
+		((cp >= 0x26F2 && cp <= 0x26F3)) ||
+		((cp == 0x26F5 || cp == 0x26FA || cp == 0x26FD)) ||
+		((cp == 0x2705)) ||
+		((cp >= 0x270A && cp <= 0x270B)) ||
+		((cp == 0x2728 || cp == 0x274C || cp == 0x274E)) ||
+		((cp >= 0x2753 && cp <= 0x2755)) ||
+		((cp == 0x2757)) ||
+		((cp >= 0x2795 && cp <= 0x2797)) ||
+		((cp == 0x27B0 || cp == 0x27BF)) ||
+		((cp >= 0x2B1B && cp <= 0x2B1C)) ||
+		((cp == 0x2B50 || cp == 0x2B55)); then
+		_ICW=2 # BMP emoji-presentation defaults
 	else
-		_ICW=2
+		_ICW=1
 	fi
 }
 
