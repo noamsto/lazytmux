@@ -130,12 +130,10 @@ in {
     persist = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = false;
+        default = true;
         description = ''
           Whether to enable tmux-state persistence (snapshots, undo, auto-restore).
-          Default off during Phase 2a soak — flip to true on a single host first,
-          observe for a week, then make default after Phase 2b lands the
-          resurrect/continuum removal.
+          Replaces tmux-resurrect/tmux-continuum.
         '';
       };
 
@@ -401,9 +399,8 @@ in {
         fi
 
         # Try to create the session. If creation fails but the session now
-        # exists anyway, something else won the race to create it — most
-        # commonly tmux-continuum's auto-restore, which creates sessions
-        # while loading tmux.conf on server start. Treat that as success.
+        # exists anyway, something else won the race to create it (e.g.
+        # tmux-state auto-restore on server start). Treat that as success.
         if "$TMUX_BIN" new -s "$SESSION" -c ${lib.escapeShellArg cfg.startupSession.directory} -d; then
           exit 0
         fi

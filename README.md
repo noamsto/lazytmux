@@ -54,7 +54,7 @@ This installs a `tmux` wrapper that automatically loads the configuration. Your 
 | **fzf pickers** | Session and window pickers with AI status per entry |
 | **vim-tmux-navigator** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes |
 | **tmux-fingers** | Smart copy with hints for URLs, hashes, file paths, JIRA tickets |
-| **resurrect + continuum** | Auto-save every 10 min with restore on start |
+| **tmux-state persistence** | Periodic snapshots, undo for closed windows, optional smart auto-restore |
 | **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |
 
 ## Requirements

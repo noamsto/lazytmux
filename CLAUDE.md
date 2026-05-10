@@ -82,21 +82,19 @@ Git worktree management is handled by the third-party `worktrunk` tool, configur
 
 ### Persist (tmux-state)
 
-Optional: `programs.lazytmux.persist.enable = true` in home-manager config wires the
-[tmux-state](https://github.com/noamsto/tmux-state) Go binary as the persistence
-layer (replaces tmux-resurrect/tmux-continuum). Default off during Phase 2a soak;
-flip per-host once trusted, then make default after Phase 2b removes the old plugins.
+The [tmux-state](https://github.com/noamsto/tmux-state) Go binary is the persistence
+layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
+`programs.lazytmux.persist.enable`; set to `false` to opt out.
 
-When enabled:
 - tmux hooks fire `tmux-state save` on structural change and
   `tmux-state capture-event` on close.
-- systemd user timer runs `tmux-state save --reason=timer` every 60s.
+- systemd user timer runs `tmux-state save --reason=timer` every 60s; weekly GC
+  drops orphan scrollback files.
 - Keybindings: `prefix + u` (undo pop), `prefix + U` (close-event picker),
   `prefix + R` (snapshot picker), `prefix + Ctrl-s` (immediate save).
 - Storage: `$XDG_DATA_HOME/tmux-state/state.db` + scrollbacks dir.
-
-`@resurrect-*` and `@continuum-*` settings + plugin loads remain in
-`config/tmux.conf.nix` during Phase 2a — both run in parallel. Phase 2b removes them.
+- `restoreMode` defaults to `"off"` (manual `prefix + R` only). Set to `"auto"`
+  to apply the smart filter on tmux server start.
 
 ## Key Conventions
 
