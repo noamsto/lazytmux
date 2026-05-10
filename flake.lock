@@ -219,11 +219,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1777279072,
-        "narHash": "sha256-NSHxORn2sEQ8ngeXUM6CqmOK7aOT/nzNGTIe/8rvY1w=",
+        "lastModified": 1778439189,
+        "narHash": "sha256-vl6sDhitZAjHBXNHiin6V9iNxrgtNx+uODjXWwWOaZ8=",
         "owner": "noamsto",
         "repo": "tmux-state",
-        "rev": "49d41f84e45214fefcc79bc779ca47d69cad4d49",
+        "rev": "8c29f8fe87f8fc10cc81e2f8928da93dc172600f",
         "type": "github"
       },
       "original": {
