@@ -1,7 +1,7 @@
 result
 .direnv
 .pre-commit-config.yaml
-.claude/settings.local.json
+.claude/
 picker/picker
 wt-explorer/wt-explorer
 
