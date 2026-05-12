@@ -256,7 +256,9 @@
     bind | split-window -h -c "#{pane_current_path}"
     unbind '"'
     bind _ split-window -v -c "#{pane_current_path}"
-    bind c new-window -c "#{pane_current_path}"
+    bind c if-shell -F '#{m:scratch-*,#{session_name}}' \
+      'display-message "scratchpad: new windows disabled"' \
+      'new-window -c "#{pane_current_path}"'
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
 
     # Yank pane's current working directory to system clipboard
@@ -287,7 +289,9 @@
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
-    bind-key "y" new-window -S -n yazi -c '#{pane_current_path}' yazi
+    bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
+      'display-message "scratchpad: new windows disabled"' \
+      "new-window -S -n yazi -c '#{pane_current_path}' yazi"
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
