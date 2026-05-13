@@ -334,19 +334,44 @@ in {
         text = ''
           worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
 
+          # The tmux post-switch hook owns navigation (select-window or switch-client),
+          # so skip cd'ing the parent shell — otherwise it ends up pwd'd at the
+          # worktree behind a different session's window. Hooks still fire normally.
+          [switch]
+          cd = false
+
           [post-switch]
           tmux = """
           [ -z "$TMUX" ] && exit 0
           [ -n "$CLAUDECODE" ] && exit 0
-          SESSION=$(tmux display-message -p '#{session_name}')
-          WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
-            | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
-          if [ -n "$WIN" ]; then
-            tmux select-window -t "$SESSION:$WIN"
+          CUR_SESSION=$(tmux display-message -p '#{session_name}')
+          CUR_WIN=$(tmux display-message -p '#{window_index}')
+          # Primary: match by @worktree tag across ALL sessions (set when we create
+          # the window). Output is "<session>\t<window>".
+          MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
+            | awk -F'\t' -v wt="{{ worktree_path }}" '$3 == wt { print $1 "\t" $2; exit }')
+          # Fallback: match by pane_current_path, excluding the current window
+          # (parent shell may have already cd'd, which would self-match and no-op).
+          if [ -z "$MATCH" ]; then
+            MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{pane_current_path}' \
+              | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" \
+                  '$3 == wt && !($1 == cs && $2 == cw) { print $1 "\t" $2; exit }')
+          fi
+          if [ -n "$MATCH" ]; then
+            SESS=$(printf '%s' "$MATCH" | cut -f1)
+            WIN=$(printf '%s' "$MATCH" | cut -f2)
+            if [ "$SESS" = "$CUR_SESSION" ]; then
+              tmux select-window -t "$SESS:$WIN"
+            else
+              tmux switch-client -t "$SESS:$WIN"
+            fi
+            # Auto-tag matched-by-path windows so the next call hits the primary signal.
+            tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
+            tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
           else
-            tmux new-window -a -t "$SESSION" -c "{{ worktree_path }}"
-            tmux set-option -t "$SESSION" -w @worktree "{{ worktree_path }}"
-            tmux set-option -t "$SESSION" -w @branch "{{ branch | sanitize }}"
+            tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
+            tmux set-option -t "$CUR_SESSION" -w @worktree "{{ worktree_path }}"
+            tmux set-option -t "$CUR_SESSION" -w @branch "{{ branch | sanitize }}"
           fi
           """
           zoxide = """
