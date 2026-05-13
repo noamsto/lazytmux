@@ -337,6 +337,7 @@ in {
           [post-switch]
           tmux = """
           [ -z "$TMUX" ] && exit 0
+          [ -n "$CLAUDECODE" ] && exit 0
           SESSION=$(tmux display-message -p '#{session_name}')
           WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
             | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
@@ -355,6 +356,7 @@ in {
           [post-remove]
           tmux = """
           [ -z "$TMUX" ] && exit 0
+          [ -n "$CLAUDECODE" ] && exit 0
           SESSION=$(tmux display-message -p '#{session_name}')
           WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
             | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
