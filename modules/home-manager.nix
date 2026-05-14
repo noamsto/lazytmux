@@ -475,10 +475,18 @@ in {
 
         # Periodic snapshot — fires `tmux-state save --reason=timer` so the
         # daemon has a recent baseline even between structural-change hooks.
+        #
+        # TMUX_TMPDIR points tmux-state at the user's actual socket
+        # ($XDG_RUNTIME_DIR/tmux-$UID/default) instead of tmux's compiled-in
+        # /tmp default; without it the timer queried a stale socket and
+        # bailed. (tmux-state >= 7f8c820 also synthesizes the TMUX env var
+        # internally so format-string control bytes survive — no need to set
+        # TMUX here.)
         lazytmux-state-save = lib.mkIf persistEnabled {
           Unit.Description = "Save tmux-state snapshot";
           Service = {
             Type = "oneshot";
+            Environment = ["TMUX_TMPDIR=%t"];
             ExecStart = "${cfg.persist.package}/bin/tmux-state save --reason=timer";
           };
         };
