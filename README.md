@@ -247,6 +247,20 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
         ]
       }
     ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update waiting"}
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [
+          {"type": "command", "command": "claude-status-update processing"}
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

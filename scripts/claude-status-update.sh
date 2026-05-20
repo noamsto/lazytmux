@@ -156,10 +156,11 @@ if [[ $state == "clear" ]]; then
 	exit 0
 fi
 
-# Don't let "processing" overwrite higher-priority interactive states.
-# Parallel subagents fire PreToolUse/PostToolUse rapidly, which would
-# clobber "waiting"/"error" set by PermissionRequest/StopFailure hooks.
-if [[ $state == "processing" && -f "$PANES_DIR/$pane_file" ]]; then
+# Don't let benign transitions overwrite higher-priority interactive states.
+# - "processing" from rapid Pre/PostToolUse hooks must not clobber waiting/error/denied.
+# - "done" from Stop must not clobber error/waiting/denied — if a tool failed
+#   right before Stop fired, the user should still see the failure.
+if [[ $state == "processing" || $state == "done" ]] && [[ -f "$PANES_DIR/$pane_file" ]]; then
 	cur_state=""
 	while IFS='=' read -r key val; do
 		[[ $key == "state" ]] && {
