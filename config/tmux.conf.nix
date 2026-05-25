@@ -144,6 +144,13 @@
 
   inherit (pkgs) tmuxPlugins;
 
+  # tmux-fingers from develop — picks up PR #161 (removes per-style tput
+  # shell-outs) which eliminates the ~1s broken-TERM penalty in tmux subshells.
+  # Drop in favor of `tmuxPlugins.fingers` once nixpkgs ships a post-#161 release.
+  fingers = pkgs.callPackage ../packages/tmux-fingers-dev {
+    inherit (pkgs.tmuxPlugins) mkTmuxPlugin;
+  };
+
   # terminal-features line for the outer terminal, derived from its TERM string.
   # Pattern uses a wildcard suffix to match version variants (e.g. "xterm-ghostty*").
   terminalConfig =
@@ -399,11 +406,12 @@
     set -g @fingers-pattern-7 "arn:[a-z0-9-]+:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:-]+"
     set -g @fingers-pattern-8 "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
     set -g @fingers-pattern-9 "([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
-    run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
+    run-shell ${fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
-    # Re-init fingers on attach (workaround for tmux-fingers colors)
-    # Only re-run fingers, not the full config, to avoid status bar flash
-    set-hook -g client-attached[99] 'run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux'
+    # Force TERM around prefix+F / prefix+J so spawned shells don't hit the
+    # no-TERM error path. Belt-and-suspenders alongside the develop-branch fix.
+    bind -T prefix F run-shell -b "TERM=tmux-256color ${fingers.passthru.fingers}/bin/tmux-fingers start #{pane_id} >>$HOME/.local/share/tmux-fingers/fingers.log 2>&1"
+    bind -T prefix J run-shell -b "TERM=tmux-256color ${fingers.passthru.fingers}/bin/tmux-fingers start --mode jump #{pane_id} >>$HOME/.local/share/tmux-fingers/fingers.log 2>&1"
 
     # Apply theme-dependent colors (must run after catppuccin loads)
     run-shell "${script.tmux-apply-theme-colors}/bin/tmux-apply-theme-colors"

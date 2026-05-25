@@ -224,7 +224,11 @@ in {
       directory = lib.mkOption {
         type = lib.types.str;
         default = "~";
-        description = "Starting directory for the session";
+        description = ''
+          Starting directory for the session. Leading `~` and any `%h` are
+          expanded to `$HOME` by the startup script before being passed to
+          `tmux new -c` (tmux itself does not expand these in `-c`).
+        '';
       };
 
       terminal = {
@@ -418,6 +422,12 @@ in {
 
         SESSION=${lib.escapeShellArg cfg.startupSession.name}
 
+        # Expand %h and leading ~ to $HOME — tmux does NOT expand format strings
+        # (or shell ~) in the -c argument; it passes the path directly to chdir.
+        DIRECTORY=${lib.escapeShellArg cfg.startupSession.directory}
+        DIRECTORY="''${DIRECTORY//%h/$HOME}"
+        DIRECTORY="''${DIRECTORY/#~/$HOME}"
+
         # Exact-match check (`=name`) — default is prefix match, which would
         # incorrectly skip creation if e.g. `foo-bar` existed when SESSION=foo.
         if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
@@ -428,7 +438,7 @@ in {
         # Try to create the session. If creation fails but the session now
         # exists anyway, something else won the race to create it (e.g.
         # tmux-state auto-restore on server start). Treat that as success.
-        if "$TMUX_BIN" new -s "$SESSION" -c ${lib.escapeShellArg cfg.startupSession.directory} -d; then
+        if "$TMUX_BIN" new -s "$SESSION" -c "$DIRECTORY" -d; then
           exit 0
         fi
 
