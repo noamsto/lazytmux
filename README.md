@@ -173,7 +173,7 @@ The commands use bare names (`claude-status-update`) because they are on PATH vi
     "UserPromptSubmit": [
       {
         "hooks": [
-          {"type": "command", "command": "claude-status-update processing"}
+          {"type": "command", "command": "claude-status-update processing --force"}
         ]
       }
     ],

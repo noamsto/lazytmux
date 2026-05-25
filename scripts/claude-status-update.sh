@@ -52,6 +52,7 @@ cleanup_stale_panes() {
 state="${1:-}"
 pane_id="${TMUX_PANE:-}"
 session_name=""
+force=0
 
 shift || true
 while [[ $# -gt 0 ]]; do
@@ -63,6 +64,10 @@ while [[ $# -gt 0 ]]; do
 	--session)
 		session_name="$2"
 		shift 2
+		;;
+	--force)
+		force=1
+		shift
 		;;
 	*)
 		shift
@@ -160,7 +165,9 @@ fi
 # - "processing" from rapid Pre/PostToolUse hooks must not clobber waiting/error/denied.
 # - "done" from Stop must not clobber error/waiting/denied — if a tool failed
 #   right before Stop fired, the user should still see the failure.
-if [[ $state == "processing" || $state == "done" ]] && [[ -f "$PANES_DIR/$pane_file" ]]; then
+# --force bypasses this guard (used by UserPromptSubmit: a new user prompt is an
+# explicit reset signal and must clear any stale terminal state).
+if [[ $force -eq 0 ]] && [[ $state == "processing" || $state == "done" ]] && [[ -f "$PANES_DIR/$pane_file" ]]; then
 	cur_state=""
 	while IFS='=' read -r key val; do
 		[[ $key == "state" ]] && {
