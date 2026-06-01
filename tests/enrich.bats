@@ -131,6 +131,21 @@ setup() {
 	[ "$REPLY" = "pending" ]
 }
 
+@test "collapse_check_rollup: StatusContext failure → failure" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-statuscontext-failure.json)"
+	[ "$REPLY" = "failure" ]
+}
+
+@test "collapse_check_rollup: StatusContext success → success" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-statuscontext-success.json)"
+	[ "$REPLY" = "success" ]
+}
+
+@test "collapse_check_rollup: cancelled conclusion → failure" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-cancelled.json)"
+	[ "$REPLY" = "failure" ]
+}
+
 @test "provider_priority_list: default order from substituted placeholder" {
 	provider_priority_list
 	[ "$REPLY" = "linear github" ]

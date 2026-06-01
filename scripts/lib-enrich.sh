@@ -74,23 +74,29 @@ branch_sha1() {
 }
 
 # collapse_check_rollup ROLLUP_JSON
-# Maps a gh `statusCheckRollup` array to a single state.
-# Priority: any FAILURE/ERROR/CANCELLED/TIMED_OUT → failure;
-#   else any PENDING/IN_PROGRESS/QUEUED (or null conclusion) → pending;
-#   else all SUCCESS/NEUTRAL/SKIPPED → success; empty array → none.
+# Maps a gh `statusCheckRollup` array (a CheckRun | StatusContext union) to a
+# single state. CheckRun entries carry .status + .conclusion; StatusContext
+# entries (Travis/CircleCI-v1/commit-status API) carry .state instead.
+# Priority: empty → none;
+#   any FAILURE/ERROR/CANCELLED/TIMED_OUT/ACTION_REQUIRED/STALE → failure;
+#   else any IN_PROGRESS/QUEUED/PENDING/EXPECTED, or an unfinished CheckRun
+#     (empty conclusion) → pending;
+#   else success.
 # Sets REPLY to one of: failure | pending | success | none.
 collapse_check_rollup() {
 	local json="$1"
 	REPLY="$(jq -r '
 		if (. | length) == 0 then "none"
-		elif any(.[]; (.conclusion // "") | ascii_upcase
-			| . == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") then "failure"
-		elif any(.[]; ((.status // "") | ascii_upcase
-			| . == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING")
-			or ((.conclusion // "") == "")) then "pending"
+		elif any(.[]; (.conclusion // .state // "") | ascii_upcase
+			| . == "FAILURE" or . == "ERROR" or . == "CANCELLED"
+			or . == "TIMED_OUT" or . == "ACTION_REQUIRED" or . == "STALE") then "failure"
+		elif any(.[];
+			((.status // "") | ascii_upcase | (. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING"))
+			or ((.state // "") | ascii_upcase | (. == "EXPECTED" or . == "PENDING"))
+			or (.__typename == "CheckRun" and ((.conclusion // "") == ""))) then "pending"
 		else "success"
 		end
-	' <<<"$json" 2>/dev/null)"
+	' <<<"$json" 2>/dev/null)" || REPLY="none"
 	if [[ -z $REPLY ]]; then REPLY="none"; fi
 }
 
