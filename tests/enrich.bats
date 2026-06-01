@@ -77,6 +77,11 @@ setup() {
 	[ "${#REPLY}" -eq 50 ]
 }
 
+@test "sanitize_title: strips ESC control char" {
+	sanitize_title "$(printf 'title\033[31mcolored')"
+	[ "$REPLY" = "title[31mcolored" ]
+}
+
 @test "truncate_ellipsis: short string is unchanged" {
 	truncate_ellipsis "short" 25
 	[ "$REPLY" = "short" ]
