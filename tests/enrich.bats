@@ -65,3 +65,38 @@ setup() {
 	branch_to_gh_issue_number "main"
 	[ -z "$REPLY" ]
 }
+
+@test "sanitize_title: strips CR/LF and truncates to 50" {
+	sanitize_title "$(printf 'Add foo\r\nbar baz')"
+	[ "$REPLY" = "Add foobar baz" ]
+}
+
+@test "sanitize_title: hard-truncates long titles to 50 chars" {
+	local long="123456789012345678901234567890123456789012345678901234567890"
+	sanitize_title "$long"
+	[ "${#REPLY}" -eq 50 ]
+}
+
+@test "truncate_ellipsis: short string is unchanged" {
+	truncate_ellipsis "short" 25
+	[ "$REPLY" = "short" ]
+}
+
+@test "truncate_ellipsis: long string gets ellipsis at limit" {
+	truncate_ellipsis "this title is definitely longer than twenty-five" 25
+	[ "${#REPLY}" -eq 25 ]
+	[ "${REPLY: -1}" = "…" ]
+}
+
+@test "branch_sha1: stable 40-char hex for a branch" {
+	branch_sha1 "feat/2-pr-window-enrichment"
+	[ "${#REPLY}" -eq 40 ]
+	[[ $REPLY =~ ^[0-9a-f]{40}$ ]]
+}
+
+@test "branch_sha1: same branch yields same key" {
+	branch_sha1 "main"
+	local first="$REPLY"
+	branch_sha1 "main"
+	[ "$REPLY" = "$first" ]
+}

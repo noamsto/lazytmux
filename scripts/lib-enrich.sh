@@ -41,3 +41,34 @@ branch_to_gh_issue_number() {
 		REPLY="${BASH_REMATCH[1]}"
 	fi
 }
+
+# sanitize_title RAW
+# Strips CR, LF, and ESC control chars, then hard-truncates to 50 chars.
+# Sets REPLY to the cleaned title.
+sanitize_title() {
+	local clean="${1//$'\r'/}"
+	clean="${clean//$'\n'/}"
+	clean="${clean//$'\033'/}"
+	REPLY="${clean:0:50}"
+}
+
+# truncate_ellipsis STR MAX
+# If STR exceeds MAX display chars, truncate to MAX-1 and append "…".
+# Sets REPLY to the (possibly shortened) string.
+truncate_ellipsis() {
+	local str="$1" max="$2"
+	if ((${#str} > max)); then
+		REPLY="${str:0:max-1}…"
+	else
+		REPLY="$str"
+	fi
+}
+
+# branch_sha1 BRANCH
+# Computes a stable cache key (sha1 hex) for a branch name.
+# Sets REPLY to the 40-char hex digest.
+branch_sha1() {
+	local out
+	out="$(printf '%s' "$1" | sha1sum)"
+	REPLY="${out%% *}"
+}
