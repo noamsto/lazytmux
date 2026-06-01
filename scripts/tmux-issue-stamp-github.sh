@@ -35,8 +35,8 @@ id="#$num"
 if command -v gh >/dev/null 2>&1; then
 	json="$(cd "$worktree" && gh issue view "$num" --json number,title,url 2>/dev/null)" || json=""
 	if [[ -n $json ]]; then
-		title="$(jq -r '.title // ""' <<<"$json" 2>/dev/null)"
-		url="$(jq -r '.url // ""' <<<"$json" 2>/dev/null)"
+		title="$(jq -r '.title // ""' <<<"$json" 2>/dev/null)" || title=""
+		url="$(jq -r '.url // ""' <<<"$json" 2>/dev/null)" || url=""
 	fi
 fi
 
