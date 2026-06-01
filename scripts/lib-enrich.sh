@@ -6,11 +6,13 @@
 
 # shellcheck disable=SC2034  # used by scripts that source this library
 
-ENRICH_CACHE_DIR="/tmp/lazytmux-pr"
+ENRICH_CACHE_DIR="/tmp/lazytmux-pr" # PR-state cache dir; consumed by the PR enrichment poller
 
 # branch_to_linear_key BRANCH
 # Extracts a Linear issue key (TEAM-123) from a branch name.
 # Requires letters before the dash (pure-numeric prefixes are GitHub issues).
+# Assumes the repo's type/id-desc branch convention (CLAUDE.md): a slashless
+# branch like 'fix-208-x' is intentionally treated as Linear key FIX-208.
 # Sets REPLY to the uppercased key, or empty if no match.
 branch_to_linear_key() {
 	local branch="$1"
