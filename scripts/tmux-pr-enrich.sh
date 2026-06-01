@@ -77,20 +77,11 @@ fetch_branch_pr() {
 
 	# Skip if fresh and not forced.
 	if ((force == 0)) && [[ -f $cache ]]; then
-		local age
-		age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
+		local age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
 		((age < TTL)) && {
 			printf '%s' "$cache"
 			return
 		}
-	fi
-
-	# Only one process per branch fetches at a time.
-	local lockfd
-	exec {lockfd}>"$lock"
-	if ! flock -n "$lockfd"; then
-		printf '%s' "$cache"
-		return
 	fi
 
 	command -v gh >/dev/null 2>&1 || {
@@ -98,14 +89,20 @@ fetch_branch_pr() {
 		return
 	}
 
-	local json
-	json="$(gh pr list --head "$b" --state open --limit 1 \
-		--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
-	if [[ $json == "[]" || -z $json ]]; then
-		json="$(gh pr list --head "$b" --state all --limit 1 \
+	# Locked fetch in a subshell: flock on fd 9 releases when the subshell
+	# exits, scoping the lock to THIS branch's fetch (not the whole pass).
+	# If another process holds the lock, skip the fetch and serve the cache.
+	(
+		flock -n 9 || exit 0
+		local json
+		json="$(gh pr list --head "$b" --state open --limit 1 \
 			--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
-	fi
-	printf '%s' "$json" >"$cache"
+		if [[ $json == "[]" || -z $json ]]; then
+			json="$(gh pr list --head "$b" --state all --limit 1 \
+				--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
+		fi
+		printf '%s' "$json" >"$cache"
+	) 9>"$lock"
 	printf '%s' "$cache"
 }
 
@@ -176,10 +173,12 @@ if ((force == 0)) && [[ -f $last_tick ]]; then
 	tick_age=$(($(date +%s) - $(stat -c %Y "$last_tick" 2>/dev/null || echo 0)))
 	((tick_age < REFRESH_SECONDS)) && exit 0
 fi
+# Mark the tick fresh BEFORE daemonizing: best-effort — if the detached pass
+# crashes we wait one cycle; --force / the prefix+i r keybind force a retry.
 touch "$last_tick"
 
 # Detach so the status refresh returns immediately. The child re-invokes with
 # --tick-run, which runs run_full_pass once and exits (no re-daemonize).
-setsid env LAZYTMUX_PR_CHILD=1 "$0" --tick-run >/dev/null 2>&1 &
+setsid env LAZYTMUX_PR_CHILD=1 "${BASH_SOURCE[0]}" --tick-run >/dev/null 2>&1 &
 disown
 exit 0
