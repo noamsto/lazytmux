@@ -22,6 +22,9 @@ fi
 id="$key"
 
 # If the linear CLI is available, enrich title + url from within the worktree.
+# NOTE: three separate `linear` calls assume the CLI resolves the same issue
+# (from the worktree's branch) across all three. A single `linear issue json`
+# call would remove this seam if/when the CLI supports it.
 if command -v linear >/dev/null 2>&1 && [[ -d $worktree ]]; then
 	title="$(cd "$worktree" && linear issue title 2>/dev/null)" || title=""
 	url="$(cd "$worktree" && linear issue url 2>/dev/null)" || url=""
