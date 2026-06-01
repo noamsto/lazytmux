@@ -10,6 +10,10 @@
   # tmux.conf. Used by the home-manager module to inject opt-in features
   # (e.g. tmux-state hooks/keybindings) without polluting the base config.
   extraConfText ? "",
+  # Issue/PR enrichment config (threaded from the home-manager module).
+  enrichProviders ? ["linear" "github"],
+  enrichPrRefreshSeconds ? 30,
+  enrichIcons ? {},
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -46,6 +50,18 @@
   maxIcons = "2";
   maxIconsPicker = "5";
 
+  enrichProvidersStr = lib.concatStringsSep " " enrichProviders;
+  # Icon defaults are ASCII sentinels; user overrides with Nerd Font glyphs via programs.lazytmux.enrich.icons (see CLAUDE.md).
+  enrichIconDefaults = {
+    linear = "L"; # nerd: nf-md-alpha-l-circle
+    github = "GH"; # nerd: nf-md-github
+    pending = "*"; # nerd: nf-md-progress-clock
+    success = "OK"; # nerd: nf-md-check-circle
+    failure = "X"; # nerd: nf-md-alert-circle
+    merged = "M"; # nerd: nf-md-source-merge
+  };
+  enrichIconSet = enrichIconDefaults // enrichIcons;
+
   # Generate bash associative array entries from Nix attrset
   iconMapBash = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "  [${k}]=\"${v}\"") processIcons);
 
@@ -80,6 +96,13 @@
 
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
+
+  # lib-enrich needs the provider-priority substitution rather than the icon map.
+  lib-enrich = let
+    raw = builtins.readFile ../scripts/lib-enrich.sh;
+    patched = builtins.replaceStrings ["@providers@"] [enrichProvidersStr] raw;
+  in
+    pkgs.writeShellScript "lib-enrich" patched;
 
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
@@ -117,6 +140,10 @@
     "tmux-dir-display"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
+    "tmux-issue-stamp"
+    "tmux-issue-stamp-linear"
+    "tmux-issue-stamp-github"
+    "tmux-pr-enrich"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -132,9 +159,54 @@
   in
     pkgs.writeShellScriptBin name patched;
 
+  # Scripts that need enrich library + provider/icon/config substitution
+  scriptsWithEnrich = ["tmux-issue-stamp" "tmux-issue-stamp-linear" "tmux-issue-stamp-github" "tmux-pr-enrich"];
+
+  mkScriptEnrich = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      [
+        "@lib_enrich@"
+        "@providers@"
+        "@pr_refresh_seconds@"
+        "@issue_stamp_linear@"
+        "@issue_stamp_github@"
+        "@pr_enrich@"
+        "@ICON_LINEAR@"
+        "@ICON_GITHUB@"
+        "@ICON_PEND@"
+        "@ICON_OK@"
+        "@ICON_FAIL@"
+        "@ICON_MERGED@"
+      ]
+      [
+        "${lib-enrich}"
+        enrichProvidersStr
+        (toString enrichPrRefreshSeconds)
+        "${enrich-linear-bin}/bin/tmux-issue-stamp-linear"
+        "${enrich-github-bin}/bin/tmux-issue-stamp-github"
+        "${enrich-pr-bin}/bin/tmux-pr-enrich"
+        enrichIconSet.linear
+        enrichIconSet.github
+        enrichIconSet.pending
+        enrichIconSet.success
+        enrichIconSet.failure
+        enrichIconSet.merged
+      ]
+      raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
+  enrich-linear-bin = mkScriptEnrich "tmux-issue-stamp-linear";
+  enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
+  enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
+
   # Individual script references for full store paths in config
   script = lib.genAttrs scriptNames (name:
-    if builtins.elem name scriptsWithIcons
+    if builtins.elem name scriptsWithEnrich
+    then mkScriptEnrich name
+    else if builtins.elem name scriptsWithIcons
     then mkScriptFull name
     else if name == "claude-status"
     then claude-status-pkg
@@ -435,7 +507,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop])}
+        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils])}
     '';
     meta.mainProgram = "tmux";
   };
