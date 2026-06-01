@@ -72,3 +72,32 @@ branch_sha1() {
 	out="$(printf '%s' "$1" | sha1sum)"
 	REPLY="${out%% *}"
 }
+
+# collapse_check_rollup ROLLUP_JSON
+# Maps a gh `statusCheckRollup` array to a single state.
+# Priority: any FAILURE/ERROR/CANCELLED/TIMED_OUT → failure;
+#   else any PENDING/IN_PROGRESS/QUEUED (or null conclusion) → pending;
+#   else all SUCCESS/NEUTRAL/SKIPPED → success; empty array → none.
+# Sets REPLY to one of: failure | pending | success | none.
+collapse_check_rollup() {
+	local json="$1"
+	REPLY="$(jq -r '
+		if (. | length) == 0 then "none"
+		elif any(.[]; (.conclusion // "") | ascii_upcase
+			| . == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") then "failure"
+		elif any(.[]; ((.status // "") | ascii_upcase
+			| . == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING")
+			or ((.conclusion // "") == "")) then "pending"
+		else "success"
+		end
+	' <<<"$json" 2>/dev/null)"
+	if [[ -z $REPLY ]]; then REPLY="none"; fi
+}
+
+# provider_priority_list
+# Returns the configured issue-tracker providers in priority order.
+# The @providers@ placeholder is substituted at Nix build time from
+# programs.lazytmux.enrich.providers. Sets REPLY to a space-separated list.
+provider_priority_list() {
+	REPLY="@providers@"
+}

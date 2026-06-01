@@ -105,3 +105,33 @@ setup() {
 	branch_sha1 "main"
 	[ "$REPLY" = "$first" ]
 }
+
+@test "collapse_check_rollup: all success/neutral → success" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-success.json)"
+	[ "$REPLY" = "success" ]
+}
+
+@test "collapse_check_rollup: any failure → failure" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-failure.json)"
+	[ "$REPLY" = "failure" ]
+}
+
+@test "collapse_check_rollup: any pending → pending" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-pending.json)"
+	[ "$REPLY" = "pending" ]
+}
+
+@test "collapse_check_rollup: empty array → none" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-empty.json)"
+	[ "$REPLY" = "none" ]
+}
+
+@test "collapse_check_rollup: pending + neutral → pending" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-mixed.json)"
+	[ "$REPLY" = "pending" ]
+}
+
+@test "provider_priority_list: default order from substituted placeholder" {
+	provider_priority_list
+	[ "$REPLY" = "linear github" ]
+}
