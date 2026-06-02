@@ -107,6 +107,7 @@
       then emulatorCfg.term
       else null;
     extraConfText = tmuxStateConf;
+    enrichEnable = cfg.enrich.enable;
     enrichProviders = cfg.enrich.providers;
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
     enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
