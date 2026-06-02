@@ -107,6 +107,9 @@
       then emulatorCfg.term
       else null;
     extraConfText = tmuxStateConf;
+    enrichProviders = cfg.enrich.providers;
+    enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
+    enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
   };
 in {
   options.programs.lazytmux = {
@@ -161,6 +164,41 @@ in {
         description = ''
           The tmux-state package to use. Defaults to the flake input. Set to a
           different derivation to override (e.g. a local checkout for dev).
+        '';
+      };
+    };
+
+    enrich = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          PR + issue-tracker window enrichment: stamps tmux windows with the
+          Linear/GitHub issue id and PR check-state for their worktree's branch,
+          and adds `prefix + i` keybinds to open the issue/PR or force refresh.
+        '';
+      };
+
+      providers = lib.mkOption {
+        type = lib.types.listOf (lib.types.enum ["linear" "github"]);
+        default = ["linear" "github"];
+        description = "Issue-tracker providers, tried in priority order. First match wins.";
+      };
+
+      prRefreshSeconds = lib.mkOption {
+        type = lib.types.ints.between 10 300;
+        default = 30;
+        description = "Background PR enrichment cadence in seconds (clamped 10–300).";
+      };
+
+      icons = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = {};
+        example = lib.literalExpression ''{ linear = "<glyph>"; github = "<glyph>"; }'';
+        description = ''
+          Override enrichment icon glyphs (keys: linear, github, pending,
+          success, failure, merged). Unset keys fall back to nerd-font defaults.
+          Values must not contain '#' (tmux format escape).
         '';
       };
     };
@@ -295,6 +333,12 @@ in {
           tmuxConfig.script.claude-status-update
           tmuxConfig.script.claude-status
         ]
+        ++ lib.optionals cfg.enrich.enable [
+          tmuxConfig.script.tmux-issue-stamp
+          tmuxConfig.script.tmux-issue-stamp-linear
+          tmuxConfig.script.tmux-issue-stamp-github
+          tmuxConfig.script.tmux-pr-enrich
+        ]
         ++ cfg.popupTools;
 
       file =
@@ -372,11 +416,17 @@ in {
             # Auto-tag matched-by-path windows so the next call hits the primary signal.
             tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
             tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
+            STAMP_TARGET="$SESS:$WIN"
           else
             tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
             tmux set-option -t "$CUR_SESSION" -w @worktree "{{ worktree_path }}"
             tmux set-option -t "$CUR_SESSION" -w @branch "{{ branch | sanitize }}"
-          fi
+            STAMP_TARGET="$CUR_SESSION"
+          fi${lib.optionalString cfg.enrich.enable ''
+
+            if [ -n "''${STAMP_TARGET:-}" ]; then
+              ${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp "$STAMP_TARGET" "{{ worktree_path }}" "{{ branch | sanitize }}" >/dev/null 2>&1 &
+            fi''}
           """
           zoxide = """
           command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
