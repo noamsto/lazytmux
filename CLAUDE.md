@@ -110,8 +110,10 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
   (background tick in status-format[0]) writes `@pr_*`. Display formats and
   keybinds only read them.
 - **Providers** (`enrich.providers`, default `["linear" "github"]`) are tried in
-  priority order; first non-empty issue id wins. `gh` must be on PATH; `linear`
-  CLI is optional (falls back to branch-regex for the issue id).
+  priority order; first non-empty issue id wins. Both CLIs are optional and
+  degrade gracefully: `gh` (inherited from PATH) provides PR data and GitHub
+  issue titles, `linear` provides Linear titles/URLs. Without a CLI, only the
+  branch-regex-derived issue id is shown (no titles, no PR state).
 - **Keybindings:** `prefix + i` enters the enrich table — `i` open issue URL,
   `p` open PR URL, `r` force-refresh the current window.
 - **Refresh:** `prRefreshSeconds` (default 30, clamped 10-300) gates the
