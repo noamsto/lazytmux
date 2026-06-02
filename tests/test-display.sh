@@ -2,7 +2,7 @@
 # Mock-mode window-list regression test.
 # Spawns a throwaway tmux server using the built wrapper, sets @issue_*/@pr_*
 # options for the documented display states, and diffs window names against a
-# golden file. Run after `nix build .#default`.
+# golden file. Run from repo root after `nix build .#default`.
 #
 # Why no -n on new-session/new-window: an explicit window name disables
 # automatic-rename, so the window would keep its literal name instead of
@@ -15,7 +15,8 @@ set -euo pipefail
 
 TMUX_BIN="${TMUX_BIN:-./result/bin/tmux}"
 SOCKET="enrichtest-$$"
-EXPECTED="tests/fixtures/window-list.expected"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXPECTED="$SCRIPT_DIR/fixtures/window-list.expected"
 
 cleanup() { "$TMUX_BIN" -L "$SOCKET" kill-server 2>/dev/null || true; }
 trap cleanup EXIT
@@ -51,13 +52,31 @@ t set-option -t s:5 -w @issue_provider linear
 t set-option -t s:5 -w @issue_id NOA-125
 t set-option -t s:5 -w @pr_number none
 
-# Force a rename pass and capture the resolved window names.
 # Trailing whitespace is stripped per line: an unset @window_icon_display (no
 # process icon on a mock pane) renders as a trailing space, which the
 # trim-trailing-whitespace pre-commit hook would strip from the golden anyway.
-# Normalizing here keeps the golden trim-clean and the comparison stable.
-sleep 2
-got="$(t list-windows -t s -F '#{window_name}' | sed 's/[[:space:]]*$//')"
+# Normalizing here keeps the golden trim-clean and the comparison stable. This
+# only strips the structurally-empty icon slot; a real icon is non-whitespace
+# content and would still be captured and compared.
+#
+# Wait for auto-rename to settle. Renames fire window-by-window over ~300ms
+# (status-interval is 1s), and a partially-renamed read can look stable for two
+# consecutive polls. Require three consecutive identical reads to skip past that
+# transient before locking in; cap ~3s.
+prev=""
+got=""
+stable=0
+for _ in $(seq 1 30); do
+	got="$(t list-windows -t s -F '#{window_name}' | sed 's/[[:space:]]*$//')"
+	if [[ -n $got && $got == "$prev" ]]; then
+		stable=$((stable + 1))
+		[[ $stable -ge 2 ]] && break
+	else
+		stable=0
+	fi
+	prev="$got"
+	sleep 0.1
+done
 
 if [[ ${UPDATE_GOLDEN:-0} == "1" ]]; then
 	printf '%s\n' "$got" >"$EXPECTED"
