@@ -188,9 +188,17 @@
   enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
-  # Individual script references for full store paths in config
+  # Individual script references for full store paths in config.
+  # Reuse the pre-built enrich provider/poller derivations (also referenced by
+  # the dispatcher's substitution) instead of rebuilding them via mkScriptEnrich.
   script = lib.genAttrs scriptNames (name:
-    if builtins.elem name scriptsWithEnrich
+    if name == "tmux-issue-stamp-linear"
+    then enrich-linear-bin
+    else if name == "tmux-issue-stamp-github"
+    then enrich-github-bin
+    else if name == "tmux-pr-enrich"
+    then enrich-pr-bin
+    else if builtins.elem name scriptsWithEnrich
     then mkScriptEnrich name
     else if builtins.elem name scriptsWithIcons
     then mkScriptFull name
@@ -351,7 +359,7 @@
     bind-key i switch-client -T enrich
     bind-key -T enrich i run-shell 'url="#{@issue_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
     bind-key -T enrich p run-shell 'url="#{@pr_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
-    bind-key -T enrich r run-shell '${enrich-pr-bin}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
+    bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
 
     # Sesh pickers (full store paths for gum/fzf so they work from tmux context)
     bind-key "K" display-popup -E -w 40% -k "sesh connect \"$(sesh list -i | ${pkgs.gum}/bin/gum filter --no-strip-ansi --limit 1 --no-sort --fuzzy --placeholder 'Pick a sesh' --height 50 --prompt='⚡')\""
@@ -500,7 +508,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils])}
+        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
     '';
     meta.mainProgram = "tmux";
   };
