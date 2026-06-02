@@ -46,11 +46,15 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
 | `tmux-set-pane-border` | `run-shell` at config load | Interpolates `@thm_*` color variables into `pane-border-format` (needed because nested `#{@thm_*}` inside `#[]` don't expand at render time). |
+| `tmux-issue-stamp` | worktrunk `post-switch` hook (one-shot, backgrounded) | Detects the Linear/GitHub issue for the new window's branch via provider priority; writes `@issue_provider`/`@issue_id`/`@issue_title`/`@issue_url`, then kicks an immediate PR fetch. |
+| `tmux-issue-stamp-linear` / `-github` | called by the dispatcher | Provider impls: branch regex (+ `linear`/`gh` CLI) → `id\ntitle\nurl`. First provider with a non-empty id wins. |
+| `tmux-pr-enrich` | `#()` in status-format[0] (`--tick`); `prefix + i` `r` (`--force`) | Background PR poller; `gh pr list` per branch (cached at `/tmp/lazytmux-pr/`, 60s TTL, flock-guarded), writes `@pr_number`/`@pr_title`/`@pr_state`/`@pr_check_state`/`@pr_url`. Self-gating tick daemonizes a full pass every `prRefreshSeconds`. |
 
 ### Shared Libraries
 
 - **`lib-icons.sh`** — `ICON_MAP` associative array, `build_proc_icons`, `measure_display_width`, `strip_tmux_colors`, `pad_to_width`. Sourced by update-icons, reflow, session-picker, window-picker.
 - **`lib-claude.sh`** — `CLAUDE_PANES_DIR`, spinner frames, `read_pane_state` (with staleness), `claude_state_icon`, `setup_claude_colors`, `claude_colored_icon`, `claude_priority_state`. Sourced by update-icons, session-picker, window-picker, claude-status.
+- **`lib-enrich.sh`** — `branch_to_linear_key`, `branch_to_gh_issue_number`, `sanitize_title`, `truncate_ellipsis`, `branch_sha1`, `collapse_check_rollup`, `provider_priority_list`. Sourced by `tmux-issue-stamp*` + `tmux-pr-enrich`. Pure logic is unit-tested in `tests/enrich.bats` (run via `nix flake check`).
 
 Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to avoid subshell forks in hot paths.
 
@@ -96,6 +100,29 @@ layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
 - `restoreMode` defaults to `"off"` (manual `prefix + R` only). Set to `"auto"`
   to apply the smart filter on tmux server start.
 
+### PR + Issue Enrichment
+
+Per-worktree Linear/GitHub issue identity + PR check-state shown in the status
+line. Enabled by default via `programs.lazytmux.enrich.enable`.
+
+- **Window options are the source of truth.** `tmux-issue-stamp` (backgrounded
+  from worktrunk `post-switch` hook) writes `@issue_*`; `tmux-pr-enrich`
+  (background tick in status-format[0]) writes `@pr_*`. Display formats and
+  keybinds only read them.
+- **Providers** (`enrich.providers`, default `["linear" "github"]`) are tried in
+  priority order; first non-empty issue id wins. `gh` must be on PATH; `linear`
+  CLI is optional (falls back to branch-regex for the issue id).
+- **Keybindings:** `prefix + i` enters the enrich table — `i` open issue URL,
+  `p` open PR URL, `r` force-refresh the current window.
+- **Refresh:** `prRefreshSeconds` (default 30, clamped 10-300) gates the
+  background poll. PR state cached at `/tmp/lazytmux-pr/` (60s TTL).
+- **Icons:** override the 6 glyphs (linear/github/pending/success/failure/merged)
+  via `enrich.icons`; defaults are ASCII sentinels (`L`, `GH`, `*`, `OK`, `X`,
+  `M`). The `#` escape: Nix replaces `#` with `##` in icon values for tmux
+  format safety.
+- **Display test:** `./tests/test-display.sh` after `nix build .#default`
+  (manual; not in `nix flake check`).
+
 ## Key Conventions
 
 - **Shell scripts are bash**, not fish (they run inside tmux's environment). User's interactive shell is fish.
@@ -105,3 +132,4 @@ layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
 - **Staleness thresholds**: waiting > 30s becomes processing; processing > 15s becomes done.
 - **Theme support**: Scripts detect light/dark from `$XDG_STATE_HOME/theme-state.json` and use Catppuccin Latte/Mocha colors accordingly.
 - **shfmt** uses tabs for indentation (project default).
+- **Enrichment window options** (`@issue_*`, `@pr_*`) are the single source of truth for issue/PR state — display formats and keybinds read them; only the stamp/enrich scripts write them.
