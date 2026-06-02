@@ -50,8 +50,24 @@
               pkgs.go
               pkgs.gopls
               pkgs.gotools
+              pkgs.bats
+              pkgs.jq
             ];
         };
+
+        checks.enrich-tests =
+          pkgs.runCommand "enrich-tests" {
+            nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils];
+            # truncate_ellipsis appends a multibyte "…"; bash's ${#REPLY}
+            # only counts it as one char under a UTF-8 locale.
+            LANG = "C.UTF-8";
+            LC_ALL = "C.UTF-8";
+          } ''
+            cp -r ${./scripts} scripts
+            cp -r ${./tests} tests
+            bats tests/enrich.bats
+            touch $out
+          '';
 
         packages = {
           default = tmuxConfig.tmux-wrapped;
