@@ -101,7 +101,7 @@ fetch_branch_pr() {
 			json="$(gh pr list --head "$b" --state all --limit 1 \
 				--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
 		fi
-		printf '%s' "$json" >"$cache"
+		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 	) 9>"$lock"
 	printf '%s' "$cache"
 }
@@ -179,6 +179,6 @@ touch "$last_tick"
 
 # Detach so the status refresh returns immediately. The child re-invokes with
 # --tick-run, which runs run_full_pass once and exits (no re-daemonize).
-setsid env LAZYTMUX_PR_CHILD=1 "${BASH_SOURCE[0]}" --tick-run >/dev/null 2>&1 &
+setsid "${BASH_SOURCE[0]}" --tick-run >/dev/null 2>&1 &
 disown
 exit 0
