@@ -1,8 +1,23 @@
 # PR + Issue-Tracker Window Enrichment
 
-**Status:** Draft
+**Status:** Implemented (2026-06-02)
 **Date:** 2026-05-28
 **Owner:** Noam Stolero
+
+> **Implementation notes (deviations from this draft):**
+>
+> - **Keybinds** use a `prefix + i` enrich key-table (`i`/`p`/`r`) instead of the
+>   `prefix + g` chord — `g` collides with the existing lazygit popup.
+> - **Title truncation** uses tmux's native `#{=25:...}` (hard cut at 25 chars,
+>   no `…` ellipsis) rather than the `truncate_ellipsis` helper. The helper exists
+>   and is unit-tested but is not wired into the display path; ellipsis is a future
+>   cosmetic refinement.
+> - **`linearCli` flake input** not bundled — the Linear provider uses whatever
+>   `linear` is on PATH and falls back to branch-regex when absent.
+> - **Sticky `unauthed` PR state** simplified to `none` (no distinct `⚠ gh`
+>   indicator in v1).
+> - **`tests/test-display.sh`** is a manual smoke test, not wired into
+>   `nix flake check` (only the `enrich.bats` unit suite runs in CI).
 
 ## Problem
 
