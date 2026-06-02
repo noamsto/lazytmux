@@ -10,6 +10,8 @@
   # tmux.conf. Used by the home-manager module to inject opt-in features
   # (e.g. tmux-state hooks/keybindings) without polluting the base config.
   extraConfText ? "",
+  # tmux prefix key (literal character). Default backtick.
+  prefix ? "`",
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -230,12 +232,16 @@
     set -g extended-keys-format csi-u
     ${terminalConfig}set -as terminal-features '*:hyperlinks'
     set -s set-clipboard on
-    set -s copy-command 'wl-copy'
+    set -s copy-command '${
+      if pkgs.stdenv.hostPlatform.isDarwin
+      then "pbcopy"
+      else "wl-copy"
+    }'
 
-    # Prefix: backtick
+    # Prefix (configurable; default backtick)
     unbind C-b
-    set-option -g prefix `
-    bind ` send-prefix
+    set-option -g prefix ${prefix}
+    bind ${prefix} send-prefix
 
     # Config reload
     bind r source-file ~/.config/tmux/tmux.conf \; display "Config reloaded!"
@@ -435,7 +441,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop])}
     '';
     meta.mainProgram = "tmux";
   };

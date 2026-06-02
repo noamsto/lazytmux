@@ -100,6 +100,7 @@
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
+    inherit (cfg) prefix;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
     terminalTerm =
@@ -168,6 +169,16 @@ in {
       default = {};
       example = lib.literalExpression ''{ "my-app" = "⚡"; }'';
       description = "Extra process name → icon mappings. Overrides built-in defaults on collision.";
+    };
+
+    prefix = lib.mkOption {
+      type = lib.types.str;
+      default = "`";
+      example = "§";
+      description = ''
+        tmux prefix key (literal character). Defaults to backtick. On macOS ISO
+        keyboards the otherwise-unused § key (left of 1) is a convenient prefix.
+      '';
     };
 
     worktrunk = {
