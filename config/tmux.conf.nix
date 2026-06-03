@@ -10,6 +10,11 @@
   # tmux.conf. Used by the home-manager module to inject opt-in features
   # (e.g. tmux-state hooks/keybindings) without polluting the base config.
   extraConfText ? "",
+  # Issue/PR enrichment config (threaded from the home-manager module).
+  enrichEnable ? true,
+  enrichProviders ? ["linear" "github"],
+  enrichPrRefreshSeconds ? 30,
+  enrichIcons ? {},
   # tmux prefix key (literal character). Default backtick.
   prefix ? "`",
   # Absolute path to the shell tmux spawns in new panes (default-shell).
@@ -51,6 +56,18 @@
   maxIcons = "2";
   maxIconsPicker = "5";
 
+  enrichProvidersStr = lib.concatStringsSep " " enrichProviders;
+  # Icon defaults are ASCII sentinels; user overrides with Nerd Font glyphs via programs.lazytmux.enrich.icons (see CLAUDE.md).
+  enrichIconDefaults = {
+    linear = "L"; # nerd: nf-md-alpha-l-circle
+    github = "GH"; # nerd: nf-md-github
+    pending = "*"; # nerd: nf-md-progress-clock
+    success = "OK"; # nerd: nf-md-check-circle
+    failure = "X"; # nerd: nf-md-alert-circle
+    merged = "M"; # nerd: nf-md-source-merge
+  };
+  enrichIconSet = enrichIconDefaults // enrichIcons;
+
   # Generate bash associative array entries from Nix attrset
   iconMapBash = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "  [${k}]=\"${v}\"") processIcons);
 
@@ -85,6 +102,13 @@
 
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
+
+  # lib-enrich needs the provider-priority substitution rather than the icon map.
+  lib-enrich = let
+    raw = builtins.readFile ../scripts/lib-enrich.sh;
+    patched = builtins.replaceStrings ["@providers@"] [enrichProvidersStr] raw;
+  in
+    pkgs.writeShellScript "lib-enrich" patched;
 
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
@@ -122,6 +146,10 @@
     "tmux-dir-display"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
+    "tmux-issue-stamp"
+    "tmux-issue-stamp-linear"
+    "tmux-issue-stamp-github"
+    "tmux-pr-enrich"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -137,9 +165,48 @@
   in
     pkgs.writeShellScriptBin name patched;
 
-  # Individual script references for full store paths in config
+  # Scripts that need enrich library + provider/icon/config substitution
+  scriptsWithEnrich = ["tmux-issue-stamp" "tmux-issue-stamp-linear" "tmux-issue-stamp-github" "tmux-pr-enrich"];
+
+  mkScriptEnrich = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      [
+        "@lib_enrich@"
+        "@pr_refresh_seconds@"
+        "@issue_stamp_linear@"
+        "@issue_stamp_github@"
+        "@pr_enrich@"
+      ]
+      [
+        "${lib-enrich}"
+        (toString enrichPrRefreshSeconds)
+        "${enrich-linear-bin}/bin/tmux-issue-stamp-linear"
+        "${enrich-github-bin}/bin/tmux-issue-stamp-github"
+        "${enrich-pr-bin}/bin/tmux-pr-enrich"
+      ]
+      raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
+  enrich-linear-bin = mkScriptEnrich "tmux-issue-stamp-linear";
+  enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
+  enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
+
+  # Individual script references for full store paths in config.
+  # Reuse the pre-built enrich provider/poller derivations (also referenced by
+  # the dispatcher's substitution) instead of rebuilding them via mkScriptEnrich.
   script = lib.genAttrs scriptNames (name:
-    if builtins.elem name scriptsWithIcons
+    if name == "tmux-issue-stamp-linear"
+    then enrich-linear-bin
+    else if name == "tmux-issue-stamp-github"
+    then enrich-github-bin
+    else if name == "tmux-pr-enrich"
+    then enrich-pr-bin
+    else if builtins.elem name scriptsWithEnrich
+    then mkScriptEnrich name
+    else if builtins.elem name scriptsWithIcons
     then mkScriptFull name
     else if name == "claude-status"
     then claude-status-pkg
@@ -302,6 +369,15 @@
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs
 
+    ${lib.optionalString enrichEnable ''
+      # === Issue/PR enrichment ===
+      # prefix + i enters the enrich table: i open issue, p open PR, r refresh.
+      bind-key i switch-client -T enrich
+      bind-key -T enrich i run-shell 'url="#{@issue_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
+      bind-key -T enrich p run-shell 'url="#{@pr_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
+      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
+    ''}
+
     # Sesh pickers (full store paths for gum/fzf so they work from tmux context)
     bind-key "K" display-popup -E -w 40% -k "sesh connect \"$(sesh list -i | ${pkgs.gum}/bin/gum filter --no-strip-ansi --limit 1 --no-sort --fuzzy --placeholder 'Pick a sesh' --height 50 --prompt='⚡')\""
     bind-key "S" run-shell "sesh connect \"$(sesh list --icons | ${pkgs.fzf}/bin/fzf-tmux -p 90%,85% --no-sort --ansi --border-label '  Sessions ' --prompt '⚡  ' --header '  ^a all ^t tmux ^g configs ^x zoxide ^d kill ^f find' --bind 'tab:down,btab:up' --bind 'ctrl-a:change-prompt(⚡  )+reload(sesh list --icons)' --bind 'ctrl-t:change-prompt(🪟  )+reload(sesh list -t --icons)' --bind 'ctrl-g:change-prompt(⚙️  )+reload(sesh list -c --icons)' --bind 'ctrl-x:change-prompt(📁  )+reload(sesh list -z --icons)' --bind 'ctrl-f:change-prompt(🔎  )+reload(${pkgs.fd}/bin/fd -H -d 2 -t d -E .Trash . ~)' --bind 'ctrl-d:execute(tmux kill-session -t {})' --preview-window 'right:60%:wrap' --preview 'sesh-preview {}')\""
@@ -349,7 +425,7 @@
     set -g @icon_dir "${icons.dir}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | App info (right)
-    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}')#[align=left,bg=#{@thm_bg}]#{?client_prefix,#[fg=#{@thm_red}#,bold],#[fg=#{@thm_mauve}]} #{@icon_session} #S  #[fg=#{@thm_blue},bold]#{@icon_branch} #(${script.tmux-branch-display}/bin/tmux-branch-display '#{@branch}' '#{pane_current_path}')  #[fg=#{@thm_subtext_0},nobold]#{@icon_dir} #(${script.tmux-dir-display}/bin/tmux-dir-display '#{@branch}' '#{pane_current_path}' '#{@git_root}')  #[fg=#{@thm_overlay_1}]#(${script.claude-status}/bin/claude-status --session '#{session_name}' --format icon-color) #[align=right,fg=#{@thm_subtext_0}]#{@active_pane_icon} #{pane_current_command} "
+    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}#[align=left,bg=#{@thm_bg}]#{?client_prefix,#[fg=#{@thm_red}#,bold],#[fg=#{@thm_mauve}]} #{@icon_session} #S  #{?#{@issue_id},#[fg=#{@thm_blue}#,bold]#{?#{==:#{@issue_provider},linear},${enrichIconSet.linear},${enrichIconSet.github}} #{@issue_id} #[fg=#{@thm_text}#,nobold]#{=25:@issue_title}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},  #{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#[fg=#{@thm_green}]}}}}#{?#{==:#{@pr_check_state},failure},${enrichIconSet.failure},#{?#{==:#{@pr_check_state},pending},${enrichIconSet.pending},#{?#{==:#{@pr_state},merged},${enrichIconSet.merged},${enrichIconSet.success}}}} ###{@pr_number} #{=25:@pr_title},},#[fg=#{@thm_blue}#,bold]#{@icon_branch} #(${script.tmux-branch-display}/bin/tmux-branch-display '#{@branch}' '#{pane_current_path}')}  #[fg=#{@thm_subtext_0},nobold]#{@icon_dir} #(${script.tmux-dir-display}/bin/tmux-dir-display '#{@branch}' '#{pane_current_path}' '#{@git_root}')  #[fg=#{@thm_overlay_1}]#(${script.claude-status}/bin/claude-status --session '#{session_name}' --format icon-color) #[align=right,fg=#{@thm_subtext_0}]#{@active_pane_icon} #{pane_current_command} "
 
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
     set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]#{window_index}: #{window_name},#[fg=#{@thm_subtext_0}#,nobold]#{window_index}: #[fg=#{@thm_fg}]#{window_name}}#{?window_zoomed_flag, 󰁌,}#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
@@ -407,7 +483,7 @@
 
     # Window naming: multi-pane process icons + branch or dir name
     set -wg automatic-rename on
-    set -g automatic-rename-format "#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{b:pane_current_path}} #{@window_icon_display}"
+    set -g automatic-rename-format "#{?#{@issue_id},#{?#{==:#{@issue_provider},linear},${enrichIconSet.linear},${enrichIconSet.github}} #{@issue_id}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}}, #{?#{==:#{@pr_check_state},failure},${enrichIconSet.failure},#{?#{==:#{@pr_check_state},pending},${enrichIconSet.pending},#{?#{==:#{@pr_state},merged},${enrichIconSet.merged},${enrichIconSet.success}}}} ###{@pr_number},},#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{b:pane_current_path}}} #{@window_icon_display}"
 
     # tmux-fingers (smart copy) — hint colors set dynamically by tmux-apply-theme-colors
     set -g @fingers-pattern-0 "[A-Z]{2,}-[0-9]+"
@@ -449,7 +525,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
     '';
     meta.mainProgram = "tmux";
   };
