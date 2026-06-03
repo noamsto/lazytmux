@@ -227,10 +227,9 @@ in {
         type = lib.types.enum ["auto" "interactive" "off"];
         default = "off";
         description = ''
-          Behavior on tmux server start. "off" disables auto-restore (safe default
-          during soak — manual `prefix + R` still works). "auto" applies the smart
-          filter and restores. "interactive" prompts via picker (not implemented in
-          tmux-state v0.1.0 — falls back to "off").
+          Behavior on tmux server start. "off" disables auto-restore (manual
+          `prefix + R` still works). "auto" applies the smart filter and restores.
+          "interactive" prompts via picker (not yet implemented — falls back to "off").
         '';
       };
 
