@@ -100,7 +100,7 @@
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
-    inherit (cfg) prefix;
+    inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
     terminalTerm =
@@ -178,6 +178,19 @@ in {
       description = ''
         tmux prefix key (literal character). Defaults to backtick. On macOS ISO
         keyboards the otherwise-unused § key (left of 1) is a convenient prefix.
+      '';
+    };
+
+    defaultShell = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/current-system/sw/bin/fish";
+      description = ''
+        Absolute path to the shell tmux spawns in new panes (tmux
+        default-shell). When null, tmux uses $SHELL / the account shell. Set
+        this when the login shell isn't reliably propagated to the tmux server
+        — e.g. launchd-started servers on macOS capture a stale $SHELL, so
+        panes open in /bin/zsh even after the account shell is changed.
       '';
     };
 
