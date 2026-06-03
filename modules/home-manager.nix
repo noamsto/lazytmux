@@ -89,11 +89,12 @@
       ''}
 
       bind   u    run-shell '${tmuxStateBin} undo --pop'
-      # FZF_DEFAULT_OPTS may contain --tmux=... (fzf's own popup), which crashes
-      # when tmux-state's fzf invocation is already inside display-popup -E.
-      # Strip it for these two bindings.
-      bind   U    display-popup -E -w 90% -h 85% -b rounded -T " Close events " 'env -u FZF_DEFAULT_OPTS ${tmuxStateBin} pick --kind=close'
-      bind   R    display-popup -E -w 90% -h 85% -b rounded -T " Snapshots "     'env -u FZF_DEFAULT_OPTS ${tmuxStateBin} pick --kind=snapshot'
+      # The picker is a bubbletea TUI (tmux-state >= 0.2.0); launching it through
+      # the `env` binary breaks its TTY init and renders a blank popup, so invoke
+      # it directly. (The old `env -u FZF_DEFAULT_OPTS` wrapper was only needed for
+      # the fzf-based picker, which no longer exists.)
+      bind   U    display-popup -E -w 90% -h 85% -b rounded -T " Close events " '${tmuxStateBin} pick --kind=close'
+      bind   R    display-popup -E -w 90% -h 85% -b rounded -T " Snapshots "     '${tmuxStateBin} pick --kind=snapshot'
       bind C-s    run-shell '${tmuxStateBin} save --reason=keybinding'
     '';
 
