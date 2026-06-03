@@ -15,6 +15,11 @@
   enrichProviders ? ["linear" "github"],
   enrichPrRefreshSeconds ? 30,
   enrichIcons ? {},
+  # tmux prefix key (literal character). Default backtick.
+  prefix ? "`",
+  # Absolute path to the shell tmux spawns in new panes (default-shell).
+  # Null => tmux uses $SHELL / the account shell.
+  defaultShell ? null,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -224,6 +229,11 @@
     lib.optionalString (terminalTerm != null)
     "set -as terminal-features '${terminalTerm}*:RGB:extkeys'\n    ";
 
+  # default-shell line, emitted only when a shell path is configured.
+  defaultShellConfig =
+    lib.optionalString (defaultShell != null)
+    "set -g default-shell ${defaultShell}\n    ";
+
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
     # catppuccin theme
@@ -260,7 +270,7 @@
   tmuxConfText = pkgs.writeText "tmux.conf" ''
     # === Base Settings ===
     set -g default-terminal "tmux-256color"
-    set -g history-limit 1500000
+    ${defaultShellConfig}set -g history-limit 1500000
     set -g base-index 1
     setw -g pane-base-index 1
     set -g popup-border-lines rounded
@@ -297,12 +307,16 @@
     set -g extended-keys-format csi-u
     ${terminalConfig}set -as terminal-features '*:hyperlinks'
     set -s set-clipboard on
-    set -s copy-command 'wl-copy'
+    set -s copy-command '${
+      if pkgs.stdenv.hostPlatform.isDarwin
+      then "pbcopy"
+      else "wl-copy"
+    }'
 
-    # Prefix: backtick
+    # Prefix (configurable; default backtick)
     unbind C-b
-    set-option -g prefix `
-    bind ` send-prefix
+    set-option -g prefix ${prefix}
+    bind ${prefix} send-prefix
 
     # Config reload
     bind r source-file ~/.config/tmux/tmux.conf \; display "Config reloaded!"
@@ -511,7 +525,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath (scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
     '';
     meta.mainProgram = "tmux";
   };

@@ -100,6 +100,7 @@
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
+    inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
     terminalTerm =
@@ -112,6 +113,57 @@
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
     enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
   };
+
+  inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
+
+  persistEnabled = cfg.persist.enable && cfg.persist.package != null;
+
+  # Stable startup script shared by the Linux systemd service and the darwin
+  # launchd agent. Resolves tmux from the user profile so the unit/plist never
+  # embeds a nix store path (no churn on update).
+  tmux-startup-script = pkgs.writeShellScript "tmux-startup" ''
+    # Resolve tmux from user profile (avoids hardcoded store paths in the unit)
+    # Try per-user profile (NixOS/home-manager/nix-darwin) then nix-profile (nix-env)
+    for candidate in "/etc/profiles/per-user/$USER/bin/tmux" "$HOME/.nix-profile/bin/tmux"; do
+      if [ -x "$candidate" ]; then
+        TMUX_BIN="$candidate"
+        break
+      fi
+    done
+    if [ -z "''${TMUX_BIN:-}" ]; then
+      echo "tmux not found in /etc/profiles/per-user/$USER/bin or ~/.nix-profile/bin" >&2
+      exit 1
+    fi
+
+    SESSION=${lib.escapeShellArg cfg.startupSession.name}
+
+    # Expand %h and leading ~ to $HOME — tmux does NOT expand format strings
+    # (or shell ~) in the -c argument; it passes the path directly to chdir.
+    DIRECTORY=${lib.escapeShellArg cfg.startupSession.directory}
+    DIRECTORY="''${DIRECTORY//%h/$HOME}"
+    DIRECTORY="''${DIRECTORY/#~/$HOME}"
+
+    # Exact-match check (`=name`) — default is prefix match, which would
+    # incorrectly skip creation if e.g. `foo-bar` existed when SESSION=foo.
+    if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+      echo "tmux session $SESSION already running, skipping"
+      exit 0
+    fi
+
+    # Try to create the session. If creation fails but the session now
+    # exists anyway, something else won the race to create it (e.g.
+    # tmux-state auto-restore on server start). Treat that as success.
+    if "$TMUX_BIN" new -s "$SESSION" -c "$DIRECTORY" -d; then
+      exit 0
+    fi
+
+    if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
+      echo "tmux session $SESSION exists (created by another source), continuing"
+      exit 0
+    fi
+
+    exit 1
+  '';
 in {
   options.programs.lazytmux = {
     enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";
@@ -121,6 +173,29 @@ in {
       default = {};
       example = lib.literalExpression ''{ "my-app" = "⚡"; }'';
       description = "Extra process name → icon mappings. Overrides built-in defaults on collision.";
+    };
+
+    prefix = lib.mkOption {
+      type = lib.types.str;
+      default = "`";
+      example = "§";
+      description = ''
+        tmux prefix key (literal character). Defaults to backtick. On macOS ISO
+        keyboards the otherwise-unused § key (left of 1) is a convenient prefix.
+      '';
+    };
+
+    defaultShell = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/current-system/sw/bin/fish";
+      description = ''
+        Absolute path to the shell tmux spawns in new panes (tmux
+        default-shell). When null, tmux uses $SHELL / the account shell. Set
+        this when the login shell isn't reliably propagated to the tmux server
+        — e.g. launchd-started servers on macOS capture a stale $SHELL, so
+        panes open in /bin/zsh even after the account shell is changed.
+      '';
     };
 
     worktrunk = {
@@ -310,279 +385,282 @@ in {
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    assertions =
-      lib.optional (
-        cfg.startupSession.terminal.emulator
-        != null
-        && !emulatorCfg.available
-      ) {
-        assertion = false;
-        message = ''
-          programs.lazytmux.startupSession.terminal.emulator = "${cfg.startupSession.terminal.emulator}"
-          but pkgs.${cfg.startupSession.terminal.emulator} is not available.
-          Add it to your packages or set terminal.emulator = null and configure manually.
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      assertions =
+        lib.optional (
+          cfg.startupSession.terminal.emulator
+          != null
+          && !emulatorCfg.available
+        ) {
+          assertion = false;
+          message = ''
+            programs.lazytmux.startupSession.terminal.emulator = "${cfg.startupSession.terminal.emulator}"
+            but pkgs.${cfg.startupSession.terminal.emulator} is not available.
+            Add it to your packages or set terminal.emulator = null and configure manually.
+          '';
+        };
+
+      home = {
+        packages =
+          [tmuxConfig.tmux-wrapped]
+          ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
+          ++ lib.optionals (cfg.persist.enable && cfg.persist.package != null) [cfg.persist.package]
+          ++ lib.optionals cfg.claudeIntegration.enable [
+            tmuxConfig.script.claude-status-update
+            tmuxConfig.script.claude-status
+          ]
+          ++ lib.optionals cfg.enrich.enable [
+            tmuxConfig.script.tmux-issue-stamp
+            tmuxConfig.script.tmux-issue-stamp-linear
+            tmuxConfig.script.tmux-issue-stamp-github
+            tmuxConfig.script.tmux-pr-enrich
+          ]
+          ++ cfg.popupTools;
+
+        file =
+          lib.optionalAttrs cfg.skills.enable (
+            lib.mapAttrs' (name: _: {
+              name = ".claude/skills/${name}";
+              value.source = ../skills/${name};
+            }) (builtins.readDir ../skills)
+          )
+          // lib.optionalAttrs cfg.opencode.enable {
+            ".config/opencode/plugin/opencode-status.ts".source = ../plugins/opencode-status.ts;
+          };
+
+        # Reload tmux config + reflow all sessions after profile switch.
+        # The config embeds full /nix/store paths, so reloading makes the running
+        # server use new script versions without restart. Reflow regenerates
+        # status-format lines for all sessions with the new reflow script.
+        # Run after restoreTheme (which sources the config and sets theme vars).
+        # We only need to: ensure config is loaded, then reflow all sessions.
+        activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
+          TMUX=${pkgs.tmux}/bin/tmux
+          REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
+          if $TMUX info &>/dev/null 2>&1; then
+            # Source config (restoreTheme may have already done this, but it's
+            # idempotent and handles the case where restoreTheme doesn't exist)
+            $TMUX source-file ${tmuxConfig.tmuxConf} || true
+            # Wait for async run-shell plugin commands to finish
+            sleep 1
+            # Reflow ALL sessions
+            WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
+            WIDTH=''${WIDTH:-200}
+            while read -r sess; do
+              [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
+            done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
+          fi
         '';
       };
 
-    home = {
-      packages =
-        [tmuxConfig.tmux-wrapped]
-        ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
-        ++ lib.optionals (cfg.persist.enable && cfg.persist.package != null) [cfg.persist.package]
-        ++ lib.optionals cfg.claudeIntegration.enable [
-          tmuxConfig.script.claude-status-update
-          tmuxConfig.script.claude-status
-        ]
-        ++ lib.optionals cfg.enrich.enable [
-          tmuxConfig.script.tmux-issue-stamp
-          tmuxConfig.script.tmux-issue-stamp-linear
-          tmuxConfig.script.tmux-issue-stamp-github
-          tmuxConfig.script.tmux-pr-enrich
-        ]
-        ++ cfg.popupTools;
+      xdg.configFile = {
+        "worktrunk/config.toml" = lib.mkIf cfg.worktrunk.enable {
+          text = ''
+            worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
 
-      file =
-        lib.optionalAttrs cfg.skills.enable (
-          lib.mapAttrs' (name: _: {
-            name = ".claude/skills/${name}";
-            value.source = ../skills/${name};
-          }) (builtins.readDir ../skills)
-        )
-        // lib.optionalAttrs cfg.opencode.enable {
-          ".config/opencode/plugin/opencode-status.ts".source = ../plugins/opencode-status.ts;
-        };
+            # The tmux post-switch hook owns navigation (select-window or switch-client),
+            # so skip cd'ing the parent shell — otherwise it ends up pwd'd at the
+            # worktree behind a different session's window. Hooks still fire normally.
+            [switch]
+            cd = false
 
-      # Reload tmux config + reflow all sessions after profile switch.
-      # The config embeds full /nix/store paths, so reloading makes the running
-      # server use new script versions without restart. Reflow regenerates
-      # status-format lines for all sessions with the new reflow script.
-      # Run after restoreTheme (which sources the config and sets theme vars).
-      # We only need to: ensure config is loaded, then reflow all sessions.
-      activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
-        TMUX=${pkgs.tmux}/bin/tmux
-        REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
-        if $TMUX info &>/dev/null 2>&1; then
-          # Source config (restoreTheme may have already done this, but it's
-          # idempotent and handles the case where restoreTheme doesn't exist)
-          $TMUX source-file ${tmuxConfig.tmuxConf} || true
-          # Wait for async run-shell plugin commands to finish
-          sleep 1
-          # Reflow ALL sessions
-          WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
-          WIDTH=''${WIDTH:-200}
-          while read -r sess; do
-            [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
-          done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
-        fi
-      '';
-    };
-
-    xdg.configFile = {
-      "worktrunk/config.toml" = lib.mkIf cfg.worktrunk.enable {
-        text = ''
-          worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
-
-          # The tmux post-switch hook owns navigation (select-window or switch-client),
-          # so skip cd'ing the parent shell — otherwise it ends up pwd'd at the
-          # worktree behind a different session's window. Hooks still fire normally.
-          [switch]
-          cd = false
-
-          [post-switch]
-          tmux = """
-          [ -z "$TMUX" ] && exit 0
-          [ -n "$CLAUDECODE" ] && exit 0
-          CUR_SESSION=$(tmux display-message -p '#{session_name}')
-          CUR_WIN=$(tmux display-message -p '#{window_index}')
-          # Primary: match by @worktree tag across ALL sessions (set when we create
-          # the window). Output is "<session>\t<window>".
-          MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
-            | awk -F'\t' -v wt="{{ worktree_path }}" '$3 == wt { print $1 "\t" $2; exit }')
-          # Fallback: match by pane_current_path, excluding the current window
-          # (parent shell may have already cd'd, which would self-match and no-op).
-          if [ -z "$MATCH" ]; then
-            MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{pane_current_path}' \
-              | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" \
-                  '$3 == wt && !($1 == cs && $2 == cw) { print $1 "\t" $2; exit }')
-          fi
-          if [ -n "$MATCH" ]; then
-            SESS=$(printf '%s' "$MATCH" | cut -f1)
-            WIN=$(printf '%s' "$MATCH" | cut -f2)
-            if [ "$SESS" = "$CUR_SESSION" ]; then
-              tmux select-window -t "$SESS:$WIN"
-            else
-              tmux switch-client -t "$SESS:$WIN"
+            [post-switch]
+            tmux = """
+            [ -z "$TMUX" ] && exit 0
+            [ -n "$CLAUDECODE" ] && exit 0
+            CUR_SESSION=$(tmux display-message -p '#{session_name}')
+            CUR_WIN=$(tmux display-message -p '#{window_index}')
+            # Primary: match by @worktree tag across ALL sessions (set when we create
+            # the window). Output is "<session>\t<window>".
+            MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
+              | awk -F'\t' -v wt="{{ worktree_path }}" '$3 == wt { print $1 "\t" $2; exit }')
+            # Fallback: match by pane_current_path, excluding the current window
+            # (parent shell may have already cd'd, which would self-match and no-op).
+            if [ -z "$MATCH" ]; then
+              MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{pane_current_path}' \
+                | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" \
+                    '$3 == wt && !($1 == cs && $2 == cw) { print $1 "\t" $2; exit }')
             fi
-            # Auto-tag matched-by-path windows so the next call hits the primary signal.
-            tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
-            tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
-            STAMP_TARGET="$SESS:$WIN"
-          else
-            tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
-            tmux set-option -t "$CUR_SESSION" -w @worktree "{{ worktree_path }}"
-            tmux set-option -t "$CUR_SESSION" -w @branch "{{ branch | sanitize }}"
-            STAMP_TARGET="$CUR_SESSION"
-          fi${lib.optionalString cfg.enrich.enable ''
+            if [ -n "$MATCH" ]; then
+              SESS=$(printf '%s' "$MATCH" | cut -f1)
+              WIN=$(printf '%s' "$MATCH" | cut -f2)
+              if [ "$SESS" = "$CUR_SESSION" ]; then
+                tmux select-window -t "$SESS:$WIN"
+              else
+                tmux switch-client -t "$SESS:$WIN"
+              fi
+              # Auto-tag matched-by-path windows so the next call hits the primary signal.
+              tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
+              tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
+              STAMP_TARGET="$SESS:$WIN"
+            else
+              tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
+              tmux set-option -t "$CUR_SESSION" -w @worktree "{{ worktree_path }}"
+              tmux set-option -t "$CUR_SESSION" -w @branch "{{ branch | sanitize }}"
+              STAMP_TARGET="$CUR_SESSION"
+            fi${lib.optionalString cfg.enrich.enable ''
 
-            if [ -n "''${STAMP_TARGET:-}" ]; then
-              ${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp "$STAMP_TARGET" "{{ worktree_path }}" "{{ branch | sanitize }}" >/dev/null 2>&1 &
-            fi''}
-          """
-          zoxide = """
-          command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
-          """
+              if [ -n "''${STAMP_TARGET:-}" ]; then
+                ${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp "$STAMP_TARGET" "{{ worktree_path }}" "{{ branch | sanitize }}" >/dev/null 2>&1 &
+              fi''}
+            """
+            zoxide = """
+            command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
+            """
 
-          [post-remove]
-          tmux = """
-          [ -z "$TMUX" ] && exit 0
-          [ -n "$CLAUDECODE" ] && exit 0
-          SESSION=$(tmux display-message -p '#{session_name}')
-          WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
-            | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
-          [ -n "$WIN" ] && tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
-          """
-        '';
+            [post-remove]
+            tmux = """
+            [ -z "$TMUX" ] && exit 0
+            [ -n "$CLAUDECODE" ] && exit 0
+            SESSION=$(tmux display-message -p '#{session_name}')
+            WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
+              | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
+            [ -n "$WIN" ] && tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+            """
+          '';
+        };
+
+        # Stable config path so theme-toggle and prefix+r can source it.
+        # The actual config is in /nix/store; this symlink always points to the latest.
+        "tmux/tmux.conf".source = tmuxConfig.tmuxConf;
       };
+    }
+    # Never restart on switch — killing the tmux server destroys all sessions and
+    # history. The startup script resolves tmux via the user profile, so the
+    # unit/plist doesn't change when lazytmux updates (preventing sd-switch restart).
+    (lib.mkIf isLinux {
+      systemd.user = {
+        services = {
+          tmux-startup = lib.mkIf cfg.startupSession.enable {
+            Unit = {
+              Description = "Start tmux server on login";
+              After = ["graphical-session.target"];
+              Wants = ["graphical-session.target"];
+            };
 
-      # Stable config path so theme-toggle and prefix+r can source it.
-      # The actual config is in /nix/store; this symlink always points to the latest.
-      "tmux/tmux.conf".source = tmuxConfig.tmuxConf;
-    };
+            Service = {
+              Type = "forking";
+              ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP COLORTERM TERM TERMINFO";
+              ExecStart = "${tmux-startup-script}";
+              RemainAfterExit = true;
+              TimeoutStopSec = "5s";
+              Environment =
+                [
+                  "COLORTERM=${cfg.startupSession.terminal.colorterm}"
+                  "TERM=${effectiveTerm}"
+                  "TMUX_TMPDIR=%t"
+                ]
+                ++ lib.optionals (effectiveTermProgram != "") [
+                  "TERM_PROGRAM=${effectiveTermProgram}"
+                ]
+                ++ lib.optionals (effectiveTerminfoPath != null) [
+                  "TERMINFO=${effectiveTerminfoPath}"
+                ];
+            };
 
-    # Never restart on switch — killing the tmux server destroys all sessions and history.
-    # The startup script is a stable wrapper that resolves tmux via ~/.nix-profile/bin,
-    # so the unit file doesn't change when lazytmux is updated (preventing sd-switch restart).
-    systemd.user = let
-      persistEnabled = cfg.persist.enable && cfg.persist.package != null;
-
-      # Stable script that doesn't embed nix store paths — prevents unit file churn
-      tmux-startup-script = pkgs.writeShellScript "tmux-startup" ''
-        # Resolve tmux from user profile (avoids hardcoded store paths in the unit)
-        # Try per-user profile (NixOS/home-manager) then nix-profile (nix-env)
-        for candidate in "/etc/profiles/per-user/$USER/bin/tmux" "$HOME/.nix-profile/bin/tmux"; do
-          if [ -x "$candidate" ]; then
-            TMUX_BIN="$candidate"
-            break
-          fi
-        done
-        if [ -z "''${TMUX_BIN:-}" ]; then
-          echo "tmux not found in /etc/profiles/per-user/$USER/bin or ~/.nix-profile/bin" >&2
-          exit 1
-        fi
-
-        SESSION=${lib.escapeShellArg cfg.startupSession.name}
-
-        # Expand %h and leading ~ to $HOME — tmux does NOT expand format strings
-        # (or shell ~) in the -c argument; it passes the path directly to chdir.
-        DIRECTORY=${lib.escapeShellArg cfg.startupSession.directory}
-        DIRECTORY="''${DIRECTORY//%h/$HOME}"
-        DIRECTORY="''${DIRECTORY/#~/$HOME}"
-
-        # Exact-match check (`=name`) — default is prefix match, which would
-        # incorrectly skip creation if e.g. `foo-bar` existed when SESSION=foo.
-        if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
-          echo "tmux session $SESSION already running, skipping"
-          exit 0
-        fi
-
-        # Try to create the session. If creation fails but the session now
-        # exists anyway, something else won the race to create it (e.g.
-        # tmux-state auto-restore on server start). Treat that as success.
-        if "$TMUX_BIN" new -s "$SESSION" -c "$DIRECTORY" -d; then
-          exit 0
-        fi
-
-        if "$TMUX_BIN" has-session -t "=$SESSION" 2>/dev/null; then
-          echo "tmux session $SESSION exists (created by another source), continuing"
-          exit 0
-        fi
-
-        exit 1
-      '';
-    in {
-      services = {
-        tmux-startup = lib.mkIf cfg.startupSession.enable {
-          Unit = {
-            Description = "Start tmux server on login";
-            After = ["graphical-session.target"];
-            Wants = ["graphical-session.target"];
+            Install = {
+              WantedBy = ["graphical-session.target"];
+            };
           };
 
-          Service = {
-            Type = "forking";
-            ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP COLORTERM TERM TERMINFO";
-            ExecStart = "${tmux-startup-script}";
-            RemainAfterExit = true;
-            TimeoutStopSec = "5s";
-            Environment =
-              [
-                "COLORTERM=${cfg.startupSession.terminal.colorterm}"
-                "TERM=${effectiveTerm}"
-                "TMUX_TMPDIR=%t"
-              ]
-              ++ lib.optionals (effectiveTermProgram != "") [
-                "TERM_PROGRAM=${effectiveTermProgram}"
-              ]
-              ++ lib.optionals (effectiveTerminfoPath != null) [
-                "TERMINFO=${effectiveTerminfoPath}"
-              ];
+          # Periodic snapshot — fires `tmux-state save --reason=timer` so the
+          # daemon has a recent baseline even between structural-change hooks.
+          #
+          # TMUX_TMPDIR points tmux-state at the user's actual socket
+          # ($XDG_RUNTIME_DIR/tmux-$UID/default) instead of tmux's compiled-in
+          # /tmp default; without it the timer queried a stale socket and
+          # bailed. (tmux-state >= 7f8c820 also synthesizes the TMUX env var
+          # internally so format-string control bytes survive — no need to set
+          # TMUX here.)
+          lazytmux-state-save = lib.mkIf persistEnabled {
+            Unit.Description = "Save tmux-state snapshot";
+            Service = {
+              Type = "oneshot";
+              Environment = ["TMUX_TMPDIR=%t"];
+              ExecStart = "${cfg.persist.package}/bin/tmux-state save --reason=timer";
+            };
           };
 
-          Install = {
-            WantedBy = ["graphical-session.target"];
+          # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
+          # was already pruned). Cheap to run; safe to skip on missed firings.
+          lazytmux-state-gc = lib.mkIf persistEnabled {
+            Unit.Description = "tmux-state garbage collection";
+            Service = {
+              Type = "oneshot";
+              ExecStart = "${cfg.persist.package}/bin/tmux-state gc";
+            };
           };
         };
 
-        # Periodic snapshot — fires `tmux-state save --reason=timer` so the
-        # daemon has a recent baseline even between structural-change hooks.
-        #
-        # TMUX_TMPDIR points tmux-state at the user's actual socket
-        # ($XDG_RUNTIME_DIR/tmux-$UID/default) instead of tmux's compiled-in
-        # /tmp default; without it the timer queried a stale socket and
-        # bailed. (tmux-state >= 7f8c820 also synthesizes the TMUX env var
-        # internally so format-string control bytes survive — no need to set
-        # TMUX here.)
-        lazytmux-state-save = lib.mkIf persistEnabled {
-          Unit.Description = "Save tmux-state snapshot";
-          Service = {
-            Type = "oneshot";
-            Environment = ["TMUX_TMPDIR=%t"];
-            ExecStart = "${cfg.persist.package}/bin/tmux-state save --reason=timer";
+        timers = {
+          lazytmux-state-save = lib.mkIf persistEnabled {
+            Unit.Description = "Periodic tmux-state snapshot";
+            Timer = {
+              OnBootSec = "2min";
+              OnUnitActiveSec = "${toString cfg.persist.saveInterval}s";
+              Unit = "lazytmux-state-save.service";
+            };
+            Install.WantedBy = ["timers.target"];
           };
-        };
 
-        # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
-        # was already pruned). Cheap to run; safe to skip on missed firings.
-        lazytmux-state-gc = lib.mkIf persistEnabled {
-          Unit.Description = "tmux-state garbage collection";
-          Service = {
-            Type = "oneshot";
-            ExecStart = "${cfg.persist.package}/bin/tmux-state gc";
+          lazytmux-state-gc = lib.mkIf persistEnabled {
+            Unit.Description = "tmux-state GC (orphan scrollback files)";
+            Timer = {
+              OnCalendar = "weekly";
+              Unit = "lazytmux-state-gc.service";
+            };
+            Install.WantedBy = ["timers.target"];
           };
         };
       };
-
-      timers = {
-        lazytmux-state-save = lib.mkIf persistEnabled {
-          Unit.Description = "Periodic tmux-state snapshot";
-          Timer = {
-            OnBootSec = "2min";
-            OnUnitActiveSec = "${toString cfg.persist.saveInterval}s";
-            Unit = "lazytmux-state-save.service";
+    })
+    # Darwin: launchd agents mirroring the systemd units. tmux uses its default
+    # /tmp/tmux-$UID socket here (no $XDG_RUNTIME_DIR), so we omit the
+    # TMUX_TMPDIR / %t handling the Linux units need.
+    (lib.mkIf isDarwin {
+      launchd.agents =
+        lib.optionalAttrs cfg.startupSession.enable {
+          tmux-startup = {
+            enable = true;
+            config = {
+              ProgramArguments = ["${tmux-startup-script}"];
+              RunAtLoad = true;
+              EnvironmentVariables =
+                {
+                  COLORTERM = cfg.startupSession.terminal.colorterm;
+                  TERM = effectiveTerm;
+                }
+                // lib.optionalAttrs (effectiveTermProgram != "") {
+                  TERM_PROGRAM = effectiveTermProgram;
+                }
+                // lib.optionalAttrs (effectiveTerminfoPath != null) {
+                  TERMINFO = effectiveTerminfoPath;
+                };
+              StandardOutPath = "/tmp/lazytmux-startup.log";
+              StandardErrorPath = "/tmp/lazytmux-startup.log";
+            };
           };
-          Install.WantedBy = ["timers.target"];
-        };
-
-        lazytmux-state-gc = lib.mkIf persistEnabled {
-          Unit.Description = "tmux-state GC (orphan scrollback files)";
-          Timer = {
-            OnCalendar = "weekly";
-            Unit = "lazytmux-state-gc.service";
+        }
+        // lib.optionalAttrs persistEnabled {
+          # Periodic snapshot. No TMUX_TMPDIR: darwin tmux uses its default
+          # /tmp/tmux-$UID socket, which tmux-state also resolves to by default.
+          lazytmux-state-save = {
+            enable = true;
+            config = {
+              ProgramArguments = ["${cfg.persist.package}/bin/tmux-state" "save" "--reason=timer"];
+              StartInterval = cfg.persist.saveInterval;
+            };
           };
-          Install.WantedBy = ["timers.target"];
+          # Weekly GC of orphaned scrollback files.
+          lazytmux-state-gc = {
+            enable = true;
+            config = {
+              ProgramArguments = ["${cfg.persist.package}/bin/tmux-state" "gc"];
+              StartCalendarInterval = [{Weekday = 0;}];
+            };
+          };
         };
-      };
-    };
-  };
+    })
+  ]);
 }
