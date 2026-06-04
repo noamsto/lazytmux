@@ -61,12 +61,18 @@ done
 
 # write_pr_options TARGET NUMBER TITLE STATE CHECK URL
 write_pr_options() {
+	# Only @pr_number/@pr_state/@pr_check_state drive the window label glyph; capture
+	# them before writing so we can skip the (cache-bypassing) reflow when unchanged.
+	local prev
+	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}')
 	tmux set-option -t "$1" -w @pr_number "$2"
 	tmux set-option -t "$1" -w @pr_title "$3"
 	tmux set-option -t "$1" -w @pr_state "$4"
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
-	@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
+	if [[ $prev != "$2|$4|$5" ]]; then
+		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
+	fi
 }
 
 # fetch_branch_pr BRANCH  → echoes cache JSON path, refreshing via gh if stale.
