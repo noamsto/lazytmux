@@ -150,3 +150,50 @@ setup() {
 	provider_priority_list
 	[ "$REPLY" = "linear github" ]
 }
+
+@test "build_window_label: enriched short = provider id" {
+	build_window_label short linear ENG-1957 "refactor services" "" "" "" feat/eng-1957 /x
+	[ "$REPLY" = "L ENG-1957" ]
+}
+
+@test "build_window_label: enriched long = provider id title" {
+	build_window_label long linear ENG-1957 "refactor services" "" "" "" feat/eng-1957 /x
+	[ "$REPLY" = "L ENG-1957 refactor services" ]
+}
+
+@test "build_window_label: enriched with failing PR adds glyph in both modes" {
+	build_window_label short github 247 "fix bug" 247 OPEN failure gh-247 /x
+	[ "$REPLY" = "G 247 F" ]
+	build_window_label long github 247 "fix bug" 247 OPEN failure gh-247 /x
+	[ "$REPLY" = "G 247 F fix bug" ]
+}
+
+@test "build_window_label: merged PR uses merged glyph" {
+	build_window_label short linear ENG-1 "t" 9 merged success br /x
+	[ "$REPLY" = "L ENG-1 M" ]
+}
+
+@test "build_window_label: pr_number=none is treated as no PR" {
+	build_window_label short linear ENG-1 "t" none "" "" br /x
+	[ "$REPLY" = "L ENG-1" ]
+}
+
+@test "build_window_label: long with empty title falls back to short form" {
+	build_window_label long linear ENG-1 "" "" "" "" br /x
+	[ "$REPLY" = "L ENG-1" ]
+}
+
+@test "build_window_label: plain short = branch basename" {
+	build_window_label short "" "" "" "" "" "" feature/fix-login /x
+	[ "$REPLY" = "fix-login" ]
+}
+
+@test "build_window_label: plain long = full branch" {
+	build_window_label long "" "" "" "" "" "" feature/fix-login /x
+	[ "$REPLY" = "feature/fix-login" ]
+}
+
+@test "build_window_label: no branch falls back to dir basename" {
+	build_window_label long "" "" "" "" "" "" "" /home/noams/proj
+	[ "$REPLY" = "proj" ]
+}

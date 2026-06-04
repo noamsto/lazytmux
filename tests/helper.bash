@@ -3,10 +3,16 @@
 setup_lib_enrich() {
 	local tmp
 	tmp="$(mktemp)"
-	# Stub the @providers@ Nix placeholder (added by provider_priority_list in a
-	# later task) so the un-built script is sourceable in tests.
-	sed 's/@providers@/linear github/g' scripts/lib-enrich.sh >"$tmp"
-	# shellcheck disable=SC1090
+	sed \
+		-e 's/@providers@/linear github/g' \
+		-e 's/@enrich_icon_linear@/L/g' \
+		-e 's/@enrich_icon_github@/G/g' \
+		-e 's/@enrich_icon_pending@/P/g' \
+		-e 's/@enrich_icon_success@/S/g' \
+		-e 's/@enrich_icon_failure@/F/g' \
+		-e 's/@enrich_icon_merged@/M/g' \
+		scripts/lib-enrich.sh >"$tmp"
+	# shellcheck source=/dev/null
 	source "$tmp"
 	rm -f "$tmp"
 }

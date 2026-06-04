@@ -8,6 +8,15 @@
 
 ENRICH_CACHE_DIR="/tmp/lazytmux-pr" # PR-state cache dir; consumed by the PR enrichment poller
 
+# Enrich glyphs (substituted at Nix build time from enrichIconSetRaw). Text-only;
+# the status template applies color and appends process/claude icons separately.
+ENRICH_ICON_LINEAR="@enrich_icon_linear@"
+ENRICH_ICON_GITHUB="@enrich_icon_github@"
+ENRICH_ICON_PENDING="@enrich_icon_pending@"
+ENRICH_ICON_SUCCESS="@enrich_icon_success@"
+ENRICH_ICON_FAILURE="@enrich_icon_failure@"
+ENRICH_ICON_MERGED="@enrich_icon_merged@"
+
 # branch_to_linear_key BRANCH
 # Extracts a Linear issue key (TEAM-123) from a branch name.
 # Requires letters before the dash (pure-numeric prefixes are GitHub issues).
@@ -106,4 +115,50 @@ collapse_check_rollup() {
 # programs.lazytmux.enrich.providers. Sets REPLY to a space-separated list.
 provider_priority_list() {
 	REPLY="@providers@"
+}
+
+# build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
+#                    PR_CHECK_STATE BRANCH PANE_PATH
+# MODE is "short" or "long". Composes the text-only window label (no color, no
+# process/claude icons — the status template adds those). Enriched windows show
+# "<provider> <id>[ <pr-glyph>][ <title>]"; plain windows show branch (long=full,
+# short=basename) or the directory basename. Sets REPLY.
+build_window_label() {
+	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
+	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
+	local provider_icon pr_icon=""
+
+	if [[ -n $issue_id ]]; then
+		if [[ $provider == "linear" ]]; then
+			provider_icon="$ENRICH_ICON_LINEAR"
+		else
+			provider_icon="$ENRICH_ICON_GITHUB"
+		fi
+		if [[ -n $pr_number && $pr_number != "none" ]]; then
+			case "$pr_check" in
+			failure) pr_icon=" $ENRICH_ICON_FAILURE" ;;
+			pending) pr_icon=" $ENRICH_ICON_PENDING" ;;
+			*)
+				if [[ $pr_state == "merged" ]]; then
+					pr_icon=" $ENRICH_ICON_MERGED"
+				else
+					pr_icon=" $ENRICH_ICON_SUCCESS"
+				fi
+				;;
+			esac
+		fi
+		if [[ $mode == "long" && -n $issue_title ]]; then
+			REPLY="${provider_icon} ${issue_id}${pr_icon} ${issue_title}"
+		else
+			REPLY="${provider_icon} ${issue_id}${pr_icon}"
+		fi
+	elif [[ -n $branch ]]; then
+		if [[ $mode == "long" ]]; then
+			REPLY="$branch"
+		else
+			REPLY="${branch##*/}"
+		fi
+	else
+		REPLY="${pane_path##*/}"
+	fi
 }

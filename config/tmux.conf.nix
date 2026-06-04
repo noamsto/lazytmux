@@ -105,10 +105,34 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
+  # Shell label builder needs raw glyphs (single '#'); the tmux-format path uses
+  # the '##'-escaped enrichIconSet. Reverse the module's escaping for shell use.
+  enrichIconSetRaw = builtins.mapAttrs (_: v: builtins.replaceStrings ["##"] ["#"] v) enrichIconSet;
+
   # lib-enrich needs the provider-priority substitution rather than the icon map.
   lib-enrich = let
     raw = builtins.readFile ../scripts/lib-enrich.sh;
-    patched = builtins.replaceStrings ["@providers@"] [enrichProvidersStr] raw;
+    patched =
+      builtins.replaceStrings
+      [
+        "@providers@"
+        "@enrich_icon_linear@"
+        "@enrich_icon_github@"
+        "@enrich_icon_pending@"
+        "@enrich_icon_success@"
+        "@enrich_icon_failure@"
+        "@enrich_icon_merged@"
+      ]
+      [
+        enrichProvidersStr
+        enrichIconSetRaw.linear
+        enrichIconSetRaw.github
+        enrichIconSetRaw.pending
+        enrichIconSetRaw.success
+        enrichIconSetRaw.failure
+        enrichIconSetRaw.merged
+      ]
+      raw;
   in
     pkgs.writeShellScript "lib-enrich" patched;
 
