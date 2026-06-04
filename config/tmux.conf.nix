@@ -206,6 +206,7 @@
         "@issue_stamp_linear@"
         "@issue_stamp_github@"
         "@pr_enrich@"
+        "@reflow@"
       ]
       [
         "${lib-enrich}"
@@ -213,6 +214,7 @@
         "${enrich-linear-bin}/bin/tmux-issue-stamp-linear"
         "${enrich-github-bin}/bin/tmux-issue-stamp-github"
         "${enrich-pr-bin}/bin/tmux-pr-enrich"
+        "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
       ]
       raw;
   in

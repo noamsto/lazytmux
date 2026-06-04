@@ -66,6 +66,7 @@ write_pr_options() {
 	tmux set-option -t "$1" -w @pr_state "$4"
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
+	@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 }
 
 # fetch_branch_pr BRANCH  → echoes cache JSON path, refreshing via gh if stale.

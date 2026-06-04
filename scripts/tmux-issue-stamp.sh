@@ -49,6 +49,9 @@ tmux set-option -t "$target" -w @issue_id "$id"
 tmux set-option -t "$target" -w @issue_title "$title"
 tmux set-option -t "$target" -w @issue_url "$url"
 
+# Recompute window labels now that the issue id/title exist (cache bypass).
+@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
+
 # Kick an immediate PR fetch for this branch (likely "none" for a fresh branch).
 @pr_enrich@ --target "$target" --branch "$branch" --force >/dev/null 2>&1 &
 disown
