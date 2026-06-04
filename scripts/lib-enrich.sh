@@ -121,28 +121,30 @@ provider_priority_list() {
 #                    PR_CHECK_STATE BRANCH PANE_PATH
 # MODE is "short" or "long". Composes the text-only window label (no color, no
 # process/claude icons — the status template adds those). Enriched windows show
-# "<provider> <id>[ <pr-glyph>][ <title>]"; plain windows show branch (long=full,
+# "<provider> <id>[ <title>][ <pr-glyph> #<num>]"; plain windows show branch (long=full,
 # short=basename) or the directory basename. Sets REPLY.
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
-	local provider_icon pr_icon=""
+	local provider_icon pr_icon="" pr_glyph=""
 	REPLY=""
 
-	# PR glyph is independent of issue detection — a branch can have a PR with no
-	# tracked issue (or before issue-stamp runs). Computed once, appended below.
+	# PR indicator (glyph + number) is independent of issue detection — a branch
+	# can have a PR with no tracked issue (or before issue-stamp runs). The number
+	# lets you locate a window's PR at a glance. Computed once, appended below.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
 		case "$pr_check" in
-		failure) pr_icon=" $ENRICH_ICON_FAILURE" ;;
-		pending) pr_icon=" $ENRICH_ICON_PENDING" ;;
+		failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
+		pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
 		*)
 			if [[ $pr_state == "merged" ]]; then
-				pr_icon=" $ENRICH_ICON_MERGED"
+				pr_glyph="$ENRICH_ICON_MERGED"
 			else
-				pr_icon=" $ENRICH_ICON_SUCCESS"
+				pr_glyph="$ENRICH_ICON_SUCCESS"
 			fi
 			;;
 		esac
+		pr_icon=" ${pr_glyph} #${pr_number}"
 	fi
 
 	if [[ -n $issue_id ]]; then
@@ -152,7 +154,7 @@ build_window_label() {
 			provider_icon="$ENRICH_ICON_GITHUB"
 		fi
 		if [[ $mode == "long" && -n $issue_title ]]; then
-			REPLY="${provider_icon} ${issue_id}${pr_icon} ${issue_title}"
+			REPLY="${provider_icon} ${issue_id} ${issue_title}${pr_icon}"
 		else
 			REPLY="${provider_icon} ${issue_id}${pr_icon}"
 		fi

@@ -163,19 +163,19 @@ setup() {
 
 @test "build_window_label: enriched with failing PR adds glyph in both modes" {
 	build_window_label short github 247 "fix bug" 247 OPEN failure gh-247 /x
-	[ "$REPLY" = "G 247 F" ]
+	[ "$REPLY" = "G 247 F #247" ]
 	build_window_label long github 247 "fix bug" 247 OPEN failure gh-247 /x
-	[ "$REPLY" = "G 247 F fix bug" ]
+	[ "$REPLY" = "G 247 fix bug F #247" ]
 }
 
 @test "build_window_label: open PR with passing checks uses success glyph" {
 	build_window_label short linear ENG-1 "" 9 open success br /x
-	[ "$REPLY" = "L ENG-1 S" ]
+	[ "$REPLY" = "L ENG-1 S #9" ]
 }
 
 @test "build_window_label: merged PR uses merged glyph" {
 	build_window_label short linear ENG-1 "t" 9 merged success br /x
-	[ "$REPLY" = "L ENG-1 M" ]
+	[ "$REPLY" = "L ENG-1 M #9" ]
 }
 
 @test "build_window_label: pr_number=none is treated as no PR" {
@@ -205,12 +205,12 @@ setup() {
 
 @test "build_window_label: plain branch with merged PR shows glyph (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
-	[ "$REPLY" = "chore/nango-coding-agent-skill M" ]
+	[ "$REPLY" = "chore/nango-coding-agent-skill M #1921" ]
 }
 
 @test "build_window_label: plain branch with pending PR shows glyph (short)" {
 	build_window_label short "" "" "" 1958 open pending eng-6018-foo /x
-	[ "$REPLY" = "eng-6018-foo P" ]
+	[ "$REPLY" = "eng-6018-foo P #1958" ]
 }
 
 @test "build_window_label: plain branch with no PR is unchanged" {
