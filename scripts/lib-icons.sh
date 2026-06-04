@@ -112,3 +112,32 @@ measure_display_width() {
 	done
 	REPLY_DW=$w
 }
+
+# truncate_to_width STRING MAXW
+# Truncates STRING to at most MAXW display cells, appending "…" (1 cell) when it
+# had to cut. Glyph-aware (uses _icon_cell_width). Sets REPLY.
+# Requires a UTF-8 locale (same as measure_display_width).
+truncate_to_width() {
+	local str="$1" ch out=""
+	local -i i cp w=0 cw maxw="$2"
+	measure_display_width "$str"
+	if ((REPLY_DW <= maxw)); then
+		REPLY="$str"
+		return
+	fi
+	# Reserve one cell for the ellipsis.
+	for ((i = 0; i < ${#str}; i++)); do
+		ch="${str:i:1}"
+		printf -v cp '%d' "'$ch"
+		if ((cp < 128)); then
+			cw=1
+		else
+			_icon_cell_width "$ch"
+			cw=$_ICW
+		fi
+		((w + cw > maxw - 1)) && break
+		out+="$ch"
+		((w += cw))
+	done
+	REPLY="${out}…"
+}

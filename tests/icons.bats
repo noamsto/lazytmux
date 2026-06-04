@@ -32,3 +32,24 @@ setup() {
 	measure_display_width ""
 	[ "$REPLY_DW" = "0" ]
 }
+
+@test "truncate_to_width: short string unchanged" {
+	truncate_to_width "abc" 10
+	[ "$REPLY" = "abc" ]
+}
+
+@test "truncate_to_width: exact fit unchanged" {
+	truncate_to_width "abcde" 5
+	[ "$REPLY" = "abcde" ]
+}
+
+@test "truncate_to_width: truncates with ellipsis" {
+	truncate_to_width "abcdefgh" 5
+	[ "$REPLY" = "abcd…" ]
+}
+
+@test "truncate_to_width: glyph counts as one cell" {
+	# U+F0C0D (1) + space (1) + a (1) = 3, then … = width 4
+	truncate_to_width $'\Uf0c0d abcdef' 4
+	[ "$REPLY" = $'\Uf0c0d a…' ]
+}

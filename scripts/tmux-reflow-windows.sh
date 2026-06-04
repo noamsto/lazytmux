@@ -35,11 +35,11 @@ case "$SESSION" in
 scratch-*) exit 0 ;;
 esac
 
-# Fast-path: skip if window count + width + active window unchanged since last
-# reflow. Active window is in the key so focus changes re-pack multi-line active
-# mode (where the active tab's long width shifts split points).
-active_win=$(tmux display-message -t "$SESSION" -p '#{window_index}')
-cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}:${active_win}"
+# Fast-path: skip if window count + width unchanged since last reflow. Layout
+# (detail mode + column width) depends only on the window set + width, not on
+# which window is active — focus only changes the active tab's color, which tmux
+# re-renders on its own without a reflow.
+cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
 if ((!FORCE)) && [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
 	exit 0
 fi
@@ -52,13 +52,11 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-FMT='#{window_index}|#{window_active}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}'
 declare -A win_short win_long win_short_dw win_long_dw
-active_idx=""
-while IFS='|' read -r idx wactive branch pane_path zoomed iprov iid ititle prnum prstate prcheck; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
-	((wactive)) && active_idx="$idx"
 
 	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
 	win_short[$idx]="$REPLY"
@@ -95,16 +93,11 @@ for idx in "${indices[@]}"; do
 	win_icon_str[$idx]="$REPLY"
 done
 
-# --- Per-window slot widths ---
+# --- Layout: pick label detail (long/short) + column width, then pack ---
 # Slot = idx_width + ": "(2) + label + " "(1) + icon column.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
 overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
-declare -A short_slot long_slot
-for idx in "${indices[@]}"; do
-	short_slot[$idx]=$((win_short_dw[$idx] + overhead))
-	long_slot[$idx]=$((win_long_dw[$idx] + overhead))
-done
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -112,105 +105,103 @@ zoom_extra=0
 SEP_WIDTH=3 # " │ "
 MAX_WIN_LINES=3
 
-# pack_count NAME-of-slot-array  → sets REPLY to the line count needed (1..N).
-# Greedy first-fit; SEP between items on a line.
-pack_count() {
-	# shellcheck disable=SC2178
-	local -n _slot=$1
-	local lines=1 cur=0 first=1
-	local idx w
-	for idx in "${indices[@]}"; do
-		w=${_slot[$idx]}
-		if ((first)); then
-			cur=$w
-			first=0
-		elif ((cur + SEP_WIDTH + w > available)); then
-			((lines++))
-			cur=$w
-		else
-			cur=$((cur + SEP_WIDTH + w))
-		fi
-	done
-	REPLY=$lines
+# Aggregate widths for the long and short label variants.
+colw_long=0
+colw_short=0
+total_long=0
+total_short=0
+for idx in "${indices[@]}"; do
+	((win_long_dw[$idx] > colw_long)) && colw_long=${win_long_dw[$idx]}
+	((win_short_dw[$idx] > colw_short)) && colw_short=${win_short_dw[$idx]}
+	((total_long += win_long_dw[$idx] + overhead))
+	((total_short += win_short_dw[$idx] + overhead))
+done
+total_long=$((total_long + (total - 1) * SEP_WIDTH))
+total_short=$((total_short + (total - 1) * SEP_WIDTH))
+
+# lines_for_colw CW: rows needed to pack uniform CW-wide columns.
+# Sets REPLY=rows, REPLY_PER=columns per row.
+lines_for_colw() {
+	local cw=$1 slot per
+	slot=$((cw + overhead))
+	per=$(((available + SEP_WIDTH) / (slot + SEP_WIDTH)))
+	((per < 1)) && per=1
+	REPLY_PER=$per
+	REPLY=$(((total + per - 1) / per))
 }
 
-# Mode decision: all-long if it fits the allowed lines, else active.
-pack_count long_slot
-long_lines=$REPLY
-if ((long_lines <= MAX_WIN_LINES)); then
+# Detail ladder: long on one row → long within MAX rows → short (compact id) on
+# one row → short within MAX rows → short truncated to fit. Compact is preferred
+# over truncating; truncation is the last resort.
+labels_mode=long
+colw=$colw_long
+trunc=0
+needs_multiline=1
+if ((total_long + zoom_extra <= available)); then
 	labels_mode=long
+	colw=$colw_long
+	needs_multiline=0
 else
-	labels_mode=active
+	lines_for_colw "$colw_long"
+	if ((REPLY <= MAX_WIN_LINES)); then
+		labels_mode=long
+		colw=$colw_long
+	elif ((total_short + zoom_extra <= available)); then
+		labels_mode=short
+		colw=$colw_short
+		needs_multiline=0
+	else
+		labels_mode=short
+		colw=$colw_short
+		lines_for_colw "$colw_short"
+		if ((REPLY > MAX_WIN_LINES)); then
+			# even compact ids overflow the rows → truncate to fit
+			trunc=1
+			cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
+			colw=$(((available - (cols - 1) * SEP_WIDTH) / cols - overhead))
+			((colw < 6)) && colw=6
+			((colw > colw_short)) && colw=$colw_short
+		fi
+	fi
 fi
 
-# Chosen slot per window for the actual packing.
-declare -A chosen_slot
-for idx in "${indices[@]}"; do
-	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
-		chosen_slot[$idx]=${long_slot[$idx]}
-	else
-		chosen_slot[$idx]=${short_slot[$idx]}
-	fi
-done
-
-# Resolved display label per window (long in long-mode; long for the active
-# window, else short in active-mode), padded to a common column width so the
-# multi-line list aligns into columns. Single-line mode uses the unpadded
-# @window_label_* live-select instead (one row needs no column alignment).
+# Resolved display label per window: chosen variant, optionally truncated, padded
+# to the common column width so multi-line rows align into columns. Single-line
+# mode uses the unpadded @window_label_* live-select instead.
 declare -A win_disp
-disp_colw=0
 for idx in "${indices[@]}"; do
-	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
-		((win_long_dw[$idx] > disp_colw)) && disp_colw=${win_long_dw[$idx]}
+	if [[ $labels_mode == long ]]; then
+		cur_lbl="${win_long[$idx]}"
+		cur_dw=${win_long_dw[$idx]}
 	else
-		((win_short_dw[$idx] > disp_colw)) && disp_colw=${win_short_dw[$idx]}
+		cur_lbl="${win_short[$idx]}"
+		cur_dw=${win_short_dw[$idx]}
 	fi
-done
-for idx in "${indices[@]}"; do
-	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
-		pad_to_width "${win_long[$idx]}" "${win_long_dw[$idx]}" "$disp_colw"
-	else
-		pad_to_width "${win_short[$idx]}" "${win_short_dw[$idx]}" "$disp_colw"
+	if ((trunc)); then
+		truncate_to_width "$cur_lbl" "$colw"
+		cur_lbl="$REPLY"
+		measure_display_width "$cur_lbl"
+		cur_dw=$REPLY_DW
 	fi
+	pad_to_width "$cur_lbl" "$cur_dw" "$colw"
 	win_disp[$idx]="$REPLY"
 done
 
-# Single-line check using chosen widths.
-total_single=0
-for idx in "${indices[@]}"; do
-	((total_single += chosen_slot[$idx]))
-done
-total_single=$((total_single + (total - 1) * SEP_WIDTH))
-
-needs_multiline=0
-((total_single + zoom_extra > available)) && needs_multiline=1
-
-# Greedy split points using chosen widths.
+# Split points (uniform columns): break after every REPLY_PER windows.
 current_line=0
 split1=999
 split2=999
 if ((needs_multiline)); then
-	cumulative=0
-	prev_idx=
-	for ((j = 0; j < total; j++)); do
-		idx=${indices[$j]}
-		w=${chosen_slot[$idx]}
-		if ((cumulative == 0)); then
-			cumulative=$w
-		elif ((cumulative + SEP_WIDTH + w > available)); then
-			((current_line++))
-			if ((current_line == 1)); then
-				split1=$prev_idx
-			elif ((current_line == 2)); then
-				split2=$prev_idx
-				break
-			fi
-			cumulative=$w
-		else
-			cumulative=$((cumulative + SEP_WIDTH + w))
-		fi
-		prev_idx=$idx
-	done
+	lines_for_colw "$colw"
+	per=$REPLY_PER
+	if ((total > per)); then
+		split1=${indices[$((per - 1))]}
+		current_line=1
+	fi
+	if ((total > 2 * per)); then
+		split2=${indices[$((2 * per - 1))]}
+		current_line=2
+	fi
 fi
 
 # --- Batch simple commands via tmux source, direct calls for complex formats ---

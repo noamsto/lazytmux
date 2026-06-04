@@ -120,18 +120,55 @@ provider_priority_list() {
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
 #                    PR_CHECK_STATE BRANCH PANE_PATH
 # MODE is "short" or "long". Composes the text-only window label (no color, no
-# process/claude icons — the status template adds those). Enriched windows show
-# "<provider> <id>[ <title>][ <pr-glyph> #<num>]"; plain windows show branch (long=full,
-# short=basename) or the directory basename. Sets REPLY.
+# process/claude icons — the status template adds those). The issue id is taken
+# from a stamped @issue_id or, if absent, derived from the branch (provider
+# priority); the branch remainder after the id is the fallback title. Issue
+# windows show "<provider> <id>[ <title>][ <pr-glyph> #<num>]"; branches with no
+# issue show the branch (long=full, short=basename) or the directory basename.
+# Sets REPLY.
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
 	local provider_icon pr_icon="" pr_glyph=""
 	REPLY=""
 
+	# Resolve issue identity: a stamped @issue_id wins; otherwise derive it from
+	# the branch (so issue windows get the compact id + special format even before
+	# or without issue-stamp). The branch remainder after the id serves as the
+	# title when no stamped title exists.
+	local rid="$issue_id" rprov="$provider" rtitle="$issue_title"
+	if [[ -z $rid && -n $branch ]]; then
+		local provs p
+		provider_priority_list
+		provs="$REPLY"
+		for p in $provs; do
+			if [[ $p == "linear" ]]; then
+				branch_to_linear_key "$branch"
+				if [[ -n $REPLY ]]; then
+					rid="$REPLY"
+					rprov="linear"
+					break
+				fi
+			elif [[ $p == "github" ]]; then
+				branch_to_gh_issue_number "$branch"
+				if [[ -n $REPLY ]]; then
+					rid="$REPLY"
+					rprov="github"
+					break
+				fi
+			fi
+		done
+		if [[ -n $rid && -z $rtitle ]]; then
+			local slug="${branch##*/}"
+			if [[ $slug =~ ^([A-Za-z]+-[0-9]+|gh-[0-9]+|issue-[0-9]+|[0-9]+)-(.+)$ ]]; then
+				rtitle="${BASH_REMATCH[2]}"
+			fi
+		fi
+	fi
+
 	# PR indicator (glyph + number) is independent of issue detection — a branch
-	# can have a PR with no tracked issue (or before issue-stamp runs). The number
-	# lets you locate a window's PR at a glance. Computed once, appended below.
+	# can have a PR with no tracked issue. The number lets you locate a window's
+	# PR at a glance. Computed once, appended below.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
 		case "$pr_check" in
 		failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
@@ -147,16 +184,16 @@ build_window_label() {
 		pr_icon=" ${pr_glyph} #${pr_number}"
 	fi
 
-	if [[ -n $issue_id ]]; then
-		if [[ $provider == "linear" ]]; then
+	if [[ -n $rid ]]; then
+		if [[ $rprov == "linear" ]]; then
 			provider_icon="$ENRICH_ICON_LINEAR"
 		else
 			provider_icon="$ENRICH_ICON_GITHUB"
 		fi
-		if [[ $mode == "long" && -n $issue_title ]]; then
-			REPLY="${provider_icon} ${issue_id} ${issue_title}${pr_icon}"
+		if [[ $mode == "long" && -n $rtitle ]]; then
+			REPLY="${provider_icon} ${rid} ${rtitle}${pr_icon}"
 		else
-			REPLY="${provider_icon} ${issue_id}${pr_icon}"
+			REPLY="${provider_icon} ${rid}${pr_icon}"
 		fi
 	elif [[ -n $branch ]]; then
 		if [[ $mode == "long" ]]; then

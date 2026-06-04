@@ -209,11 +209,41 @@ setup() {
 }
 
 @test "build_window_label: plain branch with pending PR shows glyph (short)" {
-	build_window_label short "" "" "" 1958 open pending eng-6018-foo /x
-	[ "$REPLY" = "eng-6018-foo P #1958" ]
+	build_window_label short "" "" "" 1958 open pending feature/fix-login /x
+	[ "$REPLY" = "fix-login P #1958" ]
 }
 
 @test "build_window_label: plain branch with no PR is unchanged" {
 	build_window_label long "" "" "" none "" "" feature/fix-login /x
 	[ "$REPLY" = "feature/fix-login" ]
+}
+
+@test "build_window_label: derives linear key from branch (short)" {
+	build_window_label short "" "" "" "" "" "" eng-6017-featservices-gmail /x
+	[ "$REPLY" = "L ENG-6017" ]
+}
+
+@test "build_window_label: derived linear long uses branch remainder as title" {
+	build_window_label long "" "" "" "" "" "" eng-6017-featservices-gmail /x
+	[ "$REPLY" = "L ENG-6017 featservices-gmail" ]
+}
+
+@test "build_window_label: derived issue + open PR special format" {
+	build_window_label short "" "" "" 1958 open pending eng-6017-foo /x
+	[ "$REPLY" = "L ENG-6017 P #1958" ]
+}
+
+@test "build_window_label: derives github number from numeric branch" {
+	build_window_label short "" "" "" "" "" "" 247-fix-bug /x
+	[ "$REPLY" = "G 247" ]
+}
+
+@test "build_window_label: stamped issue id takes precedence over branch" {
+	build_window_label short linear ABC-1 "" "" "" "" eng-6017-foo /x
+	[ "$REPLY" = "L ABC-1" ]
+}
+
+@test "build_window_label: non-issue branch stays bare" {
+	build_window_label long "" "" "" "" "" "" chore/nango-coding-agent-skill /x
+	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
 }
