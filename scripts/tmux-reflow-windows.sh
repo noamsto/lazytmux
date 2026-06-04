@@ -13,6 +13,18 @@ source @lib_icons@
 # shellcheck source=/dev/null
 source @lib_enrich@
 
+# Accept --force (cache bypass, used by enrich scripts after writing vars).
+FORCE=0
+pos=()
+for a in "$@"; do
+	if [[ $a == --force ]]; then
+		FORCE=1
+	else
+		pos+=("$a")
+	fi
+done
+set -- "${pos[@]}"
+
 # Accept session/width as args (from hooks) or fall back to display-message
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
@@ -23,9 +35,12 @@ case "$SESSION" in
 scratch-*) exit 0 ;;
 esac
 
-# Fast-path: skip if window count + width unchanged since last reflow
-cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
-if [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
+# Fast-path: skip if window count + width + active window unchanged since last
+# reflow. Active window is in the key so focus changes re-pack multi-line active
+# mode (where the active tab's long width shifts split points).
+active_win=$(tmux display-message -t "$SESSION" -p '#{window_index}')
+cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}:${active_win}"
+if ((!FORCE)) && [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
 	exit 0
 fi
 
@@ -33,31 +48,28 @@ PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
 # --- Single pass: collect window data + pane processes ---
 declare -a indices
-declare -A win_procs    # keyed by window_index, space-separated unique procs
-declare -A win_text_len # per-window text length (for single-line total)
-max_text_len=0          # capped at 30, for multi-line padded column width
+declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
-has_truncated=0
 
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}'
-while IFS='|' read -r idx branch pane_path zoomed; do
+FMT='#{window_index}|#{window_active}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}'
+declare -A win_short win_long win_short_dw win_long_dw
+active_idx=""
+while IFS='|' read -r idx wactive branch pane_path zoomed iprov iid ititle prnum prstate prcheck; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
+	((wactive)) && active_idx="$idx"
 
-	if [[ -n $branch ]]; then
-		text_len=${#branch}
-	else
-		dirname=${pane_path##*/}
-		text_len=${#dirname}
-	fi
-	win_text_len[$idx]=$text_len
-	capped=$text_len
-	((capped > 30)) && {
-		has_truncated=1
-		capped=30
-	}
-	((capped > max_text_len)) && max_text_len=$capped
+	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
+	win_short[$idx]="$REPLY"
+	measure_display_width "$REPLY"
+	win_short_dw[$idx]=$REPLY_DW
+
+	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
+	win_long[$idx]="$REPLY"
+	measure_display_width "$REPLY"
+	win_long_dw[$idx]=$REPLY_DW
+
 	((total++))
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
@@ -74,61 +86,95 @@ while IFS=$'\t' read -r win_idx proc; do
 done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
 unset win_seen
 
-# --- Build icon strings with fixed-width padding (stable layout across icon changes) ---
-# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
+# --- Build icon strings with fixed-width padding (stable across icon changes) ---
 max_icon_width=$((MAX_ICONS * 3 + 2))
 declare -A win_icon_str
-# Sum actual single-line width: per-window text + icon + separators
-# Single-line format: IDX(idx_width) + ": "(2) + text + " "(1) + unpadded_icon
-# No column padding — each window takes only its natural width.
-total_single_width=0
-
 for idx in "${indices[@]}"; do
 	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
-	icon_str="$REPLY"
-	((total_single_width += ${win_text_len[$idx]} + REPLY_DW))
-	pad_to_width "$icon_str" "$REPLY_DW" "$max_icon_width"
+	pad_to_width "$REPLY" "$REPLY_DW" "$max_icon_width"
 	win_icon_str[$idx]="$REPLY"
 done
 
-# --- Compute split points ---
+# --- Per-window slot widths ---
+# Slot = idx_width + ": "(2) + label + " "(1) + icon column.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-available=$((WIDTH - PREFIX_WIDTH))
+overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
+declare -A short_slot long_slot
+for idx in "${indices[@]}"; do
+	short_slot[$idx]=$((win_short_dw[$idx] + overhead))
+	long_slot[$idx]=$((win_long_dw[$idx] + overhead))
+done
 
+available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
 ((has_zoom)) && zoom_extra=2
-ellipsis_extra=0
-((has_truncated)) && ellipsis_extra=1
 SEP_WIDTH=3 # " │ "
-# Single-line total: sum of per-window (text + icon) + fixed overhead per window + separators
-# Fixed per window: idx_width + ": "(2) + " "(1) = idx_width + 3
-total_single_width=$((total_single_width + total * (idx_width + 3) + (total - 1) * SEP_WIDTH))
-# Multi-line uses padded columns for alignment
-# P = max_text_len + 2(zoom) + ellipsis_extra
-slot_base=$((max_text_len + 2 + ellipsis_extra + idx_width + 3 + max_icon_width))
+MAX_WIN_LINES=3
 
-# Single-line check: actual total width + zoom
-if ((total_single_width + zoom_extra <= available)); then
-	needs_multiline=0
+# pack_count NAME-of-slot-array  → echoes the line count needed (1..N)
+# Greedy first-fit; SEP between items on a line.
+pack_count() {
+	# shellcheck disable=SC2178
+	local -n _slot=$1
+	local lines=1 cur=0 first=1
+	local idx w
+	for idx in "${indices[@]}"; do
+		w=${_slot[$idx]}
+		if ((first)); then
+			cur=$w
+			first=0
+		elif ((cur + SEP_WIDTH + w > available)); then
+			((lines++))
+			cur=$w
+		else
+			cur=$((cur + SEP_WIDTH + w))
+		fi
+	done
+	echo "$lines"
+}
+
+# Mode decision: all-long if it fits the allowed lines, else active.
+long_lines=$(pack_count long_slot)
+if ((long_lines <= MAX_WIN_LINES)); then
+	labels_mode=long
 else
-	needs_multiline=1
+	labels_mode=active
 fi
 
+# Chosen slot per window for the actual packing.
+declare -A chosen_slot
+for idx in "${indices[@]}"; do
+	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
+		chosen_slot[$idx]=${long_slot[$idx]}
+	else
+		chosen_slot[$idx]=${short_slot[$idx]}
+	fi
+done
+
+# Single-line check using chosen widths.
+total_single=0
+for idx in "${indices[@]}"; do
+	((total_single += chosen_slot[$idx]))
+done
+total_single=$((total_single + (total - 1) * SEP_WIDTH))
+
+needs_multiline=0
+((total_single + zoom_extra > available)) && needs_multiline=1
+
+# Greedy split points using chosen widths.
 current_line=0
 split1=999
 split2=999
-
 if ((needs_multiline)); then
-	# Greedy fill: slot_base per item + SEP_WIDTH between items
 	cumulative=0
 	prev_idx=
 	for ((j = 0; j < total; j++)); do
+		idx=${indices[$j]}
+		w=${chosen_slot[$idx]}
 		if ((cumulative == 0)); then
-			# First item on line
-			cumulative=$slot_base
-		elif ((cumulative + SEP_WIDTH + slot_base > available)); then
-			# Would overflow: start new line
+			cumulative=$w
+		elif ((cumulative + SEP_WIDTH + w > available)); then
 			((current_line++))
 			if ((current_line == 1)); then
 				split1=$prev_idx
@@ -136,26 +182,29 @@ if ((needs_multiline)); then
 				split2=$prev_idx
 				break
 			fi
-			cumulative=$slot_base
+			cumulative=$w
 		else
-			cumulative=$((cumulative + SEP_WIDTH + slot_base))
+			cumulative=$((cumulative + SEP_WIDTH + w))
 		fi
-		prev_idx=${indices[$j]}
+		prev_idx=$idx
 	done
 fi
 
 # --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
-# Set padded icon display per window (separate from @window_icon_display which is unpadded)
+# Per-window: padded icon (unchanged) + short/long labels (new).
 for idx in "${indices[@]}"; do
 	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_icon_padded '${win_icon_str[$idx]}'")
+	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_label_short '${win_short[$idx]}'")
+	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_label_long '${win_long[$idx]}'")
 done
 
 # Split points and status line count
 tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
 tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
 tmux_cmds+=("set -t '$SESSION' @reflow_key '$cache_key'")
+tmux_cmds+=("set -t '$SESSION' @labels_mode '${labels_mode}'")
 
 if ((current_line >= 2)); then
 	tmux_cmds+=("set -t '$SESSION' status 4")
@@ -184,15 +233,13 @@ fi
 } | tmux source -
 
 # Common format fragments
-ICON='#{@window_icon_padded}'
-TEXT='#{?#{@branch},#{=30:@branch}#{?#{==:#{=30:@branch},#{@branch}},,…},#{=30:#{b:pane_current_path}}#{?#{==:#{=30:#{b:pane_current_path}},#{b:pane_current_path}},,…}}'
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
-
-# Multi-line format fragments
-P=$((max_text_len + 2 + ellipsis_extra))
-TEXT_Z="${TEXT}#{?window_zoomed_flag, 󰁌,}"
+ICON='#{@window_icon_padded}'
+# Live label selection: long mode → long; active mode → long iff active else short.
+LABEL='#{?#{==:#{@labels_mode},long},#{@window_label_long},#{?window_active,#{@window_label_long},#{@window_label_short}}}'
+LABEL_Z="${LABEL}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: #{p${P}:${TEXT_Z}} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]#{p${P}:${TEXT_Z}} ${ICON}}#[norange]"
+ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${LABEL_Z} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${LABEL_Z} ${ICON}}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
