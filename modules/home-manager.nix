@@ -495,10 +495,15 @@ in {
               tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
               STAMP_TARGET="$SESS:$WIN"
             else
-              tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
-              tmux set-option -t "$CUR_SESSION" -w @worktree "{{ worktree_path }}"
-              tmux set-option -t "$CUR_SESSION" -w @branch "{{ branch | sanitize }}"
-              STAMP_TARGET="$CUR_SESSION"
+              # Capture the new window as a precise target ($N:idx session-id form,
+              # immune to numeric session names). A bare session target resolves to
+              # the *currently active* window, and the backgrounded issue-stamp
+              # finishes seconds later — by then the user may have switched windows
+              # and the stamp would land on the wrong one.
+              NEW_WIN=$(tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}" -P -F '#{session_id}:#{window_index}')
+              tmux set-option -t "$NEW_WIN" -w @worktree "{{ worktree_path }}"
+              tmux set-option -t "$NEW_WIN" -w @branch "{{ branch | sanitize }}"
+              STAMP_TARGET="$NEW_WIN"
             fi${lib.optionalString cfg.enrich.enable ''
 
               if [ -n "''${STAMP_TARGET:-}" ]; then
