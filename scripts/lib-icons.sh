@@ -96,6 +96,7 @@ pad_to_width() {
 # Computes the terminal display width of STRING: ASCII = 1 cell, non-ASCII via
 # _icon_cell_width (matches tmux's measurement of nerd/emoji glyphs).
 # Sets REPLY_DW to the integer width.
+# Requires a UTF-8 locale so per-char indexing classifies multibyte codepoints.
 measure_display_width() {
 	local str="$1" ch
 	local -i i cp w=0

@@ -69,6 +69,20 @@
             touch $out
           '';
 
+        checks.icons-tests =
+          pkgs.runCommand "icons-tests" {
+            nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils];
+            # measure_display_width classifies multibyte codepoints; bash's
+            # per-char indexing only works under a UTF-8 locale.
+            LANG = "C.UTF-8";
+            LC_ALL = "C.UTF-8";
+          } ''
+            cp -r ${./scripts} scripts
+            cp -r ${./tests} tests
+            bats tests/icons.bats
+            touch $out
+          '';
+
         packages = {
           default = tmuxConfig.tmux-wrapped;
         };
