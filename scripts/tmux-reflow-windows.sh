@@ -283,8 +283,8 @@ fi
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
 # Name column: bold identity prefix + column-padded remainder (id + disp fill
-# colw exactly); reflow re-runs on focus change (active window in the cache
-# key), re-padding when the active window's long label changes.
+# colw exactly). Label content changes outside structural events (issue stamp,
+# PR arrival) re-enter via the providers' forced reflow calls.
 NAME="#[bold]#{@window_label_id}#[nobold]#{@window_label_disp}"
 LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
