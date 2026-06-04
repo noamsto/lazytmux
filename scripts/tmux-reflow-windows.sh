@@ -53,18 +53,31 @@ total=0
 has_zoom=0
 
 FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}'
-declare -A win_short win_long win_short_dw win_long_dw
+declare -A win_short win_short_dw win_long_dw
+declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
+pr_colw=0 # widest PR segment → shared PR column width (0 when no window has a PR)
 while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
 
 	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
 	win_short[$idx]="$REPLY"
+	win_id[$idx]="$REPLY_ID"
+	win_rest_short[$idx]="$REPLY_REST"
+	# shellcheck disable=SC2153 # REPLY_PR set by build_window_label (sourced lib)
+	win_pr[$idx]="$REPLY_PR"
 	measure_display_width "$REPLY"
 	win_short_dw[$idx]=$REPLY_DW
+	measure_display_width "$REPLY_ID"
+	win_id_dw[$idx]=$REPLY_DW
+	measure_display_width "${win_pr[$idx]}"
+	win_pr_dw[$idx]=$REPLY_DW
+	((win_pr_dw[$idx] > pr_colw)) && pr_colw=${win_pr_dw[$idx]}
 
+	# Long mode only changes the remainder (title / full branch); the id and PR
+	# segments are mode-independent.
 	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
-	win_long[$idx]="$REPLY"
+	win_rest_long[$idx]="$REPLY_REST"
 	measure_display_width "$REPLY"
 	win_long_dw[$idx]=$REPLY_DW
 
@@ -94,10 +107,12 @@ for idx in "${indices[@]}"; do
 done
 
 # --- Layout: pick label detail (long/short) + column width, then pack ---
-# Slot = idx_width + ": "(2) + label + " "(1) + icon column.
+# Slot = idx_width + ": "(2) + name + pr column + " "(1) + icon column.
+# The PR segment carries its own leading space, so pr_colw=0 (no PRs anywhere)
+# adds nothing to the slot.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
+overhead=$((idx_width + 3 + pr_colw + max_icon_width)) # ": " + pr col + trailing space + icons
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -165,26 +180,33 @@ else
 	fi
 fi
 
-# Resolved display label per window: chosen variant, optionally truncated, padded
-# to the common column width so multi-line rows align into columns. Single-line
-# mode uses the unpadded @window_label_* live-select instead.
-declare -A win_disp
+# Resolved display segments per window. The name column is rendered as
+# bold(@window_label_id) + @window_label_disp, so the rest segment alone is
+# truncated/padded against the column budget left after the (never-truncated)
+# identity prefix: id + rest fills colw exactly. The PR segment is padded to
+# its own shared column. Single-line mode uses the unpadded live-select
+# options instead.
+declare -A win_disp win_pr_disp
 for idx in "${indices[@]}"; do
 	if [[ $labels_mode == long ]]; then
-		cur_lbl="${win_long[$idx]}"
-		cur_dw=${win_long_dw[$idx]}
+		cur_rest="${win_rest_long[$idx]}"
 	else
-		cur_lbl="${win_short[$idx]}"
-		cur_dw=${win_short_dw[$idx]}
+		cur_rest="${win_rest_short[$idx]}"
 	fi
-	if ((trunc)); then
-		truncate_to_width "$cur_lbl" "$colw"
-		cur_lbl="$REPLY"
-		measure_display_width "$cur_lbl"
-		cur_dw=$REPLY_DW
+	rest_avail=$((colw - win_id_dw[$idx]))
+	((rest_avail < 0)) && rest_avail=0
+	if ((rest_avail == 0)); then
+		cur_rest=""
+	elif ((trunc)); then
+		truncate_to_width "$cur_rest" "$rest_avail"
+		cur_rest="$REPLY"
 	fi
-	pad_to_width "$cur_lbl" "$cur_dw" "$colw"
+	measure_display_width "$cur_rest"
+	pad_to_width "$cur_rest" "$REPLY_DW" "$rest_avail"
 	win_disp[$idx]="$REPLY"
+
+	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
+	win_pr_disp[$idx]="$REPLY"
 done
 
 # Split points (uniform columns): break after every REPLY_PER windows.
@@ -213,8 +235,12 @@ for idx in "${indices[@]}"; do
 	target="${SESSION}:${idx}"
 	tmux set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}"
 	tmux set -w -t "$target" @window_label_short "${win_short[$idx]}"
-	tmux set -w -t "$target" @window_label_long "${win_long[$idx]}"
+	tmux set -w -t "$target" @window_label_id "${win_id[$idx]}"
+	tmux set -w -t "$target" @window_label_rest_short "${win_rest_short[$idx]}"
+	tmux set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}"
 	tmux set -w -t "$target" @window_label_disp "${win_disp[$idx]}"
+	tmux set -w -t "$target" @window_pr_plain "${win_pr[$idx]}"
+	tmux set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}"
 done
 
 # Split points and status line count
@@ -252,15 +278,21 @@ fi
 # Common format fragments
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
-# Multi-line uses the pre-resolved, column-padded label (@window_label_disp) so
-# entries align into columns; reflow re-runs on focus change (active window in
-# the cache key), re-padding when the active window's long label changes.
-LABEL_Z="#{@window_label_disp}#{?window_zoomed_flag, 󰁌,}"
+# Name column: bold identity prefix + column-padded remainder (id + disp fill
+# colw exactly); reflow re-runs on focus change (active window in the cache
+# key), re-padding when the active window's long label changes.
+NAME="#[bold]#{@window_label_id}#[nobold]#{@window_label_disp}"
+LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-# Inactive-tab tint by PR check state (failing=red, pending=peach, merged=mauve,
-# else neutral); the active tab stays green so you never lose "where am I".
-TINT="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_fg}]}}},#[fg=#{@thm_fg}]}"
-ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${LABEL_Z} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: ${TINT}${LABEL_Z} ${ICON}}#[norange]"
+# Base tab color: lavender (Catppuccin's active/focused accent) for the
+# active window, dim for the rest.
+BASE="#{?window_active,#[fg=#{@thm_lavender}],#[fg=#{@thm_subtext_0}]}"
+# PR segment colored by check state on every tab (failing=red, pending=peach,
+# merged=mauve, success/open=green). No PR → no color directive, and
+# @window_pr_disp is just column padding. Rendered last in the slot, so its
+# state color only runs into the separator, which sets its own color.
+PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}},}"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
