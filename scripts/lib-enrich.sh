@@ -129,24 +129,27 @@ build_window_label() {
 	local provider_icon pr_icon=""
 	REPLY=""
 
+	# PR glyph is independent of issue detection — a branch can have a PR with no
+	# tracked issue (or before issue-stamp runs). Computed once, appended below.
+	if [[ -n $pr_number && $pr_number != "none" ]]; then
+		case "$pr_check" in
+		failure) pr_icon=" $ENRICH_ICON_FAILURE" ;;
+		pending) pr_icon=" $ENRICH_ICON_PENDING" ;;
+		*)
+			if [[ $pr_state == "merged" ]]; then
+				pr_icon=" $ENRICH_ICON_MERGED"
+			else
+				pr_icon=" $ENRICH_ICON_SUCCESS"
+			fi
+			;;
+		esac
+	fi
+
 	if [[ -n $issue_id ]]; then
 		if [[ $provider == "linear" ]]; then
 			provider_icon="$ENRICH_ICON_LINEAR"
 		else
 			provider_icon="$ENRICH_ICON_GITHUB"
-		fi
-		if [[ -n $pr_number && $pr_number != "none" ]]; then
-			case "$pr_check" in
-			failure) pr_icon=" $ENRICH_ICON_FAILURE" ;;
-			pending) pr_icon=" $ENRICH_ICON_PENDING" ;;
-			*)
-				if [[ $pr_state == "merged" ]]; then
-					pr_icon=" $ENRICH_ICON_MERGED"
-				else
-					pr_icon=" $ENRICH_ICON_SUCCESS"
-				fi
-				;;
-			esac
 		fi
 		if [[ $mode == "long" && -n $issue_title ]]; then
 			REPLY="${provider_icon} ${issue_id}${pr_icon} ${issue_title}"
@@ -155,11 +158,11 @@ build_window_label() {
 		fi
 	elif [[ -n $branch ]]; then
 		if [[ $mode == "long" ]]; then
-			REPLY="$branch"
+			REPLY="${branch}${pr_icon}"
 		else
-			REPLY="${branch##*/}"
+			REPLY="${branch##*/}${pr_icon}"
 		fi
 	else
-		REPLY="${pane_path##*/}"
+		REPLY="${pane_path##*/}${pr_icon}"
 	fi
 }

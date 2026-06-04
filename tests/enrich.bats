@@ -202,3 +202,18 @@ setup() {
 	build_window_label long "" "" "" "" "" "" "" /home/noams/proj
 	[ "$REPLY" = "proj" ]
 }
+
+@test "build_window_label: plain branch with merged PR shows glyph (long)" {
+	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
+	[ "$REPLY" = "chore/nango-coding-agent-skill M" ]
+}
+
+@test "build_window_label: plain branch with pending PR shows glyph (short)" {
+	build_window_label short "" "" "" 1958 open pending eng-6018-foo /x
+	[ "$REPLY" = "eng-6018-foo P" ]
+}
+
+@test "build_window_label: plain branch with no PR is unchanged" {
+	build_window_label long "" "" "" none "" "" feature/fix-login /x
+	[ "$REPLY" = "feature/fix-login" ]
+}
