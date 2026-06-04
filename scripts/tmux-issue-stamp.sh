@@ -54,6 +54,6 @@ tmux set-option -t "$target" -w @issue_url "$url"
 
 # Kick an immediate PR fetch for this branch (likely "none" for a fresh branch).
 @pr_enrich@ --target "$target" --branch "$branch" --force >/dev/null 2>&1 &
-disown
+disown -a
 
 exit 0
