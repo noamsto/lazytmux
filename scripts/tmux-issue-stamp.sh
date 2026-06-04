@@ -40,7 +40,15 @@ for p in "${providers[@]}"; do
 done
 
 if [[ -z $id ]]; then
-	# No provider matched: leave options unset; display falls back to branch.
+	# No provider matched: clear any stale stamp left from a previous branch on
+	# this window (a stamp is never overwritten by absence, only by presence),
+	# then recompute labels so the display falls back to the branch.
+	tmux set-option -t "$target" -wu @issue_provider 2>/dev/null
+	tmux set-option -t "$target" -wu @issue_id 2>/dev/null
+	tmux set-option -t "$target" -wu @issue_title 2>/dev/null
+	tmux set-option -t "$target" -wu @issue_url 2>/dev/null
+	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
+	disown -a
 	exit 0
 fi
 
