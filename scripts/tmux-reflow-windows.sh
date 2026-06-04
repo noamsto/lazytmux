@@ -107,12 +107,16 @@ for idx in "${indices[@]}"; do
 done
 
 # --- Layout: pick label detail (long/short) + column width, then pack ---
-# Slot = idx_width + ": "(2) + name + pr column + " "(1) + icon column.
-# The PR segment carries its own leading space, so pr_colw=0 (no PRs anywhere)
-# adds nothing to the slot.
+# Slot = idx_width + ": "(2) + name + pr + " "(1) + icon column.
+# The PR segment carries its own leading space, so no PR adds nothing.
+# The shared pr column (pr_colw) is only charged in the multi-line uniform
+# slot; single-line entries are unpadded, so the one-row fit charges each
+# window its own PR width — otherwise one window growing a PR inflates the
+# fit test by pr_colw × window count and flips to compact despite free space.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-overhead=$((idx_width + 3 + pr_colw + max_icon_width)) # ": " + pr col + trailing space + icons
+slot_overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
+overhead=$((slot_overhead + pr_colw))             # + shared pr column (multi-line)
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -128,8 +132,8 @@ total_short=0
 for idx in "${indices[@]}"; do
 	((win_long_dw[$idx] > colw_long)) && colw_long=${win_long_dw[$idx]}
 	((win_short_dw[$idx] > colw_short)) && colw_short=${win_short_dw[$idx]}
-	((total_long += win_long_dw[$idx] + overhead))
-	((total_short += win_short_dw[$idx] + overhead))
+	((total_long += win_long_dw[$idx] + slot_overhead + win_pr_dw[$idx]))
+	((total_short += win_short_dw[$idx] + slot_overhead + win_pr_dw[$idx]))
 done
 total_long=$((total_long + (total - 1) * SEP_WIDTH))
 total_short=$((total_short + (total - 1) * SEP_WIDTH))
