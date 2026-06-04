@@ -112,7 +112,7 @@ zoom_extra=0
 SEP_WIDTH=3 # " │ "
 MAX_WIN_LINES=3
 
-# pack_count NAME-of-slot-array  → echoes the line count needed (1..N)
+# pack_count NAME-of-slot-array  → sets REPLY to the line count needed (1..N).
 # Greedy first-fit; SEP between items on a line.
 pack_count() {
 	# shellcheck disable=SC2178
@@ -131,11 +131,12 @@ pack_count() {
 			cur=$((cur + SEP_WIDTH + w))
 		fi
 	done
-	echo "$lines"
+	REPLY=$lines
 }
 
 # Mode decision: all-long if it fits the allowed lines, else active.
-long_lines=$(pack_count long_slot)
+pack_count long_slot
+long_lines=$REPLY
 if ((long_lines <= MAX_WIN_LINES)); then
 	labels_mode=long
 else
@@ -193,11 +194,13 @@ fi
 # --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
-# Per-window: padded icon (unchanged) + short/long labels (new).
+# Per-window vars set directly (not via `tmux source -`): labels carry free-form
+# issue titles whose quotes/';'/'#' would break the batched command parser.
 for idx in "${indices[@]}"; do
-	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_icon_padded '${win_icon_str[$idx]}'")
-	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_label_short '${win_short[$idx]}'")
-	tmux_cmds+=("set -w -t '${SESSION}:${idx}' @window_label_long '${win_long[$idx]}'")
+	target="${SESSION}:${idx}"
+	tmux set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}"
+	tmux set -w -t "$target" @window_label_short "${win_short[$idx]}"
+	tmux set -w -t "$target" @window_label_long "${win_long[$idx]}"
 done
 
 # Split points and status line count
