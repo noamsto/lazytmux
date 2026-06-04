@@ -153,6 +153,28 @@ for idx in "${indices[@]}"; do
 	fi
 done
 
+# Resolved display label per window (long in long-mode; long for the active
+# window, else short in active-mode), padded to a common column width so the
+# multi-line list aligns into columns. Single-line mode uses the unpadded
+# @window_label_* live-select instead (one row needs no column alignment).
+declare -A win_disp
+disp_colw=0
+for idx in "${indices[@]}"; do
+	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
+		((win_long_dw[$idx] > disp_colw)) && disp_colw=${win_long_dw[$idx]}
+	else
+		((win_short_dw[$idx] > disp_colw)) && disp_colw=${win_short_dw[$idx]}
+	fi
+done
+for idx in "${indices[@]}"; do
+	if [[ $labels_mode == long ]] || [[ $idx == "$active_idx" ]]; then
+		pad_to_width "${win_long[$idx]}" "${win_long_dw[$idx]}" "$disp_colw"
+	else
+		pad_to_width "${win_short[$idx]}" "${win_short_dw[$idx]}" "$disp_colw"
+	fi
+	win_disp[$idx]="$REPLY"
+done
+
 # Single-line check using chosen widths.
 total_single=0
 for idx in "${indices[@]}"; do
@@ -201,6 +223,7 @@ for idx in "${indices[@]}"; do
 	tmux set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}"
 	tmux set -w -t "$target" @window_label_short "${win_short[$idx]}"
 	tmux set -w -t "$target" @window_label_long "${win_long[$idx]}"
+	tmux set -w -t "$target" @window_label_disp "${win_disp[$idx]}"
 done
 
 # Split points and status line count
@@ -238,9 +261,10 @@ fi
 # Common format fragments
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
-# Live label selection: long mode → long; active mode → long iff active else short.
-LABEL='#{?#{==:#{@labels_mode},long},#{@window_label_long},#{?window_active,#{@window_label_long},#{@window_label_short}}}'
-LABEL_Z="${LABEL}#{?window_zoomed_flag, 󰁌,}"
+# Multi-line uses the pre-resolved, column-padded label (@window_label_disp) so
+# entries align into columns; reflow re-runs on focus change (active window in
+# the cache key), re-padding when the active window's long label changes.
+LABEL_Z="#{@window_label_disp}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
 ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${LABEL_Z} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${LABEL_Z} ${ICON}}#[norange]"
 
