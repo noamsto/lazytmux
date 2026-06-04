@@ -257,7 +257,10 @@ ICON='#{@window_icon_padded}'
 # the cache key), re-padding when the active window's long label changes.
 LABEL_Z="#{@window_label_disp}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${LABEL_Z} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: #[fg=#{@thm_fg}]${LABEL_Z} ${ICON}}#[norange]"
+# Inactive-tab tint by PR check state (failing=red, pending=peach, merged=mauve,
+# else neutral); the active tab stays green so you never lose "where am I".
+TINT="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_fg}]}}},#[fg=#{@thm_fg}]}"
+ENTRY="#[range=window|#{window_index}]#{?window_active,#[fg=#{@thm_green}#,bold]${IDX}: ${LABEL_Z} ${ICON},#[fg=#{@thm_subtext_0}#,nobold]${IDX}: ${TINT}${LABEL_Z} ${ICON}}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
