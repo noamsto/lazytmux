@@ -105,9 +105,11 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
-  # Shell label builder needs raw glyphs (single '#'); the tmux-format path uses
-  # the '##'-escaped enrichIconSet. Reverse the module's escaping for shell use.
-  enrichIconSetRaw = builtins.mapAttrs (_: v: builtins.replaceStrings ["##"] ["#"] v) enrichIconSet;
+  # Shell label builder needs raw glyphs (single '#'). The tmux-format path uses
+  # the '##'-escaped enrichIconSet (which MUST keep '##' — do not change it). Only
+  # user-override icons are '##'-escaped by the module, so un-escape just those and
+  # merge over the raw defaults; default glyphs are never touched.
+  enrichIconSetRaw = enrichIconDefaults // (builtins.mapAttrs (_: v: builtins.replaceStrings ["##"] ["#"] v) enrichIcons);
 
   # lib-enrich needs the provider-priority substitution rather than the icon map.
   lib-enrich = let

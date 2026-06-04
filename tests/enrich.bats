@@ -168,6 +168,11 @@ setup() {
 	[ "$REPLY" = "G 247 F fix bug" ]
 }
 
+@test "build_window_label: open PR with passing checks uses success glyph" {
+	build_window_label short linear ENG-1 "" 9 open success br /x
+	[ "$REPLY" = "L ENG-1 S" ]
+}
+
 @test "build_window_label: merged PR uses merged glyph" {
 	build_window_label short linear ENG-1 "t" 9 merged success br /x
 	[ "$REPLY" = "L ENG-1 M" ]

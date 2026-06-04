@@ -127,6 +127,7 @@ build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
 	local provider_icon pr_icon=""
+	REPLY=""
 
 	if [[ -n $issue_id ]]; then
 		if [[ $provider == "linear" ]]; then
