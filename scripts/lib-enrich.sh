@@ -123,14 +123,27 @@ provider_priority_list() {
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
 # priority); the branch remainder after the id is the fallback title. Issue
-# windows show "<provider> <id>[ <title>][ <pr-glyph> #<num>]"; branches with no
-# issue show the branch (long=full, short=basename) or the directory basename.
-# Sets REPLY.
+# windows show "<provider> <id>[ <title>]"; branches with no issue show the
+# branch (long=full, short=basename) or the directory basename.
+#
+# The PR indicator is NOT folded into the name. It is returned as its own
+# segment so the status template can color just the PR by check state and keep
+# window_name / pickers free of color codes. The name itself is also split into
+# a bold-able identity prefix and a remainder.
+#
+# Sets:
+#   REPLY      full plain name (no PR); always REPLY_ID + REPLY_REST
+#   REPLY_ID   bold-able identity prefix ("<provider> <id>") or "" (plain branch)
+#   REPLY_REST remainder after the id (title / branch / dir basename)
+#   REPLY_PR   plain PR segment " <glyph> #<num>" or "" when there is no PR
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
-	local provider_icon pr_icon="" pr_glyph=""
+	local provider_icon pr_glyph=""
 	REPLY=""
+	REPLY_ID=""
+	REPLY_REST=""
+	REPLY_PR=""
 
 	# Resolve issue identity: a stamped @issue_id wins; otherwise derive it from
 	# the branch (so issue windows get the compact id + special format even before
@@ -168,7 +181,8 @@ build_window_label() {
 
 	# PR indicator (glyph + number) is independent of issue detection — a branch
 	# can have a PR with no tracked issue. The number lets you locate a window's
-	# PR at a glance. Computed once, appended below.
+	# PR at a glance. Returned as its own segment (REPLY_PR), never fused into
+	# the name, so the template can color it by check state in isolation.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
 		case "$pr_check" in
 		failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
@@ -181,7 +195,7 @@ build_window_label() {
 			fi
 			;;
 		esac
-		pr_icon=" ${pr_glyph} #${pr_number}"
+		REPLY_PR=" ${pr_glyph} #${pr_number}"
 	fi
 
 	if [[ -n $rid ]]; then
@@ -190,18 +204,19 @@ build_window_label() {
 		else
 			provider_icon="$ENRICH_ICON_GITHUB"
 		fi
+		REPLY_ID="${provider_icon} ${rid}"
 		if [[ $mode == "long" && -n $rtitle ]]; then
-			REPLY="${provider_icon} ${rid} ${rtitle}${pr_icon}"
-		else
-			REPLY="${provider_icon} ${rid}${pr_icon}"
+			REPLY_REST=" ${rtitle}"
 		fi
 	elif [[ -n $branch ]]; then
 		if [[ $mode == "long" ]]; then
-			REPLY="${branch}${pr_icon}"
+			REPLY_REST="${branch}"
 		else
-			REPLY="${branch##*/}${pr_icon}"
+			REPLY_REST="${branch##*/}"
 		fi
 	else
-		REPLY="${pane_path##*/}${pr_icon}"
+		REPLY_REST="${pane_path##*/}"
 	fi
+
+	REPLY="${REPLY_ID}${REPLY_REST}"
 }

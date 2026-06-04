@@ -154,33 +154,43 @@ setup() {
 @test "build_window_label: enriched short = provider id" {
 	build_window_label short linear ENG-1957 "refactor services" "" "" "" feat/eng-1957 /x
 	[ "$REPLY" = "L ENG-1957" ]
+	[ "$REPLY_ID" = "L ENG-1957" ]
+	[ "$REPLY_REST" = "" ]
+	[ "$REPLY_PR" = "" ]
 }
 
 @test "build_window_label: enriched long = provider id title" {
 	build_window_label long linear ENG-1957 "refactor services" "" "" "" feat/eng-1957 /x
 	[ "$REPLY" = "L ENG-1957 refactor services" ]
+	[ "$REPLY_ID" = "L ENG-1957" ]
+	[ "$REPLY_REST" = " refactor services" ]
 }
 
-@test "build_window_label: enriched with failing PR adds glyph in both modes" {
+@test "build_window_label: failing PR is a separate REPLY_PR segment in both modes" {
 	build_window_label short github 247 "fix bug" 247 OPEN failure gh-247 /x
-	[ "$REPLY" = "G 247 F #247" ]
+	[ "$REPLY" = "G 247" ]
+	[ "$REPLY_PR" = " F #247" ]
 	build_window_label long github 247 "fix bug" 247 OPEN failure gh-247 /x
-	[ "$REPLY" = "G 247 fix bug F #247" ]
+	[ "$REPLY" = "G 247 fix bug" ]
+	[ "$REPLY_PR" = " F #247" ]
 }
 
 @test "build_window_label: open PR with passing checks uses success glyph" {
 	build_window_label short linear ENG-1 "" 9 open success br /x
-	[ "$REPLY" = "L ENG-1 S #9" ]
+	[ "$REPLY" = "L ENG-1" ]
+	[ "$REPLY_PR" = " S #9" ]
 }
 
 @test "build_window_label: merged PR uses merged glyph" {
 	build_window_label short linear ENG-1 "t" 9 merged success br /x
-	[ "$REPLY" = "L ENG-1 M #9" ]
+	[ "$REPLY" = "L ENG-1" ]
+	[ "$REPLY_PR" = " M #9" ]
 }
 
 @test "build_window_label: pr_number=none is treated as no PR" {
 	build_window_label short linear ENG-1 "t" none "" "" br /x
 	[ "$REPLY" = "L ENG-1" ]
+	[ "$REPLY_PR" = "" ]
 }
 
 @test "build_window_label: long with empty title falls back to short form" {
@@ -191,6 +201,8 @@ setup() {
 @test "build_window_label: plain short = branch basename" {
 	build_window_label short "" "" "" "" "" "" feature/fix-login /x
 	[ "$REPLY" = "fix-login" ]
+	[ "$REPLY_ID" = "" ]
+	[ "$REPLY_REST" = "fix-login" ]
 }
 
 @test "build_window_label: plain long = full branch" {
@@ -203,19 +215,22 @@ setup() {
 	[ "$REPLY" = "proj" ]
 }
 
-@test "build_window_label: plain branch with merged PR shows glyph (long)" {
+@test "build_window_label: plain branch with merged PR keeps name plain, PR separate (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
-	[ "$REPLY" = "chore/nango-coding-agent-skill M #1921" ]
+	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
+	[ "$REPLY_PR" = " M #1921" ]
 }
 
-@test "build_window_label: plain branch with pending PR shows glyph (short)" {
+@test "build_window_label: plain branch with pending PR keeps name plain, PR separate (short)" {
 	build_window_label short "" "" "" 1958 open pending feature/fix-login /x
-	[ "$REPLY" = "fix-login P #1958" ]
+	[ "$REPLY" = "fix-login" ]
+	[ "$REPLY_PR" = " P #1958" ]
 }
 
 @test "build_window_label: plain branch with no PR is unchanged" {
 	build_window_label long "" "" "" none "" "" feature/fix-login /x
 	[ "$REPLY" = "feature/fix-login" ]
+	[ "$REPLY_PR" = "" ]
 }
 
 @test "build_window_label: derives linear key from branch (short)" {
@@ -226,11 +241,14 @@ setup() {
 @test "build_window_label: derived linear long uses branch remainder as title" {
 	build_window_label long "" "" "" "" "" "" eng-6017-featservices-gmail /x
 	[ "$REPLY" = "L ENG-6017 featservices-gmail" ]
+	[ "$REPLY_ID" = "L ENG-6017" ]
+	[ "$REPLY_REST" = " featservices-gmail" ]
 }
 
-@test "build_window_label: derived issue + open PR special format" {
+@test "build_window_label: derived issue + open PR keeps id name, PR separate" {
 	build_window_label short "" "" "" 1958 open pending eng-6017-foo /x
-	[ "$REPLY" = "L ENG-6017 P #1958" ]
+	[ "$REPLY" = "L ENG-6017" ]
+	[ "$REPLY_PR" = " P #1958" ]
 }
 
 @test "build_window_label: derives github number from numeric branch" {
@@ -246,4 +264,5 @@ setup() {
 @test "build_window_label: non-issue branch stays bare" {
 	build_window_label long "" "" "" "" "" "" chore/nango-coding-agent-skill /x
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
+	[ "$REPLY_ID" = "" ]
 }
