@@ -91,3 +91,23 @@ pad_to_width() {
 	printf -v pad '%*s' "$pad_needed" ''
 	REPLY="${str}${pad}"
 }
+
+# measure_display_width STRING
+# Computes the terminal display width of STRING: ASCII = 1 cell, non-ASCII via
+# _icon_cell_width (matches tmux's measurement of nerd/emoji glyphs).
+# Sets REPLY_DW to the integer width.
+measure_display_width() {
+	local str="$1" ch
+	local -i i cp w=0
+	for ((i = 0; i < ${#str}; i++)); do
+		ch="${str:i:1}"
+		printf -v cp '%d' "'$ch"
+		if ((cp < 128)); then
+			((w += 1))
+		else
+			_icon_cell_width "$ch"
+			((w += _ICW))
+		fi
+	done
+	REPLY_DW=$w
+}

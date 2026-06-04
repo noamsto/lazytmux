@@ -10,3 +10,13 @@ setup_lib_enrich() {
 	source "$tmp"
 	rm -f "$tmp"
 }
+
+setup_lib_icons() {
+	local tmp
+	tmp="$(mktemp)"
+	# Stub the @ICON_MAP@ / @FALLBACK_ICON@ Nix placeholders so the file sources.
+	sed -e 's/@ICON_MAP@//' -e 's/@FALLBACK_ICON@//' scripts/lib-icons.sh >"$tmp"
+	# shellcheck source=/dev/null
+	source "$tmp"
+	rm -f "$tmp"
+}
