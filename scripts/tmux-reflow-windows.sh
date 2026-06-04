@@ -10,6 +10,8 @@
 
 # shellcheck source=/dev/null  # Nix store path substituted at build time
 source @lib_icons@
+# shellcheck source=/dev/null
+source @lib_enrich@
 
 # Accept session/width as args (from hooks) or fall back to display-message
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
