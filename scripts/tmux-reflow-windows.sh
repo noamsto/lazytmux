@@ -284,15 +284,17 @@ ICON='#{@window_icon_padded}'
 NAME="#[bold]#{@window_label_id}#[nobold]#{@window_label_disp}"
 LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-# Base tab color: lavender (Catppuccin's active/focused accent) for the
-# active window, dim for the rest.
-BASE="#{?window_active,#[fg=#{@thm_lavender}],#[fg=#{@thm_subtext_0}]}"
+# Base tab color: the active window gets lavender (Catppuccin's
+# active/focused accent) on a raised surface_0 pill, the rest dim on the
+# default bg. The pill bg spans the whole slot (name, icons, PR) and is reset
+# at the end of ENTRY so it never leaks into the separator.
+BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
 # PR segment colored by check state on every tab (failing=red, pending=peach,
 # merged=mauve, success/open=green). No PR → no color directive, and
 # @window_pr_disp is just column padding. Rendered last in the slot, so its
 # state color only runs into the separator, which sets its own color.
 PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}},}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[norange]"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[bg=#{@thm_bg}]#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
