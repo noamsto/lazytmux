@@ -288,3 +288,34 @@ setup() {
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
 	[ "$REPLY_ID" = "" ]
 }
+
+@test "pr_cache_decision: missing cache always fetches" {
+	pr_cache_decision 0 0 "" 0 60 15
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: force fetches even with a fresh cache" {
+	pr_cache_decision 1 1 '[{"number":42}]' 1 60 15
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: fresh real-PR cache is served" {
+	pr_cache_decision 0 1 '[{"number":42}]' 30 60 15
+	[ "$REPLY" = "serve" ]
+}
+
+@test "pr_cache_decision: stale real-PR cache fetches on normal TTL" {
+	pr_cache_decision 0 1 '[{"number":42}]' 61 60 15
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: empty-array cache uses the shorter TTL_NONE" {
+	# Served under TTL_NONE, but a real-PR cache of the same age would expire.
+	pr_cache_decision 0 1 '[]' 20 60 15
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: fresh empty-array cache is served within TTL_NONE" {
+	pr_cache_decision 0 1 '[]' 5 60 15
+	[ "$REPLY" = "serve" ]
+}

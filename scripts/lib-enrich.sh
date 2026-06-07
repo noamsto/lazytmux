@@ -110,6 +110,26 @@ collapse_check_rollup() {
 	if [[ -z $REPLY ]]; then REPLY="none"; fi
 }
 
+# pr_cache_decision FORCE CACHE_EXISTS CACHE_CONTENT AGE TTL TTL_NONE
+# Decides whether the PR poller may serve a cached result or must hit gh.
+# An empty-array ("[]") cache is "no PR", which expires on TTL_NONE (the
+# none→PR transition is what a user waits on after `gh pr create`); a real PR
+# uses the slower TTL. --force and a missing cache always fetch.
+# Sets REPLY to "serve" or "fetch".
+pr_cache_decision() {
+	local force="$1" exists="$2" content="$3" age="$4" ttl="$5" ttl_none="$6"
+	if ((force != 0)) || ((exists == 0)); then
+		REPLY="fetch"
+		return
+	fi
+	[[ $content == "[]" ]] && ttl=$ttl_none
+	if ((age < ttl)); then
+		REPLY="serve"
+	else
+		REPLY="fetch"
+	fi
+}
+
 # provider_priority_list
 # Returns the configured issue-tracker providers in priority order.
 # The @providers@ placeholder is substituted at Nix build time from
