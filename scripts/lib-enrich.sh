@@ -171,11 +171,14 @@ build_window_label() {
 				fi
 			fi
 		done
-		if [[ -n $rid && -z $rtitle ]]; then
-			local slug="${branch##*/}"
-			if [[ $slug =~ ^([A-Za-z]+-[0-9]+|gh-[0-9]+|issue-[0-9]+|[0-9]+)-(.+)$ ]]; then
-				rtitle="${BASH_REMATCH[2]}"
-			fi
+	fi
+	# Title fallback: branch slug remainder. Applies to stamped ids too — the
+	# stamp writes an id with no title when the provider CLI is absent, and
+	# that must not render less detail than an unstamped window would.
+	if [[ -n $rid && -z $rtitle && -n $branch ]]; then
+		local slug="${branch##*/}"
+		if [[ $slug =~ ^([A-Za-z]+-[0-9]+|gh-[0-9]+|issue-[0-9]+|[0-9]+)-(.+)$ ]]; then
+			rtitle="${BASH_REMATCH[2]}"
 		fi
 	fi
 
