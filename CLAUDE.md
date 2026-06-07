@@ -118,10 +118,12 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
   `p` open PR URL, `r` force-refresh the current window.
 - **Refresh:** `prRefreshSeconds` (default 30, clamped 10-300) gates the
   background poll. PR state cached at `/tmp/lazytmux-pr/` (60s TTL).
-- **Icons:** override the 6 glyphs (linear/github/pending/success/failure/merged)
-  via `enrich.icons`; defaults are ASCII sentinels (`L`, `GH`, `*`, `OK`, `X`,
-  `M`). The `#` escape: Nix replaces `#` with `##` in icon values for tmux
-  format safety.
+- **Icons:** override the 7 glyphs (linear/github/pending/success/failure/
+  merged/conflict) via `enrich.icons`; defaults are nerd-font glyphs. The `#`
+  escape: Nix replaces `#` with `##` in icon values for tmux format safety.
+- **Conflicts:** `@pr_mergeable` (lowercase `mergeable`/`conflicting`/`unknown`
+  from gh) is written with the other `@pr_*` options; `conflicting` wins the
+  badge glyph over check state and renders red.
 - **Display test:** `./tests/test-display.sh` after `nix build .#default`
   (manual; not in `nix flake check`).
 

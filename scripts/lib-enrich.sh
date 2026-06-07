@@ -16,6 +16,7 @@ ENRICH_ICON_PENDING="@enrich_icon_pending@"
 ENRICH_ICON_SUCCESS="@enrich_icon_success@"
 ENRICH_ICON_FAILURE="@enrich_icon_failure@"
 ENRICH_ICON_MERGED="@enrich_icon_merged@"
+ENRICH_ICON_CONFLICT="@enrich_icon_conflict@"
 
 # branch_to_linear_key BRANCH
 # Extracts a Linear issue key (TEAM-123) from a branch name.
@@ -118,7 +119,7 @@ provider_priority_list() {
 }
 
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
-#                    PR_CHECK_STATE BRANCH PANE_PATH
+#                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE]
 # MODE is "short" or "long". Composes the text-only window label (no color, no
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
@@ -139,6 +140,7 @@ provider_priority_list() {
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
+	local pr_mergeable="${10:-}"
 	local provider_icon pr_glyph=""
 	REPLY=""
 	REPLY_ID=""
@@ -187,17 +189,23 @@ build_window_label() {
 	# PR at a glance. Returned as its own segment (REPLY_PR), never fused into
 	# the name, so the template can color it by check state in isolation.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
-		case "$pr_check" in
-		failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
-		pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
-		*)
-			if [[ $pr_state == "merged" ]]; then
-				pr_glyph="$ENRICH_ICON_MERGED"
-			else
-				pr_glyph="$ENRICH_ICON_SUCCESS"
-			fi
-			;;
-		esac
+		# Conflicts trump check state: a conflicting PR needs a rebase, which
+		# re-runs checks anyway. GitHub only reports CONFLICTING for open PRs.
+		if [[ $pr_mergeable == "conflicting" ]]; then
+			pr_glyph="$ENRICH_ICON_CONFLICT"
+		else
+			case "$pr_check" in
+			failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
+			pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
+			*)
+				if [[ $pr_state == "merged" ]]; then
+					pr_glyph="$ENRICH_ICON_MERGED"
+				else
+					pr_glyph="$ENRICH_ICON_SUCCESS"
+				fi
+				;;
+			esac
+		fi
 		REPLY_PR=" ${pr_glyph} #${pr_number}"
 	fi
 

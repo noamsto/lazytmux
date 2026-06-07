@@ -187,6 +187,21 @@ setup() {
 	[ "$REPLY_PR" = " M #9" ]
 }
 
+@test "build_window_label: conflicting PR uses conflict glyph" {
+	build_window_label short linear ENG-1 "t" 9 open success br /x conflicting
+	[ "$REPLY_PR" = " C #9" ]
+}
+
+@test "build_window_label: conflict glyph wins over failing checks" {
+	build_window_label short linear ENG-1 "t" 9 open failure br /x conflicting
+	[ "$REPLY_PR" = " C #9" ]
+}
+
+@test "build_window_label: mergeable PR keeps check-state glyph" {
+	build_window_label short linear ENG-1 "t" 9 open pending br /x mergeable
+	[ "$REPLY_PR" = " P #9" ]
+}
+
 @test "build_window_label: pr_number=none is treated as no PR" {
 	build_window_label short linear ENG-1 "t" none "" "" br /x
 	[ "$REPLY" = "L ENG-1" ]

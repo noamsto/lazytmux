@@ -20,7 +20,7 @@ mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 # --- arg parse ---
 mode="tick"
 target="" branch="" force=0
-mock_number="" mock_state="" mock_check="" mock_title="" mock_url=""
+mock_number="" mock_state="" mock_check="" mock_title="" mock_url="" mock_mergeable=""
 while (($#)); do
 	case "$1" in
 	--tick) mode="tick" ;;
@@ -55,6 +55,10 @@ while (($#)); do
 		mock_url="$2"
 		shift
 		;;
+	--mock-mergeable)
+		mock_mergeable="$2"
+		shift
+		;;
 	*) ;;
 	esac
 	shift
@@ -62,18 +66,20 @@ done
 
 # --- helper definitions (defined before any code path calls them) ---
 
-# write_pr_options TARGET NUMBER TITLE STATE CHECK URL
+# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE
 write_pr_options() {
-	# Only @pr_number/@pr_state/@pr_check_state drive the window label glyph; capture
-	# them before writing so we can skip the (cache-bypassing) reflow when unchanged.
+	# Only the glyph-driving options (@pr_number/@pr_state/@pr_check_state/
+	# @pr_mergeable) are captured before writing so we can skip the
+	# (cache-bypassing) reflow when unchanged.
 	local prev
-	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}')
+	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}')
 	tmux set-option -t "$1" -w @pr_number "$2"
 	tmux set-option -t "$1" -w @pr_title "$3"
 	tmux set-option -t "$1" -w @pr_state "$4"
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
-	if [[ $prev != "$2|$4|$5" ]]; then
+	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
+	if [[ $prev != "$2|$4|$5|${7:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	fi
 }
@@ -110,10 +116,10 @@ fetch_branch_pr() {
 		flock -n 9 || exit 0
 		local json
 		json="$(gh pr list --head "$b" --state open --limit 1 \
-			--json number,title,url,state,statusCheckRollup 2>/dev/null)" || exit 0
+			--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
 		if [[ $json == "[]" || -z $json ]]; then
 			json="$(gh pr list --head "$b" --state all --limit 1 \
-				--json number,title,url,state,statusCheckRollup 2>/dev/null)" || exit 0
+				--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
 		fi
 		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 	) 9>"$lock"
@@ -126,19 +132,20 @@ apply_cache_to_target() {
 	local json="[]"
 	[[ -f $cache ]] && json="$(cat "$cache")"
 	if [[ $json == "[]" || -z $json ]]; then
-		write_pr_options "$tgt" "none" "" "" "" ""
+		write_pr_options "$tgt" "none" "" "" "" "" ""
 		return
 	fi
-	local number title url state rollup
+	local number title url state rollup mergeable
 	number="$(jq -r '.[0].number // ""' <<<"$json")"
 	title="$(jq -r '.[0].title // ""' <<<"$json")"
 	url="$(jq -r '.[0].url // ""' <<<"$json")"
 	state="$(jq -r '(.[0].state // "") | ascii_downcase' <<<"$json")"
+	mergeable="$(jq -r '(.[0].mergeable // "") | ascii_downcase' <<<"$json")"
 	rollup="$(jq -c '.[0].statusCheckRollup // []' <<<"$json")"
 	collapse_check_rollup "$rollup"
 	local check="$REPLY"
 	sanitize_title "$title"
-	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url"
+	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable"
 }
 
 # run_full_pass — enrich every window that carries a @branch, fetching once per
@@ -164,7 +171,7 @@ run_full_pass() {
 if [[ $mode == "mock" ]]; then
 	[[ -z $target ]] && exit 0
 	sanitize_title "$mock_title"
-	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url"
+	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable"
 	exit 0
 fi
 
