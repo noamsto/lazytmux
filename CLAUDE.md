@@ -17,6 +17,14 @@ After building, reload the running tmux with `prefix + r` (which sources `~/.con
 
 There are no unit tests. CI runs `nix build .#default` and `nix flake check`.
 
+### Invoking the binaries from an agent shell
+
+The TUI/picker binaries are TTY-bound and will not run from a non-interactive Bash tool:
+
+- `tmux-state pick`, `tmux-session-picker`, `tmux-window-picker`, and `tmux-picker-generate --tui` open a bubbletea TUI and abort with `could not open TTY: open /dev/tty: no such device or address` unless launched inside a real tmux popup. Do **not** probe them from the Bash tool to "see what they do" — read the source or run the non-`--tui` generation path instead.
+- `tmux-state` is a subcommand CLI with **no `--version` flag** (`unknown flag: --version`); run `tmux-state --help` (or `tmux-state <cmd> --help`) to confirm a flag exists before invoking it. Same for the wrapper scripts — verify flags via `--help` rather than guessing.
+- Exercise pure logic through the test suites (`nix flake check` runs `tests/enrich.bats`); the display path is manual (`./tests/test-display.sh` after `nix build .#default`).
+
 ## Pre-commit Hooks
 
 Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`, `alejandra` (Nix); `shellcheck`, `shfmt` (shell); `typos`, `check-merge-conflicts`, `trim-trailing-whitespace` (general).
