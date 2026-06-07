@@ -67,7 +67,7 @@
     success = "󰗠"; # nerd: nf-md-check-circle (U+F05E0)
     failure = "󰀨"; # nerd: nf-md-alert-circle (U+F0028)
     merged = "󰘭"; # nerd: nf-md-source-merge (U+F062D)
-    conflict = "󰘬"; # nerd: nf-md-source-branch (U+F062C) — swap for preferred conflict glyph
+    conflict = "󰀦"; # nerd: nf-md-alert (U+F0026) — swap for preferred conflict glyph
   };
   enrichIconSet = enrichIconDefaults // enrichIcons;
 
