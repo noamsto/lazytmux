@@ -89,6 +89,27 @@ func TestZoxideSuggestionsTopN(t *testing.T) {
 	}
 }
 
+func TestSessionFilterMapsSkipsScratch(t *testing.T) {
+	dir := t.TempDir()
+	sessions := []sessionData{
+		{name: "real", path: dir},
+		{name: "scratch-hidden", path: dir},
+	}
+	paths, names := sessionFilterMaps(sessions)
+	if !paths[normalizePath(dir)] || !names["real"] {
+		t.Errorf("real session not recorded: paths=%v names=%v", paths, names)
+	}
+	if names["scratch-hidden"] {
+		t.Errorf("scratch session leaked into name filter: %v", names)
+	}
+	// A dir hosting only a scratch session must still be suggested.
+	paths, names = sessionFilterMaps(sessions[1:])
+	got := zoxideSuggestions([]string{normalizePath(dir)}, paths, names, 15)
+	if len(got) != 1 {
+		t.Errorf("scratch-only dir suppressed from suggestions: %v", got)
+	}
+}
+
 func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")

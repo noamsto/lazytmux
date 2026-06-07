@@ -64,6 +64,22 @@ func zoxideSuggestions(paths []string, sessionPaths, sessionNames map[string]boo
 	return out
 }
 
+// sessionFilterMaps builds the path/name suppression sets from real sessions.
+// Scratch sessions are hidden helpers; they must not suppress the suggestion
+// for the dir they happen to live in.
+func sessionFilterMaps(sessions []sessionData) (paths, names map[string]bool) {
+	paths = make(map[string]bool, len(sessions))
+	names = make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if strings.HasPrefix(s.name, "scratch-") {
+			continue
+		}
+		paths[normalizePath(s.path)] = true
+		names[s.name] = true
+	}
+	return paths, names
+}
+
 // collectZoxide returns ranked zoxide dirs not already covered by a session.
 // Missing zoxide binary, errors, or dead dirs degrade to no suggestions.
 func collectZoxide(sessions []sessionData) []suggestion {
@@ -73,12 +89,7 @@ func collectZoxide(sessions []sessionData) []suggestion {
 	if err != nil {
 		return nil
 	}
-	sessionPaths := make(map[string]bool, len(sessions))
-	sessionNames := make(map[string]bool, len(sessions))
-	for _, s := range sessions {
-		sessionPaths[normalizePath(s.path)] = true
-		sessionNames[s.name] = true
-	}
+	sessionPaths, sessionNames := sessionFilterMaps(sessions)
 	var paths []string
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		l = strings.TrimSpace(l)
