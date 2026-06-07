@@ -21,6 +21,12 @@ There are no unit tests. CI runs `nix build .#default` and `nix flake check`.
 
 Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`, `alejandra` (Nix); `shellcheck`, `shfmt` (shell); `typos`, `check-merge-conflicts`, `trim-trailing-whitespace` (general).
 
+**These hooks rewrite files in place — plan edits around that, don't fight it:**
+
+- `shfmt` (tabs), `alejandra`, and `trim-trailing-whitespace` reformat on commit, so a `git commit` mutates the very files you just edited. After **any commit** that touched a file you intend to edit again, the prior Read is stale — **re-Read before the next Edit** instead of letting it fail with "File has been modified since read". Cheapest path: run the formatter yourself first (`shfmt -w <file>`) and Edit the post-format text once, rather than Edit-then-commit-then-re-Edit.
+- Editing a worktree under `.worktrees/` that you have not yet Read in this session also produces the stale-Read error — Read first.
+- Committing inside a worktree can fail with `No .pre-commit-config.yaml file was found` (the dev-shell-generated config isn't materialized there). Do **not** retry the identical commit — prefix once with `PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit ...`; `nix flake check` still runs the hooks for real.
+
 ## Architecture
 
 ### Nix Build Pipeline
