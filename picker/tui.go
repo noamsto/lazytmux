@@ -647,11 +647,12 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 		m.visible = out
 	} else {
-		// Re-insert the Suggestions header before the first suggestion row
+		// Re-insert the section header before the first suggestion row
 		// (sessions sort first, so suggestions form a contiguous tail).
+		// In session mode the only isHeader item is the suggestions rule.
 		var sugHeader *listItem
 		for i := range m.allItems {
-			if m.allItems[i].isHeader && m.allItems[i].plain == " Suggestions" {
+			if m.allItems[i].isHeader {
 				sugHeader = &m.allItems[i]
 				break
 			}
@@ -873,9 +874,10 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 		})
 	}
 	if sugs := <-zoxCh; len(sugs) > 0 {
+		rule := "── New session " + strings.Repeat("─", 220)
 		items = append(items, listItem{
-			display:  cDim + " Suggestions" + reset,
-			plain:    " Suggestions",
+			display:  cDim + rule + reset,
+			plain:    rule,
 			isHeader: true,
 		})
 		for _, sg := range sugs {
