@@ -156,3 +156,15 @@ isn't on PATH.
 - **Theme support**: Scripts detect light/dark from `$XDG_STATE_HOME/theme-state.json` and use Catppuccin Latte/Mocha colors accordingly.
 - **shfmt** uses tabs for indentation (project default).
 - **Enrichment window options** (`@issue_*`, `@pr_*`) are the single source of truth for issue/PR state — display formats and keybinds read them; only the stamp/enrich scripts write them.
+
+## Contribution Workflow
+
+lazytmux is a **personal repo, GitHub Issues only** (no Linear). Apply the personal-repo rules:
+
+- **Branches:** `type/id-desc` where `id` is the GitHub issue number and `type` is a commit prefix (`feat`, `fix`, `refactor`, `chore`, `docs`) — e.g. `feat/2-pr-window-enrichment`. No issue → drop the id (`chore/bump-flake-lock`). Do NOT use Linear naming.
+- **Worktrees:** use `wt switch -c <branch>` for new work; don't wrap `wt` in `cd`.
+- **Validation before done:** `nix build .` and `nix flake check` (which runs the pre-commit hooks + `tests/enrich.bats`). Shell scripts must pass `shellcheck`.
+
+### Skill usage in this repo
+
+Most work here is a small, surgical edit to one script or `config/tmux.conf.nix` — match the surrounding file and stay in scope. **Do not auto-launch heavyweight skills.** Reach for planning/brainstorming/systematic-debugging skills only when the user asks for a plan or design, or when a bug genuinely resists a direct fix — not as a default first move on a scoped task. When in doubt, do the direct edit and let the user request more process.
