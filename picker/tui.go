@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -25,6 +25,8 @@ type listItem struct {
 	session         string // owning session name (for kill)
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
+	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
+	createName      string // zoxide suggestion: derived session name
 }
 
 // tuiModel is the bubbletea model for the picker.
@@ -596,8 +598,13 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 	}
 
-	// Sort by score descending; stable preserves original order for ties
+	// Sort by score descending; sessions always rank above zoxide suggestions.
+	// Stable preserves original order for ties.
 	sort.SliceStable(matches, func(i, j int) bool {
+		ci, cj := matches[i].item.createPath != "", matches[j].item.createPath != ""
+		if ci != cj {
+			return !ci
+		}
 		return matches[i].score > matches[j].score
 	})
 
@@ -697,6 +704,9 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	// Resource collection runs in parallel with rendering prep (uses cached ps data)
 	resCh := make(chan map[string]sessionResources, 1)
 	go func() { resCh <- collectSessionResources(sessions) }()
+
+	zoxCh := make(chan []suggestion, 1)
+	go func() { zoxCh <- collectZoxide(sessions) }()
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
@@ -824,6 +834,33 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			hasActiveClaude: isActiveState(claudePriority(r.sess.claude)),
 			isScratch:       strings.HasPrefix(r.sess.name, "scratch-"),
 		})
+	}
+	if sugs := <-zoxCh; len(sugs) > 0 {
+		items = append(items, listItem{
+			display:  cDim + " Suggestions" + reset,
+			plain:    " Suggestions",
+			isHeader: true,
+		})
+		for _, sg := range sugs {
+			shortPath := sg.path
+			if home != "" && strings.HasPrefix(shortPath, home) {
+				shortPath = "~" + shortPath[len(home):]
+			}
+			display := fmt.Sprintf("%s %s  %s",
+				cBlue+iDir+reset,
+				sg.name,
+				cDim+shortPath+reset,
+			)
+			plain := fmt.Sprintf("%s %s  %s", iDir, sg.name, shortPath)
+			items = append(items, listItem{
+				target:     sg.path,
+				createPath: sg.path,
+				createName: sg.name,
+				display:    display,
+				plain:      plain,
+				searchText: sg.name + " " + shortPath,
+			})
+		}
 	}
 	return items
 }
@@ -1171,12 +1208,12 @@ const (
 	fzfScoreGapStart     = -3
 	fzfScoreGapExtension = -1
 
-	fzfBonusConsecutive        = 4  // -(scoreGapStart + scoreGapExtension)
-	fzfBonusBoundary           = 8  // scoreMatch / 2
-	fzfBonusBoundaryWhite      = 10 // boundary + 2
-	fzfBonusBoundaryDelimiter  = 9  // boundary + 1
-	fzfBonusNonWord            = 8
-	fzfBonusCamelCase          = 7  // boundary + scoreGapExtension
+	fzfBonusConsecutive         = 4  // -(scoreGapStart + scoreGapExtension)
+	fzfBonusBoundary            = 8  // scoreMatch / 2
+	fzfBonusBoundaryWhite       = 10 // boundary + 2
+	fzfBonusBoundaryDelimiter   = 9  // boundary + 1
+	fzfBonusNonWord             = 8
+	fzfBonusCamelCase           = 7 // boundary + scoreGapExtension
 	fzfBonusFirstCharMultiplier = 2
 )
 
