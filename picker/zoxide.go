@@ -88,3 +88,28 @@ func collectZoxide(sessions []sessionData) []suggestion {
 	}
 	return zoxideSuggestions(paths, sessionPaths, sessionNames, maxZoxideSuggestions)
 }
+
+// createAndSwitch creates a detached session at path (unless name already
+// exists) and switches the attached client to it. zoxide add keeps the dir's
+// rank fresh: the new session's shell never cd's, so zoxide never sees it.
+func createAndSwitch(name, path string) {
+	if exec.Command("tmux", "has-session", "-t", "="+name).Run() != nil {
+		exec.Command("tmux", "new-session", "-d", "-s", name, "-c", path).Run() //nolint:errcheck
+	}
+	exec.Command("tmux", "switch-client", "-t", "="+name).Run() //nolint:errcheck
+	exec.Command("zoxide", "add", path).Run()                   //nolint:errcheck
+}
+
+// listDir renders a directory listing for the preview pane, preferring eza.
+func listDir(path string) string {
+	if eza, err := exec.LookPath("eza"); err == nil {
+		if out, err := exec.Command(eza, "-la", "--color=always", "--group-directories-first", path).Output(); err == nil {
+			return strings.TrimRight(string(out), "\n ")
+		}
+	}
+	out, err := exec.Command("ls", "-la", path).Output()
+	if err != nil {
+		return "(no preview available)"
+	}
+	return strings.TrimRight(string(out), "\n ")
+}
