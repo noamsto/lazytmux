@@ -90,8 +90,9 @@ type refreshMsg struct {
 }
 
 type previewMsg struct {
-	content string
-	target  string
+	content   string
+	target    string
+	scrollTop bool
 }
 
 // --- Entry point ---
@@ -174,7 +175,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.preview.SetContent(msg.content)
 			}
 			if !sameTarget {
-				m.preview.SetYOffset(m.preview.TotalLineCount())
+				if msg.scrollTop {
+					m.preview.SetYOffset(0)
+				} else {
+					m.preview.SetYOffset(m.preview.TotalLineCount())
+				}
 			}
 		}
 		return m, nil
@@ -211,17 +216,21 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreviewCmd()
 
 	case "enter":
-		if t := m.currentTarget(); t != "" {
-			exec.Command("tmux", "switch-client", "-t", t).Run() //nolint:errcheck
+		if item, ok := m.currentItem(); ok && item.target != "" {
+			if item.createPath != "" {
+				createAndSwitch(item.createName, item.createPath)
+			} else {
+				exec.Command("tmux", "switch-client", "-t", item.target).Run() //nolint:errcheck
+			}
 			return m, tea.Quit
 		}
 
 	case "ctrl+x":
-		if t := m.currentTarget(); t != "" {
-			if strings.Contains(t, ":") {
-				exec.Command("tmux", "kill-window", "-t", t).Run() //nolint:errcheck
+		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" {
+			if strings.Contains(item.target, ":") {
+				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
 			} else {
-				exec.Command("tmux", "kill-session", "-t", t).Run() //nolint:errcheck
+				exec.Command("tmux", "kill-session", "-t", item.target).Run() //nolint:errcheck
 			}
 			return m, m.refreshDataCmd()
 		}
@@ -542,6 +551,13 @@ func (m tuiModel) currentTarget() string {
 	return m.visible[m.cursor].target
 }
 
+func (m tuiModel) currentItem() (listItem, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.visible) {
+		return listItem{}, false
+	}
+	return m.visible[m.cursor], true
+}
+
 // --- Filter ---
 
 // itemVisible reports whether an item passes the current mode filters
@@ -692,9 +708,15 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 }
 
 func (m tuiModel) loadPreviewCmd() tea.Cmd {
-	t := m.currentTarget()
-	if t == "" || !m.showPreview {
+	item, ok := m.currentItem()
+	if !ok || item.target == "" || !m.showPreview {
 		return nil
+	}
+	t := item.target
+	if cp := item.createPath; cp != "" {
+		return func() tea.Msg {
+			return previewMsg{content: listDir(cp), target: t, scrollTop: true}
+		}
 	}
 	return func() tea.Msg {
 		out, err := exec.Command("tmux", "capture-pane", "-t", t, "-p", "-e").Output()
