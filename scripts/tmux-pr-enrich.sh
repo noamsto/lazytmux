@@ -91,15 +91,17 @@ fetch_branch_pr() {
 	local cache="$ENRICH_CACHE_DIR/$REPLY.json"
 	local lock="$ENRICH_CACHE_DIR/$REPLY.lock"
 
-	# Skip if fresh and not forced.
-	if ((force == 0)) && [[ -f $cache ]]; then
-		local ttl=$TTL
-		[[ "$(<"$cache")" == "[]" ]] && ttl=$TTL_NONE
-		local age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
-		((age < ttl)) && {
-			printf '%s' "$cache"
-			return
-		}
+	# Serve the cache when the decision says so (fresh + not forced).
+	local exists=0 content="" age=0
+	if [[ -f $cache ]]; then
+		exists=1
+		content="$(<"$cache")"
+		age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
+	fi
+	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE"
+	if [[ $REPLY == "serve" ]]; then
+		printf '%s' "$cache"
+		return
 	fi
 
 	command -v gh >/dev/null 2>&1 || {
