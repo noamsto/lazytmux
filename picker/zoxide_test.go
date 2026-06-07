@@ -73,6 +73,7 @@ func TestZoxideSuggestionsTopN(t *testing.T) {
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
 		paths = append(paths, "/tmp/dirs/"+n)
 	}
+	// nil maps are safe to read in Go — also anchors that contract
 	got := zoxideSuggestions(paths, nil, nil, 3)
 	if len(got) != 3 {
 		t.Fatalf("limit not applied: got %d, want 3", len(got))
@@ -80,5 +81,23 @@ func TestZoxideSuggestionsTopN(t *testing.T) {
 	// Rank order preserved
 	if got[0].name != "a" || got[2].name != "c" {
 		t.Errorf("rank order broken: %v", got)
+	}
+}
+
+func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// collectZoxide normalizes both sides; mirror that contract here.
+	sessionPaths := map[string]bool{normalizePath(real): true}
+	got := zoxideSuggestions([]string{normalizePath(link)}, sessionPaths, nil, 15)
+	if len(got) != 0 {
+		t.Errorf("symlinked dir not deduped against session at target: %v", got)
 	}
 }

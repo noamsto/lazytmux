@@ -10,6 +10,8 @@ import (
 // maxZoxideSuggestions caps the suggestions section below the session list.
 const maxZoxideSuggestions = 15
 
+var sessionNameReplacer = strings.NewReplacer(".", "_", ":", "_")
+
 // suggestion is a zoxide directory offered for session creation.
 type suggestion struct {
 	path string // normalized absolute dir path
@@ -19,11 +21,11 @@ type suggestion struct {
 // sessionNameFromPath derives a tmux-safe session name from a directory path:
 // basename with '.' and ':' replaced (tmux forbids them in session names).
 func sessionNameFromPath(p string) string {
-	base := filepath.Base(strings.TrimRight(p, "/"))
+	base := filepath.Base(filepath.Clean(p))
 	if base == "/" || base == "." {
 		return ""
 	}
-	return strings.NewReplacer(".", "_", ":", "_").Replace(base)
+	return sessionNameReplacer.Replace(base)
 }
 
 // normalizePath cleans and symlink-resolves a path for dedupe comparisons.
