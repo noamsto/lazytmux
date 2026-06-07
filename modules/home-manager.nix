@@ -312,10 +312,11 @@ in {
       defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop]";
       description = ''
         Tools installed via home.packages so popup keybindings
-        (prefix+K/S → sesh, prefix+g → lazygit, prefix+b → btop,
-        prefix+y → yazi) resolve in shells that don't inherit the tmux
-        wrapper's PATH prepends — e.g. fish login shells opened by
-        display-popup, or direnv-loaded devshells.
+        (prefix+g → lazygit, prefix+b → btop, prefix+y → yazi) resolve in
+        shells that don't inherit the tmux wrapper's PATH prepends — e.g.
+        fish login shells opened by display-popup, or direnv-loaded
+        devshells. sesh has no binding anymore but stays for external
+        `sesh connect` CLI workflows.
 
         Set to [] to opt out entirely, or drop individual entries if you
         install those tools elsewhere (home-manager errors if two

@@ -190,8 +190,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@fzf@" "@picker_generate@"]
-      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker "${pkgs.fzf}/bin/fzf" picker-generate-bin]
+      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@"]
+      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -411,10 +411,6 @@
       bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
     ''}
 
-    # Sesh pickers (full store paths for gum/fzf so they work from tmux context)
-    bind-key "K" display-popup -E -w 40% -k "sesh connect \"$(sesh list -i | ${pkgs.gum}/bin/gum filter --no-strip-ansi --limit 1 --no-sort --fuzzy --placeholder 'Pick a sesh' --height 50 --prompt='⚡')\""
-    bind-key "S" run-shell "sesh connect \"$(sesh list --icons | ${pkgs.fzf}/bin/fzf-tmux -p 90%,85% --no-sort --ansi --border-label '  Sessions ' --prompt '⚡  ' --header '  ^a all ^t tmux ^g configs ^x zoxide ^d kill ^f find' --bind 'tab:down,btab:up' --bind 'ctrl-a:change-prompt(⚡  )+reload(sesh list --icons)' --bind 'ctrl-t:change-prompt(🪟  )+reload(sesh list -t --icons)' --bind 'ctrl-g:change-prompt(⚙️  )+reload(sesh list -c --icons)' --bind 'ctrl-x:change-prompt(📁  )+reload(sesh list -z --icons)' --bind 'ctrl-f:change-prompt(🔎  )+reload(${pkgs.fd}/bin/fd -H -d 2 -t d -E .Trash . ~)' --bind 'ctrl-d:execute(tmux kill-session -t {})' --preview-window 'right:60%:wrap' --preview 'sesh-preview {}')\""
-
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
@@ -567,7 +563,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
     '';
     meta.mainProgram = "tmux";
   };
