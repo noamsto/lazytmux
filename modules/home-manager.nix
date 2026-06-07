@@ -473,12 +473,21 @@ in {
             # the window). Output is "<session>\t<window>".
             MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
               | awk -F'\t' -v wt="{{ worktree_path }}" '$3 == wt { print $1 "\t" $2; exit }')
-            # Fallback: match by pane_current_path, excluding the current window
-            # (parent shell may have already cd'd, which would self-match and no-op).
+            # Fallback: match by pane_current_path — prefix match, so a pane
+            # cd'd into a subdirectory still counts (but not into a nested
+            # .worktrees/ checkout, which belongs to a different branch).
+            # @worktree tags are lost on tmux-state restore, so this path
+            # also re-tags them (self-heal). Prefer the current window: when
+            # we're already sitting in the worktree, re-tag in place instead
+            # of navigating away.
             if [ -z "$MATCH" ]; then
               MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{pane_current_path}' \
-                | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" \
-                    '$3 == wt && !($1 == cs && $2 == cw) { print $1 "\t" $2; exit }')
+                | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" '
+                    $3 == wt || (index($3, wt "/") == 1 && index($3, wt "/.worktrees/") != 1) {
+                      if ($1 == cs && $2 == cw) { m = $1 "\t" $2; exit }
+                      if (!m) m = $1 "\t" $2
+                    }
+                    END { if (m) print m }')
             fi
             if [ -n "$MATCH" ]; then
               SESS=$(printf '%s' "$MATCH" | cut -f1)
@@ -493,15 +502,47 @@ in {
               tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
               STAMP_TARGET="$SESS:$WIN"
             else
-              # Capture the new window as a precise target ($N:idx session-id form,
-              # immune to numeric session names). A bare session target resolves to
-              # the *currently active* window, and the backgrounded issue-stamp
-              # finishes seconds later — by then the user may have switched windows
-              # and the stamp would land on the wrong one.
-              NEW_WIN=$(tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}" -P -F '#{session_id}:#{window_index}')
-              tmux set-option -t "$NEW_WIN" -w @worktree "{{ worktree_path }}"
-              tmux set-option -t "$NEW_WIN" -w @branch "{{ branch | sanitize }}"
-              STAMP_TARGET="$NEW_WIN"
+              # Take over the current window when it's a single pane whose
+              # worktree is already shown by another window in THIS session —
+              # repurpose the redundant window instead of stacking up a new
+              # one. Same-session only: another session showing the same path
+              # doesn't make this session's window redundant.
+              CUR_PANES=$(tmux display-message -p '#{window_panes}')
+              CUR_WT=$(tmux display-message -p '#{@worktree}')
+              CUR_PATH=$(tmux display-message -p '#{pane_current_path}')
+              CUR_CMD=$(tmux display-message -p '#{pane_current_command}')
+              DUP=""
+              # send-keys below types into the active pane, so only take over
+              # when wt itself is what's running there (or a bare shell) —
+              # never when wt was invoked via a popup/binding over e.g. nvim.
+              case "$CUR_CMD" in
+                wt | fish | bash | zsh | sh)
+                  if [ "$CUR_PANES" = "1" ]; then
+                    DUP=$(tmux list-windows -t "$CUR_SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
+                      | awk -F'\t' -v cw="$CUR_WIN" -v cwt="$CUR_WT" -v cp="$CUR_PATH" '
+                          $1 == cw { next }
+                          (cwt != "" && $2 == cwt) || $3 == cp { print "dup"; exit }')
+                  fi
+                  ;;
+              esac
+              if [ -n "$DUP" ]; then
+                CUR_TARGET=$(tmux display-message -p '#{session_id}:#{window_index}')
+                tmux set-option -t "$CUR_TARGET" -w @worktree "{{ worktree_path }}"
+                tmux set-option -t "$CUR_TARGET" -w @branch "{{ branch | sanitize }}"
+                # Queued in the pty; the shell reads it once wt exits.
+                tmux send-keys -t "$CUR_TARGET" "cd '{{ worktree_path }}'" Enter
+                STAMP_TARGET="$CUR_TARGET"
+              else
+                # Capture the new window as a precise target ($N:idx session-id form,
+                # immune to numeric session names). A bare session target resolves to
+                # the *currently active* window, and the backgrounded issue-stamp
+                # finishes seconds later — by then the user may have switched windows
+                # and the stamp would land on the wrong one.
+                NEW_WIN=$(tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}" -P -F '#{session_id}:#{window_index}')
+                tmux set-option -t "$NEW_WIN" -w @worktree "{{ worktree_path }}"
+                tmux set-option -t "$NEW_WIN" -w @branch "{{ branch | sanitize }}"
+                STAMP_TARGET="$NEW_WIN"
+              fi
             fi${lib.optionalString cfg.enrich.enable ''
 
               if [ -n "''${STAMP_TARGET:-}" ]; then
