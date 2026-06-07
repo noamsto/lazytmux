@@ -546,6 +546,8 @@ func (m tuiModel) currentTarget() string {
 
 // itemVisible reports whether an item passes the current mode filters
 // (scratch/claude). Headers are always visible (pruned separately).
+// Zoxide suggestion rows are intentionally hidden by both modes: a dir
+// has no claude activity and is never a scratch session.
 func (m tuiModel) itemVisible(item listItem) bool {
 	if m.scratchOnly && !item.isScratch {
 		return false
@@ -629,9 +631,22 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 		m.visible = out
 	} else {
-		out := make([]listItem, len(matches))
-		for i, match := range matches {
-			out[i] = match.item
+		// Re-insert the Suggestions header before the first suggestion row
+		// (sessions sort first, so suggestions form a contiguous tail).
+		var sugHeader *listItem
+		for i := range m.allItems {
+			if m.allItems[i].isHeader && m.allItems[i].plain == " Suggestions" {
+				sugHeader = &m.allItems[i]
+				break
+			}
+		}
+		var out []listItem
+		for _, match := range matches {
+			if sugHeader != nil && match.item.createPath != "" {
+				out = append(out, *sugHeader)
+				sugHeader = nil
+			}
+			out = append(out, match.item)
 		}
 		m.visible = out
 	}
