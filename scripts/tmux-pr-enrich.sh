@@ -11,6 +11,9 @@ source @lib_enrich@
 
 REFRESH_SECONDS="@pr_refresh_seconds@"
 TTL=60
+# A cached "no PR" expires faster: none→PR is the transition a user actively
+# waits on right after `gh pr create`; PR-state changes are less urgent.
+TTL_NONE=15
 
 mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 
@@ -84,8 +87,10 @@ fetch_branch_pr() {
 
 	# Skip if fresh and not forced.
 	if ((force == 0)) && [[ -f $cache ]]; then
+		local ttl=$TTL
+		[[ "$(<"$cache")" == "[]" ]] && ttl=$TTL_NONE
 		local age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
-		((age < TTL)) && {
+		((age < ttl)) && {
 			printf '%s' "$cache"
 			return
 		}
@@ -99,14 +104,16 @@ fetch_branch_pr() {
 	# Locked fetch in a subshell: flock on fd 9 releases when the subshell
 	# exits, scoping the lock to THIS branch's fetch (not the whole pass).
 	# If another process holds the lock, skip the fetch and serve the cache.
+	# A failed gh call (offline, auth, rate limit) leaves the cache untouched
+	# so the last-known PR state keeps showing instead of wiping to "none".
 	(
 		flock -n 9 || exit 0
 		local json
 		json="$(gh pr list --head "$b" --state open --limit 1 \
-			--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
+			--json number,title,url,state,statusCheckRollup 2>/dev/null)" || exit 0
 		if [[ $json == "[]" || -z $json ]]; then
 			json="$(gh pr list --head "$b" --state all --limit 1 \
-				--json number,title,url,state,statusCheckRollup 2>/dev/null)" || json="[]"
+				--json number,title,url,state,statusCheckRollup 2>/dev/null)" || exit 0
 		fi
 		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 	) 9>"$lock"
