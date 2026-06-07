@@ -52,15 +52,15 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 pr_colw=0 # widest PR segment → shared PR column width (0 when no window has a PR)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
 
-	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
+	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge"
 	win_short[$idx]="$REPLY"
 	win_id[$idx]="$REPLY_ID"
 	win_rest_short[$idx]="$REPLY_REST"
@@ -76,7 +76,7 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 
 	# Long mode only changes the remainder (title / full branch); the id and PR
 	# segments are mode-independent.
-	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path"
+	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge"
 	win_rest_long[$idx]="$REPLY_REST"
 	measure_display_width "$REPLY"
 	win_long_dw[$idx]=$REPLY_DW
@@ -293,11 +293,11 @@ IDX="#{p${idx_width}:window_index}"
 # default bg. The pill bg spans the whole slot (name, icons, PR) and is reset
 # at the end of ENTRY so it never leaks into the separator.
 BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
-# PR segment colored by check state on every tab (failing=red, pending=peach,
-# merged=mauve, success/open=green). No PR → no color directive, and
-# @window_pr_disp is just column padding. Rendered last in the slot, so its
+# PR segment colored by state on every tab (conflicting/failing=red,
+# pending=peach, merged=mauve, success/open=green). No PR → no color directive,
+# and @window_pr_disp is just column padding. Rendered last in the slot, so its
 # state color only runs into the separator, which sets its own color.
-PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_check_state},failure},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}},}"
+PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}},}"
 ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[bg=#{@thm_bg}]#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
