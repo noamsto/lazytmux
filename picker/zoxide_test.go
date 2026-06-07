@@ -69,9 +69,14 @@ func TestZoxideSuggestions(t *testing.T) {
 }
 
 func TestZoxideSuggestionsTopN(t *testing.T) {
+	dir := t.TempDir()
 	var paths []string
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
-		paths = append(paths, "/tmp/dirs/"+n)
+		p := filepath.Join(dir, n)
+		if err := os.Mkdir(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, normalizePath(p))
 	}
 	// nil maps are safe to read in Go — also anchors that contract
 	got := zoxideSuggestions(paths, nil, nil, 3)
