@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // maxZoxideSuggestions caps the suggestions section below the session list.
@@ -64,7 +67,9 @@ func zoxideSuggestions(paths []string, sessionPaths, sessionNames map[string]boo
 // collectZoxide returns ranked zoxide dirs not already covered by a session.
 // Missing zoxide binary, errors, or dead dirs degrade to no suggestions.
 func collectZoxide(sessions []sessionData) []suggestion {
-	out, err := exec.Command("zoxide", "query", "-l").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "zoxide", "query", "-l").Output()
 	if err != nil {
 		return nil
 	}
@@ -92,12 +97,15 @@ func collectZoxide(sessions []sessionData) []suggestion {
 // createAndSwitch creates a detached session at path (unless name already
 // exists) and switches the attached client to it. zoxide add keeps the dir's
 // rank fresh: the new session's shell never cd's, so zoxide never sees it.
-func createAndSwitch(name, path string) {
+func createAndSwitch(name, path string) error {
 	if exec.Command("tmux", "has-session", "-t", "="+name).Run() != nil {
-		exec.Command("tmux", "new-session", "-d", "-s", name, "-c", path).Run() //nolint:errcheck
+		if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", path).CombinedOutput(); err != nil {
+			return fmt.Errorf("new-session: %s", strings.TrimSpace(string(out)))
+		}
 	}
 	exec.Command("tmux", "switch-client", "-t", "="+name).Run() //nolint:errcheck
 	exec.Command("zoxide", "add", path).Run()                   //nolint:errcheck
+	return nil
 }
 
 // listDir renders a directory listing for the preview pane, preferring eza.
