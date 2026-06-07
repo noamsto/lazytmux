@@ -81,9 +81,6 @@
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
-      set-hook -g window-renamed[99]        'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
-      set-hook -g window-layout-changed[99] 'run-shell -b "${tmuxStateBin} index-update --session=#{hook_session}"'
-
       ${lib.optionalString (cfg.persist.restoreMode == "auto") ''
         run-shell -b '${tmuxStateBin} restore --auto'
       ''}
