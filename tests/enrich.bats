@@ -198,6 +198,13 @@ setup() {
 	[ "$REPLY" = "L ENG-1" ]
 }
 
+@test "build_window_label: stamped id with empty title uses branch remainder (long)" {
+	build_window_label long linear ENG-6011 "" "" "" "" eng-6011-fixservices-dedup-key /x
+	[ "$REPLY" = "L ENG-6011 fixservices-dedup-key" ]
+	[ "$REPLY_ID" = "L ENG-6011" ]
+	[ "$REPLY_REST" = " fixservices-dedup-key" ]
+}
+
 @test "build_window_label: plain short = branch basename" {
 	build_window_label short "" "" "" "" "" "" feature/fix-login /x
 	[ "$REPLY" = "fix-login" ]
