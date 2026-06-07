@@ -16,6 +16,14 @@ branch="${3:-}"
 
 [[ -z $target || -z $branch ]] && exit 0
 
+# The pane just cd'd into the worktree but update-icons' 1s tick hasn't
+# refreshed @branch/@git_root yet — stamp them now so dir-display doesn't
+# briefly render the worktree path relative to the parent repo's root.
+if [[ -n $worktree ]]; then
+	tmux set-option -t "$target" -w @branch "$branch"
+	tmux set-option -t "$target" -w @git_root "$worktree"
+fi
+
 provider_priority_list
 read -r -a providers <<<"$REPLY"
 
@@ -47,6 +55,7 @@ if [[ -z $id ]]; then
 	tmux set-option -t "$target" -wu @issue_id 2>/dev/null
 	tmux set-option -t "$target" -wu @issue_title 2>/dev/null
 	tmux set-option -t "$target" -wu @issue_url 2>/dev/null
+	tmux set-option -t "$target" -wu @issue_branch 2>/dev/null
 	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	disown -a
 	exit 0
@@ -56,6 +65,7 @@ tmux set-option -t "$target" -w @issue_provider "$chosen_provider"
 tmux set-option -t "$target" -w @issue_id "$id"
 tmux set-option -t "$target" -w @issue_title "$title"
 tmux set-option -t "$target" -w @issue_url "$url"
+tmux set-option -t "$target" -w @issue_branch "$branch"
 
 # Recompute window labels now that the issue id/title exist (cache bypass).
 @reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
