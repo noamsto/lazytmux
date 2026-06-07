@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lazytmux is an opinionated tmux configuration delivered as a Nix flake. It wraps the tmux binary with a baked-in config so there's no dotfile management. Key features: Catppuccin theme, multi-line status bar with auto-reflow, per-window Nerd Font process icons, real-time Claude Code status integration, and fzf session/window pickers.
+Lazytmux is an opinionated tmux configuration delivered as a Nix flake. It wraps the tmux binary with a baked-in config so there's no dotfile management. Key features: Catppuccin theme, multi-line status bar with auto-reflow, per-window Nerd Font process icons, real-time Claude Code status integration, and Go bubbletea session/window pickers.
 
 ## Build and Test
 
@@ -41,8 +41,8 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 | `tmux-reflow-windows` | tmux hooks (window add/remove/resize) | Computes multi-line window layout split points, sets `status-format[1-3]` and `status` line count (2-4). Caches by window-count:width key to skip no-ops. |
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (waiting > compacting > processing > done > idle). Handles staleness. |
 | `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`. Called by user's Claude Code hook config. |
-| `tmux-session-picker` | `prefix + s` | Pre-computes claude status + process icons, then opens `choose-tree -Zs`. Pads icon and name columns for alignment. |
-| `tmux-window-picker` | `prefix + w` | Same as session picker but for windows (`choose-tree -Zw`). |
+| `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity, then top-15 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). |
+| `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session. |
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
 | `tmux-set-pane-border` | `run-shell` at config load | Interpolates `@thm_*` color variables into `pane-border-format` (needed because nested `#{@thm_*}` inside `#[]` don't expand at render time). |
@@ -74,7 +74,7 @@ tmux treats session-level `status-format` as all-or-nothing: setting any index a
 
 ### Session Targeting Gotcha
 
-Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when piped through `tmux source -`. The pickers use `#{session_id}` (`$N` format) instead to avoid this. Direct `tmux set` calls (as in update-icons) work fine with session names.
+Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when piped through `tmux source -`. The Go TUI targets sessions by name (`tmux switch-client -t <name>`; zoxide suggestions use `=name` exact-match when creating a new session). Direct `tmux set` calls (as in update-icons) work fine with session names.
 
 ### Home-Manager Module
 
