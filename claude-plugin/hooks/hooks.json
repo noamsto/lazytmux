@@ -1,0 +1,104 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh cleanup"},
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh idle"}
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh cleanup"},
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh idle"}
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh cleanup"},
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh idle"}
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh cleanup"},
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing --force"}]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh waiting"}]
+      },
+      {
+        "matcher": "idle_prompt",
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh done"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh done"}]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh error"}]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh compacting"}]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh denied"}]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh error"}]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh waiting"}]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh clear"}]
+      }
+    ]
+  }
+}

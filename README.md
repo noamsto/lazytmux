@@ -309,3 +309,27 @@ The plugin maps OpenCode events as follows:
 State files are written to `/tmp/claude-status/` and cleaned up automatically.
 Stale states (e.g. a `processing` state older than 15 seconds) are resolved automatically
 if a hook fails to fire.
+
+## Claude Code plugin
+
+The CC-side integration (status-bar hooks + issue-tracking skill) ships as a
+Claude Code plugin in this repo.
+
+Nix (recommended — pins plugin and tmux scripts to the same revision):
+
+```nix
+# in your claude wrapper
+claude --plugin-dir "${inputs.lazytmux}/claude-plugin"
+```
+
+Marketplace:
+
+```bash
+claude plugin marketplace add noamsto/lazytmux
+claude plugin install lazytmux@lazytmux
+```
+
+With the plugin installed, the tmux status bar tracks Claude state with zero
+manual hook wiring, and Claude can stamp the issues it works on
+(`claude-status-update issue add ENG-123`) so orchestrator sessions on `main`
+show what they're actually doing.

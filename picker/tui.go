@@ -792,6 +792,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 		}
 		icons, dw := buildProcIcons(s.procs, maxIconsPicker)
 		icons, dw = appendClaudeIcon(icons, dw, s.claude, theme, dim, reset)
+		icons, dw = appendIssueIDs(icons, dw, s.claude.issues, cDim, reset)
 		rows[i] = row{sess: s, icons: icons, iconDW: dw}
 		if dw > maxIconDW {
 			maxIconDW = dw
@@ -980,6 +981,7 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 		for _, w := range g.windows {
 			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
 			icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
+			icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
 			winRows[g.name] = append(winRows[g.name], renderedWin{win: w, icons: icons, iconDW: dw})
 			if dw > maxIconDW {
 				maxIconDW = dw

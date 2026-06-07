@@ -3,7 +3,9 @@
 # Sourced (not executed) — provides constants and functions.
 
 # shellcheck disable=SC2034  # used by scripts that source this library
-CLAUDE_PANES_DIR="/tmp/claude-status/panes"
+CLAUDE_STATUS_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
+CLAUDE_PANES_DIR="$CLAUDE_STATUS_DIR/panes"
+CLAUDE_ISSUES_DIR="$CLAUDE_STATUS_DIR/issues"
 CLAUDE_SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
@@ -177,4 +179,22 @@ tally_claude_state() {
 	# Use nameref for clean indirect access
 	declare -n _ref="$varname" 2>/dev/null || return 0
 	_ref=$((_ref + 1))
+}
+
+# format_issue_list MAX [ID...]
+# Joins issue ids with spaces, capped at MAX ids followed by "+N" overflow.
+# Sets REPLY to e.g. "ENG-1 ENG-2 ENG-3 +2", empty if no ids.
+format_issue_list() {
+	local max="$1"
+	shift
+	if (($# == 0)); then
+		REPLY=""
+		return
+	fi
+	if (($# <= max)); then
+		REPLY="$*"
+		return
+	fi
+	local overflow=$(($# - max))
+	REPLY="${*:1:max} +$overflow"
 }

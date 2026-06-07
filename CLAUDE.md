@@ -40,7 +40,7 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 | `tmux-update-icons` | `#()` every 1s (status-interval) | Sets `@window_icon_display` (unpadded), `@window_icon_padded` (fixed-width), `@active_pane_icon` per window. Reads claude status files. |
 | `tmux-reflow-windows` | tmux hooks (window add/remove/resize) | Computes multi-line window layout split points, sets `status-format[1-3]` and `status` line count (2-4). Caches by window-count:width key to skip no-ops. |
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (waiting > compacting > processing > done > idle). Handles staleness. |
-| `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`. Called by user's Claude Code hook config. |
+| `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`; `issue add|done|clear <ID>` maintains self-reported issue ids in `/tmp/claude-status/issues/<pane_id>` (separate file — state hooks fire around the very call that stamps, sharing a file would lose updates). Called by the CC plugin's hooks / skill. |
 | `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity, then top-15 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). |
 | `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session. |
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
@@ -127,12 +127,31 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
 - **Display test:** `./tests/test-display.sh` after `nix build .#default`
   (manual; not in `nix flake check`).
 
+### Claude Code Plugin
+
+The repo doubles as a CC plugin marketplace: `.claude-plugin/marketplace.json`
+points at `claude-plugin/` (manifest, `hooks/hooks.json` with the
+claude-status state machine, `skills/`). Hook commands route through
+`claude-plugin/scripts/status.sh`, which no-ops when `claude-status-update`
+isn't on PATH.
+
+- Nix install: `claude --plugin-dir "${inputs.lazytmux}/claude-plugin"`
+  (read-only store path is fine; plugin + scripts pinned to one revision).
+- Marketplace install: `claude plugin marketplace add noamsto/lazytmux` then
+  `claude plugin install lazytmux@lazytmux`.
+- `programs.lazytmux.skills.enable` symlinks the same `claude-plugin/skills/`
+  into `~/.claude/skills` — disable it when the plugin is installed.
+- Self-reported issue ids show on status line 0 (cap 3 + `+N`) and picker
+  rows (cap 2 + `+N`); they survive `/clear`/compaction and die with the pane
+  or CC session.
+
 ## Key Conventions
 
 - **Shell scripts are bash**, not fish (they run inside tmux's environment). User's interactive shell is fish.
 - **Placeholders** (`@ICON_MAP@`, `@FALLBACK_ICON@`, etc.) in scripts are replaced at Nix build time. Don't use these patterns in non-placeholder contexts.
 - **Process icon mapping** lives in `config/process-icons.nix` — a plain Nix attrset of `"process-name" = "icon"`.
 - **Claude status state files** at `/tmp/claude-status/panes/<pane_id>` use simple `key=value` format (state, timestamp, session).
+- **Issue self-report files** at `/tmp/claude-status/issues/<pane_id>`: one line, comma-separated ids matching `[A-Za-z0-9_-]+`. Never written by the state machine — only by `claude-status-update issue`.
 - **Staleness thresholds**: waiting > 30s becomes processing; processing > 15s becomes done.
 - **Theme support**: Scripts detect light/dark from `$XDG_STATE_HOME/theme-state.json` and use Catppuccin Latte/Mocha colors accordingly.
 - **shfmt** uses tabs for indentation (project default).

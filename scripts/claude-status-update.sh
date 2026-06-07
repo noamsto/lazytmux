@@ -8,8 +8,9 @@
 
 set -euo pipefail
 
-STATE_DIR="/tmp/claude-status"
+STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 PANES_DIR="$STATE_DIR/panes"
+ISSUES_DIR="$STATE_DIR/issues"
 
 # Ensure directories exist
 mkdir -p "$PANES_DIR"
@@ -43,7 +44,17 @@ cleanup_stale_panes() {
 		fi
 
 		if $should_remove; then
-			rm -f "$pf"
+			rm -f "$pf" "$ISSUES_DIR/${pf##*/}"
+		fi
+	done
+
+	# Orphaned issue files (pane gone, or no longer running claude)
+	for inf in "$ISSUES_DIR"/*; do
+		[[ -f $inf ]] || continue
+		local issue_pane="${inf##*/}"
+		if [[ -z ${pane_commands[$issue_pane]+x} ]] ||
+			[[ ${pane_commands[$issue_pane]} != "claude" && ${pane_commands[$issue_pane]} != "opencode" ]]; then
+			rm -f "$inf"
 		fi
 	done
 }
@@ -55,6 +66,83 @@ session_name=""
 force=0
 
 shift || true
+
+# Issue self-report: tracks which issues CC is working on, in a file SEPARATE
+# from the pane state file — state hooks fire around the very Bash call that
+# runs `issue add`, so sharing the pane file would lose updates.
+if [[ $state == "issue" ]]; then
+	action="${1:-}"
+	shift || true
+	id=""
+	case "$action" in
+	add | done)
+		if [[ ${1:-} != --* ]]; then
+			id="${1:-}"
+			shift || true
+		fi
+		;;
+	clear) ;;
+	*)
+		echo "Error: Invalid issue action '$action'. Use: add, done, clear" >&2
+		exit 1
+		;;
+	esac
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--pane)
+			pane_id="$2"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+	if [[ $action != "clear" && ! $id =~ ^[A-Za-z0-9_-]+$ ]]; then
+		echo "Error: Invalid issue id '$id' (allowed: A-Z a-z 0-9 _ -)" >&2
+		exit 1
+	fi
+	[[ -z $pane_id ]] && exit 0
+	issues_file="$ISSUES_DIR/${pane_id#%}"
+	case "$action" in
+	add)
+		mkdir -p "$ISSUES_DIR"
+		current=""
+		[[ -f $issues_file ]] && IFS= read -r current <"$issues_file" || true
+		case ",$current," in
+		*",$id,"*) ;;
+		*)
+			[[ -n $current ]] && current+=","
+			printf '%s\n' "$current$id" >"$issues_file"
+			;;
+		esac
+		;;
+	done)
+		if [[ -f $issues_file ]]; then
+			IFS= read -r current <"$issues_file" || true
+			keep=()
+			IFS=',' read -r -a ids <<<"$current"
+			for i in "${ids[@]}"; do
+				[[ $i == "$id" || -z $i ]] || keep+=("$i")
+			done
+			if ((${#keep[@]})); then
+				(
+					IFS=','
+					printf '%s\n' "${keep[*]}"
+				) >"$issues_file"
+			else
+				rm -f "$issues_file"
+			fi
+		fi
+		;;
+	clear)
+		rm -f "$issues_file"
+		;;
+	esac
+	if [[ -n ${TMUX:-} ]]; then
+		tmux refresh-client -S 2>/dev/null || true
+	fi
+	exit 0
+fi
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--pane)
@@ -153,7 +241,7 @@ pane_file="${pane_id#%}"
 
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
-	rm -f "$PANES_DIR/$pane_file"
+	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file"
 	# Force immediate tmux refresh
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true

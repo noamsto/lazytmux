@@ -27,3 +27,16 @@ setup_lib_icons() {
 	source "$tmp"
 	rm -f "$tmp"
 }
+
+setup_lib_claude() {
+	# lib-claude.sh has no Nix placeholders; source directly.
+	# shellcheck source=/dev/null
+	source scripts/lib-claude.sh
+}
+
+# Builds a runnable claude-status with the @lib_claude@ placeholder resolved.
+# Sets CLAUDE_STATUS_SCRIPT to the path.
+make_claude_status() {
+	CLAUDE_STATUS_SCRIPT="$BATS_TEST_TMPDIR/claude-status.sh"
+	sed "s|@lib_claude@|$PWD/scripts/lib-claude.sh|" scripts/claude-status.sh >"$CLAUDE_STATUS_SCRIPT"
+}

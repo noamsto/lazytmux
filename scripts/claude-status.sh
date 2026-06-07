@@ -28,6 +28,21 @@ count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 
 all_stale=1  # assume stale until a non-stale pane proves otherwise
 any_unseen=0 # set if any pane has unseen=1
 
+issue_ids=() # union of issue ids across matched panes, insertion-ordered
+declare -A _issue_seen=()
+
+collect_pane_issues() {
+	local f="$CLAUDE_ISSUES_DIR/$1" line id ids
+	[[ -f $f ]] || return 0
+	IFS= read -r line <"$f" || true
+	IFS=',' read -r -a ids <<<"$line"
+	for id in "${ids[@]}"; do
+		[[ -n $id && -z ${_issue_seen[$id]+x} ]] || continue
+		_issue_seen[$id]=1
+		issue_ids+=("$id")
+	done
+}
+
 tally_state() {
 	((total++)) || true
 	case "$1" in
@@ -40,7 +55,7 @@ tally_state() {
 	denied) ((count_denied++)) || true ;;
 	esac
 	[[ $REPLY_STALE == 1 ]] || all_stale=0
-	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1
+	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1 || true
 }
 
 count_for_window() {
@@ -64,6 +79,7 @@ count_for_session() {
 		[[ $pane_session == "$1" ]] || continue
 		read_pane_state "$pf" || continue
 		tally_state "$REPLY"
+		collect_pane_issues "${pf##*/}"
 	done
 }
 
@@ -90,7 +106,12 @@ format_output() {
 	icon-color)
 		setup_claude_colors
 		claude_colored_icon "$state" "$stale" "$unseen"
-		echo "${prefix}${REPLY}"
+		local icon_out="$REPLY" issue_out=""
+		if ((${#issue_ids[@]} > 0)); then
+			format_issue_list 3 "${issue_ids[@]}"
+			issue_out="${C_I}${REPLY}${C_R} "
+		fi
+		echo "${prefix}${icon_out}${issue_out}"
 		;;
 	short)
 		claude_state_icon "$state"

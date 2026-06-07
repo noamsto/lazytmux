@@ -1,0 +1,13 @@
+{
+  "name": "lazytmux",
+  "owner": {
+    "name": "noamsto"
+  },
+  "plugins": [
+    {
+      "name": "lazytmux",
+      "source": "./claude-plugin",
+      "description": "Claude Code integration for lazytmux: status-bar state hooks and issue self-report skill"
+    }
+  ]
+}

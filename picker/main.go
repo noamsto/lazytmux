@@ -63,20 +63,21 @@ type sessionData struct {
 }
 
 type windowData struct {
-	session  string
-	index    int
-	name     string
-	zoomed   bool
-	branch   string
-	active   bool // currently active window in its session
-	procs    []string
-	claude   claudeCounts
+	session string
+	index   int
+	name    string
+	zoomed  bool
+	branch  string
+	active  bool // currently active window in its session
+	procs   []string
+	claude  claudeCounts
 }
 
 type claudeCounts struct {
 	waiting, compacting, processing, done, idle, errorCnt, denied int
-	allStale                                              bool
-	anyUnseen                                             bool
+	allStale                                                      bool
+	anyUnseen                                                     bool
+	issues                                                        []string // union of self-reported issue ids
 }
 
 // claudePaneInfo holds parsed pane file data with window-level targeting.
@@ -87,6 +88,7 @@ type claudePaneInfo struct {
 	ts      int64
 	stale   bool
 	unseen  bool
+	issues  []string
 }
 
 func main() {
@@ -169,8 +171,8 @@ func renderSessions(tmuxOpts map[string]string, claudePanes []claudePaneInfo, th
 	})
 
 	type rendered struct {
-		sess  *sessionData
-		icons string
+		sess   *sessionData
+		icons  string
 		iconDW int
 	}
 	rows := make([]rendered, len(sessions))
@@ -825,6 +827,7 @@ func (rc resourceColors) memColor(mb float64) string {
 
 func collectClaudePanes() []claudePaneInfo {
 	dir := "/tmp/claude-status/panes"
+	issuesDir := "/tmp/claude-status/issues"
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -880,9 +883,30 @@ func collectClaudePanes() []claudePaneInfo {
 			ts:      timestamp,
 			stale:   stale,
 			unseen:  unseen,
+			issues:  readPaneIssues(filepath.Join(issuesDir, e.Name())),
 		})
 	}
 	return result
+}
+
+// readPaneIssues reads the comma-separated self-reported issue id list for a
+// pane. Missing file (the common case) yields nil.
+func readPaneIssues(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	line := strings.TrimSpace(string(data))
+	if line == "" {
+		return nil
+	}
+	var ids []string
+	for _, id := range strings.Split(line, ",") {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 type paneMapping struct {
@@ -924,6 +948,7 @@ func aggregateClaudeBySession(panes []claudePaneInfo) map[string]*claudeCounts {
 			cc.anyUnseen = true
 		}
 		addClaudeState(cc, p.state)
+		addIssues(cc, p.issues)
 	}
 	return result
 }
@@ -947,6 +972,7 @@ func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
 			cc.anyUnseen = true
 		}
 		addClaudeState(cc, p.state)
+		addIssues(cc, p.issues)
 	}
 	return result
 }
@@ -967,6 +993,21 @@ func addClaudeState(cc *claudeCounts, state string) {
 		cc.errorCnt++
 	case "denied":
 		cc.denied++
+	}
+}
+
+func addIssues(cc *claudeCounts, ids []string) {
+	for _, id := range ids {
+		seen := false
+		for _, e := range cc.issues {
+			if e == id {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			cc.issues = append(cc.issues, id)
+		}
 	}
 }
 
@@ -1080,6 +1121,26 @@ func appendClaudeIcon(icons string, dw int, cc claudeCounts, theme, dim, reset s
 	icons += color + icon + reset + " "
 	dw += 2
 	return icons, dw
+}
+
+func formatIssueIDs(ids []string, limit int) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	if len(ids) <= limit {
+		return strings.Join(ids, " ")
+	}
+	return fmt.Sprintf("%s +%d", strings.Join(ids[:limit], " "), len(ids)-limit)
+}
+
+// appendIssueIDs appends a dim "ENG-1 GH-2 +N" segment to the icons string.
+// Ids are validated ASCII ([A-Za-z0-9_-]), so len() is the display width.
+func appendIssueIDs(icons string, dw int, ids []string, cDim, reset string) (string, int) {
+	s := formatIssueIDs(ids, 2)
+	if s == "" {
+		return icons, dw
+	}
+	return icons + cDim + s + reset + " ", dw + len(s) + 1
 }
 
 // ---------------------------------------------------------------------------

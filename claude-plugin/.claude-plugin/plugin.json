@@ -1,0 +1,5 @@
+{
+  "name": "lazytmux",
+  "version": "0.1.0",
+  "description": "Claude Code integration for lazytmux: status-bar state hooks and issue self-report skill"
+}
