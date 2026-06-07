@@ -22,6 +22,7 @@ type listItem struct {
 	plain           string // display stripped of ANSI (cached for width)
 	searchText      string // filterable text (name, branch — no paths/icons)
 	isHeader        bool   // session header row
+	isZoxideHeader  bool   // the "── New session ──" divider
 	session         string // owning session name (for kill)
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
@@ -43,6 +44,9 @@ type tuiModel struct {
 
 	// Search
 	query string
+
+	// Transient error shown in the hint line (e.g. session-create failure)
+	statusMsg string
 
 	// Preview
 	preview        viewport.Model
@@ -194,6 +198,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	m.statusMsg = "" // any keypress clears a stale create-error
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -218,7 +223,10 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if item, ok := m.currentItem(); ok && item.target != "" {
 			if item.createPath != "" {
-				createAndSwitch(item.createName, item.createPath)
+				if err := createAndSwitch(item.createName, item.createPath); err != nil {
+					m.statusMsg = err.Error()
+					return m, nil
+				}
 			} else {
 				exec.Command("tmux", "switch-client", "-t", item.target).Run() //nolint:errcheck
 			}
@@ -401,6 +409,11 @@ func (m tuiModel) renderSearch() string {
 func (m tuiModel) renderHints() string {
 	dim := lipgloss.NewStyle().Foreground(m.thmColor("@thm_surface_2", "#585b70", "#9ca0b0"))
 	key := lipgloss.NewStyle().Foreground(m.thmColor("@thm_lavender", "#b4befe", "#7287fd"))
+
+	if m.statusMsg != "" {
+		red := lipgloss.NewStyle().Foreground(m.thmColor("@thm_red", "#f38ba8", "#d20f39"))
+		return red.Width(m.width).Render("  " + m.statusMsg)
+	}
 
 	hint := func(k, desc string) string {
 		return key.Render(k) + dim.Render(":"+desc)
@@ -649,10 +662,9 @@ func (m tuiModel) withFilter() tuiModel {
 	} else {
 		// Re-insert the section header before the first suggestion row
 		// (sessions sort first, so suggestions form a contiguous tail).
-		// In session mode the only isHeader item is the suggestions rule.
 		var sugHeader *listItem
 		for i := range m.allItems {
-			if m.allItems[i].isHeader {
+			if m.allItems[i].isZoxideHeader {
 				sugHeader = &m.allItems[i]
 				break
 			}
@@ -876,9 +888,10 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	if sugs := <-zoxCh; len(sugs) > 0 {
 		rule := "── New session " + strings.Repeat("─", 220)
 		items = append(items, listItem{
-			display:  cDim + rule + reset,
-			plain:    rule,
-			isHeader: true,
+			display:        cDim + rule + reset,
+			plain:          rule,
+			isHeader:       true,
+			isZoxideHeader: true,
 		})
 		for _, sg := range sugs {
 			shortPath := sg.path
