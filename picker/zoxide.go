@@ -11,7 +11,9 @@ import (
 )
 
 // maxZoxideSuggestions caps the suggestions section below the session list.
-const maxZoxideSuggestions = 15
+// The TUI list scrolls (windows around the cursor), so this is just how deep
+// into zoxide's ranking we offer, not a render limit.
+const maxZoxideSuggestions = 30
 
 var sessionNameReplacer = strings.NewReplacer(".", "_", ":", "_")
 

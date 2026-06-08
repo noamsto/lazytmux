@@ -41,7 +41,7 @@ Entering the dev shell (`nix develop`) installs these hooks: `statix`, `deadnix`
 | `tmux-reflow-windows` | tmux hooks (window add/remove/resize) | Computes multi-line window layout split points, sets `status-format[1-3]` and `status` line count (2-4). Caches by window-count:width key to skip no-ops. |
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (waiting > compacting > processing > done > idle). Handles staleness. |
 | `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`; `issue add|done|clear <ID>` maintains self-reported issue ids in `/tmp/claude-status/issues/<pane_id>` (separate file — state hooks fire around the very call that stamps, sharing a file would lose updates). Called by the CC plugin's hooks / skill. |
-| `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity, then top-15 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). |
+| `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity, then top-30 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). |
 | `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session. |
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
