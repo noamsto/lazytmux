@@ -827,7 +827,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	hdrMem := "Mem"
 	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-len(hdrCPU)))
 	hdrMemPad := strings.Repeat(" ", max(0, maxMem-len(hdrMem)))
-	hdrRes := hdrCPUPad + hdrCPU + " / " + hdrMem + hdrMemPad
+	hdrRes := hdrCPUPad + hdrCPU + " / " + hdrMemPad + hdrMem
 	hdrDisplay := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
 		cDim+iSess+reset,
 		cDim+"Session"+reset,
@@ -868,12 +868,12 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			cpuPad,
 			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
 			cDim+"/"+reset,
-			rc.memColor(r.sess.memMB)+memStrs[i]+reset,
 			memPad,
+			rc.memColor(r.sess.memMB)+memStrs[i]+reset,
 			cBlue+iDir+reset,
 			cDim+shortPath+reset,
 		)
-		resPlain := cpuPad + cpuStrs[i] + " / " + memStrs[i] + memPad
+		resPlain := cpuPad + cpuStrs[i] + " / " + memPad + memStrs[i]
 		plain := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
 			iSess, r.sess.name, pad, stripANSI(icons), resPlain, iDir, shortPath,
 		)
