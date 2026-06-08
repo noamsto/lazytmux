@@ -150,23 +150,57 @@ apply_cache_to_target() {
 	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable"
 }
 
-# run_full_pass — enrich every window that carries a @branch, fetching once per
-# unique branch and applying the cached result to all windows on that branch.
+# run_full_pass — enrich every window that carries a @branch. One gh call fetches
+# all open PRs in the repo, indexed by head branch; each branch's slice is written
+# to its per-branch cache. Only heads with no open PR fall back to a per-branch
+# lookup (which catches merged/closed via --state all). So the common case — each
+# worktree has an open PR — costs a single API round-trip, not one per branch.
 run_full_pass() {
+	# Snapshot the window list once and reuse it for every branch's apply.
+	local windows
+	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@branch}' | awk -F'|' 'NF>=3')
+
+	# Unique, non-empty branches (capped — matches the prior head -n 30 bound).
 	declare -A seen
-	local tgt _wt br
-	while IFS="|" read -r tgt _wt br; do
-		[[ -z $br ]] && continue
-		[[ -n ${seen[$br]:-} ]] && continue
+	local branches=() line tgt _wt br
+	for line in "${windows[@]}"; do
+		IFS="|" read -r tgt _wt br <<<"$line"
+		[[ -z $br || -n ${seen[$br]:-} ]] && continue
 		seen[$br]=1
-		local cache
-		cache="$(fetch_branch_pr "$br")"
-		# Apply to every window on this branch.
-		local t _w b2
-		while IFS="|" read -r t _w b2; do
+		branches+=("$br")
+		((${#branches[@]} >= 30)) && break
+	done
+	((${#branches[@]})) || return
+
+	# Index open PRs by head branch in one call. headRefName carries the branch;
+	# each value is a single-element array matching the per-branch cache format.
+	declare -A open_pr
+	local all_json head obj
+	if command -v gh >/dev/null 2>&1 &&
+		all_json="$(gh pr list --state open --limit 100 \
+			--json number,title,url,state,statusCheckRollup,mergeable,headRefName 2>/dev/null)" &&
+		[[ -n $all_json ]]; then
+		while IFS=$'\t' read -r head obj; do
+			[[ -n $head ]] && open_pr[$head]="$obj"
+		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
+	fi
+
+	local cache t _w b2
+	for br in "${branches[@]}"; do
+		branch_sha1 "$br"
+		cache="$ENRICH_CACHE_DIR/$REPLY.json"
+		if [[ -n ${open_pr[$br]+x} ]]; then
+			printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+		else
+			# No open PR for this head (or gh/batch unavailable): the per-branch
+			# lookup resolves merged/closed and serves the cache on failure.
+			cache="$(fetch_branch_pr "$br")"
+		fi
+		for line in "${windows[@]}"; do
+			IFS="|" read -r t _w b2 <<<"$line"
 			[[ $b2 == "$br" ]] && apply_cache_to_target "$t" "$cache"
-		done < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@branch}' | awk -F'|' 'NF>=3')
-	done < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@branch}' | awk -F'|' 'NF>=3 && $3!=""' | head -n 30)
+		done
+	done
 }
 
 # --- mock mode: write the provided values directly, no gh ---
