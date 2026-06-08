@@ -183,12 +183,13 @@ Extend the existing dead-pane sweep in `claude-status-update.sh`: when it remove
   bundled.)
 - Register the new PostToolUse command in `claude-plugin/hooks/hooks.json`
   alongside the existing `status.sh processing` entry.
-- Add the keybind in `config/tmux.conf.nix` (proposed `prefix + i` — confirm
-  unbound during implementation).
-- **Open choice:** gate behind `programs.lazytmux.claudeImagePane.enable`
-  (default `true`) vs. always-on like scratchpad. Recommend an enable option
-  defaulting true (lets consumers drop the `chafa` closure cost). Final call
-  deferred to reading `modules/home-manager.nix` conventions.
+- Add the keybind in `config/tmux.conf.nix`. `prefix + i` is taken by the enrich
+  table (`bind-key i switch-client -T enrich`), so use **`prefix + I`**.
+- **Resolved: always-on, no new option.** scratchpad, lazygit, btop, and yazi
+  are all always-on keybinds with always-bundled deps; only enrich is gated
+  because it carries external-API cost. `chafa` has no such cost (~small
+  closure add), so always-on matches the dominant pattern and avoids
+  module-threading. An enable option can be added later if a consumer asks.
 
 ## Risks / open items
 
