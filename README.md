@@ -141,23 +141,23 @@ the canonical definitions in
 `"${CLAUDE_PLUGIN_ROOT}"/scripts/status.sh <state>` with `claude-status-update <state>`
 (the bare name is on PATH via the tmux wrapper). The full event → state mapping:
 
-| Hook event (matcher) | Status |
-|----------------------|--------|
-| `SessionStart` (`startup`/`resume`/`clear`) | cleanup + idle |
-| `SessionStart` (`compact`) | cleanup + processing |
-| `UserPromptSubmit` | processing (`--force`) |
-| `PreToolUse` / `PostToolUse` | processing |
-| `PostToolUseFailure` | processing |
-| `Notification` (`permission_prompt`) | waiting |
-| `Notification` (`idle_prompt`) | idle |
-| `Stop` | done |
-| `StopFailure` | error |
-| `PreCompact` | compacting |
-| `PostCompact` | processing |
-| `PermissionDenied` | denied |
-| `Elicitation` | waiting |
-| `ElicitationResult` | processing |
-| `SessionEnd` | clear |
+| Hook event (matcher)                        | Status                 |
+| ------------------------------------------- | ---------------------- |
+| `SessionStart` (`startup`/`resume`/`clear`) | cleanup + idle         |
+| `SessionStart` (`compact`)                  | cleanup + processing   |
+| `UserPromptSubmit`                          | processing (`--force`) |
+| `PreToolUse` / `PostToolUse`                | processing             |
+| `PostToolUseFailure`                        | processing             |
+| `Notification` (`permission_prompt`)        | waiting                |
+| `Notification` (`idle_prompt`)              | idle                   |
+| `Stop`                                      | done                   |
+| `StopFailure`                               | error                  |
+| `PreCompact`                                | compacting             |
+| `PostCompact`                               | processing             |
+| `PermissionDenied`                          | denied                 |
+| `Elicitation`                               | waiting                |
+| `ElicitationResult`                         | processing             |
+| `SessionEnd`                                | clear                  |
 
 ### OpenCode Plugin
 
