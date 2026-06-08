@@ -28,6 +28,7 @@
     # @fingers-enabled-builtin-patterns is consumed as a comma-list
     # (add_builtin_patterns splits on ",") but declared as a single-value enum,
     # so any subset fails load-config. Make it a free-form string instead.
+    # TODO(upstream): drop once Morantron/tmux-fingers#177 lands a release.
     patches = [./enabled-builtin-patterns-list.patch];
 
     postInstall = ''
