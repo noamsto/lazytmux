@@ -1,0 +1,13 @@
+--- a/src/fingers/options.cr
++++ b/src/fingers/options.cr
+@@ -13,7 +13,9 @@
+
+ define_enum_option :hint_position, %w(left right), "left"
+ define_enum_option :keyboard_layout, Fingers::ALPHABET_MAP.keys, "qwerty"
+-define_enum_option :enabled_builtin_patterns, ["all", *Fingers::BUILTIN_PATTERNS.keys], "all"
++# Free-form string, not an enum: a comma-separated subset ("url,path,ip") must
++# pass validation. add_builtin_patterns splits on "," and ignores unknown names.
++define_string_option :enabled_builtin_patterns, "all"
+
+ define_action_option :main, ":copy:"
+ define_action_option :ctrl, ":open:"
