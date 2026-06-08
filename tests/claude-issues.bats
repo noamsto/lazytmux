@@ -167,3 +167,33 @@ write_pane_fixture() {
 	[ "$status" -eq 0 ]
 	[[ $output != *"ENG-123"* ]]
 }
+
+# Stubs tmux so cleanup sees PANE_LIST (TSV of "pane_id<TAB>current_command"
+# lines, '%' optional) as the live panes; all other tmux subcommands no-op.
+stub_tmux() {
+	mkdir -p "$BATS_TEST_TMPDIR/bin"
+	# /bin/sh, not /usr/bin/env: the Nix flake-check sandbox has no /usr/bin.
+	cat >"$BATS_TEST_TMPDIR/bin/tmux" <<'EOF'
+#!/bin/sh
+if [ "$1" = list-panes ]; then printf '%s' "$PANE_LIST"; fi
+exit 0
+EOF
+	chmod +x "$BATS_TEST_TMPDIR/bin/tmux"
+	PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "cleanup: keeps stamp for a live pane not running claude" {
+	write_pane_fixture 7 work "ENG-123"
+	stub_tmux
+	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	[ -f "$CLAUDE_STATUS_DIR/issues/7" ]
+	[ -f "$CLAUDE_STATUS_DIR/panes/7" ]
+}
+
+@test "cleanup: removes stamp for a pane that no longer exists" {
+	write_pane_fixture 9 work "GH-42"
+	stub_tmux
+	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	[ ! -f "$CLAUDE_STATUS_DIR/issues/9" ]
+	[ ! -f "$CLAUDE_STATUS_DIR/panes/9" ]
+}
