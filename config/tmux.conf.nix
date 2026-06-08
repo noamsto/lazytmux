@@ -541,6 +541,9 @@
     set -g @fingers-pattern-7 "arn:[a-z0-9-]+:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:[a-zA-Z0-9_/.:-]+"
     set -g @fingers-pattern-8 "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
     set -g @fingers-pattern-9 "([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
+    # Only scan built-ins we actually use. Dropped: digit (too noisy — matches
+    # any 4+ digit run), git-status, git-status-branch, diff (niche).
+    set -g @fingers-enabled-builtin-patterns "url,path,ip,uuid,sha,hex,kubernetes"
     run-shell ${fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Force TERM around prefix+F / prefix+J so spawned shells don't hit the
