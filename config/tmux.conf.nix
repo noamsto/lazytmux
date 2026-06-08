@@ -15,6 +15,9 @@
   enrichProviders ? ["linear" "github"],
   enrichPrRefreshSeconds ? 30,
   enrichIcons ? {},
+  # Comma-separated glob/basename patterns the session picker drops from its
+  # zoxide suggestions (e.g. "*/.ssh,/tmp/*"). Empty => suggest everything.
+  zoxideExclude ? "",
   # tmux prefix key (literal character). Default backtick.
   prefix ? "`",
   # Absolute path to the shell tmux spawns in new panes (default-shell).
@@ -452,6 +455,7 @@
     set -g @icon_session "${icons.session}"
     set -g @icon_branch "${icons.branch}"
     set -g @icon_dir "${icons.dir}"
+    set -g @picker_zoxide_exclude "${zoxideExclude}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | App info (right)
     set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}#[align=left,bg=#{@thm_bg}]#{?client_prefix,#[fg=#{@thm_red}#,bold],#[fg=#{@thm_mauve}]} #{@icon_session} #S  #{?#{&&:#{@issue_id},#{==:#{@issue_branch},#{@branch}}},#[fg=#{@thm_blue}#,bold]#{?#{==:#{@issue_provider},linear},${enrichIconSet.linear},${enrichIconSet.github}} #{@issue_id} #[fg=#{@thm_text}#,nobold]#{@issue_title},#[fg=#{@thm_blue}#,bold]#{@icon_branch} #(${script.tmux-branch-display}/bin/tmux-branch-display '#{@branch}' '#{pane_current_path}')}  #[fg=#{@thm_subtext_0},nobold]#{@icon_dir} #(${script.tmux-dir-display}/bin/tmux-dir-display '#{@branch}' '#{pane_current_path}' '#{@git_root}')  #[fg=#{@thm_overlay_1}]#(${script.claude-status}/bin/claude-status --session '#{session_name}' --format icon-color) #[align=right]#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#[fg=#{@thm_green}]}}}}#{?#{==:#{@pr_mergeable},conflicting},${enrichIconSet.conflict},#{?#{==:#{@pr_check_state},failure},${enrichIconSet.failure},#{?#{==:#{@pr_check_state},pending},${enrichIconSet.pending},#{?#{==:#{@pr_state},merged},${enrichIconSet.merged},${enrichIconSet.success}}}}} ###{@pr_number} #{@pr_title}  ,}#[fg=#{@thm_subtext_0}]#{@active_pane_icon} #{pane_current_command} "

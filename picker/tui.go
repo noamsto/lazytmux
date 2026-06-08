@@ -755,8 +755,9 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	resCh := make(chan map[string]sessionResources, 1)
 	go func() { resCh <- collectSessionResources(sessions) }()
 
+	zoxExclude := parseExcludePatterns(envOrMap("PICKER_ZOXIDE_EXCLUDE", tmuxOpts, "@picker_zoxide_exclude", ""))
 	zoxCh := make(chan []suggestion, 1)
-	go func() { zoxCh <- collectZoxide(sessions) }()
+	go func() { zoxCh <- collectZoxide(sessions, zoxExclude) }()
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")

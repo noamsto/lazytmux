@@ -6,6 +6,45 @@ import (
 	"testing"
 )
 
+func TestParseExcludePatterns(t *testing.T) {
+	got := parseExcludePatterns("  */.ssh , /tmp/* ,, ")
+	want := []string{"*/.ssh", "/tmp/*"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pattern %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+	if parseExcludePatterns("") != nil {
+		t.Errorf("empty string should yield nil")
+	}
+}
+
+func TestIsExcluded(t *testing.T) {
+	pats := []string{".ssh", "/tmp/*", "/home/noams/Downloads"}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/home/noams/.ssh", true},                 // basename
+		{"/tmp/zr-rank-test", true},                // glob child
+		{"/home/noams/Downloads", true},            // exact dir
+		{"/home/noams/Downloads/teamviewer", true}, // subtree
+		{"/home/noams/Data/git/lazytmux", false},
+		{"/home/noams/.config", false},
+	}
+	for _, c := range cases {
+		if got := isExcluded(c.path, pats); got != c.want {
+			t.Errorf("isExcluded(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+	if isExcluded("/anything", nil) {
+		t.Errorf("nil patterns should exclude nothing")
+	}
+}
+
 func TestSessionNameFromPath(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"/home/n/Data/git/lazytmux", "lazytmux"},

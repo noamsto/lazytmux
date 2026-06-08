@@ -80,9 +80,43 @@ func sessionFilterMaps(sessions []sessionData) (paths, names map[string]bool) {
 	return paths, names
 }
 
-// collectZoxide returns ranked zoxide dirs not already covered by a session.
-// Missing zoxide binary, errors, or dead dirs degrade to no suggestions.
-func collectZoxide(sessions []sessionData) []suggestion {
+// isExcluded reports whether path matches any blacklist pattern. A pattern
+// matches when it equals the path, is an ancestor dir of it (subtree exclude),
+// or globs the full path or basename via filepath.Match. So "/tmp/*" drops
+// /tmp children, ".ssh" drops any dir named .ssh, and "/home/x/Downloads"
+// drops that dir and everything under it. Malformed globs are skipped.
+func isExcluded(path string, patterns []string) bool {
+	base := filepath.Base(path)
+	for _, pat := range patterns {
+		if pat == path || strings.HasPrefix(path, pat+"/") {
+			return true
+		}
+		if ok, err := filepath.Match(pat, path); err == nil && ok {
+			return true
+		}
+		if ok, err := filepath.Match(pat, base); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// parseExcludePatterns splits a comma-separated blacklist option into trimmed,
+// non-empty patterns.
+func parseExcludePatterns(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// collectZoxide returns ranked zoxide dirs not already covered by a session
+// and not matching an exclude pattern. Missing zoxide binary, errors, or dead
+// dirs degrade to no suggestions.
+func collectZoxide(sessions []sessionData, exclude []string) []suggestion {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "zoxide", "query", "-l").Output()
@@ -97,6 +131,9 @@ func collectZoxide(sessions []sessionData) []suggestion {
 			continue
 		}
 		p := normalizePath(l)
+		if isExcluded(p, exclude) {
+			continue
+		}
 		if st, err := os.Stat(p); err != nil || !st.IsDir() {
 			continue
 		}
