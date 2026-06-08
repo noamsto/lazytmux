@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/md5"
 	"fmt"
 	imgcolor "image/color"
 	"os"
@@ -33,9 +32,11 @@ type listItem struct {
 // tuiModel is the bubbletea model for the picker.
 type tuiModel struct {
 	// Data
-	allItems []listItem // unfiltered
-	visible  []listItem // after query + mode filter
-	cursor   int
+	allItems     []listItem // unfiltered: sessionItems + zoxideItems
+	sessionItems []listItem // session/window rows (base for recombination)
+	zoxideItems  []listItem // zoxide suggestions, loaded async after first paint
+	visible      []listItem // after query + mode filter
+	cursor       int
 
 	// Modes
 	windowMode  bool
@@ -54,9 +55,6 @@ type tuiModel struct {
 	previewFor     string // target currently loaded in preview
 	previewRaw     string // unshifted content for horizontal scroll
 	previewXOffset int    // horizontal scroll offset (in cells)
-
-	// Refresh
-	lastStructHash string // ASCII-only hash; spinner changes don't affect it
 
 	// Layout
 	width, height int
@@ -89,8 +87,12 @@ func (m tuiModel) thmColorHex(tmuxOpt, darkFallback, lightFallback string) strin
 type tickMsg struct{}
 
 type refreshMsg struct {
-	items      []listItem
-	structHash string
+	items []listItem
+}
+
+// zoxideMsg carries the suggestion rows collected off the first-paint path.
+type zoxideMsg struct {
+	items []listItem
 }
 
 type previewMsg struct {
@@ -114,13 +116,13 @@ func runTUI(windowMode, claudeOnly bool) error {
 	}
 
 	m := tuiModel{
-		windowMode:     windowMode,
-		claudeOnly:     claudeOnly,
-		showPreview:    true,
-		theme:          theme,
-		tmuxOpts:       opts,
-		allItems:       items,
-		lastStructHash: structHash(items),
+		windowMode:   windowMode,
+		claudeOnly:   claudeOnly,
+		showPreview:  true,
+		theme:        theme,
+		tmuxOpts:     opts,
+		allItems:     items,
+		sessionItems: items,
 	}
 	m = m.withFilter()
 	m.cursor = m.firstSelectable(0)
@@ -133,7 +135,11 @@ func runTUI(windowMode, claudeOnly bool) error {
 // --- Bubbletea interface ---
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), m.loadPreviewCmd())
+	cmds := []tea.Cmd{tickCmd(), m.loadPreviewCmd()}
+	if !m.windowMode {
+		cmds = append(cmds, m.zoxideCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -159,12 +165,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tickCmd(), m.refreshDataCmd())
 
 	case refreshMsg:
-		m.allItems = msg.items
-		m.lastStructHash = msg.structHash
-		m = m.withFilter()
+		m.sessionItems = msg.items
+		m = m.recombine().withFilter()
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
 		}
+		return m, m.loadPreviewCmd()
+
+	case zoxideMsg:
+		m.zoxideItems = msg.items
+		m = m.recombine().withFilter()
 		return m, m.loadPreviewCmd()
 
 	case previewMsg:
@@ -716,8 +726,28 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 			items = buildSessionItems(opts, panes, theme)
 		}
 		// Always send — spinners need to animate even without structural changes.
-		return refreshMsg{items: items, structHash: structHash(items)}
+		return refreshMsg{items: items}
 	}
+}
+
+// zoxideCmd collects directory suggestions off the first-paint path (session
+// mode only). The result merges in via zoxideMsg once stat-ing every zoxide
+// dir completes, so the popup paints with sessions immediately.
+func (m tuiModel) zoxideCmd() tea.Cmd {
+	opts := m.tmuxOpts
+	return func() tea.Msg {
+		return zoxideMsg{items: collectZoxideItems(opts)}
+	}
+}
+
+// recombine rebuilds allItems from the session base plus the async suggestion
+// rows, so a 1s refresh (sessions only) doesn't drop loaded zoxide entries.
+func (m tuiModel) recombine() tuiModel {
+	all := make([]listItem, 0, len(m.sessionItems)+len(m.zoxideItems))
+	all = append(all, m.sessionItems...)
+	all = append(all, m.zoxideItems...)
+	m.allItems = all
+	return m
 }
 
 func (m tuiModel) loadPreviewCmd() tea.Cmd {
@@ -754,10 +784,6 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	// Resource collection runs in parallel with rendering prep (uses cached ps data)
 	resCh := make(chan map[string]sessionResources, 1)
 	go func() { resCh <- collectSessionResources(sessions) }()
-
-	zoxExclude := parseExcludePatterns(envOrMap("PICKER_ZOXIDE_EXCLUDE", tmuxOpts, "@picker_zoxide_exclude", ""))
-	zoxCh := make(chan []suggestion, 1)
-	go func() { zoxCh <- collectZoxide(sessions, zoxExclude) }()
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
@@ -887,34 +913,48 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			isScratch:       strings.HasPrefix(r.sess.name, "scratch-"),
 		})
 	}
-	if sugs := <-zoxCh; len(sugs) > 0 {
-		rule := "── New session " + strings.Repeat("─", 220)
-		items = append(items, listItem{
-			display:        cDim + rule + reset,
-			plain:          rule,
-			isHeader:       true,
-			isZoxideHeader: true,
-		})
-		for _, sg := range sugs {
-			shortPath := sg.path
-			if home != "" && strings.HasPrefix(shortPath, home) {
-				shortPath = "~" + shortPath[len(home):]
-			}
-			display := fmt.Sprintf("%s %s  %s",
-				cBlue+iDir+reset,
-				sg.name,
-				cDim+shortPath+reset,
-			)
-			plain := fmt.Sprintf("%s %s  %s", iDir, sg.name, shortPath)
-			items = append(items, listItem{
-				target:     sg.path,
-				createPath: sg.path,
-				createName: sg.name,
-				display:    display,
-				plain:      plain,
-				searchText: sg.name + " " + shortPath,
-			})
+	return items
+}
+
+// collectZoxideItems builds the "New session" suggestion rows (header + zoxide
+// dirs). Runs off the first-paint path so its zoxide query + per-dir stat walk
+// never blocks the popup; the result merges in via zoxideMsg.
+func collectZoxideItems(tmuxOpts map[string]string) []listItem {
+	zoxExclude := parseExcludePatterns(envOrMap("PICKER_ZOXIDE_EXCLUDE", tmuxOpts, "@picker_zoxide_exclude", ""))
+	sugs := collectZoxide(collectSessions(), zoxExclude)
+	if len(sugs) == 0 {
+		return nil
+	}
+
+	cBlue := ansiFg(envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa"))
+	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
+	iDir := envOrMap("PICKER_ICON_DIR", tmuxOpts, "@icon_dir", iconDir)
+	reset := "\033[0m"
+	home := os.Getenv("HOME")
+
+	rule := "── New session " + strings.Repeat("─", 220)
+	items := make([]listItem, 0, len(sugs)+1)
+	items = append(items, listItem{
+		display:        cDim + rule + reset,
+		plain:          rule,
+		isHeader:       true,
+		isZoxideHeader: true,
+	})
+	for _, sg := range sugs {
+		shortPath := sg.path
+		if home != "" && strings.HasPrefix(shortPath, home) {
+			shortPath = "~" + shortPath[len(home):]
 		}
+		display := fmt.Sprintf("%s %s  %s", cBlue+iDir+reset, sg.name, cDim+shortPath+reset)
+		plain := fmt.Sprintf("%s %s  %s", iDir, sg.name, shortPath)
+		items = append(items, listItem{
+			target:     sg.path,
+			createPath: sg.path,
+			createName: sg.name,
+			display:    display,
+			plain:      plain,
+			searchText: sg.name + " " + shortPath,
+		})
 	}
 	return items
 }
@@ -1102,16 +1142,6 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 // isActiveState reports whether a claude priority state is worth highlighting.
 func isActiveState(state string) bool {
 	return state != "" && state != "idle"
-}
-
-// structHash hashes only ASCII characters so spinner/icon changes don't trigger structural reloads.
-func structHash(items []listItem) string {
-	var sb strings.Builder
-	for _, item := range items {
-		sb.WriteString(item.plain)
-		sb.WriteByte('\n')
-	}
-	return fmt.Sprintf("%x", md5.Sum([]byte(sb.String())))
 }
 
 // stripANSI removes ANSI escape sequences from s.
