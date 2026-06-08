@@ -98,6 +98,7 @@
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     extraProcessIcons = cfg.processIcons;
+    zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
     inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
@@ -322,6 +323,22 @@ in {
         install those tools elsewhere (home-manager errors if two
         different derivations install the same file).
       '';
+    };
+
+    sessionPicker = {
+      zoxideExclude = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [".ssh" "/tmp/*"];
+        example = [".ssh" "/tmp/*" "*/node_modules"];
+        description = ''
+          Patterns the session picker drops from its zoxide directory
+          suggestions. A pattern matches when it equals the path, is an
+          ancestor dir of it (subtree), or globs the full path or its
+          basename — so ".ssh" hides any dir named .ssh, "/tmp/*" hides
+          /tmp children, and "/home/you/Downloads" hides that subtree.
+          Set to [] to suggest every zoxide dir.
+        '';
+      };
     };
 
     startupSession = {

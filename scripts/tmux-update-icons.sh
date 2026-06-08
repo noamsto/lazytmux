@@ -68,6 +68,7 @@ declare -A win_icons win_icon_dw win_display
 
 # Collect all tmux set commands to batch via `tmux source -`
 tmux_cmds=""
+branch_changed=0
 
 for idx in "${!win_pane_path[@]}"; do
 	all_idx+=("$idx")
@@ -81,6 +82,7 @@ for idx in "${!win_pane_path[@]}"; do
 		# Re-derive git root when branch changes (different repo or worktree)
 		git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
 		tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
+		branch_changed=1
 	fi
 
 	# Build process icons from batched data
@@ -127,3 +129,11 @@ done
 
 # Batch all tmux set commands in a single IPC call
 printf '%s' "$tmux_cmds" | tmux source -
+
+# A branch change means window labels (built by reflow from @branch/@issue_*)
+# are stale — no tmux hook fires on cd, so kick a forced reflow here. The
+# wrapped tmux puts all lazytmux scripts on the server's PATH.
+if ((branch_changed)); then
+	tmux-reflow-windows "$SESSION" --force >/dev/null 2>&1 &
+	disown
+fi

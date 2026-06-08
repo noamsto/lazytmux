@@ -52,13 +52,21 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 pr_colw=0 # widest PR segment → shared PR column width (0 when no window has a PR)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
+
+	# Stamp belongs to the branch it was written for. If the pane has since
+	# cd'd to a different branch, build the label from the current branch
+	# instead — the stamp stays on the window and reappears on cd back.
+	if [[ -n $iid && $ibranch != "$branch" ]]; then
+		iprov="" iid="" ititle=""
+		prnum="" prstate="" prcheck="" prmerge=""
+	fi
 
 	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge"
 	win_short[$idx]="$REPLY"
