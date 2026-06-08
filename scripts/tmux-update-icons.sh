@@ -18,6 +18,7 @@ setup_claude_colors
 # --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
 declare -A pane_to_win win_procs win_pane_path win_cur_branch
 active_pane_proc=""
+active_win_idx=""
 while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active; do
 	pane_to_win["${pane_id#%}"]="$idx"
 	# First pane_path per window wins (active pane comes first from list-panes)
@@ -25,6 +26,7 @@ while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window
 		win_pane_path[$idx]="$pane_path"
 		win_cur_branch[$idx]="$cur_branch"
 	fi
+	[[ $window_active == 1 ]] && active_win_idx="$idx"
 	# Track the session's active pane command (active pane in active window)
 	[[ $pane_active == 1 && $window_active == 1 ]] && active_pane_proc="$proc"
 	# Collect unique processes per window
@@ -75,14 +77,20 @@ for idx in "${!win_pane_path[@]}"; do
 	pane_path="${win_pane_path[$idx]}"
 	target="${SESSION}:${idx}"
 
-	# Auto-detect git branch and root — always check branch (3ms), cache root
-	branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
-	if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
-		tmux_cmds+="set -qw -t '$target' @branch '$branch'"$'\n'
-		# Re-derive git root when branch changes (different repo or worktree)
-		git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
-		tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
-		branch_changed=1
+	# Branch detection forks git per window. A branch only changes in the window
+	# where a checkout/cd happens, so poll only the active window each tick;
+	# inactive windows trust their cached @branch (worktrunk stamps it on switch).
+	# A window with no @branch yet (manual new-window, restore) is polled once to
+	# seed it, then trusted — this caps the steady git fork rate at ~1/tick.
+	if [[ $idx == "$active_win_idx" || -z ${win_cur_branch[$idx]:-} ]]; then
+		branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
+		if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
+			tmux_cmds+="set -qw -t '$target' @branch '$branch'"$'\n'
+			# Re-derive git root when branch changes (different repo or worktree)
+			git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
+			tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
+			branch_changed=1
+		fi
 	fi
 
 	# Build process icons from batched data
