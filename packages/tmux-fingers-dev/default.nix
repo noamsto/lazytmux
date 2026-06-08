@@ -25,6 +25,11 @@
     shardsFile = ./shards.nix;
     crystalBinaries.tmux-fingers.src = "src/fingers.cr";
 
+    # @fingers-enabled-builtin-patterns is consumed as a comma-list
+    # (add_builtin_patterns splits on ",") but declared as a single-value enum,
+    # so any subset fails load-config. Make it a free-form string instead.
+    patches = [./enabled-builtin-patterns-list.patch];
+
     postInstall = ''
       shopt -s dotglob extglob
       rm -rv !("tmux-fingers.tmux"|"bin")
