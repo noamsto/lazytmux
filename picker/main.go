@@ -622,16 +622,24 @@ func collectWindows() []windowData {
 		}
 	}
 
-	// Fill missing branches by running git in the pane's working directory
+	// Fill missing branches by running git in each pane's working directory.
+	// Parallel: one git fork per window, all in flight at once — the picker's
+	// first paint waits on the slowest single call, not their sum. Each goroutine
+	// writes a distinct *winInfo, so no shared-state guard is needed.
+	var wg sync.WaitGroup
 	for _, k := range order {
 		wi := m[k]
 		if wi.branch == "" && wi.path != "" {
-			cmd := exec.Command("git", "-C", wi.path, "branch", "--show-current")
-			if out, err := cmd.Output(); err == nil {
-				wi.branch = strings.TrimSpace(string(out))
-			}
+			wg.Add(1)
+			go func(wi *winInfo) {
+				defer wg.Done()
+				if out, err := exec.Command("git", "-C", wi.path, "branch", "--show-current").Output(); err == nil {
+					wi.branch = strings.TrimSpace(string(out))
+				}
+			}(wi)
 		}
 	}
+	wg.Wait()
 
 	windows := make([]windowData, 0, len(order))
 	for _, k := range order {
