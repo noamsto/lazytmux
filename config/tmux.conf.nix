@@ -172,6 +172,9 @@
   scriptNames = [
     "claude-status"
     "claude-status-update"
+    "claude-images-update"
+    "claude-image-render"
+    "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
@@ -384,6 +387,7 @@
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
+    bind I run-shell '${script.tmux-claude-images}/bin/tmux-claude-images'
 
     # Yank pane's current working directory to system clipboard
     bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
@@ -573,7 +577,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa])}
     '';
     meta.mainProgram = "tmux";
   };
