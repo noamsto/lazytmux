@@ -61,3 +61,35 @@ run_app() { # $1 = fixture name
 	[ "$status" -eq 0 ]
 	[ ! -f "$MANIFEST" ]
 }
+
+choose() { bash scripts/claude-image-render.sh --choose "$1" "$2"; }
+
+@test "kitty terminal with kitten → kitten" {
+	run choose xterm-kitty 1
+	[ "$output" = "kitten" ]
+}
+
+@test "kitty terminal without kitten → chafa-kitty" {
+	run choose xterm-kitty 0
+	[ "$output" = "chafa-kitty" ]
+}
+
+@test "ghostty with kitten → kitten" {
+	run choose xterm-ghostty 1
+	[ "$output" = "kitten" ]
+}
+
+@test "foot → chafa-sixel" {
+	run choose foot 0
+	[ "$output" = "chafa-sixel" ]
+}
+
+@test "unknown terminal → chafa-symbols (universal floor)" {
+	run choose dumb 0
+	[ "$output" = "chafa-symbols" ]
+}
+
+@test "wezterm → chafa-sixel" {
+	run choose wezterm 0
+	[ "$output" = "chafa-sixel" ]
+}
