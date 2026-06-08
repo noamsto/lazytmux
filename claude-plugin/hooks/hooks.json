@@ -52,7 +52,7 @@
       },
       {
         "matcher": "idle_prompt",
-        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh done"}]
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh idle"}]
       }
     ],
     "Stop": [
@@ -82,7 +82,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh error"}]
+        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing"}]
       }
     ],
     "Elicitation": [
