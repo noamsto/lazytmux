@@ -131,148 +131,33 @@ highest-priority state (waiting > denied > compacting > processing > done > idle
 
 ### Claude Code Hooks
 
-Paste this into `~/.claude/settings.json` (merge with existing `hooks` if present).
-The commands use bare names (`claude-status-update`) because they are on PATH via the tmux wrapper.
+The easiest path is the [Claude Code plugin](#claude-code-plugin) — install it and these
+hooks register automatically, with no `settings.json` editing.
 
-<details>
-<summary><b>Click to expand hooks JSON</b></summary>
+To wire them up manually (e.g. you use the tmux integration without the plugin), mirror
+the canonical definitions in
+[`claude-plugin/hooks/hooks.json`](claude-plugin/hooks/hooks.json) into
+`~/.claude/settings.json`, replacing each
+`"${CLAUDE_PLUGIN_ROOT}"/scripts/status.sh <state>` with `claude-status-update <state>`
+(the bare name is on PATH via the tmux wrapper). The full event → state mapping:
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update cleanup"},
-          {"type": "command", "command": "claude-status-update idle"}
-        ]
-      },
-      {
-        "matcher": "resume",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update cleanup"},
-          {"type": "command", "command": "claude-status-update idle"}
-        ]
-      },
-      {
-        "matcher": "clear",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update cleanup"},
-          {"type": "command", "command": "claude-status-update idle"}
-        ]
-      },
-      {
-        "matcher": "compact",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update cleanup"},
-          {"type": "command", "command": "claude-status-update processing"}
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update processing --force"}
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update processing"}
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update processing"}
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "permission_prompt",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update waiting"}
-        ]
-      },
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {"type": "command", "command": "claude-status-update idle"}
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update done"}
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update compacting"}
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update processing"}
-        ]
-      }
-    ],
-    "PermissionDenied": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update denied"}
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update error"}
-        ]
-      }
-    ],
-    "StopFailure": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update error"}
-        ]
-      }
-    ],
-    "Elicitation": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update waiting"}
-        ]
-      }
-    ],
-    "ElicitationResult": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update processing"}
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {"type": "command", "command": "claude-status-update clear"}
-        ]
-      }
-    ]
-  }
-}
-```
-
-</details>
+| Hook event (matcher)                        | Status                 |
+| ------------------------------------------- | ---------------------- |
+| `SessionStart` (`startup`/`resume`/`clear`) | cleanup + idle         |
+| `SessionStart` (`compact`)                  | cleanup + processing   |
+| `UserPromptSubmit`                          | processing (`--force`) |
+| `PreToolUse` / `PostToolUse`                | processing             |
+| `PostToolUseFailure`                        | processing             |
+| `Notification` (`permission_prompt`)        | waiting                |
+| `Notification` (`idle_prompt`)              | idle                   |
+| `Stop`                                      | done                   |
+| `StopFailure`                               | error                  |
+| `PreCompact`                                | compacting             |
+| `PostCompact`                               | processing             |
+| `PermissionDenied`                          | denied                 |
+| `Elicitation`                               | waiting                |
+| `ElicitationResult`                         | processing             |
+| `SessionEnd`                                | clear                  |
 
 ### OpenCode Plugin
 
