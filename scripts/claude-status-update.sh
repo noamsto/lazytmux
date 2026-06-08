@@ -16,17 +16,19 @@ ISSUES_DIR="$STATE_DIR/issues"
 mkdir -p "$PANES_DIR"
 
 # Function to clean up stale pane entries
-# Removes entries for panes that either:
-#   1. No longer exist in tmux
-#   2. Exist but are no longer running claude
+# Removes entries only for panes that no longer exist in tmux. A live pane is
+# kept even when its foreground command isn't claude/opencode: Claude shells
+# out constantly (builds, pagers, git), and that momentary command must not be
+# read as "session gone" — doing so wipes issue stamps mid-session. Genuine
+# exit is handled by the SessionEnd hook (`clear`), not by sampling here.
 cleanup_stale_panes() {
 	[[ -d $PANES_DIR ]] || return 0
 	command -v tmux &>/dev/null || return 0
 
-	# Build lookup: pane_id (without %) -> current_command
-	declare -A pane_commands
-	while IFS=$'\t' read -r pid cmd; do
-		pane_commands["${pid#%}"]="$cmd"
+	# Build lookup: pane_id (without %) -> 1 for every pane that still exists
+	declare -A pane_exists
+	while IFS=$'\t' read -r pid _; do
+		pane_exists["${pid#%}"]=1
 	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
 
 	# Check each pane file
@@ -34,26 +36,16 @@ cleanup_stale_panes() {
 		[[ -f $pf ]] || continue
 		local pane_file="${pf##*/}"
 
-		local should_remove=false
-
-		if [[ -z ${pane_commands[$pane_file]+x} ]]; then
-			# Pane no longer exists in tmux
-			should_remove=true
-		elif [[ ${pane_commands[$pane_file]} != "claude" && ${pane_commands[$pane_file]} != "opencode" ]]; then
-			should_remove=true
-		fi
-
-		if $should_remove; then
+		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
 			rm -f "$pf" "$ISSUES_DIR/${pf##*/}"
 		fi
 	done
 
-	# Orphaned issue files (pane gone, or no longer running claude)
+	# Orphaned issue files (pane gone)
 	for inf in "$ISSUES_DIR"/*; do
 		[[ -f $inf ]] || continue
 		local issue_pane="${inf##*/}"
-		if [[ -z ${pane_commands[$issue_pane]+x} ]] ||
-			[[ ${pane_commands[$issue_pane]} != "claude" && ${pane_commands[$issue_pane]} != "opencode" ]]; then
+		if [[ -z ${pane_exists[$issue_pane]+x} ]]; then
 			rm -f "$inf"
 		fi
 	done
