@@ -72,6 +72,21 @@ func TestPlaceholderBlockTwoRows(t *testing.T) {
 	}
 }
 
+func TestSymbolsArgs(t *testing.T) {
+	got := symbolsArgs("/a/b.png", 20, 10)
+	// No --clear: chafa's --clear wipes the whole screen, which would erase the
+	// rest of the grid on every per-cell render.
+	want := []string{"-f", "symbols", "--size", "20x10", "/a/b.png"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("arg %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	data := []byte(`{"type":"image","path":"/a/one.png","source":"Read","ts":"t","mtime":1}
 
