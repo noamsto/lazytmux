@@ -144,6 +144,7 @@ func collectZoxide(sessions []sessionData, exclude []string) []suggestion {
 			continue
 		}
 		p := normalizePath(l)
+		p = collapseWorktree(p)
 		if isExcluded(p, exclude) {
 			continue
 		}
