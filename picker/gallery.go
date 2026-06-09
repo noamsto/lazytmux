@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	previewID   = 250 // kitty image id for the big preview
-	stripThumbW = 12  // filmstrip thumbnail width in cells
-	stripGutter = 1   // blank columns between filmstrip thumbnails
+	previewID      = 250 // kitty image id for the big preview
+	stripThumbW    = 18  // filmstrip thumbnail width in cells
+	stripGutter    = 2   // blank columns between filmstrip thumbnails
+	previewBoxCols = 355 // preview box cols per 100 rows (~16:9 given ~1:2.1 cells)
 )
 
 func clamp(v, lo, hi int) int {
@@ -39,14 +40,26 @@ type layout struct {
 }
 
 // computeLayout splits the pane into a big preview on top and a filmstrip row
-// above a one-line status bar.
+// above a one-line status bar. The preview is the largest ~16:9 box that fits
+// the area left over after the filmstrip (so landscape images barely letterbox).
 func computeLayout(paneW, paneH int) layout {
-	stripH := clamp(paneH/6, 3, 8)
+	stripH := clamp(paneH/4, 5, 12)
 	stripW := stripThumbW
 	stripCols := clamp((paneW+stripGutter)/(stripW+stripGutter), 1, maxCellDim)
-	previewW := clamp(paneW, 1, maxCellDim)
-	// rows consumed: status(1) + filmstrip(stripH) + marker(1) + gap(1).
-	previewH := clamp(paneH-stripH-3, 1, maxCellDim)
+
+	// Area left for the preview after filmstrip(stripH) + marker(1) + status(1).
+	availW := clamp(paneW, 1, maxCellDim)
+	availH := clamp(paneH-stripH-2, 1, maxCellDim)
+
+	// Largest box with cols:rows ≈ previewBoxCols/100 that fits availW × availH.
+	previewW := availW
+	previewH := availW * 100 / previewBoxCols
+	if previewH > availH {
+		previewH = availH
+		previewW = clamp(availH*previewBoxCols/100, 1, availW)
+	}
+	previewW = clamp(previewW, 1, maxCellDim)
+	previewH = clamp(previewH, 1, maxCellDim)
 	return layout{previewW: previewW, previewH: previewH, stripW: stripW, stripH: stripH, stripCols: stripCols}
 }
 
@@ -195,20 +208,22 @@ func (m galleryModel) renderView() string {
 	if len(m.images) == 0 {
 		return "no images yet"
 	}
-	center := lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center)
 
-	// Big preview of the selected image.
+	// Big preview of the selected image, centered in the area above the filmstrip.
 	var preview string
 	if m.backend == backendKitty {
 		preview = placeholderBlock(previewID, m.l.previewW, m.l.previewH)
 	} else {
 		preview = symbolsBlock(m.images[m.cursor].Path, m.l.previewW, m.l.previewH)
 	}
+	previewH := m.height - m.l.stripH - 2 // filmstrip + marker + status
+	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
 
 	// Filmstrip window + a marker under the selected thumbnail.
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
 	hgap := lipgloss.NewStyle().Width(stripGutter).Height(m.l.stripH).Render("")
 	var cells []string
+	shown := 0
 	for s := 0; s < m.l.stripCols; s++ {
 		idx := start + s
 		if idx >= len(m.images) {
@@ -222,23 +237,26 @@ func (m galleryModel) renderView() string {
 		} else {
 			cells = append(cells, symbolsBlock(m.images[idx].Path, m.l.stripW, m.l.stripH))
 		}
+		shown++
 	}
 	strip := lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+
+	// Marker line: a colored bar under the selected thumbnail, padded to the
+	// strip's full width so it stays aligned when the strip is centered.
+	stripW := shown*m.l.stripW + (shown-1)*stripGutter
 	selSlot := m.cursor - start
 	markerColor := m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")
-	marker := strings.Repeat(" ", selSlot*(m.l.stripW+stripGutter)) +
-		lipgloss.NewStyle().Foreground(markerColor).Render(strings.Repeat("▔", m.l.stripW))
+	left := selSlot * (m.l.stripW + stripGutter)
+	marker := strings.Repeat(" ", left) +
+		lipgloss.NewStyle().Foreground(markerColor).Render(strings.Repeat("▀", m.l.stripW)) +
+		strings.Repeat(" ", max(0, stripW-left-m.l.stripW))
+	filmstrip := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
+		lipgloss.JoinVertical(lipgloss.Left, strip, marker))
 
 	status := fmt.Sprintf("[%d/%d] %s · ↵/o open · O folder · h/l move · q quit",
 		m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path))
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		center.Render(preview),
-		"",
-		strip,
-		marker,
-		status,
-	)
+	return lipgloss.JoinVertical(lipgloss.Left, previewArea, filmstrip, status)
 }
 
 // thmColor reads a tmux @thm_* color option, falling back per theme.
