@@ -81,15 +81,17 @@ func tmuxPassthrough(seq string) string {
 
 // transmitVirtual stores a PNG (by file path) as a virtual placement (U=1) under
 // a known id, sized to cols x rows cells, emitting NO visible cells. Placeholder
-// cells in the View reference it.
+// cells in the View reference it. q=2 suppresses kitty's responses — without it
+// the "OK"/error replies land on our stdin and get misparsed as keystrokes.
 func transmitVirtual(id int, path string, cols, rows int) string {
 	enc := base64.StdEncoding.EncodeToString([]byte(path))
-	return tmuxPassthrough(fmt.Sprintf("\x1b_Gi=%d,a=T,U=1,f=100,c=%d,r=%d,t=f;%s\x1b\\",
+	return tmuxPassthrough(fmt.Sprintf("\x1b_Gi=%d,a=T,U=1,q=2,f=100,c=%d,r=%d,t=f;%s\x1b\\",
 		id, cols, rows, enc))
 }
 
 // deleteAll removes all stored images + placements (kitty graphics a=d,d=A).
-func deleteAll() string { return tmuxPassthrough("\x1b_Ga=d,d=A\x1b\\") }
+// q=2 suppresses the response (see transmitVirtual).
+func deleteAll() string { return tmuxPassthrough("\x1b_Ga=d,d=A,q=2\x1b\\") }
 
 // placeholderRune is kitty's Unicode image placeholder (U+10EEEE).
 const placeholderRune = "\U0010EEEE"

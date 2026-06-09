@@ -17,9 +17,9 @@ func TestTmuxPassthrough(t *testing.T) {
 
 func TestTransmitVirtual(t *testing.T) {
 	t.Setenv("TMUX", "")
-	// base64 of "/x.png" is "L3gucG5n"
+	// base64 of "/x.png" is "L3gucG5n". q=2 suppresses kitty's response.
 	got := transmitVirtual(7, "/x.png", 20, 10)
-	want := "\x1b_Gi=7,a=T,U=1,f=100,c=20,r=10,t=f;L3gucG5n\x1b\\"
+	want := "\x1b_Gi=7,a=T,U=1,q=2,f=100,c=20,r=10,t=f;L3gucG5n\x1b\\"
 	if got != want {
 		t.Errorf("transmitVirtual = %q, want %q", got, want)
 	}
@@ -27,7 +27,7 @@ func TestTransmitVirtual(t *testing.T) {
 
 func TestDeleteAll(t *testing.T) {
 	t.Setenv("TMUX", "")
-	if got := deleteAll(); got != "\x1b_Ga=d,d=A\x1b\\" {
+	if got := deleteAll(); got != "\x1b_Ga=d,d=A,q=2\x1b\\" {
 		t.Errorf("deleteAll = %q", got)
 	}
 }
