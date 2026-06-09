@@ -91,6 +91,9 @@ type galleryModel struct {
 	tty     *os.File // raw graphics sink (bypasses bubbletea's stdout)
 	mtime   int64    // manifest mtime at last load (for auto-refresh)
 	ready   bool
+
+	// Theme colors, resolved once at startup (tmux options are session-invariant).
+	selColor, dimColor, hintFg, textFg imgcolor.Color
 }
 
 func (m galleryModel) Init() tea.Cmd { return galleryTickCmd() }
@@ -213,8 +216,7 @@ func (m galleryModel) renderView() string {
 		return "no images yet"
 	}
 
-	selColor := m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")
-	dimColor := m.thmColor("@thm_surface_1", "#45475a", "#bcc0cc")
+	selColor, dimColor := m.selColor, m.dimColor
 
 	// Big preview of the selected image, framed and centered above the filmstrip.
 	var preview string
@@ -229,8 +231,7 @@ func (m galleryModel) renderView() string {
 	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
 
 	// Centered title + subtitle (current image).
-	hintFg := m.thmColor("@thm_subtext_0", "#a6adc8", "#6c6f85")
-	textFg := m.thmColor("@thm_text", "#cdd6f4", "#4c4f69")
+	hintFg, textFg := m.hintFg, m.textFg
 	center := func(s string) string { return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, s) }
 	title := center(lipgloss.NewStyle().Foreground(selColor).Bold(true).Render(galleryTitleIcon + "  Claude Images"))
 	subtitle := center(lipgloss.NewStyle().Foreground(textFg).Render(
@@ -308,6 +309,11 @@ func runGallery(pane string) error {
 		tty:     tty,
 		mtime:   manifestMtime(pane),
 	}
+	// Resolve theme colors once (each is a tmux subprocess; don't do it per frame).
+	m.selColor = m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")
+	m.dimColor = m.thmColor("@thm_surface_1", "#45475a", "#bcc0cc")
+	m.hintFg = m.thmColor("@thm_subtext_0", "#a6adc8", "#6c6f85")
+	m.textFg = m.thmColor("@thm_text", "#cdd6f4", "#4c4f69")
 	// Teardown on pane-kill (toggle-off SIGTERM/SIGHUP), not just q.
 	if tty != nil {
 		sig := make(chan os.Signal, 1)

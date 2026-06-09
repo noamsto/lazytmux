@@ -95,8 +95,9 @@ func TestComputeLayout(t *testing.T) {
 	if l.previewW < 1 || l.previewH < 1 || l.stripCols < 1 {
 		t.Errorf("dims must be >= 1: %+v", l)
 	}
-	// preview + filmstrip + status/marker rows must fit the pane height.
-	if l.previewH+l.stripH+3 > 50 {
+	// preview(+2 border) + filmstrip(stripH+2 border) + title + subtitle + hints
+	// must fit the pane height (the full row budget computeLayout reserves).
+	if l.previewH+2+l.stripH+2+3 > 50 {
 		t.Errorf("rows overflow pane height: %+v", l)
 	}
 	// filmstrip thumbnails + gutters must fit the pane width.
