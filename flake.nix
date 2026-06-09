@@ -93,6 +93,16 @@
               bats tests/claude-issues.bats
               touch $out
             '';
+
+          claude-images-tests =
+            pkgs.runCommand "claude-images-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/claude-images.bats
+              touch $out
+            '';
         };
 
         packages = {

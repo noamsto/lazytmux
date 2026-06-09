@@ -11,6 +11,7 @@ set -euo pipefail
 STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 PANES_DIR="$STATE_DIR/panes"
 ISSUES_DIR="$STATE_DIR/issues"
+IMAGES_DIR="$STATE_DIR/images"
 
 # Ensure directories exist
 mkdir -p "$PANES_DIR"
@@ -37,7 +38,7 @@ cleanup_stale_panes() {
 		local pane_file="${pf##*/}"
 
 		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
-			rm -f "$pf" "$ISSUES_DIR/${pf##*/}"
+			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
 		fi
 	done
 
