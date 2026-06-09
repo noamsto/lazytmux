@@ -6,10 +6,13 @@ set -euo pipefail
 
 STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 IMAGES_DIR="$STATE_DIR/images"
-SELF="${BASH_SOURCE[0]}"
 
 if [[ ${1:-} == --view ]]; then
 	src_pane="$2"
+	start_idx=0
+	if [[ ${3:-} == --start && -n ${4:-} ]]; then
+		start_idx="$4"
+	fi
 	manifest="$IMAGES_DIR/${src_pane#%}.jsonl"
 
 	# Load valid (parseable) manifest lines into `lines`; skips blank/corrupt.
@@ -26,7 +29,9 @@ if [[ ${1:-} == --view ]]; then
 		exit 0
 	}
 
-	i=0
+	i=$start_idx
+	((i >= 0)) || i=0
+	((i < n)) || i=$((n - 1))
 	prev=-1
 	while true; do
 		# Redraw only when the selection changed — no flicker on no-op keys.
@@ -77,5 +82,5 @@ if [[ -n $existing ]]; then
 	exit 0
 fi
 
-viewer="$(tmux split-window -h -P -F '#{pane_id}' "'$SELF' --view '$src_pane'")"
+viewer="$(tmux split-window -h -P -F '#{pane_id}' "tmux-picker-generate --gallery '$src_pane'")"
 tmux set-option -p -t "$viewer" @claude_img_src "$src_pane"
