@@ -972,10 +972,11 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmGreen := envOrMap("THM_GREEN", tmuxOpts, "@thm_green", "#a6e3a1")
 	thmRed := envOrMap("THM_RED", tmuxOpts, "@thm_red", "#f38ba8")
-	thmYellow := envOrMap("THM_YELLOW", tmuxOpts, "@thm_yellow", "#f9e2af")
+	thmPeach := envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
 	thmOverlay1 := envOrMap("THM_OVERLAY_1", tmuxOpts, "@thm_overlay_1", "#7f849c")
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
+	iBranch := envOrMap("PICKER_ICON_BRANCH", tmuxOpts, "@icon_branch", iconBranch)
 
 	cMauve := ansiFg(thmMauve)
 	cGreen := ansiFg(thmGreen)
@@ -983,7 +984,8 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmYellow), merged: cMauve, reset: reset}
+	// Peach for pending mirrors the status bar (tmux-reflow-windows PRCOLOR).
+	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, reset: reset}
 
 	type sessGroup struct {
 		name     string
@@ -1029,6 +1031,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	const identityCap = 32
 	type renderedWin struct {
 		win           *windowData
+		name          string // clean window name, for search
 		icons         string
 		iconDW        int
 		winLabel      string
@@ -1073,7 +1076,10 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				}
 			} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
 				br := truncateCells(w.branch, 35)
-				idPlain = iconBranch + " " + br
+				idPlain = br
+				if iBranch != "" {
+					idPlain = iBranch + " " + br
+				}
 				idSearch = br
 				idColored = cFaint + idPlain + reset
 			}
@@ -1086,7 +1092,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			}
 
 			winRows[g.name] = append(winRows[g.name], renderedWin{
-				win: w, icons: icons, iconDW: dw,
+				win: w, name: name, icons: icons, iconDW: dw,
 				winLabel: winLabel, winLabelDW: winLabelDW,
 				identity: idColored, identityPlain: idPlain, identityDW: idDW,
 				idSearch: idSearch, prBadge: prBadge, prPlain: prPlain,
@@ -1144,6 +1150,8 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			icons := r.icons
 			if icons == "" {
 				icons = emptyIcons
+			} else {
+				icons = padToWidth(icons, r.iconDW, iconCol)
 			}
 
 			tree := "├─"
@@ -1176,7 +1184,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			display = strings.TrimRight(display, " ")
 			plain = strings.TrimRight(plain, " ")
 
-			search := g.name + " " + stripANSI(r.winLabel)
+			search := g.name + " " + r.name
 			if r.idSearch != "" {
 				search += " " + r.idSearch
 			}
