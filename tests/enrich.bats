@@ -237,6 +237,31 @@ setup() {
 	[ "$REPLY" = "proj" ]
 }
 
+@test "build_window_label: default branch with no issue falls back to dir basename (long)" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_ID" = "" ]
+	[ "$REPLY_REST" = "lazytmux" ]
+}
+
+@test "build_window_label: master branch with no issue falls back to dir basename (short)" {
+	build_window_label short "" "" "" "" "" "" master /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_REST" = "lazytmux" ]
+}
+
+@test "build_window_label: default branch with stamped issue keeps issue label, not basename" {
+	build_window_label long linear ENG-1 "fix thing" "" "" "" main /home/noams/lazytmux
+	[ "$REPLY" = "L ENG-1 fix thing" ]
+	[ "$REPLY_ID" = "L ENG-1" ]
+}
+
+@test "build_window_label: default branch with PR keeps basename, PR separate" {
+	build_window_label long "" "" "" 42 open success main /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_PR" = " S #42" ]
+}
+
 @test "build_window_label: plain branch with merged PR keeps name plain, PR separate (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]

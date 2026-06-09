@@ -144,8 +144,9 @@ provider_priority_list() {
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
 # priority); the branch remainder after the id is the fallback title. Issue
-# windows show "<provider> <id>[ <title>]"; branches with no issue show the
-# branch (long=full, short=basename) or the directory basename.
+# windows show "<provider> <id>[ <title>]"; feature branches with no issue show
+# the branch (long=full, short=basename); default-branch (main/master) and
+# branch-less windows show the directory basename.
 #
 # The PR indicator is NOT folded into the name. It is returned as its own
 # segment so the status template can color just the PR by check state and keep
@@ -239,13 +240,15 @@ build_window_label() {
 		if [[ $mode == "long" && -n $rtitle ]]; then
 			REPLY_REST=" ${rtitle}"
 		fi
-	elif [[ -n $branch ]]; then
+	elif [[ -n $branch && $branch != "main" && $branch != "master" ]]; then
 		if [[ $mode == "long" ]]; then
 			REPLY_REST="${branch}"
 		else
 			REPLY_REST="${branch##*/}"
 		fi
 	else
+		# Default-branch (or branch-less) windows show the repo dir basename: a
+		# bare "main" labels every default-branch window identically across repos.
 		REPLY_REST="${pane_path##*/}"
 	fi
 
