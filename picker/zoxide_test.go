@@ -164,6 +164,31 @@ func TestCollapseWorktree(t *testing.T) {
 	}
 }
 
+func TestCollapseThenSuggest(t *testing.T) {
+	// Mirror collectZoxide: collapse every path, then suggest.
+	raw := []string{
+		"/home/n/git/delta/.worktrees/feat-a",  // -> /home/n/git/delta
+		"/home/n/git/delta/.worktrees/feat-b",  // -> same root, deduped away
+		"/home/n/git/epsilon/.worktrees/wip",   // -> /home/n/git/epsilon, suppressed (live session)
+	}
+	var paths []string
+	for _, p := range raw {
+		paths = append(paths, collapseWorktree(p))
+	}
+	sessionPaths := map[string]bool{"/home/n/git/epsilon": true}
+
+	got := zoxideSuggestions(paths, sessionPaths, nil, 15)
+	want := []suggestion{{path: "/home/n/git/delta", name: "delta"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %d suggestions, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("suggestion[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
