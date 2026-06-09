@@ -87,76 +87,45 @@ func TestSymbolsArgs(t *testing.T) {
 	}
 }
 
-func TestComputeGrid(t *testing.T) {
-	// (100+hGutter)/(targetCellWidth+hGutter) = 102/30 = 3 cols.
-	g := computeGrid(100, 40, 30)
-	if g.cols != 3 {
-		t.Errorf("cols = %d, want 3", g.cols)
+func TestComputeLayout(t *testing.T) {
+	l := computeLayout(120, 50)
+	if l.previewW > maxCellDim || l.previewH > maxCellDim || l.stripW > maxCellDim || l.stripH > maxCellDim {
+		t.Errorf("dims must clamp to %d: %+v", maxCellDim, l)
 	}
-	if g.perPage != g.cols*g.rows {
-		t.Errorf("perPage = %d, want cols*rows = %d", g.perPage, g.cols*g.rows)
+	if l.previewW < 1 || l.previewH < 1 || l.stripCols < 1 {
+		t.Errorf("dims must be >= 1: %+v", l)
 	}
-	if g.cellW > maxCellDim || g.imgH > maxCellDim {
-		t.Errorf("cell dims must clamp to %d: cellW=%d imgH=%d", maxCellDim, g.cellW, g.imgH)
+	// preview + filmstrip + status/marker rows must fit the pane height.
+	if l.previewH+l.stripH+3 > 50 {
+		t.Errorf("rows overflow pane height: %+v", l)
 	}
-	if g.cols < 1 || g.rows < 1 {
-		t.Errorf("cols/rows must be >= 1: %+v", g)
-	}
-	// Cells plus gutters must fit the pane width.
-	if g.cols*g.cellW+(g.cols-1)*hGutter > 100 {
-		t.Errorf("cells+gutters overflow pane width: %+v", g)
+	// filmstrip thumbnails + gutters must fit the pane width.
+	if l.stripCols*l.stripW+(l.stripCols-1)*stripGutter > 120 {
+		t.Errorf("filmstrip overflows pane width: %+v", l)
 	}
 }
 
-func TestComputeGridFewImages(t *testing.T) {
-	// Wide pane but only 2 images: cols must not exceed the image count.
-	g := computeGrid(200, 40, 2)
-	if g.cols > 2 {
-		t.Errorf("cols = %d, want <= 2 (image count)", g.cols)
+func TestComputeLayoutTiny(t *testing.T) {
+	l := computeLayout(10, 6) // degenerate pane
+	if l.previewW < 1 || l.previewH < 1 || l.stripW < 1 || l.stripH < 1 || l.stripCols < 1 {
+		t.Errorf("tiny pane must still yield a valid layout: %+v", l)
 	}
 }
 
-func TestComputeGridNarrow(t *testing.T) {
-	g := computeGrid(10, 6, 1) // tiny pane, 1 image
-	if g.cols < 1 || g.rows < 1 || g.perPage < 1 {
-		t.Errorf("degenerate pane must still yield a 1x1 grid: %+v", g)
+func TestStripStart(t *testing.T) {
+	// All fit -> window starts at 0.
+	if s := stripStart(3, 8, 5); s != 0 {
+		t.Errorf("all-fit start = %d, want 0", s)
 	}
-}
-
-func TestPageOf(t *testing.T) {
-	if p := pageOf(0, 6); p != 0 {
-		t.Errorf("pageOf(0,6) = %d, want 0", p)
+	// More than fit -> window centers on cursor, clamped.
+	if s := stripStart(0, 4, 20); s != 0 {
+		t.Errorf("start at head = %d, want 0", s)
 	}
-	if p := pageOf(6, 6); p != 1 {
-		t.Errorf("pageOf(6,6) = %d, want 1", p)
+	if s := stripStart(19, 4, 20); s != 16 {
+		t.Errorf("start at tail = %d, want 16 (n-stripCols)", s)
 	}
-	if p := pageOf(13, 6); p != 2 {
-		t.Errorf("pageOf(13,6) = %d, want 2", p)
-	}
-}
-
-func TestPageCount(t *testing.T) {
-	if n := pageCount(0, 6); n != 1 {
-		t.Errorf("empty -> 1 page, got %d", n)
-	}
-	if n := pageCount(6, 6); n != 1 {
-		t.Errorf("exactly one page, got %d", n)
-	}
-	if n := pageCount(7, 6); n != 2 {
-		t.Errorf("7/6 -> 2 pages, got %d", n)
-	}
-}
-
-func TestMoveCursor(t *testing.T) {
-	// 5 images, 2 cols. cursor 0, move right -> 1; left from 0 clamps to 0.
-	if c := moveCursor(0, 1, 5); c != 1 {
-		t.Errorf("right = %d, want 1", c)
-	}
-	if c := moveCursor(0, -1, 5); c != 0 {
-		t.Errorf("left from 0 = %d, want 0 (clamp)", c)
-	}
-	if c := moveCursor(4, 1, 5); c != 4 {
-		t.Errorf("right at end = %d, want 4 (clamp)", c)
+	if s := stripStart(10, 4, 20); s != 8 {
+		t.Errorf("centered start = %d, want 8 (cursor-stripCols/2)", s)
 	}
 }
 
