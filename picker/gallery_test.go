@@ -111,6 +111,43 @@ func TestComputeGridNarrow(t *testing.T) {
 	}
 }
 
+func TestPageOf(t *testing.T) {
+	if p := pageOf(0, 6); p != 0 {
+		t.Errorf("pageOf(0,6) = %d, want 0", p)
+	}
+	if p := pageOf(6, 6); p != 1 {
+		t.Errorf("pageOf(6,6) = %d, want 1", p)
+	}
+	if p := pageOf(13, 6); p != 2 {
+		t.Errorf("pageOf(13,6) = %d, want 2", p)
+	}
+}
+
+func TestPageCount(t *testing.T) {
+	if n := pageCount(0, 6); n != 1 {
+		t.Errorf("empty -> 1 page, got %d", n)
+	}
+	if n := pageCount(6, 6); n != 1 {
+		t.Errorf("exactly one page, got %d", n)
+	}
+	if n := pageCount(7, 6); n != 2 {
+		t.Errorf("7/6 -> 2 pages, got %d", n)
+	}
+}
+
+func TestMoveCursor(t *testing.T) {
+	// 5 images, 2 cols. cursor 0, move right -> 1; left from 0 clamps to 0.
+	if c := moveCursor(0, 1, 5); c != 1 {
+		t.Errorf("right = %d, want 1", c)
+	}
+	if c := moveCursor(0, -1, 5); c != 0 {
+		t.Errorf("left from 0 = %d, want 0 (clamp)", c)
+	}
+	if c := moveCursor(4, 1, 5); c != 4 {
+		t.Errorf("right at end = %d, want 4 (clamp)", c)
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	data := []byte(`{"type":"image","path":"/a/one.png","source":"Read","ts":"t","mtime":1}
 

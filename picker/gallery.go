@@ -42,3 +42,20 @@ func maxRowsThatFit(body int) int {
 	}
 	return body / (labelRows + 1)
 }
+
+func pageOf(index, perPage int) int { return index / perPage }
+
+func pageCount(n, perPage int) int {
+	if n <= 0 {
+		return 1
+	}
+	return (n + perPage - 1) / perPage
+}
+
+// moveCursor shifts the selected index by delta, clamped to [0, count-1].
+func moveCursor(index, delta, count int) int {
+	if count == 0 {
+		return 0
+	}
+	return clamp(index+delta, 0, count-1)
+}
