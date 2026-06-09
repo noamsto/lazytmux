@@ -2,6 +2,25 @@ package main
 
 import "testing"
 
+func TestChooseGridBackend(t *testing.T) {
+	cases := []struct {
+		term string
+		want gridBackend
+	}{
+		{"xterm-kitty", backendKitty},
+		{"xterm-ghostty", backendKitty},
+		{"xterm-kitty-something", backendKitty},
+		{"foot", backendSymbols},
+		{"xterm-256color", backendSymbols},
+		{"", backendSymbols},
+	}
+	for _, c := range cases {
+		if got := chooseGridBackend(c.term); got != c.want {
+			t.Errorf("chooseGridBackend(%q) = %v, want %v", c.term, got, c.want)
+		}
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	data := []byte(`{"type":"image","path":"/a/one.png","source":"Read","ts":"t","mtime":1}
 
