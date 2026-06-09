@@ -114,7 +114,9 @@ One JSON object per line. `log_event` emits `ts` and `cat`, then the caller's
 - **Escaping:** `\` → `\\`, `"` → `\"`, `<tab>` → `\t`, `<cr>` → `\r`, newlines stripped,
   other C0 control chars stripped — so an issue/PR title can never corrupt or invalidate
   a line.
-- **Multi-value fields** (e.g. reflow split points) serialize as a comma-joined string.
+- **Multi-value fields**, if any arise, serialize as a comma-joined string. (As
+  shipped, reflow emits its two split points as separate `split1`/`split2` fields
+  rather than one comma-joined `splits`, which is cleaner for the fixed 2-split layout.)
 
 ```json
 {"ts":"2026-06-09T09:51:03.412","cat":"claude","sess":"lazytmux","win_id":"@4","win":"2","pane":"%53","event":"transition","from":"processing","to":"done"}
@@ -131,10 +133,10 @@ windows close and are useless for cross-time correlation.
 | Category | Script / site | Event fields |
 |---|---|---|
 | **claude** | `claude-status-update.sh` — at the write, after reading prior state (prior read happens only when debug on) | `event=transition from= to= pane= win_id= win= sess=` — **logged only when `from != to`** (PreToolUse+PostToolUse both fire `processing` on every tool call, so un-deduped this floods); plus `event=issue op=add\|done\|clear id= pane=` |
-| **reflow** | `tmux-reflow-windows.sh` — after the cache check | `event=recompute trigger= wins= width= splits= lines= cache=hit\|miss sess=` |
+| **reflow** | `tmux-reflow-windows.sh` — after the cache check | `event=recompute forced= wins= width= split1= split2= lines= labels_mode= sess=` and `event=cache_hit wins= width= sess=` (as shipped: `trigger` is not plumbed through the hooks, so `forced` is logged instead) |
 | **enrich/issue** | `tmux-issue-stamp.sh` + providers — after provider selection | `event=stamp provider= id= title= url= win_id= sess=` |
 | **enrich/pr** | `tmux-pr-enrich.sh` — after the gh fetch | `event=pr branch= number= state= check= mergeable= cache=hit\|miss win_id=` |
-| **picker** | `picker/tui.go` + `picker/zoxide.go` — at the action sites, via the CLI | `event=switch\|create\|kill_window\|kill_session mode=session\|window target= from=` |
+| **picker** | `picker/tui.go` + `picker/zoxide.go` — at the action sites, via the CLI | `event=switch\|create\|kill_window\|kill_session target=` (+ `path=` on create). As shipped, `target` encodes mode (`session:window` vs bare session name), so separate `mode=`/`from=` fields were dropped as redundant. |
 
 Two scoping calls:
 
