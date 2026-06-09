@@ -51,6 +51,27 @@ func TestChooseGridBackend(t *testing.T) {
 	}
 }
 
+func TestPlaceholderBlock(t *testing.T) {
+	// id=1 -> fg 0;0;1; 2 cols x 1 row. Cell = U+10EEEE + diacritic[row] + diacritic[col].
+	got := placeholderBlock(1, 2, 1)
+	want := "\x1b[38;2;0;0;1m" +
+		"\U0010EEEE̅̅" + // row 0, col 0
+		"\U0010EEEE̅̍" + // row 0, col 1
+		"\x1b[39m"
+	if got != want {
+		t.Errorf("placeholderBlock(1,2,1) =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestPlaceholderBlockTwoRows(t *testing.T) {
+	got := placeholderBlock(1, 1, 2)
+	want := "\x1b[38;2;0;0;1m\U0010EEEE̅̅\x1b[39m\n" +
+		"\x1b[38;2;0;0;1m\U0010EEEE̍̅\x1b[39m"
+	if got != want {
+		t.Errorf("placeholderBlock(1,1,2) =\n%q\nwant\n%q", got, want)
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	data := []byte(`{"type":"image","path":"/a/one.png","source":"Read","ts":"t","mtime":1}
 
