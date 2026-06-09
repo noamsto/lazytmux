@@ -43,6 +43,17 @@ func normalizePath(p string) string {
 	return p
 }
 
+// collapseWorktree maps a worktrunk worktree path back to its repo root.
+// Worktrunk lays worktrees out as "<repo>/.worktrees/<branch>", so the segment
+// before "/.worktrees/" is the root; a subdir of a worktree collapses too
+// (first occurrence wins). Paths without that segment are returned unchanged.
+func collapseWorktree(p string) string {
+	if i := strings.Index(p, "/.worktrees/"); i != -1 {
+		return p[:i]
+	}
+	return p
+}
+
 // zoxideSuggestions filters rank-ordered, normalized zoxide paths against
 // existing sessions (by path and by derived name) and cuts to limit.
 // Duplicate derived names among suggestions keep only the higher-ranked dir.

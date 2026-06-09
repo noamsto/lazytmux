@@ -149,6 +149,21 @@ func TestSessionFilterMapsSkipsScratch(t *testing.T) {
 	}
 }
 
+func TestCollapseWorktree(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/home/n/git/lazytmux/.worktrees/feat-x", "/home/n/git/lazytmux"},
+		{"/home/n/git/lazytmux/.worktrees/feat-x/sub/dir", "/home/n/git/lazytmux"},
+		{"/home/n/git/lazytmux", "/home/n/git/lazytmux"},
+		{"/home/n/notes/.worktrees-backup/x", "/home/n/notes/.worktrees-backup/x"},
+		{"/.worktrees/x", ""},
+	}
+	for _, c := range cases {
+		if got := collapseWorktree(c.in); got != c.want {
+			t.Errorf("collapseWorktree(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
