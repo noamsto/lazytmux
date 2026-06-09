@@ -913,6 +913,13 @@ func readTmuxOpts() map[string]string {
 	return m
 }
 
+// logEvent fires the lazytmux-log-event CLI (best-effort, never blocks the UI).
+// Bare-name exec relies on the tmux wrapper's PATH, like our tmux/zoxide calls.
+// No-ops when debug is off (the CLI checks the sentinel).
+func logEvent(args ...string) {
+	exec.Command("lazytmux-log-event", args...).Run() //nolint:errcheck
+}
+
 func envOrMap(envKey string, tmuxOpts map[string]string, tmuxOpt, fallback string) string {
 	if v := os.Getenv(envKey); v != "" {
 		return v

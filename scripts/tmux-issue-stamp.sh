@@ -9,6 +9,8 @@ set -uo pipefail
 
 # shellcheck source=/dev/null
 source @lib_enrich@
+# shellcheck source=/dev/null
+source @lib_log@
 
 target="${1:-}"
 worktree="${2:-}"
@@ -57,6 +59,7 @@ if [[ -z $id ]]; then
 	tmux set-option -t "$target" -wu @issue_url 2>/dev/null
 	tmux set-option -t "$target" -wu @issue_branch 2>/dev/null
 	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
+	log_enabled && log_event enrich event stamp_clear win_id "$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null || true)" sess "$(tmux display-message -t "$target" -p '#{session_name}' 2>/dev/null || true)"
 	disown -a
 	exit 0
 fi
@@ -66,6 +69,7 @@ tmux set-option -t "$target" -w @issue_id "$id"
 tmux set-option -t "$target" -w @issue_title "$title"
 tmux set-option -t "$target" -w @issue_url "$url"
 tmux set-option -t "$target" -w @issue_branch "$branch"
+log_enabled && log_event enrich event stamp provider "$chosen_provider" id "$id" title "$title" url "$url" win_id "$(tmux display-message -t "$target" -p '#{window_id}' 2>/dev/null || true)" sess "$(tmux display-message -t "$target" -p '#{session_name}' 2>/dev/null || true)"
 
 # Recompute window labels now that the issue id/title exist (cache bypass).
 @reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &

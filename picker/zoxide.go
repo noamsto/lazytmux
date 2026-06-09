@@ -165,6 +165,7 @@ func createAndSwitch(name, path string) error {
 			return fmt.Errorf("new-session: %s", strings.TrimSpace(string(out)))
 		}
 	}
+	logEvent("picker", "event", "create", "target", name, "path", path)
 	exec.Command("tmux", "switch-client", "-t", "="+name).Run() //nolint:errcheck
 	exec.Command("zoxide", "add", path).Run()                   //nolint:errcheck
 	return nil

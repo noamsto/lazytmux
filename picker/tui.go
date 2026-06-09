@@ -238,6 +238,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			} else {
+				logEvent("picker", "event", "switch", "target", item.target)
 				exec.Command("tmux", "switch-client", "-t", item.target).Run() //nolint:errcheck
 			}
 			return m, tea.Quit
@@ -246,8 +247,10 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+x":
 		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" {
 			if strings.Contains(item.target, ":") {
+				logEvent("picker", "event", "kill_window", "target", item.target)
 				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
 			} else {
+				logEvent("picker", "event", "kill_session", "target", item.target)
 				exec.Command("tmux", "kill-session", "-t", item.target).Run() //nolint:errcheck
 			}
 			return m, m.refreshDataCmd()

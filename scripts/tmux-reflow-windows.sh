@@ -12,6 +12,8 @@
 source @lib_icons@
 # shellcheck source=/dev/null
 source @lib_enrich@
+# shellcheck source=/dev/null
+source @lib_log@
 
 # Accept --force (cache bypass, used by enrich scripts after writing vars).
 FORCE=0
@@ -41,6 +43,7 @@ esac
 # re-renders on its own without a reflow.
 cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
 if ((!FORCE)) && [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
+	log_enabled && log_event reflow event cache_hit wins "${cache_key%%:*}" width "$WIDTH" sess "$SESSION"
 	exit 0
 fi
 
@@ -282,6 +285,14 @@ if ((!needs_multiline && current_line == 0)); then
 fi
 
 # Execute batched simple commands + early redraw so layout appears immediately
+if log_enabled; then
+	lines=2
+	((current_line >= 1)) && lines=3
+	((current_line >= 2)) && lines=4
+	log_event reflow event recompute forced "$FORCE" wins "${cache_key%%:*}" \
+		width "$WIDTH" split1 "$split1" split2 "$split2" lines "$lines" \
+		labels_mode "$labels_mode" sess "$SESSION"
+fi
 {
 	printf '%s\n' "${tmux_cmds[@]}"
 	echo "refresh-client -S"

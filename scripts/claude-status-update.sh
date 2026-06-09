@@ -16,6 +16,16 @@ IMAGES_DIR="$STATE_DIR/images"
 # Ensure directories exist
 mkdir -p "$PANES_DIR"
 
+# Event logging (no-op unless debug armed). Guarded so the RAW script still runs
+# under tests/claude-issues.bats, where @lib_log@ is not substituted.
+# shellcheck source=/dev/null
+if [[ -f "@lib_log@" ]]; then
+	source "@lib_log@"
+else
+	log_enabled() { return 1; }
+	log_event() { :; }
+fi
+
 # Function to clean up stale pane entries
 # Removes entries only for panes that no longer exist in tmux. A live pane is
 # kept even when its foreground command isn't claude/opencode: Claude shells
@@ -130,6 +140,7 @@ if [[ $state == "issue" ]]; then
 		rm -f "$issues_file"
 		;;
 	esac
+	log_enabled && log_event claude event issue op "$action" id "${id:-}" pane "%${pane_id#%}"
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true
 	fi
@@ -271,6 +282,27 @@ done | error | waiting | denied)
 	[[ $win_active == "0" ]] && unseen_line=$'\n'"unseen=1"
 	;;
 esac
+
+# Log only real transitions (from != to). Pre/PostToolUse both fire "processing"
+# on every tool call, so logging every write would flood. Prior-state read +
+# tmux id lookups happen only when debug is armed.
+if log_enabled; then
+	prior_state="none"
+	if [[ -f "$PANES_DIR/$pane_file" ]]; then
+		while IFS='=' read -r _k _v; do
+			[[ $_k == state ]] && {
+				prior_state="$_v"
+				break
+			}
+		done <"$PANES_DIR/$pane_file"
+	fi
+	if [[ $prior_state != "$state" ]]; then
+		win_id=$(tmux display-message -t "$pane_id" -p '#{window_id}' 2>/dev/null || true)
+		win_idx=$(tmux display-message -t "$pane_id" -p '#{window_index}' 2>/dev/null || true)
+		log_event claude event transition from "$prior_state" to "$state" \
+			pane "$pane_id" win_id "$win_id" win "$win_idx" sess "$session_name"
+	fi
+fi
 
 # Write pane state with timestamp
 printf -v _now '%(%s)T' -1
