@@ -87,6 +87,30 @@ func TestSymbolsArgs(t *testing.T) {
 	}
 }
 
+func TestComputeGrid(t *testing.T) {
+	// 100 wide / targetCellWidth(20) = 5 cols. 40 tall, status row reserved.
+	g := computeGrid(100, 40, 30)
+	if g.cols != 5 {
+		t.Errorf("cols = %d, want 5", g.cols)
+	}
+	if g.perPage != g.cols*g.rows {
+		t.Errorf("perPage = %d, want cols*rows = %d", g.perPage, g.cols*g.rows)
+	}
+	if g.cellW > maxCellDim || g.imgH > maxCellDim {
+		t.Errorf("cell dims must clamp to %d: cellW=%d imgH=%d", maxCellDim, g.cellW, g.imgH)
+	}
+	if g.cols < 1 || g.rows < 1 {
+		t.Errorf("cols/rows must be >= 1: %+v", g)
+	}
+}
+
+func TestComputeGridNarrow(t *testing.T) {
+	g := computeGrid(10, 6, 1) // tiny pane, 1 image
+	if g.cols < 1 || g.rows < 1 || g.perPage < 1 {
+		t.Errorf("degenerate pane must still yield a 1x1 grid: %+v", g)
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	data := []byte(`{"type":"image","path":"/a/one.png","source":"Read","ts":"t","mtime":1}
 
