@@ -50,10 +50,10 @@ func computeLayout(paneW, paneH int) layout {
 	// +2 per thumb for its border frame.
 	stripCols := clamp((paneW+stripGutter)/(stripW+2+stripGutter), 1, maxCellDim)
 
-	// Area left for the preview after title(1) + filmstrip(stripH+2 border) +
-	// status(1), minus 2 for the preview's own border frame.
+	// Area left for the preview after title(1) + subtitle(1) +
+	// filmstrip(stripH+2 border) + hints(1), minus 2 for the preview border.
 	availW := clamp(paneW-2, 1, maxCellDim)
-	availH := clamp(paneH-stripH-6, 1, maxCellDim)
+	availH := clamp(paneH-stripH-7, 1, maxCellDim)
 
 	// Largest box with cols:rows ≈ previewBoxCols/100 that fits availW × availH.
 	previewW := availW
@@ -225,15 +225,16 @@ func (m galleryModel) renderView() string {
 	}
 	preview = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 		BorderForeground(selColor).Render(preview)
-	previewH := m.height - m.l.stripH - 4 // title(1) + filmstrip(stripH+2) + status(1)
+	previewH := m.height - m.l.stripH - 5 // title + subtitle + filmstrip(stripH+2) + hints
 	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
 
-	// Top bar: title on the left, key hints on the right.
-	barBg := m.thmColor("@thm_surface_0", "#313244", "#ccd0da")
+	// Centered title + subtitle (current image).
 	hintFg := m.thmColor("@thm_subtext_0", "#a6adc8", "#6c6f85")
 	textFg := m.thmColor("@thm_text", "#cdd6f4", "#4c4f69")
-	topBar := styledBar(m.width, " "+galleryTitleIcon+"  Claude Images",
-		"↵/o open · O folder · h/l move · n/p page · q quit ", selColor, hintFg, barBg)
+	center := func(s string) string { return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, s) }
+	title := center(lipgloss.NewStyle().Foreground(selColor).Bold(true).Render(galleryTitleIcon + "  Claude Images"))
+	subtitle := center(lipgloss.NewStyle().Foreground(textFg).Render(
+		truncateToWidth(fmt.Sprintf("[%d/%d]  %s", m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path)), m.width)))
 
 	// Filmstrip window: each thumb framed; the selected thumb's frame is colored.
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
@@ -263,27 +264,11 @@ func (m galleryModel) renderView() string {
 	filmstrip := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
 		lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 
-	// Bottom bar: position + filename only (truncated so it can't overflow).
-	botBar := styledBar(m.width,
-		fmt.Sprintf(" [%d/%d]  %s", m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path)),
-		"", textFg, textFg, barBg)
+	// Centered key hints at the bottom.
+	hints := center(lipgloss.NewStyle().Foreground(hintFg).Render(
+		"↵/o open · O folder · h/l move · n/p page · q quit"))
 
-	return lipgloss.JoinVertical(lipgloss.Left, topBar, previewArea, filmstrip, botBar)
-}
-
-// styledBar renders a full-width bar: left segment, right segment justified to
-// the far edge, on a solid background. The left segment is truncated if the two
-// would overflow, so a long left text can never push the right off-screen.
-func styledBar(width int, left, right string, leftFg, rightFg, bg imgcolor.Color) string {
-	rw := lipgloss.Width(right)
-	if lw := lipgloss.Width(left); lw+rw > width {
-		left = truncateToWidth(left, max(0, width-rw-1))
-	}
-	gap := width - lipgloss.Width(left) - rw
-	mid := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", max(0, gap)))
-	ls := lipgloss.NewStyle().Foreground(leftFg).Background(bg).Render(left)
-	rs := lipgloss.NewStyle().Foreground(rightFg).Background(bg).Render(right)
-	return lipgloss.NewStyle().Width(width).Background(bg).Render(ls + mid + rs)
+	return lipgloss.JoinVertical(lipgloss.Left, title, subtitle, previewArea, filmstrip, hints)
 }
 
 // truncateToWidth cuts s to at most w display columns (ASCII-safe; bar text is
