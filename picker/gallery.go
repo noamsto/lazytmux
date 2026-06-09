@@ -79,6 +79,7 @@ func moveCursor(index, delta, count int) int {
 
 type galleryModel struct {
 	pane    string
+	viewer  string // absolute path to the v1 navigator (drill-in); falls back to PATH
 	images  []imageEntry
 	backend gridBackend
 	theme   string
@@ -211,10 +212,15 @@ func (m galleryModel) renderGrid() string {
 }
 
 // runGallery is the entry point dispatched from main for `--gallery <pane>`.
-func runGallery(pane string) error {
+// viewer is the absolute path to the v1 navigator for drill-in ("" → PATH lookup).
+func runGallery(pane, viewer string) error {
+	if viewer == "" {
+		viewer = "tmux-claude-images"
+	}
 	tty, _ := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 	m := galleryModel{
 		pane:    pane,
+		viewer:  viewer,
 		images:  loadManifest(pane),
 		backend: chooseGridBackend(termName()),
 		theme:   detectTheme(),
@@ -284,7 +290,7 @@ func (m galleryModel) drillIn() tea.Cmd {
 		return nil
 	}
 	idx := m.cursor
-	cmd := exec.Command("tmux-claude-images", "--view", m.pane, "--start", fmt.Sprint(idx))
+	cmd := exec.Command(m.viewer, "--view", m.pane, "--start", fmt.Sprint(idx))
 	return tea.ExecProcess(cmd, func(error) tea.Msg { return retransmitMsg{} })
 }
 

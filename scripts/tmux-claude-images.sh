@@ -82,5 +82,5 @@ if [[ -n $existing ]]; then
 	exit 0
 fi
 
-viewer="$(tmux split-window -h -P -F '#{pane_id}' "tmux-picker-generate --gallery '$src_pane'")"
+viewer="$(tmux split-window -h -P -F '#{pane_id}' "@picker_generate@ --gallery '$src_pane' --viewer '$0'")"
 tmux set-option -p -t "$viewer" @claude_img_src "$src_pane"

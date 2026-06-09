@@ -89,6 +89,16 @@ type claudePaneInfo struct {
 	issues  []string
 }
 
+// argValue returns the argument following flag, or "" if absent.
+func argValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func main() {
 	args := os.Args[1:]
 	for i, a := range args {
@@ -97,7 +107,7 @@ func main() {
 			if i+1 < len(args) {
 				pane = args[i+1]
 			}
-			if err := runGallery(pane); err != nil {
+			if err := runGallery(pane, argValue(args, "--viewer")); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
