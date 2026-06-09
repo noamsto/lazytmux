@@ -56,6 +56,7 @@ done
 if [[ -z $path ]]; then
 	response_path="$(jq -r '
     [.tool_response | .. | strings
+      | select(length < 4096)
       | capture("(?<p>(?:/|\\./)[^\\s]*\\.(?:png|jpe?g|gif|webp|bmp))"; "i")
       | .p
     ] | first // empty

@@ -93,3 +93,12 @@ choose() { bash scripts/claude-image-render.sh --choose "$1" "$2"; }
 	run choose wezterm 0
 	[ "$output" = "chafa-sixel" ]
 }
+
+@test "Phase-2 ignores an over-long path-like string (regex DoS guard)" {
+	# A >4096-char token that ends in .png must NOT be scanned/matched.
+	big="/$(printf 'a%.0s' {1..5000}).png"
+	payload="$(jq -nc --arg t "see $big here" '{tool_name:"X",cwd:"/work",tool_input:{},tool_response:{content:[{type:"text",text:$t}]}}')"
+	run bash -c "printf '%s' '$payload' | bash '$APP'"
+	[ "$status" -eq 0 ]
+	[ ! -f "$MANIFEST" ]
+}

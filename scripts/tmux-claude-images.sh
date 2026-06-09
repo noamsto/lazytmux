@@ -11,7 +11,8 @@ SELF="${BASH_SOURCE[0]}"
 if [[ ${1:-} == --view ]]; then
 	src_pane="$2"
 	manifest="$IMAGES_DIR/${src_pane#%}.jsonl"
-	mapfile -t lines < <(grep -v '^[[:space:]]*$' "$manifest")
+	mapfile -t lines < <(grep -v '^[[:space:]]*$' "$manifest" |
+		while IFS= read -r ln; do jq -e . >/dev/null 2>&1 <<<"$ln" && printf '%s\n' "$ln"; done)
 	n=${#lines[@]}
 	((n > 0)) || {
 		echo "no images"
@@ -20,7 +21,7 @@ if [[ ${1:-} == --view ]]; then
 	}
 	i=0
 	while true; do
-		clear
+		printf '\033[2J\033[3J\033[H'
 		path="$(jq -r '.path' <<<"${lines[$i]}")"
 		src="$(jq -r '.source' <<<"${lines[$i]}")"
 		read -r cols rows < <(tmux display-message -p '#{pane_width} #{pane_height}') || true
