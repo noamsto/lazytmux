@@ -164,12 +164,61 @@ func TestCollapseWorktree(t *testing.T) {
 	}
 }
 
+func TestCollapseWorktreeNonNested(t *testing.T) {
+	// A linked worktree placed OUTSIDE <repo>/.worktrees/ (e.g. a central or
+	// sibling layout). Its ".git" is a file "gitdir: <main>/.git/worktrees/<n>",
+	// so collapse must recover <main> even with no "/.worktrees/" in the path.
+	main := t.TempDir()
+	wt := t.TempDir()
+	gitfile := "gitdir: " + main + "/.git/worktrees/feat-x\n"
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte(gitfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := collapseWorktree(wt); got != main {
+		t.Errorf("collapseWorktree(%q) = %q, want %q (main repo root)", wt, got, main)
+	}
+
+	// A subdir of that worktree (e.g. a monorepo's apps/mobile) collapses too,
+	// via the walk-up to the worktree's .git file. This is the case that would
+	// regress under the sibling layout without the walk-up.
+	sub := filepath.Join(wt, "apps", "mobile")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := collapseWorktree(sub); got != main {
+		t.Errorf("collapseWorktree(%q) = %q, want %q (main repo root)", sub, got, main)
+	}
+
+	// A plain directory (no .git anywhere above) is returned unchanged.
+	plain := t.TempDir()
+	if got := collapseWorktree(plain); got != plain {
+		t.Errorf("collapseWorktree(%q) = %q, want unchanged", plain, got)
+	}
+
+	// A normal repo (.git is a directory) and its subdirs are NOT collapsed —
+	// only worktrees fold into their root; main-checkout dirs stay as-is.
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := collapseWorktree(repo); got != repo {
+		t.Errorf("collapseWorktree(%q) = %q, want unchanged", repo, got)
+	}
+	repoSub := filepath.Join(repo, "src")
+	if err := os.Mkdir(repoSub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := collapseWorktree(repoSub); got != repoSub {
+		t.Errorf("collapseWorktree(%q) = %q, want unchanged (main-repo subdir)", repoSub, got)
+	}
+}
+
 func TestCollapseThenSuggest(t *testing.T) {
 	// Mirror collectZoxide: collapse every path, then suggest.
 	raw := []string{
-		"/home/n/git/delta/.worktrees/feat-a",  // -> /home/n/git/delta
-		"/home/n/git/delta/.worktrees/feat-b",  // -> same root, deduped away
-		"/home/n/git/epsilon/.worktrees/wip",   // -> /home/n/git/epsilon, suppressed (live session)
+		"/home/n/git/delta/.worktrees/feat-a", // -> /home/n/git/delta
+		"/home/n/git/delta/.worktrees/feat-b", // -> same root, deduped away
+		"/home/n/git/epsilon/.worktrees/wip",  // -> /home/n/git/epsilon, suppressed (live session)
 	}
 	var paths []string
 	for _, p := range raw {

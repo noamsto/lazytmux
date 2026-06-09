@@ -43,15 +43,59 @@ func normalizePath(p string) string {
 	return p
 }
 
-// collapseWorktree maps a worktrunk worktree path back to its repo root.
-// Worktrunk lays worktrees out as "<repo>/.worktrees/<branch>", so the segment
-// before "/.worktrees/" is the root; a subdir of a worktree collapses too
-// (first occurrence wins). Paths without that segment are returned unchanged.
+// collapseWorktree maps a git worktree path (or any subdir of one) back to its
+// main repo root, so a worktree and its repo collapse to one zoxide suggestion.
+//
+// Fast path: worktrunk's old "<repo>/.worktrees/<branch>" nesting — the segment
+// before "/.worktrees/" is the root (covers subdirs too), with no fs access.
+//
+// General case (any layout — incl. the sibling "<repo>-worktrees/<branch>"
+// default, and subdirs of either): walk up to the nearest ".git". A linked
+// worktree's ".git" is a FILE "gitdir: <main>/.git/worktrees/<name>", so its
+// root is the segment before "/.git/worktrees/". A normal checkout's ".git" is
+// a DIR — left uncollapsed, so a main-repo subdir is still offered as-is.
+// Lstat-only per level (no forks); fine for the human-triggered picker.
+//
+// Paths under no git dir are returned unchanged.
 func collapseWorktree(p string) string {
 	if i := strings.Index(p, "/.worktrees/"); i != -1 {
 		return p[:i]
 	}
-	return p
+	for dir := p; ; {
+		gitpath := filepath.Join(dir, ".git")
+		if fi, err := os.Lstat(gitpath); err == nil {
+			if !fi.Mode().IsRegular() {
+				return p // ".git" dir: normal checkout — don't collapse subdirs
+			}
+			if root := mainRootFromGitFile(gitpath, dir); root != "" {
+				return root // linked worktree — collapse to its main repo root
+			}
+			return p // unparsable ".git" file: leave unchanged
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p // reached "/" with no ".git"
+		}
+		dir = parent
+	}
+}
+
+// mainRootFromGitFile parses a linked worktree's ".git" file (gitFile, located
+// in dir) and returns the main repo root, or "" when it is not a worktree
+// pointer. The "gitdir:" path may be relative to dir.
+func mainRootFromGitFile(gitFile, dir string) string {
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return ""
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Clean(filepath.Join(dir, gitdir))
+	}
+	if i := strings.Index(gitdir, "/.git/worktrees/"); i != -1 {
+		return gitdir[:i]
+	}
+	return ""
 }
 
 // zoxideSuggestions filters rank-ordered, normalized zoxide paths against
