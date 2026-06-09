@@ -18,8 +18,10 @@ import (
 const (
 	previewID      = 250 // kitty image id for the big preview
 	stripThumbW    = 18  // filmstrip thumbnail width in cells
-	stripGutter    = 2   // blank columns between filmstrip thumbnails
+	stripGutter    = 1   // blank columns between filmstrip thumbs (borders add separation)
 	previewBoxCols = 355 // preview box cols per 100 rows (~16:9 given ~1:2.1 cells)
+
+	galleryTitleIcon = "󰋩" // nerd: nf-md-image_multiple
 )
 
 func clamp(v, lo, hi int) int {
@@ -48,10 +50,10 @@ func computeLayout(paneW, paneH int) layout {
 	// +2 per thumb for its border frame.
 	stripCols := clamp((paneW+stripGutter)/(stripW+2+stripGutter), 1, maxCellDim)
 
-	// Area left for the preview after filmstrip(stripH+2 border) + status(1),
-	// minus 2 for the preview's own border frame.
+	// Area left for the preview after title(1) + filmstrip(stripH+2 border) +
+	// status(1), minus 2 for the preview's own border frame.
 	availW := clamp(paneW-2, 1, maxCellDim)
-	availH := clamp(paneH-stripH-5, 1, maxCellDim)
+	availH := clamp(paneH-stripH-6, 1, maxCellDim)
 
 	// Largest box with cols:rows ≈ previewBoxCols/100 that fits availW × availH.
 	previewW := availW
@@ -223,8 +225,12 @@ func (m galleryModel) renderView() string {
 	}
 	preview = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 		BorderForeground(selColor).Render(preview)
-	previewH := m.height - m.l.stripH - 3 // filmstrip(stripH+2 border) + status(1)
+	previewH := m.height - m.l.stripH - 4 // title(1) + filmstrip(stripH+2) + status(1)
 	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
+
+	// Decorative title bar.
+	title := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
+		lipgloss.NewStyle().Foreground(selColor).Bold(true).Render(galleryTitleIcon+"  Claude Images"))
 
 	// Filmstrip window: each thumb framed; the selected thumb's frame is colored.
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
@@ -257,7 +263,7 @@ func (m galleryModel) renderView() string {
 	status := fmt.Sprintf("[%d/%d] %s · ↵/o open · O folder · h/l move · q quit",
 		m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path))
 
-	return lipgloss.JoinVertical(lipgloss.Left, previewArea, filmstrip, status)
+	return lipgloss.JoinVertical(lipgloss.Left, title, previewArea, filmstrip, status)
 }
 
 // thmColor reads a tmux @thm_* color option, falling back per theme.
