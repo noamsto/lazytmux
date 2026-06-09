@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,16 +38,7 @@ func TestRenderSubstitutesPrefix(t *testing.T) {
 	m := newModel("dark", []tip{{Key: "prefix + s", Label: "Sessions"}}, "C-a", 10)
 	m.width, m.height = 80, 24
 	out := m.View().Content
-	if !contains(out, "C-a + s") {
+	if !strings.Contains(out, "C-a + s") {
 		t.Errorf("rendered tips should substitute prefix; got:\n%s", out)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

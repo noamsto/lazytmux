@@ -61,7 +61,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tea.KeyPressMsg:
-		_ = msg
 		return m, tea.Quit
 	case timeoutMsg:
 		return m, tea.Quit
