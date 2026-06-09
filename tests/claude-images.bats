@@ -62,37 +62,7 @@ run_app() { # $1 = fixture name
 	[ ! -f "$MANIFEST" ]
 }
 
-choose() { bash scripts/claude-image-render.sh --choose "$1" "$2"; }
-
-@test "kitty terminal with kitten → kitten" {
-	run choose xterm-kitty 1
-	[ "$output" = "kitten" ]
-}
-
-@test "kitty terminal without kitten → chafa-kitty" {
-	run choose xterm-kitty 0
-	[ "$output" = "chafa-kitty" ]
-}
-
-@test "ghostty with kitten → kitten" {
-	run choose xterm-ghostty 1
-	[ "$output" = "kitten" ]
-}
-
-@test "foot → chafa-sixel" {
-	run choose foot 0
-	[ "$output" = "chafa-sixel" ]
-}
-
-@test "unknown terminal → chafa-symbols (universal floor)" {
-	run choose dumb 0
-	[ "$output" = "chafa-symbols" ]
-}
-
-@test "wezterm → chafa-sixel" {
-	run choose wezterm 0
-	[ "$output" = "chafa-sixel" ]
-}
+# Renderer selection moved to Go (chooseGridBackend, tested in picker/gallery_test.go).
 
 @test "Phase-2 ignores an over-long path-like string (regex DoS guard)" {
 	# A >4096-char token that ends in .png must NOT be scanned/matched.

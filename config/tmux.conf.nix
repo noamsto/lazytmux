@@ -187,7 +187,6 @@
     "claude-status"
     "claude-status-update"
     "claude-images-update"
-    "claude-image-render"
     "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
@@ -206,7 +205,7 @@
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
-  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
+  scriptsWithIcons = ["tmux-claude-images" "tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
