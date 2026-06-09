@@ -1,9 +1,11 @@
 #!/usr/bin/env bats
 
+load helper
+
 setup() {
 	export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
 	export LAZYTMUX_DEBUG_SENTINEL="$BATS_TEST_TMPDIR/debug.on"
-	source scripts/lib-log.sh
+	setup_lib_log
 }
 
 @test "log_event is a no-op when the sentinel is absent" {

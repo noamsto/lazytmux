@@ -34,6 +34,12 @@ setup_lib_claude() {
 	source scripts/lib-claude.sh
 }
 
+setup_lib_log() {
+	# lib-log.sh has no Nix placeholders; source directly.
+	# shellcheck source=/dev/null
+	source scripts/lib-log.sh
+}
+
 # Builds a runnable claude-status with the @lib_claude@ placeholder resolved.
 # Sets CLAUDE_STATUS_SCRIPT to the path.
 make_claude_status() {
