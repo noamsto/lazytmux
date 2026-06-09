@@ -284,7 +284,7 @@ func (m galleryModel) drillIn() tea.Cmd {
 		return nil
 	}
 	idx := m.cursor
-	cmd := exec.Command("tmux-claude-images.sh", "--view", m.pane, "--start", fmt.Sprint(idx))
+	cmd := exec.Command("tmux-claude-images", "--view", m.pane, "--start", fmt.Sprint(idx))
 	return tea.ExecProcess(cmd, func(error) tea.Msg { return retransmitMsg{} })
 }
 
