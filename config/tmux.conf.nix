@@ -577,7 +577,12 @@
     run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
     run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
 
-    ${lib.optionalString splashEnable "# splash hooks wired in Task 7"}
+    ${lib.optionalString splashEnable ''
+      # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
+      # index-0 bindings on the same events (a bare set-hook would clobber them).
+      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+    ''}
 
     ${extraConfText}
   '';
