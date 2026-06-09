@@ -960,12 +960,19 @@ func collectZoxideItems(tmuxOpts map[string]string) []listItem {
 }
 
 func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) []listItem {
-	windows := collectWindows()
+	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme)
+}
+
+// renderWindowItems is the pure rendering half of buildWindowItems, split out so
+// the enriched row layout can be unit-tested with synthetic windows.
+func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) []listItem {
 	claudeByWin := aggregateClaudeByWindow(claudePanes)
 	mergeClaudeWindows(windows, claudeByWin)
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmGreen := envOrMap("THM_GREEN", tmuxOpts, "@thm_green", "#a6e3a1")
+	thmRed := envOrMap("THM_RED", tmuxOpts, "@thm_red", "#f38ba8")
+	thmYellow := envOrMap("THM_YELLOW", tmuxOpts, "@thm_yellow", "#f9e2af")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
 	thmOverlay1 := envOrMap("THM_OVERLAY_1", tmuxOpts, "@thm_overlay_1", "#7f849c")
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
@@ -976,6 +983,7 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
+	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmYellow), merged: cMauve, reset: reset}
 
 	type sessGroup struct {
 		name     string
@@ -1011,31 +1019,91 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 		})
 	}
 
+	// One pre-pass builds every variable-width piece (icons, window label, the
+	// enrich identity, the PR badge) and tracks the column maxima, so the second
+	// pass can pad each column to a shared width and keep them aligned across
+	// every session group.
+	// Keep the identity column tight: preview is open by default, halving the
+	// list width, and the PR badge trailing it is the high-value signal that
+	// must stay on screen.
+	const identityCap = 32
 	type renderedWin struct {
-		win    *windowData
-		icons  string
-		iconDW int
+		win           *windowData
+		icons         string
+		iconDW        int
+		winLabel      string
+		winLabelDW    int
+		identity      string // colored
+		identityPlain string
+		identityDW    int
+		idSearch      string // searchable text (no glyphs/color)
+		prBadge       string // colored
+		prPlain       string
 	}
 	winRows := make(map[string][]renderedWin)
-	maxIconDW := 0
+	maxIconDW, maxWinLabelDW, maxIdentityDW := 0, 0, 0
+	anyPR := false
 	for _, g := range groups {
 		for _, w := range g.windows {
 			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
 			icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
 			icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
-			winRows[g.name] = append(winRows[g.name], renderedWin{win: w, icons: icons, iconDW: dw})
-			if dw > maxIconDW {
-				maxIconDW = dw
+
+			name := truncateCells(w.name, 40)
+			winLabel := fmt.Sprintf("%d: %s", w.index, name)
+			if w.zoomed {
+				winLabel += " 󰁌"
 			}
+			winLabelDW := iconCellWidth(winLabel)
+
+			// Identity: an issue window shows the stamped "<id> <title>" (id
+			// accent, title dim); otherwise the feature branch (faint),
+			// suppressing default-branch/basename which only echoes the header.
+			var idColored, idPlain, idSearch string
+			if w.labelID != "" {
+				id, rest := w.labelID, w.labelRest
+				if iconCellWidth(id+rest) > identityCap {
+					rest = truncateCells(rest, max(identityCap-iconCellWidth(id), 1))
+				}
+				idPlain = id + rest
+				idSearch = id + rest
+				idColored = cMauve + id + reset
+				if rest != "" {
+					idColored += cDim + rest + reset
+				}
+			} else if w.branch != "" && w.branch != w.name && w.branch != "main" && w.branch != "master" {
+				br := truncateCells(w.branch, 35)
+				idPlain = iconBranch + " " + br
+				idSearch = br
+				idColored = cFaint + idPlain + reset
+			}
+			idDW := iconCellWidth(idPlain)
+
+			prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
+			prPlain := strings.TrimSpace(w.prPlain)
+			if prPlain != "" {
+				anyPR = true
+			}
+
+			winRows[g.name] = append(winRows[g.name], renderedWin{
+				win: w, icons: icons, iconDW: dw,
+				winLabel: winLabel, winLabelDW: winLabelDW,
+				identity: idColored, identityPlain: idPlain, identityDW: idDW,
+				idSearch: idSearch, prBadge: prBadge, prPlain: prPlain,
+			})
+			maxIconDW = max(maxIconDW, dw)
+			maxWinLabelDW = max(maxWinLabelDW, winLabelDW)
+			maxIdentityDW = max(maxIdentityDW, idDW)
 		}
 	}
 	iconCol := max(maxIconDW+1, 3)
-	for _, rows := range winRows {
-		for i := range rows {
-			rows[i].icons = padToWidth(rows[i].icons, rows[i].iconDW, iconCol)
-		}
-	}
 	emptyIcons := strings.Repeat(" ", iconCol)
+	// Only reserve an identity column when a PR badge needs to trail it; a bare
+	// identity (nothing after) shouldn't pad to trailing whitespace.
+	identityCol := 0
+	if anyPR {
+		identityCol = maxIdentityDW
+	}
 
 	var items []listItem
 	for _, g := range groups {
@@ -1067,14 +1135,6 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 		multiWin := len(rows) > 1
 		for wi, r := range rows {
 			w := r.win
-			name := w.name
-			if len(name) > 40 {
-				name = name[:38] + "…"
-			}
-			winLabel := fmt.Sprintf("%d: %s", w.index, name)
-			if w.zoomed {
-				winLabel += " 󰁌"
-			}
 
 			activeMarker := " "
 			if w.active && multiWin {
@@ -1091,14 +1151,7 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 				tree = "╰─"
 			}
 
-			var branchStr string
-			if w.branch != "" && w.branch != w.name && w.branch != "main" && w.branch != "master" {
-				br := w.branch
-				if len(br) > 35 {
-					br = br[:33] + "…"
-				}
-				branchStr = iconBranch + " " + br
-			}
+			winLabel := padToWidth(r.winLabel, r.winLabelDW, maxWinLabelDW)
 
 			display := fmt.Sprintf("%s %s %s %s",
 				cDim+tree+reset,
@@ -1106,23 +1159,29 @@ func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, 
 				winLabel,
 				icons,
 			)
-			if branchStr != "" {
-				display += "  " + cFaint + branchStr + reset
-			}
-
 			plain := fmt.Sprintf("%s %s %s %s",
 				tree,
 				strings.TrimSpace(stripANSI(activeMarker)),
 				winLabel,
 				stripANSI(icons),
 			)
-			if branchStr != "" {
-				plain += "  " + branchStr
+			if r.identity != "" || r.prBadge != "" {
+				display += "  " + padToWidth(r.identity, r.identityDW, identityCol)
+				plain += "  " + padToWidth(r.identityPlain, r.identityDW, identityCol)
+				if r.prBadge != "" {
+					display += " " + r.prBadge
+					plain += " " + r.prPlain
+				}
 			}
+			display = strings.TrimRight(display, " ")
+			plain = strings.TrimRight(plain, " ")
 
-			search := g.name + " " + name
-			if branchStr != "" {
-				search += " " + branchStr
+			search := g.name + " " + stripANSI(r.winLabel)
+			if r.idSearch != "" {
+				search += " " + r.idSearch
+			}
+			if r.prPlain != "" {
+				search += " " + r.prPlain
 			}
 			items = append(items, listItem{
 				target:          fmt.Sprintf("%s:%d", g.name, w.index),
