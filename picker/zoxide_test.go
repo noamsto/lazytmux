@@ -149,6 +149,47 @@ func TestSessionFilterMapsSkipsScratch(t *testing.T) {
 	}
 }
 
+func TestCollapseWorktree(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/home/n/git/lazytmux/.worktrees/feat-x", "/home/n/git/lazytmux"},
+		{"/home/n/git/lazytmux/.worktrees/feat-x/sub/dir", "/home/n/git/lazytmux"},
+		{"/home/n/git/lazytmux", "/home/n/git/lazytmux"},
+		{"/home/n/notes/.worktrees-backup/x", "/home/n/notes/.worktrees-backup/x"},
+		{"/.worktrees/x", ""}, // degenerate root; empty path is dropped by os.Stat("") in collectZoxide
+	}
+	for _, c := range cases {
+		if got := collapseWorktree(c.in); got != c.want {
+			t.Errorf("collapseWorktree(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCollapseThenSuggest(t *testing.T) {
+	// Mirror collectZoxide: collapse every path, then suggest.
+	raw := []string{
+		"/home/n/git/delta/.worktrees/feat-a",  // -> /home/n/git/delta
+		"/home/n/git/delta/.worktrees/feat-b",  // -> same root, deduped away
+		"/home/n/git/epsilon/.worktrees/wip",   // -> /home/n/git/epsilon, suppressed (live session)
+	}
+	var paths []string
+	for _, p := range raw {
+		paths = append(paths, collapseWorktree(p))
+	}
+	sessionPaths := map[string]bool{"/home/n/git/epsilon": true}
+
+	// nil sessionNames is a safe read in Go; this case has no name collisions to suppress
+	got := zoxideSuggestions(paths, sessionPaths, nil, 15)
+	want := []suggestion{{path: "/home/n/git/delta", name: "delta"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %d suggestions, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("suggestion[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")

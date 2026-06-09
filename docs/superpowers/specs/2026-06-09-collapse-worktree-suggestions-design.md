@@ -57,40 +57,72 @@ func collapseWorktree(p string) string {
 
 ### Call site (`picker/zoxide.go`)
 
-Apply `collapseWorktree` at the **top of the `zoxideSuggestions` loop**, before
-the session-path and name checks:
+Apply `collapseWorktree` inside `collectZoxide`, **immediately after
+`normalizePath`, before `isExcluded` and `os.Stat`**:
 
 ```go
-for _, p := range paths {
+for _, l := range lines {
+	p := normalizePath(l)
 	p = collapseWorktree(p)
-	if sessionPaths[p] {
+	if isExcluded(p, exclude) {
 		continue
 	}
-	name := sessionNameFromPath(p)
-	...
+	if st, err := os.Stat(p); err != nil || !st.IsDir() {
+		continue
+	}
+	paths = append(paths, p)
 }
 ```
 
-Placing it there lets the existing dedup machinery do all the work — no new
-dedup logic:
+Collapsing here (not in `zoxideSuggestions`) is the deliberate choice — it puts
+**both** the exclude check and the stat on the repo root, which fixes two bugs
+that collapsing later would leave:
+
+- **Stale worktree → lost repo.** A worktree removed from disk but still ranked
+  in zoxide would fail `os.Stat` on its own path and be dropped entirely.
+  Collapsing first stats the repo root (still present), so the repo correctly
+  surfaces as a suggestion instead of vanishing.
+- **Basename exclude.** `isExcluded` matches a pattern against the path's
+  basename; on a worktree path that basename is the branch (`feat-x`), not the
+  repo. Collapsing first means a bare-basename exclude of the repo
+  (`lazytmux`) hides its worktree-derived rows too, matching intent. (Absolute
+  and subtree excludes already worked either way.)
+
+`zoxideSuggestions` then receives already-collapsed paths and its existing dedup
+does the rest, unchanged:
 
 - **Across a repo's worktrees:** every worktree collapses to the same root →
   same derived name → the existing `seen[name]` keeps the highest-ranked
   occurrence and drops the rest. One row per repo.
-- **Against the root's own zoxide entry:** if `<repo>` is itself in zoxide, it
+- **Against the root's own zoxide entry:** if `<repo>` is itself ranked, it
   collapses to itself and folds into the same name-dedup.
 - **Against a live session:** the collapsed root is checked against
-  `sessionPaths` / `sessionNames`, so if the repo session already exists the
-  suggestion is suppressed — exactly the attach-don't-recreate behavior.
+  `sessionPaths` / `sessionNames`. `#{session_path}` is the session's
+  creation directory — under the session=repo model that is the repo root
+  (verified live: a `lazytmux` session whose active pane sits in a worktree
+  still reports the repo root). So an existing repo session suppresses the
+  suggestion — the attach-don't-recreate behavior.
 - **Rank order:** zoxide output is frecency-ordered and the loop iterates in
   order, so the most-recently-used worktree wins the repo's row.
 
+### Known limitations (accepted, not bugs)
+
+- **Name-collision amplification.** Pre-collapse, worktree rows carried unique
+  branch basenames that never collided. Post-collapse they become repo-name
+  rows, so they now participate in the existing basename dedup — e.g. a
+  `factify/lazytmux` worktree is suppressed when a `noamsto/lazytmux` session is
+  live. This is inherent to the session=repo model and the pre-existing
+  name-dedup tradeoff, not a regression of this change.
+- **Coincidental `.worktrees` dir.** A non-worktrunk directory literally named
+  `.worktrees` (e.g. `~/notes/.worktrees/foo`) would collapse to `~/notes`.
+  Worktrunk owns this path convention, so this is treated as a non-case — no
+  guard added.
+
 ### What stays unchanged
 
-- `collectZoxide` (the impure `exec`/`os.Stat` half) is untouched. Collapse
-  lives entirely in the pure, unit-tested `zoxideSuggestions` path.
-- **Exclude patterns:** `isExcluded` already subtree-matches, so excluding
-  `<repo>` continues to drop its worktrees — no interaction with collapse.
+- **`zoxideSuggestions`** keeps its current body; it just receives collapsed
+  paths. `collapseWorktree` is independently pure and unit-tested, so moving the
+  call into the impure `collectZoxide` costs no meaningful test coverage.
 - **`createAndSwitch`:** a collapsed row's `path` is the repo root and `name` is
   the repo basename, so Enter creates/attaches the root session as intended. No
   change needed.
@@ -106,9 +138,14 @@ dedup logic:
   - non-worktree path → unchanged
   - edge: `/.worktrees/x` → `""` (no crash; downstream `sessionNameFromPath`
     yields `""` and the row is filtered)
-- Extend `TestZoxideSuggestions` with a worktree scenario proving:
-  - two worktrees of one repo collapse to a single deduped row, and
-  - a worktree whose root is already a live session is suppressed.
+- A `zoxideSuggestions`-level test feeding **already-collapsed** paths (mirroring
+  what `collectZoxide` now produces) proving:
+  - two worktrees of one repo, both collapsed to the same root, yield a single
+    deduped row — use a repo name **absent** from the session maps so this
+    exercises collapse-dedup, not session suppression (the existing
+    `TestZoxideSuggestions` fixture already has `lazytmux` in `sessionNames`, so
+    reusing it would only prove suppression);
+  - a collapsed root that matches a live session's path is suppressed.
 
 `buildGoModule`'s default check phase runs `go test ./...` on `nix build` /
 `nix flake check`, so no harness wiring is needed. Manual verification: open
@@ -122,6 +159,8 @@ repo row appears (not one per worktree) and Enter lands on the root session.
 | Worktree handling | Collapse to repo root (fold worktree rows onto one repo row) |
 | Detection method | Path-based (`/.worktrees/` split), not `git rev-parse` |
 | Dedup mechanism | Reuse existing name/session dedup — collapse upstream of it, add nothing |
-| Where collapse runs | Top of `zoxideSuggestions` loop (pure, testable); `collectZoxide` unchanged |
+| Where collapse runs | In `collectZoxide`, after `normalizePath`, before `isExcluded`/`Stat` — so exclude + stat see the root (fixes stale-worktree and basename-exclude cases) |
 | Subdir of a worktree | Collapses to repo root too (first `/.worktrees/` wins) |
-| Exclude interaction | None — `isExcluded` subtree match already covers worktrees |
+| Stale worktree in zoxide | Collapses to live repo root and surfaces, instead of being dropped by a failing stat |
+| Exclude interaction | Exclude runs on the collapsed root; absolute/subtree/basename excludes of the repo all hit |
+| Name collision | Accepted: worktree rows now fold into repo-name dedup (see Known limitations) |
