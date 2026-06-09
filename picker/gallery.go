@@ -8,15 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
 const (
-	targetCellWidth = 20 // desired thumbnail width in cells
-	targetCellRows  = 5  // desired rows per screenful before paging
+	targetCellWidth = 28 // desired thumbnail width in cells
+	targetCellRows  = 4  // desired rows per screenful before paging
 	labelRows       = 1  // one label line per cell
+	hGutter         = 2  // blank columns between cells
+	vGutter         = 1  // blank rows between cells
 )
 
 // grid is the computed layout for a given pane size and image count.
@@ -37,23 +40,30 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// computeGrid derives the grid layout. paneH-1 reserves the bottom status row.
+// computeGrid derives the grid layout, reserving the bottom status row and
+// hGutter/vGutter spacing between cells.
 func computeGrid(paneW, paneH, imageCount int) grid {
-	cols := clamp(paneW/targetCellWidth, 1, maxCellDim)
+	cols := clamp((paneW+hGutter)/(targetCellWidth+hGutter), 1, maxCellDim)
+	if imageCount > 0 {
+		cols = clamp(cols, 1, imageCount) // don't reserve more columns than images
+	}
+	cellW := clamp((paneW-(cols-1)*hGutter)/cols, 1, maxCellDim)
+
 	body := paneH - 1
 	rows := clamp(targetCellRows, 1, maxRowsThatFit(body))
-	cellW := clamp(paneW/cols, 1, maxCellDim)
-	cellH := clamp(body/rows, labelRows+1, maxCellDim+labelRows)
+	cellH := clamp((body-(rows-1)*vGutter)/rows, labelRows+1, maxCellDim+labelRows)
 	imgH := clamp(cellH-labelRows, 1, maxCellDim)
 	return grid{cols: cols, rows: rows, cellW: cellW, cellH: cellH, imgH: imgH, perPage: cols * rows}
 }
 
-// maxRowsThatFit caps rows so each cell keeps at least a label row + 1 image row.
+// maxRowsThatFit caps rows so each cell keeps a label row + image rows + a
+// gutter, fitting the body height.
 func maxRowsThatFit(body int) int {
-	if body < labelRows+1 {
+	per := labelRows + 1 + vGutter
+	if body < per {
 		return 1
 	}
-	return body / (labelRows + 1)
+	return body / per
 }
 
 func pageOf(index, perPage int) int { return index / perPage }
@@ -88,10 +98,19 @@ type galleryModel struct {
 	width   int
 	height  int
 	tty     *os.File // raw graphics sink (bypasses bubbletea's stdout)
+	mtime   int64    // manifest mtime at last load (for auto-refresh)
 	ready   bool
 }
 
-func (m galleryModel) Init() tea.Cmd { return nil }
+func (m galleryModel) Init() tea.Cmd { return galleryTickCmd() }
+
+type galleryTickMsg struct{}
+
+// galleryTickCmd polls the manifest for changes so the grid auto-refreshes
+// while the plugin hook appends new images.
+func galleryTickCmd() tea.Cmd {
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg { return galleryTickMsg{} })
+}
 
 // transmitPage stores the current page's images store-only (kitty backend),
 // ids 1..perPage, sized to the cell box. Writes to /dev/tty so the APC bytes
@@ -137,8 +156,10 @@ func (m galleryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.cursor = m.pageJump(-1)
 		case "r":
+			m.mtime = manifestMtime(m.pane)
 			m.images = loadManifest(m.pane)
 			m.cursor = clamp(m.cursor, 0, max(0, len(m.images)-1))
+			m.g = computeGrid(m.width, m.height, len(m.images))
 			m.transmitPage()
 		case "enter":
 			return m, m.drillIn()
@@ -154,8 +175,28 @@ func (m galleryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case retransmitMsg:
 		m.transmitPage()
 		return m, nil
+	case galleryTickMsg:
+		if mt := manifestMtime(m.pane); mt != m.mtime {
+			m.mtime = mt
+			m.images = loadManifest(m.pane)
+			m.cursor = clamp(m.cursor, 0, max(0, len(m.images)-1))
+			if m.ready {
+				m.g = computeGrid(m.width, m.height, len(m.images))
+				m.transmitPage()
+			}
+		}
+		return m, galleryTickCmd()
 	}
 	return m, nil
+}
+
+// manifestMtime returns the manifest file's mtime in ns, or 0 if absent.
+func manifestMtime(pane string) int64 {
+	fi, err := os.Stat(manifestPath(pane))
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime().UnixNano()
 }
 
 func (m galleryModel) View() tea.View {
@@ -176,11 +217,15 @@ func (m galleryModel) renderGrid() string {
 	start := page * m.g.perPage
 	labelStyle := lipgloss.NewStyle().Width(m.g.cellW)
 	selStyle := labelStyle.Reverse(true)
+	hgap := lipgloss.NewStyle().Width(hGutter).Height(m.g.cellH).Render("")
 
 	var rows []string
 	for r := 0; r < m.g.rows; r++ {
 		var cols []string
 		for c := 0; c < m.g.cols; c++ {
+			if c > 0 {
+				cols = append(cols, hgap) // gutter between columns
+			}
 			slot := r*m.g.cols + c
 			idx := start + slot
 			if idx >= len(m.images) {
@@ -204,6 +249,9 @@ func (m galleryModel) renderGrid() string {
 			}
 			cols = append(cols, lipgloss.JoinVertical(lipgloss.Left, label, thumb))
 		}
+		if r > 0 {
+			rows = append(rows, strings.Repeat("\n", vGutter-1)) // gutter between rows
+		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 	}
 	status := fmt.Sprintf("page %d/%d · %d images · ↵ open · n/p page · q quit",
@@ -225,6 +273,7 @@ func runGallery(pane, viewer string) error {
 		backend: chooseGridBackend(termName()),
 		theme:   detectTheme(),
 		tty:     tty,
+		mtime:   manifestMtime(pane),
 	}
 	// Teardown on pane-kill (toggle-off SIGTERM/SIGHUP), not just q.
 	if tty != nil {

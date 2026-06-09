@@ -88,10 +88,10 @@ func TestSymbolsArgs(t *testing.T) {
 }
 
 func TestComputeGrid(t *testing.T) {
-	// 100 wide / targetCellWidth(20) = 5 cols. 40 tall, status row reserved.
+	// (100+hGutter)/(targetCellWidth+hGutter) = 102/30 = 3 cols.
 	g := computeGrid(100, 40, 30)
-	if g.cols != 5 {
-		t.Errorf("cols = %d, want 5", g.cols)
+	if g.cols != 3 {
+		t.Errorf("cols = %d, want 3", g.cols)
 	}
 	if g.perPage != g.cols*g.rows {
 		t.Errorf("perPage = %d, want cols*rows = %d", g.perPage, g.cols*g.rows)
@@ -101,6 +101,18 @@ func TestComputeGrid(t *testing.T) {
 	}
 	if g.cols < 1 || g.rows < 1 {
 		t.Errorf("cols/rows must be >= 1: %+v", g)
+	}
+	// Cells plus gutters must fit the pane width.
+	if g.cols*g.cellW+(g.cols-1)*hGutter > 100 {
+		t.Errorf("cells+gutters overflow pane width: %+v", g)
+	}
+}
+
+func TestComputeGridFewImages(t *testing.T) {
+	// Wide pane but only 2 images: cols must not exceed the image count.
+	g := computeGrid(200, 40, 2)
+	if g.cols > 2 {
+		t.Errorf("cols = %d, want <= 2 (image count)", g.cols)
 	}
 }
 

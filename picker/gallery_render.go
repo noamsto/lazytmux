@@ -34,14 +34,19 @@ func parseManifest(data []byte) []imageEntry {
 	return out
 }
 
-// loadManifest reads images/<pane>.jsonl for the given source pane id (leading
-// % stripped) under the claude status dir.
-func loadManifest(pane string) []imageEntry {
+// manifestPath is images/<pane>.jsonl (leading % stripped) under the claude
+// status dir (CLAUDE_STATUS_DIR or /tmp/claude-status).
+func manifestPath(pane string) string {
 	dir := os.Getenv("CLAUDE_STATUS_DIR")
 	if dir == "" {
 		dir = "/tmp/claude-status"
 	}
-	data, err := os.ReadFile(dir + "/images/" + strings.TrimPrefix(pane, "%") + ".jsonl")
+	return dir + "/images/" + strings.TrimPrefix(pane, "%") + ".jsonl"
+}
+
+// loadManifest reads and parses the pane's image manifest.
+func loadManifest(pane string) []imageEntry {
+	data, err := os.ReadFile(manifestPath(pane))
 	if err != nil {
 		return nil
 	}
