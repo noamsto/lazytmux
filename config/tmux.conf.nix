@@ -173,7 +173,6 @@
     "claude-status"
     "claude-status-update"
     "claude-images-update"
-    "claude-image-render"
     "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
