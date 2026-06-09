@@ -155,7 +155,7 @@ func TestCollapseWorktree(t *testing.T) {
 		{"/home/n/git/lazytmux/.worktrees/feat-x/sub/dir", "/home/n/git/lazytmux"},
 		{"/home/n/git/lazytmux", "/home/n/git/lazytmux"},
 		{"/home/n/notes/.worktrees-backup/x", "/home/n/notes/.worktrees-backup/x"},
-		{"/.worktrees/x", ""},
+		{"/.worktrees/x", ""}, // degenerate root; empty path is dropped by os.Stat("") in collectZoxide
 	}
 	for _, c := range cases {
 		if got := collapseWorktree(c.in); got != c.want {
@@ -177,6 +177,7 @@ func TestCollapseThenSuggest(t *testing.T) {
 	}
 	sessionPaths := map[string]bool{"/home/n/git/epsilon": true}
 
+	// nil sessionNames is a safe read in Go; this case has no name collisions to suppress
 	got := zoxideSuggestions(paths, sessionPaths, nil, 15)
 	want := []suggestion{{path: "/home/n/git/delta", name: "delta"}}
 	if len(got) != len(want) {
