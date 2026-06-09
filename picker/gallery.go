@@ -45,11 +45,13 @@ type layout struct {
 func computeLayout(paneW, paneH int) layout {
 	stripH := clamp(paneH/4, 5, 12)
 	stripW := stripThumbW
-	stripCols := clamp((paneW+stripGutter)/(stripW+stripGutter), 1, maxCellDim)
+	// +2 per thumb for its border frame.
+	stripCols := clamp((paneW+stripGutter)/(stripW+2+stripGutter), 1, maxCellDim)
 
-	// Area left for the preview after filmstrip(stripH) + marker(1) + status(1).
-	availW := clamp(paneW, 1, maxCellDim)
-	availH := clamp(paneH-stripH-2, 1, maxCellDim)
+	// Area left for the preview after filmstrip(stripH+2 border) + status(1),
+	// minus 2 for the preview's own border frame.
+	availW := clamp(paneW-2, 1, maxCellDim)
+	availH := clamp(paneH-stripH-5, 1, maxCellDim)
 
 	// Largest box with cols:rows ≈ previewBoxCols/100 that fits availW × availH.
 	previewW := availW
@@ -209,21 +211,25 @@ func (m galleryModel) renderView() string {
 		return "no images yet"
 	}
 
-	// Big preview of the selected image, centered in the area above the filmstrip.
+	selColor := m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")
+	dimColor := m.thmColor("@thm_surface_1", "#45475a", "#bcc0cc")
+
+	// Big preview of the selected image, framed and centered above the filmstrip.
 	var preview string
 	if m.backend == backendKitty {
 		preview = placeholderBlock(previewID, m.l.previewW, m.l.previewH)
 	} else {
 		preview = symbolsBlock(m.images[m.cursor].Path, m.l.previewW, m.l.previewH)
 	}
-	previewH := m.height - m.l.stripH - 2 // filmstrip + marker + status
+	preview = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+		BorderForeground(selColor).Render(preview)
+	previewH := m.height - m.l.stripH - 3 // filmstrip(stripH+2 border) + status(1)
 	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
 
-	// Filmstrip window + a marker under the selected thumbnail.
+	// Filmstrip window: each thumb framed; the selected thumb's frame is colored.
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
-	hgap := lipgloss.NewStyle().Width(stripGutter).Height(m.l.stripH).Render("")
+	hgap := lipgloss.NewStyle().Width(stripGutter).Height(m.l.stripH + 2).Render("")
 	var cells []string
-	shown := 0
 	for s := 0; s < m.l.stripCols; s++ {
 		idx := start + s
 		if idx >= len(m.images) {
@@ -232,26 +238,21 @@ func (m galleryModel) renderView() string {
 		if s > 0 {
 			cells = append(cells, hgap)
 		}
+		var thumb string
 		if m.backend == backendKitty {
-			cells = append(cells, placeholderBlock(s+1, m.l.stripW, m.l.stripH))
+			thumb = placeholderBlock(s+1, m.l.stripW, m.l.stripH)
 		} else {
-			cells = append(cells, symbolsBlock(m.images[idx].Path, m.l.stripW, m.l.stripH))
+			thumb = symbolsBlock(m.images[idx].Path, m.l.stripW, m.l.stripH)
 		}
-		shown++
+		border := dimColor
+		if idx == m.cursor {
+			border = selColor
+		}
+		cells = append(cells, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+			BorderForeground(border).Render(thumb))
 	}
-	strip := lipgloss.JoinHorizontal(lipgloss.Top, cells...)
-
-	// Marker line: a colored bar under the selected thumbnail, padded to the
-	// strip's full width so it stays aligned when the strip is centered.
-	stripW := shown*m.l.stripW + (shown-1)*stripGutter
-	selSlot := m.cursor - start
-	markerColor := m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")
-	left := selSlot * (m.l.stripW + stripGutter)
-	marker := strings.Repeat(" ", left) +
-		lipgloss.NewStyle().Foreground(markerColor).Render(strings.Repeat("▀", m.l.stripW)) +
-		strings.Repeat(" ", max(0, stripW-left-m.l.stripW))
 	filmstrip := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
-		lipgloss.JoinVertical(lipgloss.Left, strip, marker))
+		lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 
 	status := fmt.Sprintf("[%d/%d] %s · ↵/o open · O folder · h/l move · q quit",
 		m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path))
