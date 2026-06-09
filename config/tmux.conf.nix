@@ -441,6 +441,7 @@
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
+    bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
       'display-message "scratchpad: new windows disabled"' \
