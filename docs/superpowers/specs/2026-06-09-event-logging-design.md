@@ -45,7 +45,7 @@ taxing the fork-averse hot paths (`claude-status` runs every status render;
 | Scope | All four categories: claude transitions, reflow, enrichment, picker |
 | Sink + format | Single file, JSON lines |
 | Retention | Size-based rotation (flock-guarded) |
-| Debug lifetime | Transient — per tmux-server lifetime; cleared on server start |
+| Debug lifetime | Transient — sentinel in `/tmp`, dies on reboot or explicit `off` |
 
 ## Architecture
 
@@ -67,10 +67,12 @@ a which-key chord) sets the `@lazytmux_debug` tmux option (for display / which-k
 visibility) **and** creates/removes the sentinel. The sentinel is what scripts gate on,
 and what `lazytmux-debug status` reports (never the option — they could diverge).
 
-**Debug is transient.** The sentinel lives in `$XDG_STATE_HOME` (persists on disk), but
-a tmux **server-start hook removes it**, so debug never silently survives a server
-restart while the (reset) `@lazytmux_debug` option reads off. Debug = "I'm chasing a bug
-in this server session now," not a durable setting.
+**Debug is transient.** The sentinel lives in **`/tmp`** (`/tmp/lazytmux-debug.on`), so
+it dies on reboot like the other `/tmp` runtime state — and, crucially, it is *not*
+cleared on config reload. tmux sources the config on every `prefix + r` reload, not just
+server start, so a config-load clear would silently disarm debug mid-session. The log
+file itself stays in `$XDG_STATE_HOME` (you want to read it after the bug). Debug =
+"I'm chasing a bug now," cleared by reboot or an explicit `lazytmux-debug off`.
 
 > ⚠️ **Documented footgun:** a bare `tmux set -g @lazytmux_debug 1` will *not* arm
 > logging — there is no tmux "option-changed" hook to mirror it to the sentinel. Flip
@@ -92,8 +94,8 @@ overhead.
 | `config/tmux.conf.nix` | Build `lib-log` (`pkgs.writeShellScript "lib-log" (readFile …)`); add `@lib_log@`→`${lib-log}` to **`mkScriptFull`** (reflow) and **`mkScriptEnrich`** (issue/PR); **give `claude-status-update` a substitution path** — it is currently built by plain `mkScript` with no substitution, so it must move to a builder that substitutes `@lib_log@`. Package `lazytmux-debug` + `lazytmux-log-event` (both source `@lib_log@`). Add a which-key chord to flip debug. Add the server-start hook that removes the sentinel. |
 | `tests/log.bats` *(new)* | Unit-tests the pure logic: JSON escaping (incl. tabs/control chars), all-values-quoted output, the `from!=to` dedup helper, no-op when the sentinel is absent, and rotation at a tiny `LAZYTMUX_LOG_MAX_BYTES`. Runs under `nix flake check` like `enrich.bats`. |
 
-**Locations:** `${XDG_STATE_HOME:-$HOME/.local/state}/lazytmux/` holds `events.log`,
-`events.log.1`, and the `debug.on` sentinel.
+**Locations:** `${XDG_STATE_HOME:-$HOME/.local/state}/lazytmux/` holds `events.log` and
+`events.log.1`; the sentinel is `/tmp/lazytmux-debug.on` (reboot-transient, reload-safe).
 
 There is now **one** logging implementation (`lib-log.sh`); the Go picker reaches it
 through the `lazytmux-log-event` CLI, so there is no second source of truth to drift.
@@ -172,4 +174,6 @@ Two scoping calls:
 - Manual `tmux set @lazytmux_debug 1` does not arm logging — use the binding or
   `lazytmux-debug on`.
 - Leaving debug on grows the log; size rotation bounds it to ~2× the cap. `status`
-  surfaces current size, and a server restart turns debug off.
+  surfaces current size, and a reboot (or explicit `off`) turns debug off. A server
+  restart without reboot leaves debug armed — an accepted minor footgun, traded for
+  not disarming debug on every config reload.
