@@ -47,7 +47,11 @@ Throwaway smoke scripts (shell grid + a bubbletea spike) are not committed.
    foreground color) **inside the bubbletea `View`**: the image rendered,
    **survived full repaints**, and a `lipgloss` border around the block stayed
    **square** — i.e. `lipgloss`/`ultraviolet` measure each placeholder cell as
-   width 1 and emit the runes unmodified.
+   width 1 and emit the runes unmodified. *Scope of this test:* it covered one
+   image repainting in place. It did **not** cover swapping the `View` to a
+   *different* page of images (old cells replaced by new + the id-retransmit
+   ordering of §6) — that path is plausible but unverified, and phase 3 opens
+   with a mini-smoke-test for it.
 3. **Clean teardown.** Transmitting the image **store-only** via the raw kitty
    graphics protocol (`a=T,U=1` — virtual placement, emits zero visible cells)
    and sending **`a=d,d=A`** (delete all) on exit, both wrapped in tmux
@@ -137,11 +141,13 @@ Each unit has one purpose, a narrow interface, and is independently testable.
 
 ### 2. Renderer selection (Go)
 
-- `chooseGridBackend(termname string, hasKitten bool) → backend` →
-  `kittyPlaceholder` for `xterm-kitty*`/`xterm-ghostty*`, else `chafaSymbols`.
-  Mirrors v1's `choose_renderer` but collapsed to the two View-embeddable rungs.
-- Termname from `tmux display-message -p '#{client_termname}'`; `kitten`
-  presence from PATH. Pure given inputs → unit-testable.
+- `chooseGridBackend(termname string) → backend` → `kittyPlaceholder` for
+  `xterm-kitty*`/`xterm-ghostty*`, else `chafaSymbols`. **Termname only** — the
+  kitty grid uses the raw graphics protocol (§3), so unlike v1's `choose_renderer`
+  it does **not** depend on `kitten` being on PATH (`kitten` matters only to the
+  v1 focus view's higher-fidelity rungs). Two View-embeddable rungs.
+- Termname from `tmux display-message -p '#{client_termname}'`. Pure given input
+  → unit-testable.
 
 ### 3. Graphics transmit / teardown (Go, kitty backend only)
 
@@ -153,6 +159,13 @@ Each unit has one purpose, a narrow interface, and is independently testable.
   passthrough-wrapped. Called on page-change (free previous page) and on exit.
 - `tmuxPassthrough(seq)`: wrap as `\ePtmux;<ESC-doubled seq>\e\\` when `$TMUX`
   set, else pass through.
+- **Teardown must also fire on pane-kill, not just `q`.** Toggling the pane off
+  (`prefix + I` again) makes the outer script `kill-pane`, which never reaches
+  the `q` path — so a `SIGTERM`/`SIGHUP` handler must emit `deleteAll()` before
+  exit, or stored images accumulate in the terminal's graphics memory.
+  (`transfer-mode=memory` bounds the leak via kitty eviction, but the handler is
+  the correct fix; the v1 focus view likely shares this gap and is out of scope
+  here.)
 
 ### 4. Placeholder block builder (Go, kitty backend only)
 
@@ -175,23 +188,34 @@ Each unit has one purpose, a narrow interface, and is independently testable.
 
 The `tea.Model`. Owns geometry, paging, cursor, selection, input, and `View`.
 
-- **Geometry:** `cols` from `pane_width / targetCellWidth` (clamped ≥1); cell
-  box `cellW × cellH` from pane size and cols/rows; one label row per cell
+- **Geometry:** `cols` from `pane_width / targetCellWidth` (clamped ≥1;
+  `targetCellWidth` a tunable constant, start ~18–22 cells); cell box
+  `cellW × cellH` from pane size and cols/rows; one label row per cell
   (`[i] basename`, truncated to `cellW`). `perPage = cols × rows`.
 - **Paging:** `n`/`p` change page; `View` swaps to the page's blocks (bubbletea
   diffs and repaints — no manual clear). On page change (kitty), transmit the
   new page's images (ids `1..perPage`, reused per page) and delete the previous
-  page's ids.
+  page's ids. **Ordering invariant:** a reused id must be re-transmitted with the
+  new image *before* its placeholder cells are emitted in the next `View`, else
+  the cells reference the prior page's stored image.
 - **Cursor / selection:** arrows + `h/j/k/l` move within the page (wrap to
-  next/prev page at edges); a `lipgloss` highlight (border or background) marks
-  the focused cell; number keys jump within the page; `r` reloads the manifest;
+  next/prev page at edges); a **dimension-neutral** highlight marks the focused
+  cell — inverse/background on its *label row*, or a frame drawn into the
+  already-reserved inter-cell gutter. **Not** a `lipgloss` border around the
+  cell: a border adds a cell of width/height, so the focused cell would grow and
+  shift the whole grid as the cursor moves. `r` reloads the manifest;
   `q`/`Ctrl-c` quit.
+- **Jump-to-cell:** number keys jump within the page, but only address cells
+  `1–9`; when `perPage > 9` the remainder are reachable by cursor movement only
+  (acceptable — jump is a convenience, not the primary nav).
 - **`View`:** `lipgloss` grid (`JoinHorizontal` of columns, `JoinVertical` of
   rows) of `[label / thumbnail block]` cells, a top or bottom status line
   (`page X/Y · N images · ↵ open · n/p page · q quit`), `AltScreen = true`.
 - **Resize (`WindowSizeMsg`):** recompute geometry; for kitty, re-transmit the
-  current page at the new `cols×rows` (virtual placement size is fixed at
-  transmit). Debounce rapid resizes.
+  current page at the new `cols×rows`. *(Assumption to confirm in phase 3: a
+  virtual placement's cell extent is fixed at transmit `c/r`, so a resized block
+  needs a re-transmit rather than just emitting more/fewer placeholder cells.)*
+  Debounce rapid resizes.
 
 ### 7. Drill-in handoff (Go)
 
@@ -226,10 +250,10 @@ The `tea.Model`. Owns geometry, paging, cursor, selection, input, and `View`.
   before splitting.
 - **Missing/deleted image file:** render a textual placeholder cell (`[missing:
   name]`); never crash. (v1 does the same in the focus view.)
-- **`kitten` absent on a kitty term:** falls to the `chafaSymbols` backend (no
-  kitten dependency in the grid path; the raw transmit needs no kitten, but the
-  symbols rung is the safe floor).
-- **`chafa` failure:** render the textual placeholder cell.
+- **`kitten` absent on a kitty term:** irrelevant to the grid — the kitty
+  backend transmits via the raw graphics protocol, not `kitten icat`, so a kitty
+  term gets placeholders regardless. (`kitten` only affects the v1 focus view.)
+- **`chafa` failure / not on PATH:** render the textual placeholder cell.
 - **tmux option / termname unresolved:** default to `chafaSymbols` (universal
   floor — never a blank grid).
 
@@ -247,6 +271,14 @@ The `tea.Model`. Owns geometry, paging, cursor, selection, input, and `View`.
 
 ## Risks / open items
 
+- **Page-swap in bubbletea is unverified** — the spike covered same-image
+  repaint, not swapping to a different page (old placeholder cells replaced by
+  new + the id-retransmit ordering of §6). Phase 3 opens with a mini-smoke-test;
+  if a stale image bleeds through, fall back to an explicit per-cell clear before
+  the swap.
+- **Teardown on pane-kill** — `q` deletes images, but toggling the pane off
+  `kill-pane`s it; a `SIGTERM`/`SIGHUP` handler must emit `deleteAll()` so stored
+  images don't accumulate (§3).
 - **Resize re-transmit cost** — re-transmitting a page's images on every
   `WindowSizeMsg`; mitigate by debouncing and only re-transmitting on a settled
   size change.
@@ -264,8 +296,12 @@ The `tea.Model`. Owns geometry, paging, cursor, selection, input, and `View`.
    teardown~~ — **done, passed.**
 2. Manifest loader + renderer selection + transmit/teardown + placeholder/symbols
    block builders, with Go unit tests.
-3. Grid bubbletea model (geometry, paging, cursor, selection, `View`) on the
-   kitty placeholder backend; eyeball on kitty.
+3. **Open with a mini-smoke-test**: in the bubbletea spike shape, swap the
+   `View` between two *different* pages of images (with id reuse + re-transmit)
+   and confirm no stale-image bleed, and that a resized block re-transmits
+   correctly. Then build the grid bubbletea model (geometry, paging, cursor,
+   dimension-neutral selection, `View`) on the kitty placeholder backend;
+   eyeball on kitty.
 4. Symbols backend wired into the `View`; eyeball forced-symbols (and on a
    non-kitty term if available).
 5. Drill-in handoff (`tea.Exec` → v1 `--view --start`) + v1 `--start` flag;
