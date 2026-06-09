@@ -11,27 +11,47 @@ SELF="${BASH_SOURCE[0]}"
 if [[ ${1:-} == --view ]]; then
 	src_pane="$2"
 	manifest="$IMAGES_DIR/${src_pane#%}.jsonl"
-	mapfile -t lines < <(grep -v '^[[:space:]]*$' "$manifest" |
-		while IFS= read -r ln; do jq -e . >/dev/null 2>&1 <<<"$ln" && printf '%s\n' "$ln"; done)
-	n=${#lines[@]}
+
+	# Load valid (parseable) manifest lines into `lines`; skips blank/corrupt.
+	load_manifest() {
+		mapfile -t lines < <(grep -v '^[[:space:]]*$' "$manifest" 2>/dev/null |
+			while IFS= read -r ln; do jq -e . >/dev/null 2>&1 <<<"$ln" && printf '%s\n' "$ln"; done)
+		n=${#lines[@]}
+	}
+
+	load_manifest
 	((n > 0)) || {
 		echo "no images"
 		sleep 1
 		exit 0
 	}
+
 	i=0
+	prev=-1
 	while true; do
-		printf '\033[2J\033[3J\033[H'
-		path="$(jq -r '.path' <<<"${lines[$i]}")"
-		src="$(jq -r '.source' <<<"${lines[$i]}")"
-		read -r cols rows < <(tmux display-message -p '#{pane_width} #{pane_height}') || true
-		claude-image-render "$path" "$cols" "$((rows - 1))" || true
-		printf '\n[%d/%d] %s · %s   n/p · 1-9=jump · q quit ' \
-			"$((i + 1))" "$n" "$(basename "$path")" "$src"
+		# Redraw only when the selection changed — no flicker on no-op keys.
+		if ((i != prev)); then
+			printf '\033[2J\033[3J\033[H'
+			path="$(jq -r '.path' <<<"${lines[$i]}")"
+			src="$(jq -r '.source' <<<"${lines[$i]}")"
+			read -r cols rows < <(tmux display-message -p '#{pane_width} #{pane_height}') || true
+			claude-image-render "$path" "$cols" "$((rows - 1))" || true
+			printf '\n[%d/%d] %s · %s   j/k n/p move · g/G ends · 1-9 jump · r reload · q quit ' \
+				"$((i + 1))" "$n" "$(basename "$path")" "$src"
+			prev=$i
+		fi
 		read -rsn1 key || break
 		case "$key" in
-		n) i=$(((i + 1) % n)) ;;
-		p) i=$(((i - 1 + n) % n)) ;;
+		n | j) i=$(((i + 1) % n)) ;;
+		p | k) i=$(((i - 1 + n) % n)) ;;
+		g) i=0 ;;
+		G) i=$((n - 1)) ;;
+		r)
+			load_manifest
+			((n > 0)) || break
+			((i < n)) || i=$((n - 1))
+			prev=-1
+			;;
 		q) break ;;
 		[0-9])
 			num=$((key - 1))
