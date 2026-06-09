@@ -8,6 +8,8 @@ set -uo pipefail
 
 # shellcheck source=/dev/null
 source @lib_enrich@
+# shellcheck source=/dev/null
+source @lib_log@
 
 REFRESH_SECONDS="@pr_refresh_seconds@"
 TTL=60
@@ -79,6 +81,7 @@ write_pr_options() {
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
 	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
+	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}"
 	if [[ $prev != "$2|$4|$5|${7:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	fi
