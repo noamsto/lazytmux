@@ -903,6 +903,15 @@ func truncateCells(s string, max int) string {
 	return b.String() + "…"
 }
 
+// branchEchoesName reports whether showing a branch would merely restate the
+// window name. A worktree window takes its name from the checkout dir, which
+// worktrunk derives from the branch by replacing "/" with "-", so the branch
+// column would otherwise duplicate the name (name "feat-5-x" vs branch
+// "feat/5-x").
+func branchEchoesName(branch, name string) bool {
+	return branch == name || strings.ReplaceAll(branch, "/", "-") == name
+}
+
 // prColors holds the four PR badge tints, mirroring the status bar's check-state
 // coloring.
 type prColors struct{ success, failure, pending, merged, reset string }

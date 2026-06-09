@@ -1071,7 +1071,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				if rest != "" {
 					idColored += cDim + rest + reset
 				}
-			} else if w.branch != "" && w.branch != w.name && w.branch != "main" && w.branch != "master" {
+			} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
 				br := truncateCells(w.branch, 35)
 				idPlain = iconBranch + " " + br
 				idSearch = br

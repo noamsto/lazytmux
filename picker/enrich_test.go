@@ -82,6 +82,24 @@ func TestRenderWindowItemsEnriched(t *testing.T) {
 	}
 }
 
+func TestBranchEchoesName(t *testing.T) {
+	cases := []struct {
+		branch, name string
+		want         bool
+	}{
+		{"feat/5-window-picker-enrich", "feat-5-window-picker-enrich", true}, // worktree dir
+		{"mono", "mono", true},             // exact
+		{"feat/login", "feat-login", true}, // slash normalized
+		{"feat/login", "mono", false},      // unrelated
+		{"feat/a/b", "feat-a-b", true},     // multiple slashes
+	}
+	for _, c := range cases {
+		if got := branchEchoesName(c.branch, c.name); got != c.want {
+			t.Errorf("branchEchoesName(%q,%q) = %v, want %v", c.branch, c.name, got, c.want)
+		}
+	}
+}
+
 func TestColorPRBadge(t *testing.T) {
 	c := prColors{success: "<s>", failure: "<f>", pending: "<p>", merged: "<m>", reset: "<r>"}
 	cases := []struct {
