@@ -484,8 +484,12 @@ in {
             tmux = """
             [ -z "$TMUX" ] && exit 0
             [ -n "$CLAUDECODE" ] && exit 0
-            CUR_SESSION=$(tmux display-message -p '#{session_name}')
-            CUR_WIN=$(tmux display-message -p '#{window_index}')
+            # display-message resolves against the attached client's ACTIVE
+            # window unless pinned to the invoking pane — and wt's pane often
+            # isn't the active one at hook time (long checkout, multi-client,
+            # focus moved). $TMUX_PANE is set for every pane once $TMUX is.
+            CUR_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}')
+            CUR_WIN=$(tmux display-message -t "$TMUX_PANE" -p '#{window_index}')
             # Primary: match by @worktree tag across ALL sessions (set when we create
             # the window). Output is "<session>\t<window>".
             MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
@@ -524,10 +528,10 @@ in {
               # repurpose the redundant window instead of stacking up a new
               # one. Same-session only: another session showing the same path
               # doesn't make this session's window redundant.
-              CUR_PANES=$(tmux display-message -p '#{window_panes}')
-              CUR_WT=$(tmux display-message -p '#{@worktree}')
-              CUR_PATH=$(tmux display-message -p '#{pane_current_path}')
-              CUR_CMD=$(tmux display-message -p '#{pane_current_command}')
+              CUR_PANES=$(tmux display-message -t "$TMUX_PANE" -p '#{window_panes}')
+              CUR_WT=$(tmux display-message -t "$TMUX_PANE" -p '#{@worktree}')
+              CUR_PATH=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_current_path}')
+              CUR_CMD=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_current_command}')
               DUP=""
               # send-keys below types into the active pane, so only take over
               # when wt itself is what's running there (or a bare shell) —
@@ -543,7 +547,7 @@ in {
                   ;;
               esac
               if [ -n "$DUP" ]; then
-                CUR_TARGET=$(tmux display-message -p '#{session_id}:#{window_index}')
+                CUR_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#{session_id}:#{window_index}')
                 tmux set-option -t "$CUR_TARGET" -w @worktree "{{ worktree_path }}"
                 tmux set-option -t "$CUR_TARGET" -w @branch "{{ branch | sanitize }}"
                 # Queued in the pty; the shell reads it once wt exits.
@@ -574,7 +578,7 @@ in {
             tmux = """
             [ -z "$TMUX" ] && exit 0
             [ -n "$CLAUDECODE" ] && exit 0
-            SESSION=$(tmux display-message -p '#{session_name}')
+            SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}')
             WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
               | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
             [ -n "$WIN" ] && tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
