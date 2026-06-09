@@ -2,6 +2,36 @@ package main
 
 import "testing"
 
+func TestTmuxPassthrough(t *testing.T) {
+	t.Setenv("TMUX", "")
+	if got := tmuxPassthrough("\x1b_Ga=d\x1b\\"); got != "\x1b_Ga=d\x1b\\" {
+		t.Errorf("no-tmux passthrough should be identity, got %q", got)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,123,0")
+	got := tmuxPassthrough("\x1b_Ga=d\x1b\\")
+	want := "\x1bPtmux;\x1b\x1b_Ga=d\x1b\x1b\\\x1b\\"
+	if got != want {
+		t.Errorf("tmux passthrough = %q, want %q", got, want)
+	}
+}
+
+func TestTransmitVirtual(t *testing.T) {
+	t.Setenv("TMUX", "")
+	// base64 of "/x.png" is "L3gucG5n"
+	got := transmitVirtual(7, "/x.png", 20, 10)
+	want := "\x1b_Gi=7,a=T,U=1,f=100,c=20,r=10,t=f;L3gucG5n\x1b\\"
+	if got != want {
+		t.Errorf("transmitVirtual = %q, want %q", got, want)
+	}
+}
+
+func TestDeleteAll(t *testing.T) {
+	t.Setenv("TMUX", "")
+	if got := deleteAll(); got != "\x1b_Ga=d,d=A\x1b\\" {
+		t.Errorf("deleteAll = %q", got)
+	}
+}
+
 func TestChooseGridBackend(t *testing.T) {
 	cases := []struct {
 		term string
