@@ -30,9 +30,15 @@ Centered in the popup, top-to-bottom:
   labels in subtext) so they stay readable.
 - `prefix` is **interpolated from `cfg.prefix` at Nix build time** (same as other
   templated placeholders), so the tips always show the user's real prefix.
-- The cheatsheet is a **curated static list** baked into the binary — it is not
-  parsed from the live tmux config. Drift risk is accepted; the list lives next
-  to the binds in review. (Out of scope: deriving it from the config.)
+- The cheatsheet is **fully configurable** via the `programs.lazytmux.splash.tips`
+  module option — a list of `{ key; label; }` entries with a sensible default set
+  (the binds shown above). Entries are codegen'd into the binary at build time
+  (the same pattern as the picker's Nix-generated `icons_generated.go`), so
+  editing the list and rebuilding changes the welcome buffer. A `key` string may
+  contain the literal token `prefix`, replaced with `cfg.prefix` at render time
+  (so `{ key = "prefix + s"; label = "Sessions"; }` shows the real prefix). The
+  list is **not** parsed from the live tmux config — keeping it in sync with the
+  actual binds is the user's call. Empty list → mascot only, no cheatsheet.
 
 ## Mascot
 
@@ -133,6 +139,11 @@ shell. **Verified:** a `client-attached` hook firing `display-popup` via
   emitted; the gate/binary are simply never invoked.
 - `programs.lazytmux.splash.timeout` — auto-dismiss seconds, **default `10`**
   (clamped to a sane range). Injected into the binary at build time.
+- `programs.lazytmux.splash.tips` — the cheatsheet, a list of `{ key; label; }`
+  entries. **Default** = the eight binds shown in the Layout section. Codegen'd
+  into the binary at build time (`tips_generated.go`, mirroring the picker's
+  `icons_generated.go`). `prefix` token in `key` is substituted from `cfg.prefix`.
+  Empty list → no cheatsheet.
 
 The enable boolean flows from the module into the config builder the same way
 `enrichEnable` does today. `prefix` is already available to the builder.
@@ -202,7 +213,8 @@ client switches  ─client-session-changed─┤  run-shell -b
 
 ## Out of scope
 
-- Deriving the cheatsheet from the live tmux config (curated static list only).
+- Deriving the cheatsheet from the live tmux config (it's a configurable list via
+  `splash.tips`, but not auto-synced to the actual binds).
 - Configurable mascot / alternate art (single baked cat, two sizes).
 - Configurable animation style (gradient ripple only; dissolve / typewriter /
   static-flicker not built).
