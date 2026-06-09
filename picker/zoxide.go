@@ -188,7 +188,9 @@ func collectZoxide(sessions []sessionData, exclude []string) []suggestion {
 			continue
 		}
 		p := normalizePath(l)
-		p = collapseWorktree(p)
+		// Re-normalize: a worktree root recovered from a ".git" file is raw file
+		// content, not symlink-resolved like normalizePath/session paths.
+		p = normalizePath(collapseWorktree(p))
 		if isExcluded(p, exclude) {
 			continue
 		}
