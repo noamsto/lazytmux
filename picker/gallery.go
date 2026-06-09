@@ -228,9 +228,12 @@ func (m galleryModel) renderView() string {
 	previewH := m.height - m.l.stripH - 4 // title(1) + filmstrip(stripH+2) + status(1)
 	previewArea := lipgloss.Place(m.width, previewH, lipgloss.Center, lipgloss.Center, preview)
 
-	// Decorative title bar.
-	title := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
-		lipgloss.NewStyle().Foreground(selColor).Bold(true).Render(galleryTitleIcon+"  Claude Images"))
+	// Top bar: title on the left, key hints on the right.
+	barBg := m.thmColor("@thm_surface_0", "#313244", "#ccd0da")
+	hintFg := m.thmColor("@thm_subtext_0", "#a6adc8", "#6c6f85")
+	textFg := m.thmColor("@thm_text", "#cdd6f4", "#4c4f69")
+	topBar := styledBar(m.width, " "+galleryTitleIcon+"  Claude Images",
+		"↵/o open · O folder · h/l move · n/p page · q quit ", selColor, hintFg, barBg)
 
 	// Filmstrip window: each thumb framed; the selected thumb's frame is colored.
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
@@ -260,10 +263,39 @@ func (m galleryModel) renderView() string {
 	filmstrip := lipgloss.PlaceHorizontal(m.width, lipgloss.Center,
 		lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 
-	status := fmt.Sprintf("[%d/%d] %s · ↵/o open · O folder · h/l move · q quit",
-		m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path))
+	// Bottom bar: position + filename only (truncated so it can't overflow).
+	botBar := styledBar(m.width,
+		fmt.Sprintf(" [%d/%d]  %s", m.cursor+1, len(m.images), filepath.Base(m.images[m.cursor].Path)),
+		"", textFg, textFg, barBg)
 
-	return lipgloss.JoinVertical(lipgloss.Left, title, previewArea, filmstrip, status)
+	return lipgloss.JoinVertical(lipgloss.Left, topBar, previewArea, filmstrip, botBar)
+}
+
+// styledBar renders a full-width bar: left segment, right segment justified to
+// the far edge, on a solid background. The left segment is truncated if the two
+// would overflow, so a long left text can never push the right off-screen.
+func styledBar(width int, left, right string, leftFg, rightFg, bg imgcolor.Color) string {
+	rw := lipgloss.Width(right)
+	if lw := lipgloss.Width(left); lw+rw > width {
+		left = truncateToWidth(left, max(0, width-rw-1))
+	}
+	gap := width - lipgloss.Width(left) - rw
+	mid := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", max(0, gap)))
+	ls := lipgloss.NewStyle().Foreground(leftFg).Background(bg).Render(left)
+	rs := lipgloss.NewStyle().Foreground(rightFg).Background(bg).Render(right)
+	return lipgloss.NewStyle().Width(width).Background(bg).Render(ls + mid + rs)
+}
+
+// truncateToWidth cuts s to at most w display columns (ASCII-safe; bar text is
+// filenames + hints, no wide runes).
+func truncateToWidth(s string, w int) string {
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	if w <= 0 {
+		return ""
+	}
+	return s[:w]
 }
 
 // thmColor reads a tmux @thm_* color option, falling back per theme.
