@@ -103,6 +103,16 @@
               bats tests/claude-images.bats
               touch $out
             '';
+
+          splash-tests =
+            pkgs.runCommand "splash-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/splash.bats
+              touch $out
+            '';
         };
 
         packages = {
