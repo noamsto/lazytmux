@@ -434,7 +434,9 @@
       bind-key i switch-client -T enrich
       bind-key -T enrich i run-shell 'url="#{@issue_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
       bind-key -T enrich p run-shell 'url="#{@pr_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
-      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
+      # run-shell inherits the tmux server's cwd (not a repo) — pass a repo dir
+      # so gh has context: the window's worktree, else the active pane's path.
+      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --dir "#{?#{@worktree},#{@worktree},#{pane_current_path}}" --force'
     ''}
 
     # Floating popups
