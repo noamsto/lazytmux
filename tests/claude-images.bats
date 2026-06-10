@@ -7,6 +7,7 @@ setup() {
 	IMG="$BATS_TEST_TMPDIR/pic.png"
 	printf 'x' >"$IMG"
 	APP="scripts/claude-images-update.sh"
+	unset CLAUDE_CODE_SESSION_ID
 }
 
 run_app() { # $1 = fixture name
@@ -55,11 +56,23 @@ run_app() { # $1 = fixture name
 	[ "$output" -eq 1 ]
 }
 
-@test "no TMUX_PANE -> no-op, exit 0" {
+@test "no TMUX_PANE and no session id -> no-op, exit 0" {
 	unset TMUX_PANE
+	unset CLAUDE_CODE_SESSION_ID
 	run run_app hook-read-image.json
 	[ "$status" -eq 0 ]
 	[ ! -f "$MANIFEST" ]
+}
+
+@test "no TMUX_PANE falls back to CLAUDE_CODE_SESSION_ID key" {
+	unset TMUX_PANE
+	export CLAUDE_CODE_SESSION_ID="sess-abc"
+	run run_app hook-read-image.json
+	[ "$status" -eq 0 ]
+	sess_manifest="$CLAUDE_STATUS_DIR/images/sess-abc.jsonl"
+	[ -f "$sess_manifest" ]
+	run jq -r '.path' "$sess_manifest"
+	[ "$output" = "$IMG" ]
 }
 
 # Renderer selection moved to Go (chooseGridBackend, tested in picker/gallery_test.go).

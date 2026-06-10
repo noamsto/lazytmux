@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Append images Claude touches (Read/Write/screenshots) to a per-pane manifest.
 # PostToolUse hook: reads the hook JSON payload on stdin.
-# Mirrors claude-status-update.sh — self-contained, keyed by $TMUX_PANE.
+# Mirrors claude-status-update.sh — self-contained, keyed by $TMUX_PANE or $CLAUDE_CODE_SESSION_ID.
 set -euo pipefail
 
 STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 IMAGES_DIR="$STATE_DIR/images"
 
-pane_id="${TMUX_PANE:-}"
-[[ -n $pane_id ]] || exit 0 # outside tmux → no-op
+# Key by tmux pane when inside tmux, else the Claude Code session id so the
+# carousel works in a bare terminal. No pane and no session id → no-op.
+pane_id="${TMUX_PANE:-${CLAUDE_CODE_SESSION_ID:-}}"
+[[ -n $pane_id ]] || exit 0
 pane_file="${pane_id#%}"
 
 payload="$(cat)"
