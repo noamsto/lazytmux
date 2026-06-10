@@ -101,6 +101,7 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/claude-images.bats
+              bats tests/claude-images-launch.bats
               touch $out
             '';
 
