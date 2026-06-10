@@ -75,7 +75,7 @@ log_enabled && log_event enrich event stamp provider "$chosen_provider" id "$id"
 @reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
 
 # Kick an immediate PR fetch for this branch (likely "none" for a fresh branch).
-@pr_enrich@ --target "$target" --branch "$branch" --force >/dev/null 2>&1 &
+@pr_enrich@ --target "$target" --branch "$branch" --dir "$worktree" --force >/dev/null 2>&1 &
 disown -a
 
 exit 0

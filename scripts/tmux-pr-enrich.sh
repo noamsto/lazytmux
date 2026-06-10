@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # Background PR enrichment poller. Three entry modes:
 #   --tick                  cheap gate; daemonize a full pass if .last-tick stale
-#   --target T --branch B   enrich one window's branch (with --force to bypass TTL)
+#   --target T --branch B [--dir D]
+#                           enrich one window's branch (with --force to bypass
+#                           TTL); D is a checkout dir giving gh its repo context
 #   --mock-* ...            write mock @pr_* options directly (no gh), for tests
 # Always exits 0. Writes @pr_number @pr_title @pr_state @pr_check_state @pr_url.
+#
+# gh resolves the repo from its cwd, and this poller's own cwd is the tmux
+# server's (usually not a repo at all) — so every gh call must run inside a
+# checkout of the branch's repo: D in single-target mode, the window's
+# @worktree/@git_root in the full pass.
 set -uo pipefail
 
 # shellcheck source=/dev/null
@@ -16,12 +23,16 @@ TTL=60
 # A cached "no PR" expires faster: none→PR is the transition a user actively
 # waits on right after `gh pr create`; PR-state changes are less urgent.
 TTL_NONE=15
+# Merged/closed PRs are terminal: re-polling them every TTL wastes two serial
+# gh calls per branch. The long TTL (not infinity) still catches a reopened PR
+# eventually; --force (prefix+i r) checks immediately.
+TTL_TERMINAL=3600
 
 mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 
 # --- arg parse ---
 mode="tick"
-target="" branch="" force=0
+target="" branch="" dir="" force=0
 mock_number="" mock_state="" mock_check="" mock_title="" mock_url="" mock_mergeable=""
 while (($#)); do
 	case "$1" in
@@ -33,6 +44,10 @@ while (($#)); do
 		;;
 	--branch)
 		branch="$2"
+		shift
+		;;
+	--dir)
+		dir="$2"
 		shift
 		;;
 	--force) force=1 ;;
@@ -87,12 +102,27 @@ write_pr_options() {
 	fi
 }
 
-# fetch_branch_pr BRANCH  → echoes cache JSON path, refreshing via gh if stale.
+# branch_cache_key DIR BRANCH — sets REPLY to the cache key (sha1). Scoped by
+# the repo's git common dir so identical branch names in different repos don't
+# share a cache slot; worktrees of one repo resolve to the same key.
+branch_cache_key() {
+	local d="$1" repo=""
+	[[ -n $d ]] && repo="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+	branch_sha1 "${repo}|$2"
+}
+
+# fetch_branch_pr DIR BRANCH [KEY]  → echoes cache JSON path, refreshing via
+# gh if stale. DIR is a checkout of the branch's repo; KEY is the precomputed
+# cache key (derived from DIR+BRANCH when absent, saving a git fork for
+# callers that already hold it).
 fetch_branch_pr() {
-	local b="$1"
-	branch_sha1 "$b"
-	local cache="$ENRICH_CACHE_DIR/$REPLY.json"
-	local lock="$ENRICH_CACHE_DIR/$REPLY.lock"
+	local d="$1" b="$2" key="${3:-}"
+	if [[ -z $key ]]; then
+		branch_cache_key "$d" "$b"
+		key="$REPLY"
+	fi
+	local cache="$ENRICH_CACHE_DIR/$key.json"
+	local lock="$ENRICH_CACHE_DIR/$key.lock"
 
 	# Serve the cache when the decision says so (fresh + not forced).
 	local exists=0 content="" age=0
@@ -101,7 +131,7 @@ fetch_branch_pr() {
 		content="$(<"$cache")"
 		age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
 	fi
-	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE"
+	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE" "$TTL_TERMINAL"
 	if [[ $REPLY == "serve" ]]; then
 		printf '%s' "$cache"
 		return
@@ -119,6 +149,7 @@ fetch_branch_pr() {
 	# so the last-known PR state keeps showing instead of wiping to "none".
 	(
 		flock -n 9 || exit 0
+		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
 		local json
 		json="$(gh pr list --head "$b" --state open --limit 1 \
 			--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
@@ -134,8 +165,12 @@ fetch_branch_pr() {
 # apply_cache_to_target TARGET CACHE_PATH
 apply_cache_to_target() {
 	local tgt="$1" cache="$2"
-	local json="[]"
-	[[ -f $cache ]] && json="$(cat "$cache")"
+	# No cache file = this branch was never successfully fetched: keep the
+	# last-known options instead of wiping to "none" (offline / rate-limit
+	# resilience). A genuine "no PR" answer is a present "[]" cache.
+	[[ -f $cache ]] || return
+	local json
+	json="$(cat "$cache")"
 	if [[ $json == "[]" || -z $json ]]; then
 		write_pr_options "$tgt" "none" "" "" "" "" ""
 		return
@@ -153,34 +188,25 @@ apply_cache_to_target() {
 	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable"
 }
 
-# run_full_pass — enrich every window that carries a @branch. One gh call fetches
-# all open PRs in the repo, indexed by head branch; each branch's slice is written
-# to its per-branch cache. Only heads with no open PR fall back to a per-branch
-# lookup (which catches merged/closed via --state all). So the common case — each
-# worktree has an open PR — costs a single API round-trip, not one per branch.
-run_full_pass() {
-	# Snapshot the window list once and reuse it for every branch's apply.
-	local windows
-	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@branch}' | awk -F'|' 'NF>=3')
+# enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
+# full pass. REPO_ID is the repo's git common dir (already resolved by
+# run_full_pass; reused for cache keys so no git forks happen here). BRANCHES
+# is newline-separated; WINDOWS is newline-separated "target|branch" lines.
+# One gh call indexes the repo's open PRs by head branch (headRefName; each
+# value is a single-element array matching the per-branch cache format). Only
+# heads with no open PR fall back to a per-branch lookup (which catches
+# merged/closed via --state all). So the common case — each worktree has an
+# open PR — costs a single API round-trip per repo.
+enrich_repo_group() {
+	local d="$1" repo_id="$2"
+	local branches=() wlines=()
+	mapfile -t branches <<<"$3"
+	mapfile -t wlines <<<"$4"
 
-	# Unique, non-empty branches (capped — matches the prior head -n 30 bound).
-	declare -A seen
-	local branches=() line tgt _wt br
-	for line in "${windows[@]}"; do
-		IFS="|" read -r tgt _wt br <<<"$line"
-		[[ -z $br || -n ${seen[$br]:-} ]] && continue
-		seen[$br]=1
-		branches+=("$br")
-		((${#branches[@]} >= 30)) && break
-	done
-	((${#branches[@]})) || return
-
-	# Index open PRs by head branch in one call. headRefName carries the branch;
-	# each value is a single-element array matching the per-branch cache format.
 	declare -A open_pr
 	local all_json head obj
 	if command -v gh >/dev/null 2>&1 &&
-		all_json="$(gh pr list --state open --limit 100 \
+		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
 			--json number,title,url,state,statusCheckRollup,mergeable,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
 		while IFS=$'\t' read -r head obj; do
@@ -188,22 +214,69 @@ run_full_pass() {
 		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
 	fi
 
-	local cache t _w b2
+	local br ck cache line tgt b2
 	for br in "${branches[@]}"; do
-		branch_sha1 "$br"
-		cache="$ENRICH_CACHE_DIR/$REPLY.json"
+		[[ -z $br ]] && continue
+		branch_sha1 "$repo_id|$br"
+		ck="$REPLY"
+		cache="$ENRICH_CACHE_DIR/$ck.json"
 		if [[ -n ${open_pr[$br]+x} ]]; then
 			printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 		else
 			# No open PR for this head (or gh/batch unavailable): the per-branch
 			# lookup resolves merged/closed and serves the cache on failure.
-			cache="$(fetch_branch_pr "$br")"
+			cache="$(fetch_branch_pr "$d" "$br" "$ck")"
 		fi
-		for line in "${windows[@]}"; do
-			IFS="|" read -r t _w b2 <<<"$line"
-			[[ $b2 == "$br" ]] && apply_cache_to_target "$t" "$cache"
+		for line in "${wlines[@]}"; do
+			IFS="|" read -r tgt b2 <<<"$line"
+			[[ $b2 == "$br" ]] && apply_cache_to_target "$tgt" "$cache"
 		done
 	done
+}
+
+# run_full_pass — enrich every window that carries a @branch. Windows are
+# grouped by repo (git common dir, derived from @worktree/@git_root); each
+# group runs concurrently as one enrich_repo_group. Multi-repo setups pay one
+# round-trip per repo, all in flight at once.
+run_full_pass() {
+	local windows
+	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@git_root}|#{@branch}' | awk -F'|' 'NF>=4')
+
+	# Unique branches (capped — matches the prior head -n 30 bound) and window
+	# lines, grouped by repo. Windows with no resolvable repo checkout are
+	# skipped: gh could only run in the server's cwd (the original wrong-repo
+	# bug), so they keep their last-known options instead.
+	declare -A seen grp_dir grp_branches grp_windows
+	local total=0 line tgt wt gr br d key sk
+	for line in "${windows[@]}"; do
+		IFS="|" read -r tgt wt gr br <<<"$line"
+		[[ -z $br ]] && continue
+		d="${wt:-$gr}"
+		[[ -z $d ]] && continue
+		key="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+		# Stale @worktree (dir removed out from under the window): retry with
+		# @git_root before giving up.
+		if [[ -z $key && -n $gr && $gr != "$d" ]]; then
+			d="$gr"
+			key="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+		fi
+		[[ -z $key ]] && continue
+		grp_windows[$key]+="$tgt|$br"$'\n'
+		sk="$key|$br"
+		[[ -n ${seen[$sk]:-} ]] && continue
+		((total >= 30)) && continue
+		seen[$sk]=1
+		grp_dir[$key]="$d"
+		grp_branches[$key]+="$br"$'\n'
+		((++total))
+	done
+	((total)) || return
+
+	local k
+	for k in "${!grp_branches[@]}"; do
+		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" &
+	done
+	wait
 }
 
 # --- mock mode: write the provided values directly, no gh ---
@@ -222,7 +295,7 @@ fi
 
 # --- single-target mode (from dispatcher / force refresh) ---
 if [[ -n $target && -n $branch ]]; then
-	cache="$(fetch_branch_pr "$branch")"
+	cache="$(fetch_branch_pr "$dir" "$branch")"
 	apply_cache_to_target "$target" "$cache"
 	exit 0
 fi
