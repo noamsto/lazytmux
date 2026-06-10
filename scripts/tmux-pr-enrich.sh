@@ -111,25 +111,27 @@ branch_cache_key() {
 	branch_sha1 "${repo}|$2"
 }
 
-# fetch_branch_pr DIR BRANCH  → echoes cache JSON path, refreshing via gh if
-# stale. DIR is a checkout of the branch's repo (empty: gh falls back to the
-# inherited cwd, useful only when the caller already runs inside the repo).
+# fetch_branch_pr DIR BRANCH [KEY]  → echoes cache JSON path, refreshing via
+# gh if stale. DIR is a checkout of the branch's repo; KEY is the precomputed
+# cache key (derived from DIR+BRANCH when absent, saving a git fork for
+# callers that already hold it).
 fetch_branch_pr() {
-	local d="$1" b="$2"
-	branch_cache_key "$d" "$b"
-	local cache="$ENRICH_CACHE_DIR/$REPLY.json"
-	local lock="$ENRICH_CACHE_DIR/$REPLY.lock"
+	local d="$1" b="$2" key="${3:-}"
+	if [[ -z $key ]]; then
+		branch_cache_key "$d" "$b"
+		key="$REPLY"
+	fi
+	local cache="$ENRICH_CACHE_DIR/$key.json"
+	local lock="$ENRICH_CACHE_DIR/$key.lock"
 
 	# Serve the cache when the decision says so (fresh + not forced).
-	local exists=0 content="" age=0 ttl=$TTL state
+	local exists=0 content="" age=0
 	if [[ -f $cache ]]; then
 		exists=1
 		content="$(<"$cache")"
 		age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
-		state="$(jq -r '(.[0].state // "") | ascii_upcase' <<<"$content" 2>/dev/null)"
-		[[ $state == "MERGED" || $state == "CLOSED" ]] && ttl=$TTL_TERMINAL
 	fi
-	pr_cache_decision "$force" "$exists" "$content" "$age" "$ttl" "$TTL_NONE"
+	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE" "$TTL_TERMINAL"
 	if [[ $REPLY == "serve" ]]; then
 		printf '%s' "$cache"
 		return
@@ -163,8 +165,12 @@ fetch_branch_pr() {
 # apply_cache_to_target TARGET CACHE_PATH
 apply_cache_to_target() {
 	local tgt="$1" cache="$2"
-	local json="[]"
-	[[ -f $cache ]] && json="$(cat "$cache")"
+	# No cache file = this branch was never successfully fetched: keep the
+	# last-known options instead of wiping to "none" (offline / rate-limit
+	# resilience). A genuine "no PR" answer is a present "[]" cache.
+	[[ -f $cache ]] || return
+	local json
+	json="$(cat "$cache")"
 	if [[ $json == "[]" || -z $json ]]; then
 		write_pr_options "$tgt" "none" "" "" "" "" ""
 		return
@@ -182,22 +188,24 @@ apply_cache_to_target() {
 	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable"
 }
 
-# enrich_repo_group DIR BRANCHES WINDOWS — one repo's slice of the full pass.
-# BRANCHES is newline-separated; WINDOWS is newline-separated "target|branch"
-# lines. One gh call indexes the repo's open PRs by head branch (headRefName;
-# each value is a single-element array matching the per-branch cache format).
-# Only heads with no open PR fall back to a per-branch lookup (which catches
+# enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
+# full pass. REPO_ID is the repo's git common dir (already resolved by
+# run_full_pass; reused for cache keys so no git forks happen here). BRANCHES
+# is newline-separated; WINDOWS is newline-separated "target|branch" lines.
+# One gh call indexes the repo's open PRs by head branch (headRefName; each
+# value is a single-element array matching the per-branch cache format). Only
+# heads with no open PR fall back to a per-branch lookup (which catches
 # merged/closed via --state all). So the common case — each worktree has an
 # open PR — costs a single API round-trip per repo.
 enrich_repo_group() {
-	local d="$1"
+	local d="$1" repo_id="$2"
 	local branches=() wlines=()
-	mapfile -t branches <<<"$2"
-	mapfile -t wlines <<<"$3"
+	mapfile -t branches <<<"$3"
+	mapfile -t wlines <<<"$4"
 
 	declare -A open_pr
 	local all_json head obj
-	if command -v gh >/dev/null 2>&1 && [[ -n $d ]] &&
+	if command -v gh >/dev/null 2>&1 &&
 		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
 			--json number,title,url,state,statusCheckRollup,mergeable,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
@@ -206,17 +214,18 @@ enrich_repo_group() {
 		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
 	fi
 
-	local br cache line tgt b2
+	local br ck cache line tgt b2
 	for br in "${branches[@]}"; do
 		[[ -z $br ]] && continue
-		branch_cache_key "$d" "$br"
-		cache="$ENRICH_CACHE_DIR/$REPLY.json"
+		branch_sha1 "$repo_id|$br"
+		ck="$REPLY"
+		cache="$ENRICH_CACHE_DIR/$ck.json"
 		if [[ -n ${open_pr[$br]+x} ]]; then
 			printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 		else
 			# No open PR for this head (or gh/batch unavailable): the per-branch
 			# lookup resolves merged/closed and serves the cache on failure.
-			cache="$(fetch_branch_pr "$d" "$br")"
+			cache="$(fetch_branch_pr "$d" "$br" "$ck")"
 		fi
 		for line in "${wlines[@]}"; do
 			IFS="|" read -r tgt b2 <<<"$line"
@@ -234,23 +243,24 @@ run_full_pass() {
 	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@git_root}|#{@branch}' | awk -F'|' 'NF>=4')
 
 	# Unique branches (capped — matches the prior head -n 30 bound) and window
-	# lines, grouped by repo. "-" collects windows with no usable dir: their
-	# fetch keeps the legacy inherited-cwd behavior.
+	# lines, grouped by repo. Windows with no resolvable repo checkout are
+	# skipped: gh could only run in the server's cwd (the original wrong-repo
+	# bug), so they keep their last-known options instead.
 	declare -A seen grp_dir grp_branches grp_windows
 	local total=0 line tgt wt gr br d key sk
 	for line in "${windows[@]}"; do
 		IFS="|" read -r tgt wt gr br <<<"$line"
 		[[ -z $br ]] && continue
 		d="${wt:-$gr}"
-		key=""
-		if [[ -n $d ]]; then
+		[[ -z $d ]] && continue
+		key="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+		# Stale @worktree (dir removed out from under the window): retry with
+		# @git_root before giving up.
+		if [[ -z $key && -n $gr && $gr != "$d" ]]; then
+			d="$gr"
 			key="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 		fi
-		# No dir, or not a repo (stale worktree): legacy inherited-cwd fetch.
-		if [[ -z $key ]]; then
-			key="-"
-			d=""
-		fi
+		[[ -z $key ]] && continue
 		grp_windows[$key]+="$tgt|$br"$'\n'
 		sk="$key|$br"
 		[[ -n ${seen[$sk]:-} ]] && continue
@@ -264,7 +274,7 @@ run_full_pass() {
 
 	local k
 	for k in "${!grp_branches[@]}"; do
-		enrich_repo_group "${grp_dir[$k]}" "${grp_branches[$k]}" "${grp_windows[$k]}" &
+		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" &
 	done
 	wait
 }
