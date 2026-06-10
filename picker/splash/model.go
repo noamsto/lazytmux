@@ -85,8 +85,18 @@ func (m model) subtext() string {
 	return "#a6adc8"
 }
 
-// colorizeArt applies the moving gradient to each non-space glyph.
+// introFrames is the dissolve-in length (~1s at 50ms/frame): each glyph starts
+// as gradient-colored noise and resolves at a hash-staggered frame.
+const introFrames = 20
+
+// noise glyphs cells flicker through while dissolving in, dim → dense.
+var noiseRamp = []rune("·~+=*x%$@")
+
+// colorizeArt renders the mascot: a dissolve-in intro, then a plasma field
+// driving both gradient color and brightness per glyph (organic shimmer rather
+// than a linear color stripe).
 func (m model) colorizeArt(a artGrid) string {
+	t := float64(m.frame) * 0.11
 	var sb strings.Builder
 	for y, line := range a.lines {
 		x := 0
@@ -96,8 +106,14 @@ func (m model) colorizeArt(a artGrid) string {
 				x++
 				continue
 			}
-			hex := m.gradient[paletteIndex(x, y, m.frame, len(m.gradient))]
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(string(r)))
+			v := plasma(x, y, t)
+			glyph := r
+			if revealAt := cellHash(x, y, 0) * introFrames; float64(m.frame) < revealAt {
+				glyph = noiseRamp[int(cellHash(x, y, m.frame)*float64(len(noiseRamp)))]
+				v *= 0.6
+			}
+			hex := shade(m.gradient[int(v*float64(len(m.gradient)-1))], v)
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(string(glyph)))
 			x++
 		}
 		if y < len(a.lines)-1 {

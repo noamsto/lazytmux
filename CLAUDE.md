@@ -133,9 +133,11 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
 ### Welcome Buffer (splash)
 
 `tmux-splash` (a bubbletea binary, second main package in the `picker/` Go
-module) renders an animated sleepy-cat mascot with a gradient ripple plus a
-keybind cheatsheet, shown once per fresh session via `display-popup`. Enabled by
-default through `programs.lazytmux.splash.enable`.
+module) renders a dithered sleepy-cat mascot (generated to a density-glyph
+grid; assets are static text) with a dissolve-in intro and a plasma-field
+shimmer (summed sines drive both gradient color and brightness per glyph),
+plus a keybind cheatsheet — shown once per fresh session via `display-popup`.
+Enabled by default through `programs.lazytmux.splash.enable`.
 
 - **Trigger:** indexed `client-attached[50]` / `client-session-changed[50]`
   hooks fire `tmux-splash-maybe`, which gates on `@splash_shown` +
