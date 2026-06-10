@@ -28,9 +28,10 @@ func parseArt(s string) artGrid {
 	return artGrid{lines: lines, w: w, h: len(lines)}
 }
 
-// reserveLines is the vertical space the non-mascot rows (zzz spacer, wordmark,
-// cheatsheet, dismiss hint) need; the mascot is dropped if it can't coexist.
-const reserveLines = 10
+// reserveLines is the vertical space the non-cat rows (z headroom above, plus
+// wordmark + cheatsheet + dismiss hint below) need; the mascot is dropped if it
+// can't coexist with them.
+const reserveLines = 14
 
 // pickArt returns the largest art that fits the viewport, and whether to show a
 // mascot at all (false → wordmark + cheatsheet only).

@@ -86,15 +86,18 @@ func (m model) subtext() string {
 }
 
 // introFrames is the dissolve-in length (~1s at 50ms/frame): each glyph starts
-// as gradient-colored noise and resolves at a hash-staggered frame.
+// as braille static and resolves into the real art at a hash-staggered frame.
 const introFrames = 20
 
-// noise glyphs cells flicker through while dissolving in, dim → dense.
-var noiseRamp = []rune("·~+=*x%$@")
+// brailleStatic returns a random-ish braille pattern (U+2800 + 8-bit dot mask)
+// for the dissolve-in, so the "assembling" noise matches the braille art.
+func brailleStatic(x, y, frame int) rune {
+	return rune(0x2800 + int(cellHash(x, y, frame)*256))
+}
 
-// colorizeArt renders the mascot: a dissolve-in intro, then a plasma field
-// driving both gradient color and brightness per glyph (organic shimmer rather
-// than a linear color stripe).
+// colorizeArt renders the mascot: a dissolve-in intro (braille static settling
+// into the art), then a plasma field driving both gradient color and brightness
+// per glyph (organic shimmer rather than a linear color stripe).
 func (m model) colorizeArt(a artGrid) string {
 	t := float64(m.frame) * 0.11
 	var sb strings.Builder
@@ -109,7 +112,7 @@ func (m model) colorizeArt(a artGrid) string {
 			v := plasma(x, y, t)
 			glyph := r
 			if revealAt := cellHash(x, y, 0) * introFrames; float64(m.frame) < revealAt {
-				glyph = noiseRamp[int(cellHash(x, y, m.frame)*float64(len(noiseRamp)))]
+				glyph = brailleStatic(x, y, m.frame)
 				v *= 0.6
 			}
 			hex := shade(m.gradient[int(v*float64(len(m.gradient)-1))], v)
@@ -120,6 +123,62 @@ func (m model) colorizeArt(a artGrid) string {
 			sb.WriteByte('\n')
 		}
 	}
+	return sb.String()
+}
+
+// Sleep "z" overlay: a few marks drift up-and-right from above the cat's head
+// and fade, staggered with a pause between cycles so they read as sporadic.
+const (
+	zSlots    = 3
+	zHeadroom = 4   // blank rows reserved above the cat for the z's to rise into
+	zPeriod   = 78  // frames for one mark's full rise (~3.9s at 50ms)
+	zStagger  = 26  // frame offset between successive marks
+	zActive   = 0.8 // fraction of the period a mark is visible (rest = pause)
+)
+
+var zGlyphs = []rune{'z', 'Z', 'z'}
+
+// renderMascot stacks the animated z headroom above the dissolving/shimmering
+// cat, as one block so outer centering keeps the marks aligned to the art.
+func (m model) renderMascot(a artGrid) string {
+	originX := a.w * 30 / 100
+	grid := make([][]rune, zHeadroom)
+	bright := make([][]float64, zHeadroom)
+	for r := range grid {
+		grid[r] = make([]rune, a.w)
+		bright[r] = make([]float64, a.w)
+		for c := range grid[r] {
+			grid[r][c] = ' '
+		}
+	}
+	for i := 0; i < zSlots; i++ {
+		ph := float64((m.frame+i*zStagger)%zPeriod) / zPeriod
+		if ph >= zActive {
+			continue // pause between marks
+		}
+		p := ph / zActive // 0 (just above head) → 1 (top, faded out)
+		row := zHeadroom - 1 - int(p*float64(zHeadroom))
+		col := originX + int(p*5)
+		if row < 0 || col < 0 || col >= a.w {
+			continue
+		}
+		grid[row][col] = zGlyphs[i]
+		bright[row][col] = 1 - p
+	}
+
+	var sb strings.Builder
+	for r := 0; r < zHeadroom; r++ {
+		for c := 0; c < a.w; c++ {
+			if grid[r][c] == ' ' {
+				sb.WriteRune(' ')
+				continue
+			}
+			hex := shade(m.accent(), 0.35+0.65*bright[r][c])
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(string(grid[r][c])))
+		}
+		sb.WriteByte('\n')
+	}
+	sb.WriteString(m.colorizeArt(a))
 	return sb.String()
 }
 
@@ -159,7 +218,7 @@ func (m model) tipCell(t tip, keyOf func(tip) string, keyStyle, lblStyle lipglos
 func (m model) render() string {
 	var blocks []string
 	if art, show := pickArt(m.full, m.small, m.width, m.height); show {
-		blocks = append(blocks, m.colorizeArt(art))
+		blocks = append(blocks, m.renderMascot(art))
 	}
 	wordmark := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("l a z y t m u x")
 	blocks = append(blocks, wordmark, "")
