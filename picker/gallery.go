@@ -114,14 +114,14 @@ func (m *galleryModel) transmitView() {
 		return
 	}
 	fmt.Fprint(m.tty, deleteAll())
-	fmt.Fprint(m.tty, transmitVirtual(previewID, m.images[m.cursor].Path, m.l.previewW, m.l.previewH))
+	fmt.Fprint(m.tty, transmitVirtual(previewID, cachedPNG(m.images[m.cursor].Path, m.l.previewW, m.l.previewH), m.l.previewW, m.l.previewH))
 	start := stripStart(m.cursor, m.l.stripCols, len(m.images))
 	for s := 0; s < m.l.stripCols; s++ {
 		idx := start + s
 		if idx >= len(m.images) {
 			break
 		}
-		fmt.Fprint(m.tty, transmitVirtual(s+1, m.images[idx].Path, m.l.stripW, m.l.stripH))
+		fmt.Fprint(m.tty, transmitVirtual(s+1, cachedPNG(m.images[idx].Path, m.l.stripW, m.l.stripH), m.l.stripW, m.l.stripH))
 	}
 }
 

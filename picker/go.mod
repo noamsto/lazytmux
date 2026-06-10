@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
 	github.com/mattn/go-runewidth v0.0.20
+	golang.org/x/image v0.42.0
 )
 
 require (
