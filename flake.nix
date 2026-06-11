@@ -101,6 +101,17 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/claude-images.bats
+              bats tests/claude-images-launch.bats
+              touch $out
+            '';
+
+          log-tests =
+            pkgs.runCommand "log-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.util-linux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/log.bats
               touch $out
             '';
 

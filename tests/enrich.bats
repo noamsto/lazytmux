@@ -237,6 +237,31 @@ setup() {
 	[ "$REPLY" = "proj" ]
 }
 
+@test "build_window_label: default branch with no issue falls back to dir basename (long)" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_ID" = "" ]
+	[ "$REPLY_REST" = "lazytmux" ]
+}
+
+@test "build_window_label: master branch with no issue falls back to dir basename (short)" {
+	build_window_label short "" "" "" "" "" "" master /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_REST" = "lazytmux" ]
+}
+
+@test "build_window_label: default branch with stamped issue keeps issue label, not basename" {
+	build_window_label long linear ENG-1 "fix thing" "" "" "" main /home/noams/lazytmux
+	[ "$REPLY" = "L ENG-1 fix thing" ]
+	[ "$REPLY_ID" = "L ENG-1" ]
+}
+
+@test "build_window_label: default branch with PR keeps basename, PR separate" {
+	build_window_label long "" "" "" 42 open success main /home/noams/lazytmux
+	[ "$REPLY" = "lazytmux" ]
+	[ "$REPLY_PR" = " S #42" ]
+}
+
 @test "build_window_label: plain branch with merged PR keeps name plain, PR separate (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
@@ -318,4 +343,37 @@ setup() {
 @test "pr_cache_decision: fresh empty-array cache is served within TTL_NONE" {
 	pr_cache_decision 0 1 '[]' 5 60 15
 	[ "$REPLY" = "serve" ]
+}
+
+@test "pr_cache_decision: merged PR is served under TTL_TERMINAL" {
+	# Same age expires a real open-PR cache (61 > 60), but merged is terminal.
+	pr_cache_decision 0 1 '[{"number":42,"state":"MERGED","title":"x"}]' 61 60 15 3600
+	[ "$REPLY" = "serve" ]
+}
+
+@test "pr_cache_decision: closed PR is served under TTL_TERMINAL" {
+	pr_cache_decision 0 1 '[{"number":42,"state":"CLOSED","title":"x"}]' 61 60 15 3600
+	[ "$REPLY" = "serve" ]
+}
+
+@test "pr_cache_decision: terminal cache still expires past TTL_TERMINAL" {
+	pr_cache_decision 0 1 '[{"number":42,"state":"MERGED","title":"x"}]' 3601 60 15 3600
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: open PR ignores TTL_TERMINAL" {
+	pr_cache_decision 0 1 '[{"number":42,"state":"OPEN","title":"x"}]' 61 60 15 3600
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: TTL_TERMINAL defaults to TTL when omitted" {
+	pr_cache_decision 0 1 '[{"number":42,"state":"MERGED","title":"x"}]' 61 60 15
+	[ "$REPLY" = "fetch" ]
+}
+
+@test "pr_cache_decision: escaped state literal in a title is not terminal" {
+	# A title containing the text state":"MERGED arrives JSON-escaped (\"), so
+	# the raw-quote substring must not match.
+	pr_cache_decision 0 1 '[{"number":42,"state":"OPEN","title":"say \"state\":\"MERGED\" loudly"}]' 61 60 15 3600
+	[ "$REPLY" = "fetch" ]
 }

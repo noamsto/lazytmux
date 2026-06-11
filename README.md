@@ -198,7 +198,9 @@ if a hook fails to fire.
 ## Claude Code plugin
 
 The CC-side integration (status-bar hooks + issue-tracking skill) ships as a
-Claude Code plugin in this repo.
+Claude Code plugin in this repo. For an agent-oriented setup walkthrough
+(install, verify, troubleshoot), see
+[`claude-plugin/README.md`](claude-plugin/README.md).
 
 Nix (recommended — pins plugin and tmux scripts to the same revision):
 

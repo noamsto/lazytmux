@@ -537,7 +537,13 @@ in {
       xdg.configFile = {
         "worktrunk/config.toml" = lib.mkIf cfg.worktrunk.enable {
           text = ''
-            worktree-path = "{{ repo_path }}/.worktrees/{{ branch | sanitize }}"
+            # Sibling dir, NOT nested under the repo: a worktree inside the repo
+            # working tree sits under watchman's already-watched root, so a fresh
+            # npm install floods fsevents and watchman drops events — breaking
+            # Metro module resolution in RN/Expo worktrees (see issue #41). A
+            # sibling becomes its own watch root with a clean crawl. Only affects
+            # newly-created worktrees; existing ones keep their path.
+            worktree-path = "{{ repo_path }}-worktrees/{{ branch | sanitize }}"
 
             # The tmux post-switch hook owns navigation (select-window or switch-client),
             # so skip cd'ing the parent shell — otherwise it ends up pwd'd at the

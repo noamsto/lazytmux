@@ -113,6 +113,9 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
+  # lib-log has no build-time placeholders of its own; a plain writeShellScript.
+  lib-log = pkgs.writeShellScript "lib-log" (builtins.readFile ../scripts/lib-log.sh);
+
   # Shell label builder needs raw glyphs (single '#'). The tmux-format path uses
   # the '##'-escaped enrichIconSet (which MUST keep '##' — do not change it). Only
   # user-override icons are '##'-escaped by the module, so un-escape just those and
@@ -168,6 +171,17 @@
   in
     pkgs.writeShellScriptBin name patched;
 
+  # Scripts that source only lib-log (gated event logging). Includes
+  # claude-status-update, which is run RAW by tests/claude-issues.bats — its
+  # source is guarded so the raw script defines no-op stubs.
+  scriptsWithLog = ["claude-status-update" "lazytmux-log-event" "lazytmux-debug"];
+
+  mkScriptWithLog = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched = builtins.replaceStrings ["@lib_log@"] ["${lib-log}"] raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
   # Build claude-status first — other scripts reference it by full path
   claude-status-pkg = mkScriptWithLibs "claude-status";
   claude-status-bin = "${claude-status-pkg}/bin/claude-status";
@@ -185,7 +199,6 @@
     "claude-status"
     "claude-status-update"
     "claude-images-update"
-    "claude-image-render"
     "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
@@ -200,17 +213,19 @@
     "tmux-issue-stamp-github"
     "tmux-pr-enrich"
     "tmux-splash-maybe"
+    "lazytmux-log-event"
+    "lazytmux-debug"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
-  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
+  scriptsWithIcons = ["tmux-claude-images" "tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@"]
-      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin]
+      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@"]
+      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}"]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -229,6 +244,7 @@
         "@issue_stamp_github@"
         "@pr_enrich@"
         "@reflow@"
+        "@lib_log@"
       ]
       [
         "${lib-enrich}"
@@ -237,6 +253,7 @@
         "${enrich-github-bin}/bin/tmux-issue-stamp-github"
         "${enrich-pr-bin}/bin/tmux-pr-enrich"
         "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+        "${lib-log}"
       ]
       raw;
   in
@@ -264,6 +281,8 @@
     then claude-status-pkg
     else if name == "tmux-splash-maybe"
     then mkScriptSplash name
+    else if builtins.elem name scriptsWithLog
+    then mkScriptWithLog name
     else mkScript name);
 
   scripts = lib.attrValues script;
@@ -430,12 +449,16 @@
       bind-key i switch-client -T enrich
       bind-key -T enrich i run-shell 'url="#{@issue_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
       bind-key -T enrich p run-shell 'url="#{@pr_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
-      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --force'
+      # run-shell inherits the tmux server's cwd (not a repo) — pass a repo dir
+      # so gh has context. Same @worktree→@git_root chain as the full pass (so
+      # both resolve the same cache key), with the pane path as a last resort.
+      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --dir "#{?#{@worktree},#{@worktree},#{?#{@git_root},#{@git_root},#{pane_current_path}}}" --force'
     ''}
 
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
+    bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
       'display-message "scratchpad: new windows disabled"' \

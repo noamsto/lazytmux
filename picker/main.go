@@ -69,6 +69,14 @@ type windowData struct {
 	active  bool // currently active window in its session
 	procs   []string
 	claude  claudeCounts
+	// Enrich identity, read from the window options build_window_label already
+	// stamped (single source of truth — the status bar reads the same).
+	labelID     string // @window_label_id   — "<provider> <id>" or ""
+	labelRest   string // @window_label_rest_long — issue title (leading space)
+	prPlain     string // @window_pr_plain   — " <glyph> #<n>" or ""
+	prState     string // @pr_state
+	prCheck     string // @pr_check_state
+	prMergeable string // @pr_mergeable
 }
 
 type claudeCounts struct {
@@ -90,11 +98,25 @@ type claudePaneInfo struct {
 }
 
 func main() {
-	args := map[string]bool{}
-	for _, a := range os.Args[1:] {
-		args[a] = true
+	args := os.Args[1:]
+	for i, a := range args {
+		if a == "--gallery" {
+			pane := ""
+			if i+1 < len(args) {
+				pane = args[i+1]
+			}
+			if err := runGallery(pane); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
-	if err := runTUI(args["--windows"], args["--claude"]); err != nil {
+	flags := map[string]bool{}
+	for _, a := range args {
+		flags[a] = true
+	}
+	if err := runTUI(flags["--windows"], flags["--claude"]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -203,7 +225,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}").Output()
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}").Output()
 	if err != nil {
 		return nil
 	}
@@ -213,20 +235,32 @@ func collectWindows() []windowData {
 		idx  int
 	}
 	type winInfo struct {
-		name   string
-		zoomed bool
-		active bool
-		branch string
-		path   string // pane_current_path for git branch fallback
-		seen   map[string]bool
-		procs  []string
+		name        string
+		zoomed      bool
+		active      bool
+		branch      string
+		path        string // pane_current_path for git branch fallback
+		labelID     string
+		labelRest   string
+		prPlain     string
+		prState     string
+		prCheck     string
+		prMergeable string
+		seen        map[string]bool
+		procs       []string
 	}
 	m := make(map[winKey]*winInfo)
 	// Preserve ordering
 	var order []winKey
 
+	field := func(parts []string, i int) string {
+		if len(parts) > i {
+			return parts[i]
+		}
+		return ""
+	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 8)
+		parts := strings.SplitN(line, "\t", 14)
 		if len(parts) < 6 {
 			continue
 		}
@@ -236,19 +270,22 @@ func collectWindows() []windowData {
 		zoomed := parts[3] == "1"
 		proc := parts[4]
 		active := parts[5] == "1"
-		branch := ""
-		if len(parts) >= 7 {
-			branch = stripTmuxColors(parts[6])
-		}
-		panePath := ""
-		if len(parts) >= 8 {
-			panePath = parts[7]
-		}
+		branch := stripTmuxColors(field(parts, 6))
+		panePath := field(parts, 7)
 
 		k := winKey{sess, idx}
 		wi, ok := m[k]
 		if !ok {
-			wi = &winInfo{name: wName, zoomed: zoomed, active: active, branch: branch, path: panePath, seen: make(map[string]bool)}
+			wi = &winInfo{
+				name: wName, zoomed: zoomed, active: active, branch: branch, path: panePath,
+				labelID:     field(parts, 8),
+				labelRest:   field(parts, 9),
+				prPlain:     field(parts, 10),
+				prState:     field(parts, 11),
+				prCheck:     field(parts, 12),
+				prMergeable: field(parts, 13),
+				seen:        make(map[string]bool),
+			}
 			m[k] = wi
 			order = append(order, k)
 		}
@@ -281,13 +318,19 @@ func collectWindows() []windowData {
 	for _, k := range order {
 		wi := m[k]
 		windows = append(windows, windowData{
-			session: k.sess,
-			index:   k.idx,
-			name:    wi.name,
-			zoomed:  wi.zoomed,
-			active:  wi.active,
-			branch:  wi.branch,
-			procs:   wi.procs,
+			session:     k.sess,
+			index:       k.idx,
+			name:        wi.name,
+			zoomed:      wi.zoomed,
+			active:      wi.active,
+			branch:      wi.branch,
+			procs:       wi.procs,
+			labelID:     wi.labelID,
+			labelRest:   wi.labelRest,
+			prPlain:     wi.prPlain,
+			prState:     wi.prState,
+			prCheck:     wi.prCheck,
+			prMergeable: wi.prMergeable,
 		})
 	}
 	return windows
@@ -853,6 +896,63 @@ func padToWidth(s string, currentWidth, targetWidth int) string {
 	return s + strings.Repeat(" ", pad)
 }
 
+// truncateCells clamps s to max display cells (rune- and width-aware), reserving
+// one cell for an ellipsis when it has to cut. Byte slicing would split
+// multibyte titles; this counts cells like the rest of the picker.
+func truncateCells(s string, max int) string {
+	if iconCellWidth(s) <= max {
+		return s
+	}
+	budget := max - 1
+	w := 0
+	var b strings.Builder
+	for _, r := range s {
+		rw := runeCellWidth(r)
+		if w+rw > budget {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
+}
+
+// branchEchoesName reports whether showing a branch would merely restate the
+// window name. A worktree window takes its name from the checkout dir, which
+// worktrunk derives from the branch by replacing "/" with "-", so the branch
+// column would otherwise duplicate the name (name "feat-5-x" vs branch
+// "feat/5-x").
+func branchEchoesName(branch, name string) bool {
+	return branch == name || strings.ReplaceAll(branch, "/", "-") == name
+}
+
+// prColors holds the four PR badge tints, mirroring the status bar's check-state
+// coloring.
+type prColors struct{ success, failure, pending, merged, reset string }
+
+// colorPRBadge tints a plain PR badge (" <glyph> #<n>" from @window_pr_plain) by
+// check state, mirroring build_window_label's glyph choice: a conflicting merge
+// or failing checks → failure, pending → pending, a merged PR → merged, else
+// success. Returns "" when there is no PR.
+func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
+	badge := strings.TrimSpace(prPlain)
+	if badge == "" {
+		return ""
+	}
+	var col string
+	switch {
+	case mergeable == "conflicting", check == "failure":
+		col = c.failure
+	case check == "pending":
+		col = c.pending
+	case state == "merged":
+		col = c.merged
+	default:
+		col = c.success
+	}
+	return col + badge + c.reset
+}
+
 // ---------------------------------------------------------------------------
 // Theme / tmux helpers
 // ---------------------------------------------------------------------------
@@ -911,6 +1011,13 @@ func readTmuxOpts() map[string]string {
 		}
 	}
 	return m
+}
+
+// logEvent fires the lazytmux-log-event CLI (best-effort, never blocks the UI).
+// Bare-name exec relies on the tmux wrapper's PATH, like our tmux/zoxide calls.
+// No-ops when debug is off (the CLI checks the sentinel).
+func logEvent(args ...string) {
+	exec.Command("lazytmux-log-event", args...).Run() //nolint:errcheck
 }
 
 func envOrMap(envKey string, tmuxOpts map[string]string, tmuxOpt, fallback string) string {
