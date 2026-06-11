@@ -111,6 +111,9 @@
     enrichProviders = cfg.enrich.providers;
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
     enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
+    splashEnable = cfg.splash.enable;
+    splashTips = cfg.splash.tips;
+    splashTimeout = cfg.splash.timeout;
   };
 
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
@@ -274,6 +277,68 @@ in {
           success, failure, merged, conflict). Unset keys fall back to
           nerd-font defaults. Values must not contain '#' (tmux format escape).
         '';
+      };
+    };
+
+    splash = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Whether to show the animated welcome-buffer splash on fresh sessions.";
+      };
+      timeout = lib.mkOption {
+        type = lib.types.ints.between 1 120;
+        default = 10;
+        description = "Seconds before the splash auto-dismisses (also dismissed by any key).";
+      };
+      tips = lib.mkOption {
+        type = lib.types.listOf (lib.types.submodule {
+          options = {
+            key = lib.mkOption {
+              type = lib.types.str;
+              description = "Key hint; the token `prefix` is replaced with the real prefix.";
+            };
+            label = lib.mkOption {
+              type = lib.types.str;
+              description = "What the key does.";
+            };
+          };
+        });
+        default = [
+          {
+            key = "prefix + s";
+            label = "Sessions";
+          }
+          {
+            key = "prefix + w";
+            label = "Windows";
+          }
+          {
+            key = "prefix + a";
+            label = "Claude windows";
+          }
+          {
+            key = "prefix + i";
+            label = "Issues / PRs";
+          }
+          {
+            key = "prefix + g";
+            label = "LazyGit";
+          }
+          {
+            key = "prefix + b";
+            label = "btop";
+          }
+          {
+            key = "prefix + R";
+            label = "Restore snapshot";
+          }
+          {
+            key = "prefix + u";
+            label = "Undo close";
+          }
+        ];
+        description = "Keybind cheatsheet shown in the welcome buffer. Empty = mascot only.";
       };
     };
 
