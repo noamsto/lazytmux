@@ -7,7 +7,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,19 +98,6 @@ type claudePaneInfo struct {
 
 func main() {
 	args := os.Args[1:]
-	for i, a := range args {
-		if a == "--gallery" {
-			pane := ""
-			if i+1 < len(args) {
-				pane = args[i+1]
-			}
-			if err := runGallery(pane); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-			return
-		}
-	}
 	flags := map[string]bool{}
 	for _, a := range args {
 		flags[a] = true
@@ -979,23 +965,6 @@ func ansiBg(hex string) string {
 	return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
 }
 
-func detectTheme() string {
-	xdg := os.Getenv("XDG_STATE_HOME")
-	if xdg == "" {
-		xdg = filepath.Join(os.Getenv("HOME"), ".local", "state")
-	}
-	data, err := os.ReadFile(filepath.Join(xdg, "theme-state.json"))
-	if err != nil {
-		return "dark"
-	}
-	var cfg struct {
-		Theme string `json:"theme"`
-	}
-	if json.Unmarshal(data, &cfg) != nil || cfg.Theme == "" {
-		return "dark"
-	}
-	return cfg.Theme
-}
 
 func readTmuxOpts() map[string]string {
 	out, err := exec.Command("tmux", "show", "-g").Output()

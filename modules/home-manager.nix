@@ -3,6 +3,8 @@
   lib,
   pkgs,
   tmux-state-pkg ? null,
+  carousel-toggle ? null,
+  carouselPluginSkills ? null,
   ...
 }: let
   cfg = config.programs.lazytmux;
@@ -97,6 +99,7 @@
 
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
+    inherit carousel-toggle;
     extraProcessIcons = cfg.processIcons;
     zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
     inherit (cfg) prefix defaultShell;
@@ -346,7 +349,7 @@ in {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Whether to install Claude Code skills into ~/.claude/skills. Disable when the lazytmux Claude Code plugin is installed (marketplace or --plugin-dir) — the plugin ships the same skills.";
+        description = "Whether to install Claude Code skills into ~/.claude/skills (lazytmux skills and agent-carousel skills). Disable when the lazytmux Claude Code plugin is installed (marketplace or --plugin-dir) — the plugin ships the same skills.";
       };
     };
 
@@ -504,6 +507,14 @@ in {
               name = ".claude/skills/${name}";
               value.source = ../claude-plugin/skills/${name};
             }) (builtins.readDir ../claude-plugin/skills)
+          )
+          # agent-carousel ships its skills via the flake input; omitted when the
+          # module is imported standalone (no agent-carousel input → null).
+          // lib.optionalAttrs (cfg.skills.enable && carouselPluginSkills != null) (
+            lib.mapAttrs' (name: _: {
+              name = ".claude/skills/${name}";
+              value.source = "${carouselPluginSkills}/${name}";
+            }) (builtins.readDir carouselPluginSkills)
           )
           // lib.optionalAttrs cfg.opencode.enable {
             ".config/opencode/plugin/opencode-status.ts".source = ../plugins/opencode-status.ts;

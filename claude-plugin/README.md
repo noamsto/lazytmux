@@ -12,10 +12,10 @@ and each command is non-interactive.
 
 | Component | What it does |
 |-----------|--------------|
-| **Hooks** (`hooks/hooks.json`) | A state machine over the CC lifecycle (`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `Notification`, `PreCompact`, …). Each event routes through `scripts/status.sh <state>`, which writes the pane's Claude state (`processing`/`waiting`/`done`/`idle`/…) so the tmux status bar reflects it live. `PostToolUse` also runs `scripts/images.sh` to record images the session touches. |
-| **Skills** (`skills/*/SKILL.md`) | `lazytmux:issue-tracking`, `lazytmux:image-gallery`, `lazytmux:tmux-interactive` — see [Skills](#skills). |
+| **Hooks** (`hooks/hooks.json`) | A state machine over the CC lifecycle (`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `Notification`, `PreCompact`, …). Each event routes through `scripts/status.sh <state>`, which writes the pane's Claude state (`processing`/`waiting`/`done`/`idle`/…) so the tmux status bar reflects it live. |
+| **Skills** (`skills/*/SKILL.md`) | `lazytmux:issue-tracking`, `lazytmux:tmux-interactive` — see [Skills](#skills). |
 
-**Safe to install anywhere.** `status.sh`/`images.sh` `exit 0` silently when the
+**Safe to install anywhere.** `status.sh` `exit 0` silently when the
 `claude-status-update` binary isn't on `PATH` (i.e. you're not in a lazytmux tmux
 pane). The plugin never errors on a hook; the status-bar effects simply appear
 once Claude is running inside lazytmux's wrapped tmux.
@@ -26,8 +26,8 @@ once Claude is running inside lazytmux's wrapped tmux.
 - For the **status-bar effects to be visible**: Claude must be running inside a
   pane of lazytmux's wrapped tmux (the `claude-status-update` binary on `PATH`).
   Installing the plugin without that is harmless — hooks no-op.
-- The skills assume a tmux session; `image-gallery` and `tmux-interactive` need a
-  tmux pane to act on.
+- The skills assume a tmux session; `tmux-interactive` needs a tmux pane to act
+  on.
 
 ## Install
 
@@ -80,7 +80,7 @@ restarting.
 
 What to expect:
 
-- **Skills loaded** — `lazytmux:issue-tracking`, `lazytmux:image-gallery`,
+- **Skills loaded** — `lazytmux:issue-tracking`,
   `lazytmux:tmux-interactive` appear in the skill list immediately.
 - **Hooks active** — fire on the next lifecycle event. To confirm they reach the
   status writer (only meaningful inside a lazytmux tmux pane):
@@ -96,7 +96,6 @@ What to expect:
 | Skill | Use it when |
 |-------|-------------|
 | `lazytmux:issue-tracking` | Working a Linear/GitHub issue or PR whose branch is **not** the current tmux window's branch — orchestrating from `main`, spawning agents into worktrees, driving PRs. Stamps issue ids into the status bar. |
-| `lazytmux:image-gallery` | The user wants to see images from the conversation (screenshots, images you Read/Wrote, generated pictures). Opens the image carousel in a tmux split for the current pane. |
 | `lazytmux:tmux-interactive` | Driving an interactive CLI (Python REPL, gdb, psql, node, lldb) that needs keystroke-level control, output scraping, or waiting on prompts inside a tmux pane. |
 
 Skills auto-invoke from their descriptions; no manual step beyond having the

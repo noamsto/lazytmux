@@ -23,6 +23,8 @@
   # Absolute path to the shell tmux spawns in new panes (default-shell).
   # Null => tmux uses $SHELL / the account shell.
   defaultShell ? null,
+  # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
+  carousel-toggle ? null,
   # Welcome-buffer splash (threaded from the home-manager module).
   splashEnable ? true,
   splashTips ? [],
@@ -198,8 +200,6 @@
   scriptNames = [
     "claude-status"
     "claude-status-update"
-    "claude-images-update"
-    "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
@@ -218,7 +218,7 @@
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
-  scriptsWithIcons = ["tmux-claude-images" "tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
+  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -306,6 +306,12 @@
   defaultShellConfig =
     lib.optionalString (defaultShell != null)
     "set -g default-shell ${defaultShell}\n    ";
+
+  # prefix+I bind for the agent-carousel image gallery, emitted only when the
+  # toggle package is wired in (carousel-toggle != null).
+  carouselBind =
+    lib.optionalString (carousel-toggle != null)
+    "bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'";
 
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
@@ -421,7 +427,7 @@
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
-    bind I run-shell '${script.tmux-claude-images}/bin/tmux-claude-images'
+    ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
     bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
@@ -622,7 +628,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa])}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
     '';
     meta.mainProgram = "tmux";
   };
