@@ -10,6 +10,10 @@
       url = "github:noamsto/tmux-state";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    agent-carousel = {
+      url = "github:noamsto/agent-carousel";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {flake-parts, ...}:
@@ -24,7 +28,10 @@
         lib,
         ...
       }: let
-        tmuxConfig = import ./config/tmux.conf.nix {inherit pkgs lib;};
+        tmuxConfig = import ./config/tmux.conf.nix {
+          inherit pkgs lib;
+          carousel-toggle = inputs.agent-carousel.packages.${pkgs.system}.toggle;
+        };
       in {
         pre-commit.settings.hooks = {
           # Nix
@@ -126,6 +133,7 @@
           import ./modules/home-manager.nix (args
             // {
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
+              carousel-toggle = inputs.agent-carousel.packages.${pkgs.system}.toggle;
             });
       };
     };

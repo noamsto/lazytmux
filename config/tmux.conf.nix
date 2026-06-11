@@ -23,6 +23,8 @@
   # Absolute path to the shell tmux spawns in new panes (default-shell).
   # Null => tmux uses $SHELL / the account shell.
   defaultShell ? null,
+  # agent-carousel toggle package (threaded from the flake input; used by prefix+I in Task 9).
+  carousel-toggle ? null,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {

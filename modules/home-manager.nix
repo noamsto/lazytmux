@@ -3,6 +3,7 @@
   lib,
   pkgs,
   tmux-state-pkg ? null,
+  carousel-toggle ? null,
   ...
 }: let
   cfg = config.programs.lazytmux;
@@ -97,6 +98,7 @@
 
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
+    inherit carousel-toggle;
     extraProcessIcons = cfg.processIcons;
     zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
     inherit (cfg) prefix defaultShell;
