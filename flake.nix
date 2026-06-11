@@ -123,6 +123,7 @@
             // {
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
               carousel-toggle = inputs.agent-carousel.packages.${pkgs.system}.toggle;
+              carouselPluginSkills = "${inputs.agent-carousel}/adapters/claude-code/plugin/skills";
             });
       };
     };
