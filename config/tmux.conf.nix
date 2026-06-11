@@ -292,6 +292,12 @@
     lib.optionalString (defaultShell != null)
     "set -g default-shell ${defaultShell}\n    ";
 
+  # prefix+I bind for the agent-carousel image gallery, emitted only when the
+  # toggle package is wired in (carousel-toggle != null).
+  carouselBind =
+    lib.optionalString (carousel-toggle != null)
+    "bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'";
+
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
     # catppuccin theme
@@ -406,7 +412,7 @@
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
-    bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'
+    ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
     bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
