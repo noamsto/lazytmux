@@ -449,6 +449,12 @@
     # Click session name in status bar to open session picker
     bind -T root MouseDown1StatusLeft choose-tree -Zs
 
+    ${lib.optionalString splashEnable ''
+      # Summon the welcome splash on demand (bypasses the once-per-session gate;
+      # no auto-timeout — dismiss with any key).
+      bind C-Space display-popup -E -B -w 100% -h 100% '${picker-splash-bin} --no-timeout'
+    ''}
+
     ${lib.optionalString enrichEnable ''
       # === Issue/PR enrichment ===
       # prefix + i enters the enrich table: i open issue, p open PR, r refresh.
