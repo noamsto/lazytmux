@@ -23,8 +23,12 @@
   # Absolute path to the shell tmux spawns in new panes (default-shell).
   # Null => tmux uses $SHELL / the account shell.
   defaultShell ? null,
-  # agent-carousel toggle package (threaded from the flake input; used by prefix+I in Task 9).
+  # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
+  # Welcome-buffer splash (threaded from the home-manager module).
+  splashEnable ? true,
+  splashTips ? [],
+  splashTimeout ? 10,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -152,6 +156,12 @@
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
 
+  mkScriptSplash = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings ["@tmux_splash@"] [picker-splash-bin]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # claude-status needs lib substitution but not self-reference
   mkScriptWithLibs = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -182,8 +192,10 @@
   picker-generate = import ../picker {
     inherit pkgs lib processIcons fallbackIcon;
     inherit maxIconsPicker;
+    inherit splashTips splashTimeout prefix;
   };
   picker-generate-bin = "${picker-generate}/bin/tmux-picker-generate";
+  picker-splash-bin = "${picker-generate}/bin/tmux-splash";
 
   scriptNames = [
     "claude-status"
@@ -200,6 +212,7 @@
     "tmux-issue-stamp-linear"
     "tmux-issue-stamp-github"
     "tmux-pr-enrich"
+    "tmux-splash-maybe"
     "lazytmux-log-event"
     "lazytmux-debug"
   ];
@@ -266,6 +279,8 @@
     then mkScriptFull name
     else if name == "claude-status"
     then claude-status-pkg
+    else if name == "tmux-splash-maybe"
+    then mkScriptSplash name
     else if builtins.elem name scriptsWithLog
     then mkScriptWithLog name
     else mkScript name);
@@ -590,6 +605,13 @@
     # Synchronous init on config load so icons + window bar are ready before the user sees it
     run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
     run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
+
+    ${lib.optionalString splashEnable ''
+      # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
+      # index-0 bindings on the same events (a bare set-hook would clobber them).
+      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+    ''}
 
     ${extraConfText}
   '';
