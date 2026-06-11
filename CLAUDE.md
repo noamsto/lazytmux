@@ -151,6 +151,8 @@ default through `programs.lazytmux.splash.enable`.
 - **Trigger:** indexed `client-attached[50]` / `client-session-changed[50]`
   hooks fire `tmux-splash-maybe`, which gates on `@splash_shown` +
   1-window/1-pane + `pane_current_command` being a shell.
+- **On demand:** `prefix + C-Space` pops the splash directly (bypasses the gate),
+  launched with `--no-timeout` so it dismisses on keypress only.
 - **Cheatsheet:** `splash.tips` (list of `{ key; label; }`) is codegen'd into the
   binary at build time (`picker/splash/tips_generated.go`, like the picker's
   `icons_generated.go`); the `prefix` token is substituted at render time.

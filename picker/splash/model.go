@@ -66,6 +66,9 @@ func timeoutCmd(sec int) tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.timeoutSec <= 0 {
+		return frameCmd() // no auto-dismiss (on-demand launch)
+	}
 	return tea.Batch(frameCmd(), timeoutCmd(m.timeoutSec))
 }
 
