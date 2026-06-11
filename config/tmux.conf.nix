@@ -188,8 +188,6 @@
   scriptNames = [
     "claude-status"
     "claude-status-update"
-    "claude-images-update"
-    "tmux-claude-images"
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
@@ -207,7 +205,7 @@
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
-  scriptsWithIcons = ["tmux-claude-images" "tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
+  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
   mkScriptFull = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -408,7 +406,7 @@
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
     bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
-    bind I run-shell '${script.tmux-claude-images}/bin/tmux-claude-images'
+    bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'
 
     # Yank pane's current working directory to system clipboard
     bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
