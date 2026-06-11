@@ -133,17 +133,20 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
 ### Welcome Buffer (splash)
 
 `tmux-splash` (a bubbletea binary, second main package in the `picker/` Go
-module) renders a sleeping-cat mascot in braille glyphs with a dissolve-in
-intro (braille static settling into the art), a plasma-field shimmer (summed
-sines drive both gradient color and per-cell brightness), floating sleep `z`s,
-and a keybind cheatsheet — shown once per fresh session via `display-popup`.
-Enabled by default through `programs.lazytmux.splash.enable`.
+module) renders a sleeping-cat mascot as an animated braille frame deck —
+breathing + drifting sleep `z`s baked into the source — with a dissolve-in
+intro (braille static settling into the art) and a plasma-field shimmer (summed
+sines drive both gradient color and per-cell brightness), plus a keybind
+cheatsheet — shown once per fresh session via `display-popup`. Enabled by
+default through `programs.lazytmux.splash.enable`.
 
-- **Art:** `assets/cat.txt` / `cat-small.txt` are static braille text embedded
-  via `//go:embed`, regenerated from `assets/cat-source.png` (a frame of a
-  sleeping-cat clip) by `assets/catgen.py` (ffmpeg negate → chafa braille; U+2800
-  blanks folded to spaces). The renderer recolors every glyph, so the source is
-  shape-only.
+- **Art:** `assets/frames.txt` is the loop (one braille frame per form-feed
+  `\f`, uniform height) and `cat-small.txt` is a single static frame for small
+  viewports — both embedded via `//go:embed`. Regenerated from
+  `assets/cat-source.mp4` (a seamless sleeping-cat clip) by `assets/catgen.py`
+  (ffmpeg negate + hard threshold → chafa braille `--dither none`; U+2800 blanks
+  folded to spaces). The deck plays ~real-time (`deckStep` ticks/frame); the
+  renderer recolors every glyph, so the source is shape-only.
 - **Trigger:** indexed `client-attached[50]` / `client-session-changed[50]`
   hooks fire `tmux-splash-maybe`, which gates on `@splash_shown` +
   1-window/1-pane + `pane_current_command` being a shell.

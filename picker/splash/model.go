@@ -24,7 +24,8 @@ type model struct {
 	gradient      []string
 	frame         int
 	width, height int
-	full, small   artGrid
+	deck          []artGrid // breathing + drifting-z loop
+	small         artGrid   // single static frame for small viewports
 }
 
 func newModel(theme string, tips []tip, prefix string, timeoutSec int) model {
@@ -38,9 +39,22 @@ func newModel(theme string, tips []tip, prefix string, timeoutSec int) model {
 		prefix:     prefix,
 		timeoutSec: timeoutSec,
 		gradient:   buildGradient(anchors, 48),
-		full:       parseArt(catFull),
+		deck:       loadDeck(),
 		small:      parseArt(catSmall),
 	}
+}
+
+// deckStep is ticks per deck frame: 2 * 50ms = 100ms ≈ the source loop rate
+// (100 frames over ~10s). The plasma shimmer still updates every tick.
+const deckStep = 2
+
+// currentFrame is the deck frame for the current tick (loops); falls back to
+// the small frame when the deck is empty.
+func (m model) currentFrame() artGrid {
+	if len(m.deck) == 0 {
+		return m.small
+	}
+	return m.deck[(m.frame/deckStep)%len(m.deck)]
 }
 
 func frameCmd() tea.Cmd {
@@ -126,62 +140,6 @@ func (m model) colorizeArt(a artGrid) string {
 	return sb.String()
 }
 
-// Sleep "z" overlay: a few marks drift up-and-right from above the cat's head
-// and fade, staggered with a pause between cycles so they read as sporadic.
-const (
-	zSlots    = 3
-	zHeadroom = 4   // blank rows reserved above the cat for the z's to rise into
-	zPeriod   = 78  // frames for one mark's full rise (~3.9s at 50ms)
-	zStagger  = 26  // frame offset between successive marks
-	zActive   = 0.8 // fraction of the period a mark is visible (rest = pause)
-)
-
-var zGlyphs = []rune{'z', 'Z', 'z'}
-
-// renderMascot stacks the animated z headroom above the dissolving/shimmering
-// cat, as one block so outer centering keeps the marks aligned to the art.
-func (m model) renderMascot(a artGrid) string {
-	originX := a.w * 30 / 100
-	grid := make([][]rune, zHeadroom)
-	bright := make([][]float64, zHeadroom)
-	for r := range grid {
-		grid[r] = make([]rune, a.w)
-		bright[r] = make([]float64, a.w)
-		for c := range grid[r] {
-			grid[r][c] = ' '
-		}
-	}
-	for i := 0; i < zSlots; i++ {
-		ph := float64((m.frame+i*zStagger)%zPeriod) / zPeriod
-		if ph >= zActive {
-			continue // pause between marks
-		}
-		p := ph / zActive // 0 (just above head) → 1 (top, faded out)
-		row := zHeadroom - 1 - int(p*float64(zHeadroom))
-		col := originX + int(p*5)
-		if row < 0 || col < 0 || col >= a.w {
-			continue
-		}
-		grid[row][col] = zGlyphs[i]
-		bright[row][col] = 1 - p
-	}
-
-	var sb strings.Builder
-	for r := 0; r < zHeadroom; r++ {
-		for c := 0; c < a.w; c++ {
-			if grid[r][c] == ' ' {
-				sb.WriteRune(' ')
-				continue
-			}
-			hex := shade(m.accent(), 0.35+0.65*bright[r][c])
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(string(grid[r][c])))
-		}
-		sb.WriteByte('\n')
-	}
-	sb.WriteString(m.colorizeArt(a))
-	return sb.String()
-}
-
 func (m model) renderTips() string {
 	if len(m.tips) == 0 {
 		return ""
@@ -190,35 +148,42 @@ func (m model) renderTips() string {
 	lblStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.subtext()))
 
 	keyOf := func(t tip) string { return strings.ReplaceAll(t.Key, "prefix", m.prefix) }
-	keyW := 0
+	// Fixed key and label column widths so both halves line up in a grid.
+	keyW, labelW := 0, 0
 	for _, t := range m.tips {
 		if n := lipgloss.Width(keyOf(t)); n > keyW {
 			keyW = n
+		}
+		if n := lipgloss.Width(t.Label); n > labelW {
+			labelW = n
 		}
 	}
 
 	half := (len(m.tips) + 1) / 2
 	var rows []string
 	for i := 0; i < half; i++ {
-		left := m.tipCell(m.tips[i], keyOf, keyStyle, lblStyle, keyW)
+		left := m.tipCell(m.tips[i], keyOf, keyStyle, lblStyle, keyW, labelW)
 		right := ""
 		if j := i + half; j < len(m.tips) {
-			right = m.tipCell(m.tips[j], keyOf, keyStyle, lblStyle, keyW)
+			right = m.tipCell(m.tips[j], keyOf, keyStyle, lblStyle, keyW, labelW)
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", right))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-func (m model) tipCell(t tip, keyOf func(tip) string, keyStyle, lblStyle lipgloss.Style, keyW int) string {
+func (m model) tipCell(t tip, keyOf func(tip) string, keyStyle, lblStyle lipgloss.Style, keyW, labelW int) string {
 	key := keyStyle.Width(keyW).Render(keyOf(t))
-	return lipgloss.JoinHorizontal(lipgloss.Top, key, "  ", lblStyle.Render(t.Label))
+	label := lblStyle.Width(labelW).Render(t.Label)
+	return lipgloss.JoinHorizontal(lipgloss.Top, key, "  ", label)
 }
 
 func (m model) render() string {
 	var blocks []string
-	if art, show := pickArt(m.full, m.small, m.width, m.height); show {
-		blocks = append(blocks, m.renderMascot(art))
+	if cur := m.currentFrame(); fits(cur, m.width, m.height) {
+		blocks = append(blocks, m.colorizeArt(cur))
+	} else if fits(m.small, m.width, m.height) {
+		blocks = append(blocks, m.colorizeArt(m.small))
 	}
 	wordmark := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("l a z y t m u x")
 	blocks = append(blocks, wordmark, "")

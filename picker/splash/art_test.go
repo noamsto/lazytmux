@@ -12,18 +12,31 @@ func TestParseArtDimensions(t *testing.T) {
 	}
 }
 
-func TestPickArt(t *testing.T) {
-	full := artGrid{w: 40, h: 8}
-	small := artGrid{w: 12, h: 3}
-	const reserve = 10
+func TestFits(t *testing.T) {
+	a := artGrid{w: 40, h: 8}
+	if !fits(a, 80, 24) {
+		t.Error("roomy viewport should fit")
+	}
+	if fits(a, 20, 24) {
+		t.Error("too-narrow viewport should not fit")
+	}
+	if fits(a, 80, a.h+reserveLines-1) {
+		t.Error("too-short viewport should not fit")
+	}
+	if !fits(a, 80, a.h+reserveLines) {
+		t.Error("exact-height viewport should fit")
+	}
+}
 
-	if a, show := pickArt(full, small, 80, 24); !show || a.w != full.w {
-		t.Errorf("roomy viewport should pick full, got show=%v w=%d", show, a.w)
+func TestLoadDeckNonEmpty(t *testing.T) {
+	deck := loadDeck()
+	if len(deck) == 0 {
+		t.Fatal("embedded frame deck is empty")
 	}
-	if a, show := pickArt(full, small, 20, 24); !show || a.w != small.w {
-		t.Errorf("narrow viewport should pick small, got show=%v w=%d", show, a.w)
-	}
-	if _, show := pickArt(full, small, 8, reserve+1); show {
-		t.Error("tiny viewport should drop the mascot (show=false)")
+	h := deck[0].h
+	for i, f := range deck {
+		if f.h != h {
+			t.Errorf("frame %d height %d != frame 0 height %d (deck must be registered)", i, f.h, h)
+		}
 	}
 }
