@@ -492,7 +492,11 @@
 
     # Window titles
     set-option -g set-titles on
-    set-option -g set-titles-string "#S / #{pane_current_command}"
+    # Strip the nix makeWrapper decoration (.foo-wrapped → foo). On macOS,
+    # pane_current_command resolves to the real on-disk binary, which
+    # makeWrapper names `.foo-wrapped`; argv[0] can't change that (the kernel
+    # reports the resolved file via proc_pidpath). Rewrite at the display layer.
+    set-option -g set-titles-string "#S / #{s|^\.(.*)-wrapped$|\1|:pane_current_command}"
 
     # === Status Bar (Catppuccin + multi-line) ===
     set -g allow-rename off
