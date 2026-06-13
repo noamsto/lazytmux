@@ -118,6 +118,8 @@ done
 
 # Set active pane icon for top-right display (from batched data)
 active_icon=""
+# Normalize nix makeWrapper's `.foo-wrapped` to `foo` (see lib-icons).
+[[ $active_pane_proc == .*-wrapped ]] && active_pane_proc="${active_pane_proc#.}" && active_pane_proc="${active_pane_proc%-wrapped}"
 [[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
 tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
 
