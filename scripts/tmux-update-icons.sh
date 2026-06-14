@@ -39,7 +39,10 @@ while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window
 done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}	#{pane_current_path}	#{pane_current_command}	#{@branch}	#{pane_active}	#{window_active}')
 
 # --- Claude status: read pane files, bucket by window index ---
-declare -A win_claude_state win_claude_stale win_claude_unseen
+declare -A win_claude_state win_claude_fade win_claude_unseen
+# Session-wide tally drives the status-bar session-name tint (@claude_session_fg)
+sess_w=0 sess_k=0 sess_p=0 sess_d=0 sess_i=0 sess_e=0 sess_dn=0
+sess_min_fade=100 sess_unseen=0
 if [[ -d $CLAUDE_PANES_DIR ]]; then
 	for pf in "$CLAUDE_PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
@@ -48,21 +51,40 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		[[ -n $win_idx ]] || continue
 		read_pane_state "$pf" || continue
 		state="$REPLY"
-		stale=$REPLY_STALE
+		fade=$REPLY_FADE
 		unseen=$REPLY_UNSEEN
+		# Session aggregate: count states, freshest pane wins the fade
+		case "$state" in
+		error) ((sess_e++)) ;;
+		waiting) ((sess_w++)) ;;
+		compacting) ((sess_k++)) ;;
+		processing) ((sess_p++)) ;;
+		done) ((sess_d++)) ;;
+		idle) ((sess_i++)) ;;
+		denied) ((sess_dn++)) ;;
+		esac
+		((fade < sess_min_fade)) && sess_min_fade=$fade
+		[[ $unseen == 1 ]] && sess_unseen=1
 		# Priority merge: error > waiting > compacting > processing > done > idle
-		# Staleness and unseen track the winning state's pane
+		# Fade and unseen track the winning state's pane
 		current="${win_claude_state[$win_idx]:-}"
 		case "$state" in
-		error) win_claude_state[$win_idx]="error" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
-		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
-		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
-		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="processing" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
-		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
-		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_stale[$win_idx]=$stale win_claude_unseen[$win_idx]=$unseen ;;
+		error) win_claude_state[$win_idx]="error" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="processing" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
 		esac
 	done
 fi
+
+# Session-name color: tint with the aggregate claude state, faded by the
+# freshest pane's age. Empty when no claude panes — the format falls back to
+# the theme's session color.
+claude_priority_state "$sess_w" "$sess_k" "$sess_p" "$sess_d" "$sess_i" "$sess_e" "$sess_dn"
+claude_faded_hex "$REPLY" "$sess_min_fade" "$sess_unseen"
+session_fg=$REPLY
 
 # --- Compute process icons + claude per window, measure display widths ---
 declare -a all_idx=()
@@ -102,7 +124,7 @@ for idx in "${!win_pane_path[@]}"; do
 	# Append colored claude status icon (shares the icon column)
 	c_state="${win_claude_state[$idx]:-}"
 	display="${proc_icon_str}"
-	claude_colored_icon "$c_state" "${win_claude_stale[$idx]:-0}" "${win_claude_unseen[$idx]:-0}"
+	claude_colored_icon "$c_state" "${win_claude_fade[$idx]:-0}" "${win_claude_unseen[$idx]:-0}"
 	if [[ -n $REPLY ]]; then
 		icon+="$REPLY"
 		((icon_dw += 2)) # 1-cell nerd font icon + 1 space
@@ -122,6 +144,7 @@ active_icon=""
 [[ $active_pane_proc == .*-wrapped ]] && active_pane_proc="${active_pane_proc#.}" && active_pane_proc="${active_pane_proc%-wrapped}"
 [[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
 tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
+tmux_cmds+="set -q -t '$SESSION' @claude_session_fg '$session_fg'"$'\n'
 
 # --- Second pass: set unpadded + padded icon variables ---
 # Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
