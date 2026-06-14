@@ -145,7 +145,11 @@ claude_faded_hex() {
 	esac
 	local fade=${2:-0}
 	[[ ${3:-0} == 1 ]] && fade=0
-	((fade > 0)) && fade_hex "$REPLY" "$H_I" "$fade"
+	# `if`, not `&&` — a trailing false `((...))` would make this the function's
+	# non-zero exit status and trip `set -e` in callers (claude-status).
+	if ((fade > 0)); then
+		fade_hex "$REPLY" "$H_I" "$fade"
+	fi
 }
 
 # claude_colored_icon STATE [FADE] [UNSEEN]
