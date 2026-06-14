@@ -25,7 +25,7 @@ source @lib_claude@
 # --- Counting ---
 
 count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 total=0
-all_stale=1  # assume stale until a non-stale pane proves otherwise
+min_fade=100 # freshest pane wins: 0 = fresh/full color, 100 = fully dim
 any_unseen=0 # set if any pane has unseen=1
 
 issue_ids=() # union of issue ids across matched panes, insertion-ordered
@@ -54,7 +54,7 @@ tally_state() {
 	error) ((count_error++)) || true ;;
 	denied) ((count_denied++)) || true ;;
 	esac
-	[[ $REPLY_STALE == 1 ]] || all_stale=0
+	((REPLY_FADE < min_fade)) && min_fade=$REPLY_FADE
 	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1 || true
 }
 
@@ -90,7 +90,7 @@ get_priority_state() {
 # --- Output Formatting ---
 
 format_output() {
-	local state="$1" count="$2" format="$3" leading_space="$4" stale="${5:-0}" unseen="${6:-0}"
+	local state="$1" count="$2" format="$3" leading_space="$4" fade="${5:-0}" unseen="${6:-0}"
 	[[ -n $state ]] || return 0
 
 	local prefix=""
@@ -105,7 +105,7 @@ format_output() {
 		;;
 	icon-color)
 		setup_claude_colors
-		claude_colored_icon "$state" "$stale" "$unseen"
+		claude_colored_icon "$state" "$fade" "$unseen"
 		local icon_out="$REPLY" issue_out=""
 		if ((${#issue_ids[@]} > 0)); then
 			format_issue_list 3 "${issue_ids[@]}"
@@ -188,7 +188,7 @@ pane)
 	read_pane_state "$CLAUDE_PANES_DIR/${target#%}" || exit 0
 	tally_state "$REPLY"
 	get_priority_state
-	format_output "$REPLY" 1 "$format" "true" "$all_stale" "$any_unseen"
+	format_output "$REPLY" 1 "$format" "true" "$min_fade" "$any_unseen"
 	;;
 window)
 	count_for_window "$target"
@@ -198,12 +198,12 @@ window)
 		exit 0
 	fi
 	get_priority_state
-	format_output "$REPLY" "$total" "$format" "true" "$all_stale" "$any_unseen"
+	format_output "$REPLY" "$total" "$format" "true" "$min_fade" "$any_unseen"
 	;;
 session)
 	count_for_session "$target"
 	[[ $total -gt 0 ]] || exit 0
 	get_priority_state
-	format_output "$REPLY" "$total" "$format" "false" "$all_stale" "$any_unseen"
+	format_output "$REPLY" "$total" "$format" "false" "$min_fade" "$any_unseen"
 	;;
 esac
