@@ -5,7 +5,8 @@
 #                           enrich one window's branch (with --force to bypass
 #                           TTL); D is a checkout dir giving gh its repo context
 #   --mock-* ...            write mock @pr_* options directly (no gh), for tests
-# Always exits 0. Writes @pr_number @pr_title @pr_state @pr_check_state @pr_url.
+# Always exits 0. Writes @pr_number @pr_title @pr_state @pr_check_state @pr_url
+# @pr_mergeable @pr_branch.
 #
 # gh resolves the repo from its cwd, and this poller's own cwd is the tmux
 # server's (usually not a repo at all) — so every gh call must run inside a
@@ -83,7 +84,7 @@ done
 
 # --- helper definitions (defined before any code path calls them) ---
 
-# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE
+# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH
 write_pr_options() {
 	# Only the glyph-driving options (@pr_number/@pr_state/@pr_check_state/
 	# @pr_mergeable) are captured before writing so we can skip the
@@ -96,6 +97,10 @@ write_pr_options() {
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
 	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
+	# Tags the branch this PR data describes so displays can hide it once the
+	# pane cd's to a different branch (no wt switch re-stamps @pr_*). Mirrors
+	# @issue_branch.
+	tmux set-option -t "$1" -w @pr_branch "${8:-}"
 	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}"
 	if [[ $prev != "$2|$4|$5|${7:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
@@ -162,9 +167,9 @@ fetch_branch_pr() {
 	printf '%s' "$cache"
 }
 
-# apply_cache_to_target TARGET CACHE_PATH
+# apply_cache_to_target TARGET CACHE_PATH BRANCH
 apply_cache_to_target() {
-	local tgt="$1" cache="$2"
+	local tgt="$1" cache="$2" br="$3"
 	# No cache file = this branch was never successfully fetched: keep the
 	# last-known options instead of wiping to "none" (offline / rate-limit
 	# resilience). A genuine "no PR" answer is a present "[]" cache.
@@ -172,7 +177,7 @@ apply_cache_to_target() {
 	local json
 	json="$(cat "$cache")"
 	if [[ $json == "[]" || -z $json ]]; then
-		write_pr_options "$tgt" "none" "" "" "" "" ""
+		write_pr_options "$tgt" "none" "" "" "" "" "" "$br"
 		return
 	fi
 	local number title url state rollup mergeable
@@ -185,7 +190,7 @@ apply_cache_to_target() {
 	collapse_check_rollup "$rollup"
 	local check="$REPLY"
 	sanitize_title "$title"
-	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable"
+	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br"
 }
 
 # enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
@@ -229,7 +234,7 @@ enrich_repo_group() {
 		fi
 		for line in "${wlines[@]}"; do
 			IFS="|" read -r tgt b2 <<<"$line"
-			[[ $b2 == "$br" ]] && apply_cache_to_target "$tgt" "$cache"
+			[[ $b2 == "$br" ]] && apply_cache_to_target "$tgt" "$cache" "$br"
 		done
 	done
 }
@@ -283,7 +288,7 @@ run_full_pass() {
 if [[ $mode == "mock" ]]; then
 	[[ -z $target ]] && exit 0
 	sanitize_title "$mock_title"
-	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable"
+	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable" "$branch"
 	exit 0
 fi
 
@@ -296,7 +301,7 @@ fi
 # --- single-target mode (from dispatcher / force refresh) ---
 if [[ -n $target && -n $branch ]]; then
 	cache="$(fetch_branch_pr "$dir" "$branch")"
-	apply_cache_to_target "$target" "$cache"
+	apply_cache_to_target "$target" "$cache" "$branch"
 	exit 0
 fi
 
