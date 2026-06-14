@@ -157,10 +157,10 @@ if [[ $state == "task" ]]; then
 	text=""
 	case "$action" in
 	set)
-		[[ ${1:-} != --* ]] && {
-			text="${1:-}"
-			shift || true
-		}
+		# Text is mandatory and free-form (a captured prompt), so take it
+		# verbatim — even a leading "--" is content here, not a flag.
+		text="${1:-}"
+		shift || true
 		;;
 	clear) ;;
 	*)
@@ -181,9 +181,11 @@ if [[ $state == "task" ]]; then
 	tasks_file="$TASKS_DIR/${pane_id#%}"
 	case "$action" in
 	set)
-		# Squeeze to one line, drop non-printables, trim, cap length — the value
-		# becomes a tmux window option and a status-bar segment.
-		clean=$(printf '%s' "$text" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | tr -s ' ')
+		# Squeeze to one line, drop control chars, trim, cap length — the value
+		# becomes a tmux window option and a status-bar segment. Delete cntrl (not
+		# keep [:print:]): tr is byte-oriented, so [:print:] would strip every
+		# non-ASCII byte and mangle UTF-8 (emoji, accents, RTL text).
+		clean=$(printf '%s' "$text" | tr '\n\r\t' '   ' | tr -d '[:cntrl:]' | tr -s ' ')
 		clean="${clean# }"
 		clean="${clean:0:60}"
 		clean="${clean% }"

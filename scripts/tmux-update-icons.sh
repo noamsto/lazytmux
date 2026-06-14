@@ -21,13 +21,16 @@ active_pane_proc=""
 active_win_idx=""
 while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_task; do
 	pane_to_win["${pane_id#%}"]="$idx"
-	# First pane_path per window wins (active pane comes first from list-panes)
+	# First pane per window wins for path/branch/task — panes in a window share a
+	# cwd, and @window_task/@branch are window options (same for every pane).
 	if [[ -z ${win_pane_path[$idx]+x} ]]; then
 		win_pane_path[$idx]="$pane_path"
 		win_cur_branch[$idx]="$cur_branch"
-		win_active_pane[$idx]="${pane_id#%}"
 		win_cur_task[$idx]="$cur_task"
 	fi
+	# The task file is keyed by the pane Claude runs in, so resolve the genuinely
+	# active pane (list-panes orders by index, not active-first).
+	[[ $pane_active == 1 ]] && win_active_pane[$idx]="${pane_id#%}"
 	[[ $window_active == 1 ]] && active_win_idx="$idx"
 	# Track the session's active pane command (active pane in active window)
 	[[ $pane_active == 1 && $window_active == 1 ]] && active_pane_proc="$proc"

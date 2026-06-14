@@ -113,6 +113,22 @@ setup() {
 	[ "${#got}" -eq 60 ]
 }
 
+@test "task set: preserves non-ASCII (UTF-8 RTL + emoji)" {
+	bash "$CSU" task set "fix שלום 🚀 bug" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "fix שלום 🚀 bug" ]
+}
+
+@test "task set: a leading -- is content, not a flag" {
+	bash "$CSU" task set "--watch the splash" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "--watch the splash" ]
+}
+
+@test "task set: a literal --pane prompt is stored, not parsed as a flag" {
+	run bash "$CSU" task set "--pane" --pane %7
+	[ "$status" -eq 0 ]
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "--pane" ]
+}
+
 @test "task set: overwrites the previous phrase" {
 	bash "$CSU" task set "first thing" --pane %7
 	bash "$CSU" task set "second thing" --pane %7
