@@ -85,12 +85,60 @@ setup() {
 	[ "$(cat "$CLAUDE_STATUS_DIR/issues/7")" = "ENG-123" ]
 }
 
-@test "clear state removes pane and issues files" {
+@test "clear state removes pane, issues, and tasks files" {
 	bash "$CSU" issue add ENG-123 --pane %7
+	bash "$CSU" task set "fix the reflow" --pane %7
 	bash "$CSU" processing --pane %7
 	bash "$CSU" clear --pane %7
 	[ ! -e "$CLAUDE_STATUS_DIR/panes/7" ]
 	[ ! -e "$CLAUDE_STATUS_DIR/issues/7" ]
+	[ ! -e "$CLAUDE_STATUS_DIR/tasks/7" ]
+}
+
+@test "task set: writes the phrase to the tasks file" {
+	bash "$CSU" task set "fix the reflow" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "fix the reflow" ]
+}
+
+@test "task set: collapses newlines and squeezes whitespace" {
+	printf -v multi 'fix   the\nreflow\twindows'
+	bash "$CSU" task set "$multi" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "fix the reflow windows" ]
+}
+
+@test "task set: truncates to 60 chars" {
+	long=$(printf 'x%.0s' {1..100})
+	bash "$CSU" task set "$long" --pane %7
+	got=$(cat "$CLAUDE_STATUS_DIR/tasks/7")
+	[ "${#got}" -eq 60 ]
+}
+
+@test "task set: overwrites the previous phrase" {
+	bash "$CSU" task set "first thing" --pane %7
+	bash "$CSU" task set "second thing" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/tasks/7")" = "second thing" ]
+}
+
+@test "task set: whitespace-only writes nothing" {
+	bash "$CSU" task set "   " --pane %7
+	[ ! -e "$CLAUDE_STATUS_DIR/tasks/7" ]
+}
+
+@test "task clear: removes the file" {
+	bash "$CSU" task set "fix the reflow" --pane %7
+	bash "$CSU" task clear --pane %7
+	[ ! -e "$CLAUDE_STATUS_DIR/tasks/7" ]
+}
+
+@test "task: rejects unknown action" {
+	run bash "$CSU" task frobnicate --pane %7
+	[ "$status" -eq 1 ]
+}
+
+@test "task set: no pane id exits 0 silently" {
+	run bash "$CSU" task set "fix the reflow"
+	[ "$status" -eq 0 ]
+	[ ! -e "$CLAUDE_STATUS_DIR/tasks" ] || [ -z "$(ls -A "$CLAUDE_STATUS_DIR/tasks")" ]
 }
 
 @test "format_issue_list: no ids yields empty" {
@@ -196,4 +244,20 @@ EOF
 	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
 	[ ! -f "$CLAUDE_STATUS_DIR/issues/9" ]
 	[ ! -f "$CLAUDE_STATUS_DIR/panes/9" ]
+}
+
+@test "cleanup: removes orphan task file for a dead pane" {
+	mkdir -p "$CLAUDE_STATUS_DIR/tasks"
+	printf 'fix the reflow\n' >"$CLAUDE_STATUS_DIR/tasks/9"
+	stub_tmux
+	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	[ ! -f "$CLAUDE_STATUS_DIR/tasks/9" ]
+}
+
+@test "cleanup: keeps task file for a live pane" {
+	mkdir -p "$CLAUDE_STATUS_DIR/tasks"
+	printf 'fix the reflow\n' >"$CLAUDE_STATUS_DIR/tasks/7"
+	stub_tmux
+	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	[ -f "$CLAUDE_STATUS_DIR/tasks/7" ]
 }

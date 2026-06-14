@@ -145,14 +145,15 @@ provider_priority_list() {
 }
 
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
-#                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE]
+#                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE] [TASK]
 # MODE is "short" or "long". Composes the text-only window label (no color, no
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
 # priority); the branch remainder after the id is the fallback title. Issue
 # windows show "<provider> <id>[ <title>]"; feature branches with no issue show
 # the branch (long=full, short=basename); default-branch (main/master) and
-# branch-less windows show the directory basename.
+# branch-less windows show TASK ("what Claude is doing", self-reported) when set,
+# else the directory basename — so multiple Claudes in one checkout stay distinct.
 #
 # The PR indicator is NOT folded into the name. It is returned as its own
 # segment so the status template can color just the PR by check state and keep
@@ -167,7 +168,7 @@ provider_priority_list() {
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
-	local pr_mergeable="${10:-}"
+	local pr_mergeable="${10:-}" task="${11:-}"
 	local provider_icon pr_glyph=""
 	REPLY=""
 	REPLY_ID=""
@@ -252,9 +253,13 @@ build_window_label() {
 		else
 			REPLY_REST="${branch##*/}"
 		fi
+	elif [[ -n $task ]]; then
+		# Default-branch / branch-less window with a self-reported task: show what
+		# Claude is doing so sibling windows in one checkout don't all read alike.
+		REPLY_REST="$task"
 	else
-		# Default-branch (or branch-less) windows show the repo dir basename: a
-		# bare "main" labels every default-branch window identically across repos.
+		# Last resort: the repo dir basename. A bare "main" labels every
+		# default-branch window identically across repos.
 		REPLY_REST="${pane_path##*/}"
 	fi
 

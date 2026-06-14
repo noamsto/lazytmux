@@ -262,6 +262,33 @@ setup() {
 	[ "$REPLY_PR" = " S #42" ]
 }
 
+@test "build_window_label: default branch with task shows the task, not basename" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "fix the reflow"
+	[ "$REPLY" = "fix the reflow" ]
+	[ "$REPLY_ID" = "" ]
+	[ "$REPLY_REST" = "fix the reflow" ]
+}
+
+@test "build_window_label: branch-less window with task shows the task (short)" {
+	build_window_label short "" "" "" "" "" "" "" /home/noams/proj "" "debug splash flicker"
+	[ "$REPLY" = "debug splash flicker" ]
+}
+
+@test "build_window_label: empty task on default branch still falls back to basename" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" ""
+	[ "$REPLY" = "lazytmux" ]
+}
+
+@test "build_window_label: feature branch wins over task" {
+	build_window_label short "" "" "" "" "" "" feature/fix-login /x "" "some task"
+	[ "$REPLY" = "fix-login" ]
+}
+
+@test "build_window_label: issue id wins over task" {
+	build_window_label long linear ENG-1 "fix thing" "" "" "" main /x "" "some task"
+	[ "$REPLY" = "L ENG-1 fix thing" ]
+}
+
 @test "build_window_label: plain branch with merged PR keeps name plain, PR separate (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]
