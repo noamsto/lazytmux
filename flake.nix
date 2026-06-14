@@ -10,8 +10,8 @@
       url = "github:noamsto/tmux-state";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    agent-carousel = {
-      url = "github:noamsto/agent-carousel";
+    aeye = {
+      url = "github:noamsto/aeye";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -30,7 +30,7 @@
       }: let
         tmuxConfig = import ./config/tmux.conf.nix {
           inherit pkgs lib;
-          carousel-toggle = inputs.agent-carousel.packages.${pkgs.system}.toggle;
+          carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
         };
       in {
         pre-commit.settings.hooks = {
@@ -132,8 +132,8 @@
           import ./modules/home-manager.nix (args
             // {
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
-              carousel-toggle = inputs.agent-carousel.packages.${pkgs.system}.toggle;
-              carouselPluginSkills = "${inputs.agent-carousel}/adapters/claude-code/plugin/skills";
+              carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+              carouselPluginSkills = "${inputs.aeye}/adapters/claude-code/plugin/skills";
             });
       };
     };

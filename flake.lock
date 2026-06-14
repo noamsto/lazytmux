@@ -1,6 +1,6 @@
 {
   "nodes": {
-    "agent-carousel": {
+    "aeye": {
       "inputs": {
         "flake-parts": "flake-parts",
         "git-hooks-nix": "git-hooks-nix",
@@ -9,16 +9,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1781446233,
-        "narHash": "sha256-AJxuoYN10ynetNh3dVtoD/xBa8Nj6kj+JRJr/x9ML3Y=",
+        "lastModified": 1781458168,
+        "narHash": "sha256-DGFytk0YzSYTcRqOEeMaAcb0XgVADCHsEmznlB3+wkE=",
         "owner": "noamsto",
-        "repo": "agent-carousel",
-        "rev": "b93d9be551ecb10f8156d19409729b96d04272d8",
+        "repo": "aeye",
+        "rev": "c2da7085b7e7fe21dc6cf4df0c5fdd449e1b463b",
         "type": "github"
       },
       "original": {
         "owner": "noamsto",
-        "repo": "agent-carousel",
+        "repo": "aeye",
         "type": "github"
       }
     },
@@ -129,7 +129,7 @@
         "flake-compat": "flake-compat",
         "gitignore": "gitignore",
         "nixpkgs": [
-          "agent-carousel",
+          "aeye",
           "nixpkgs"
         ]
       },
@@ -195,7 +195,7 @@
     "gitignore": {
       "inputs": {
         "nixpkgs": [
-          "agent-carousel",
+          "aeye",
           "git-hooks-nix",
           "nixpkgs"
         ]
@@ -320,7 +320,7 @@
     },
     "root": {
       "inputs": {
-        "agent-carousel": "agent-carousel",
+        "aeye": "aeye",
         "flake-parts": "flake-parts_2",
         "git-hooks-nix": "git-hooks-nix_2",
         "nixpkgs": "nixpkgs",
