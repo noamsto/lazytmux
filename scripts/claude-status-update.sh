@@ -11,6 +11,7 @@ set -euo pipefail
 STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 PANES_DIR="$STATE_DIR/panes"
 ISSUES_DIR="$STATE_DIR/issues"
+TASKS_DIR="$STATE_DIR/tasks"
 IMAGES_DIR="$STATE_DIR/images"
 
 # Ensure directories exist
@@ -48,15 +49,14 @@ cleanup_stale_panes() {
 		local pane_file="${pf##*/}"
 
 		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
-			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
+			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
 		fi
 	done
 
-	# Orphaned issue files (pane gone)
-	for inf in "$ISSUES_DIR"/*; do
+	# Orphaned issue / task files (pane gone)
+	for inf in "$ISSUES_DIR"/* "$TASKS_DIR"/*; do
 		[[ -f $inf ]] || continue
-		local issue_pane="${inf##*/}"
-		if [[ -z ${pane_exists[$issue_pane]+x} ]]; then
+		if [[ -z ${pane_exists[${inf##*/}]+x} ]]; then
 			rm -f "$inf"
 		fi
 	done
@@ -141,6 +141,63 @@ if [[ $state == "issue" ]]; then
 		;;
 	esac
 	log_enabled && log_event claude event issue op "$action" id "${id:-}" pane "%${pane_id#%}"
+	if [[ -n ${TMUX:-} ]]; then
+		tmux refresh-client -S 2>/dev/null || true
+	fi
+	exit 0
+fi
+
+# Task self-report: a short freeform phrase for "what this pane's Claude is
+# doing", captured from the latest user prompt (UserPromptSubmit hook). Kept in
+# its own file like the issue ids; surfaces as the window-label fallback when no
+# branch/issue/PR distinguishes the window (multiple Claudes in one checkout).
+if [[ $state == "task" ]]; then
+	action="${1:-}"
+	shift || true
+	text=""
+	case "$action" in
+	set)
+		# Text is mandatory and free-form (a captured prompt), so take it
+		# verbatim — even a leading "--" is content here, not a flag.
+		text="${1:-}"
+		shift || true
+		;;
+	clear) ;;
+	*)
+		echo "Error: Invalid task action '$action'. Use: set, clear" >&2
+		exit 1
+		;;
+	esac
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--pane)
+			pane_id="$2"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+	[[ -z $pane_id ]] && exit 0
+	tasks_file="$TASKS_DIR/${pane_id#%}"
+	case "$action" in
+	set)
+		# Squeeze to one line, drop control chars, trim, cap length — the value
+		# becomes a tmux window option and a status-bar segment. Delete cntrl (not
+		# keep [:print:]): tr is byte-oriented, so [:print:] would strip every
+		# non-ASCII byte and mangle UTF-8 (emoji, accents, RTL text).
+		clean=$(printf '%s' "$text" | tr '\n\r\t' '   ' | tr -d '[:cntrl:]' | tr -s ' ')
+		clean="${clean# }"
+		clean="${clean:0:60}"
+		clean="${clean% }"
+		if [[ -n $clean ]]; then
+			mkdir -p "$TASKS_DIR"
+			printf '%s\n' "$clean" >"$tasks_file"
+		fi
+		;;
+	clear)
+		rm -f "$tasks_file"
+		;;
+	esac
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true
 	fi
@@ -245,7 +302,7 @@ pane_file="${pane_id#%}"
 
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
-	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file"
+	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file"
 	# Force immediate tmux refresh
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true

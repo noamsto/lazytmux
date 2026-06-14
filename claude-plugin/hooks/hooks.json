@@ -32,7 +32,10 @@
     ],
     "UserPromptSubmit": [
       {
-        "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing --force"}]
+        "hooks": [
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh processing --force"},
+          {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/status.sh task"}
+        ]
       }
     ],
     "PreToolUse": [

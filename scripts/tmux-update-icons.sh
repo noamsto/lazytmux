@@ -16,16 +16,21 @@ MAX_ICONS=@MAX_ICONS@
 setup_claude_colors
 
 # --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
-declare -A pane_to_win win_procs win_pane_path win_cur_branch
+declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task
 active_pane_proc=""
 active_win_idx=""
-while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active; do
+while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_task; do
 	pane_to_win["${pane_id#%}"]="$idx"
-	# First pane_path per window wins (active pane comes first from list-panes)
+	# First pane per window wins for path/branch/task — panes in a window share a
+	# cwd, and @window_task/@branch are window options (same for every pane).
 	if [[ -z ${win_pane_path[$idx]+x} ]]; then
 		win_pane_path[$idx]="$pane_path"
 		win_cur_branch[$idx]="$cur_branch"
+		win_cur_task[$idx]="$cur_task"
 	fi
+	# The task file is keyed by the pane Claude runs in, so resolve the genuinely
+	# active pane (list-panes orders by index, not active-first).
+	[[ $pane_active == 1 ]] && win_active_pane[$idx]="${pane_id#%}"
 	[[ $window_active == 1 ]] && active_win_idx="$idx"
 	# Track the session's active pane command (active pane in active window)
 	[[ $pane_active == 1 && $window_active == 1 ]] && active_pane_proc="$proc"
@@ -36,7 +41,7 @@ while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window
 	*" $proc "*) ;;
 	*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 	esac
-done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}	#{pane_current_path}	#{pane_current_command}	#{@branch}	#{pane_active}	#{window_active}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}	#{pane_current_path}	#{pane_current_command}	#{@branch}	#{pane_active}	#{window_active}	#{@window_task}')
 
 # --- Claude status: read pane files, bucket by window index ---
 declare -A win_claude_state win_claude_fade win_claude_unseen
@@ -93,11 +98,24 @@ declare -A win_icons win_icon_dw win_display
 # Collect all tmux set commands to batch via `tmux source -`
 tmux_cmds=""
 branch_changed=0
+labels_changed=0
 
 for idx in "${!win_pane_path[@]}"; do
 	all_idx+=("$idx")
 	pane_path="${win_pane_path[$idx]}"
 	target="${SESSION}:${idx}"
+
+	# Task label tracks the active pane's self-reported "what Claude is doing"
+	# phrase (UserPromptSubmit hook). It can change in any window, so poll every
+	# window each tick — a single small file read. Set directly (not batched via
+	# `source -`): the phrase is free-form and would break the command parser.
+	task=""
+	[[ -f "$CLAUDE_TASKS_DIR/${win_active_pane[$idx]}" ]] &&
+		IFS= read -r task <"$CLAUDE_TASKS_DIR/${win_active_pane[$idx]}"
+	if [[ $task != "${win_cur_task[$idx]:-}" ]]; then
+		tmux set -qw -t "$target" @window_task "$task"
+		labels_changed=1
+	fi
 
 	# Branch detection forks git per window. A branch only changes in the window
 	# where a checkout/cd happens, so poll only the active window each tick;
@@ -163,10 +181,11 @@ done
 # Batch all tmux set commands in a single IPC call
 printf '%s' "$tmux_cmds" | tmux source -
 
-# A branch change means window labels (built by reflow from @branch/@issue_*)
-# are stale — no tmux hook fires on cd, so kick a forced reflow here. The
-# wrapped tmux puts all lazytmux scripts on the server's PATH.
-if ((branch_changed)); then
+# A branch or task change means window labels (built by reflow from
+# @branch/@issue_*/@window_task) are stale — no tmux hook fires on cd or a new
+# prompt, so kick a forced reflow here. The wrapped tmux puts all lazytmux
+# scripts on the server's PATH.
+if ((branch_changed || labels_changed)); then
 	tmux-reflow-windows "$SESSION" --force >/dev/null 2>&1 &
 	disown
 fi

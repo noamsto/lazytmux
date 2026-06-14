@@ -55,11 +55,13 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}'
+# @window_task is last: free-form text may contain '|', and read drops any extra
+# delimiters into the final field, so it can't shift the columns before it.
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 pr_colw=0 # widest PR segment → shared PR column width (0 when no window has a PR)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch wtask; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
 
@@ -71,7 +73,7 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 		prnum="" prstate="" prcheck="" prmerge=""
 	fi
 
-	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge"
+	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask"
 	win_short[$idx]="$REPLY"
 	win_id[$idx]="$REPLY_ID"
 	win_rest_short[$idx]="$REPLY_REST"
@@ -87,7 +89,7 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 
 	# Long mode only changes the remainder (title / full branch); the id and PR
 	# segments are mode-independent.
-	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge"
+	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask"
 	win_rest_long[$idx]="$REPLY_REST"
 	measure_display_width "$REPLY"
 	win_long_dw[$idx]=$REPLY_DW
