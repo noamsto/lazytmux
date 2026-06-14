@@ -9,11 +9,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781183760,
-        "narHash": "sha256-W1eLv7UPrtz6ymUK9fsP1GDFoKP6Rh01cj5+5wC7ZeU=",
+        "lastModified": 1781432402,
+        "narHash": "sha256-1kX/ABT/wP7CYWJU5rI0OJHIRlErFwIJ6xgtEypyK3w=",
         "owner": "noamsto",
         "repo": "agent-carousel",
-        "rev": "220397dcebd03d939130d7e97c835337046607cc",
+        "rev": "5cd23e60ed4c67f213055c19f63b429e4f578197",
         "type": "github"
       },
       "original": {
