@@ -7,8 +7,9 @@ set -euo pipefail
 session="${1:-}"
 [ -n "$session" ] || session="$(tmux display-message -p '#{session_name}')"
 
-# Once per session — use explicit if to avoid set -e ambiguity with && exit 0.
-if [ "$(tmux show-option -t "$session" -qv @splash_shown)" = "1" ]; then exit 0; fi
+# Once per tmux server — a global flag, so only the first fresh session after
+# server start shows it (not every new session, nor on session switch).
+if [ "$(tmux show-option -gqv @splash_shown)" = "1" ]; then exit 0; fi
 
 # Only a brand-new, single-pane session.
 [ "$(tmux display-message -t "$session" -p '#{session_windows}')" = "1" ] || exit 0
@@ -21,5 +22,5 @@ fish | bash | zsh | sh | dash | nu) ;;
 *) exit 0 ;;
 esac
 
-tmux set-option -t "$session" @splash_shown 1
+tmux set-option -g @splash_shown 1
 tmux display-popup -E -B -w 100% -h 100% -t "$session" @tmux_splash@
