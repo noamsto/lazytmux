@@ -12,19 +12,20 @@ source @lib_claude@
 
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 MAX_ICONS=@MAX_ICONS@
-AI_NAMING=@AI_NAMING@ # 1 when programs.lazytmux.aiNaming.enable, else 0
 
 setup_claude_colors
 
 # --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
-declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task
+declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name
 active_pane_proc=""
 active_win_idx=""
 # '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
 # window with no @branch yet) collapses and shifts every later field left,
 # corrupting cur_branch/active flags. '@window_task' is free-form so it stays
 # last — read drops any stray '|' it contains into that final field.
-while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_task; do
+# @window_ai_name is sanitized free of '|' (claude-status-update), so it is safe
+# as a fixed middle field.
+while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_task; do
 	pane_to_win["${pane_id#%}"]="$idx"
 	# First pane per window wins for path/branch/task — panes in a window share a
 	# cwd, and @window_task/@branch are window options (same for every pane).
@@ -32,6 +33,7 @@ while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_a
 		win_pane_path[$idx]="$pane_path"
 		win_cur_branch[$idx]="$cur_branch"
 		win_cur_task[$idx]="$cur_task"
+		win_cur_name[$idx]="$cur_ai_name"
 	fi
 	# The task file is keyed by the pane Claude runs in, so resolve the genuinely
 	# active pane (list-panes orders by index, not active-first).
@@ -46,7 +48,7 @@ while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_a
 	*" $proc "*) ;;
 	*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 	esac
-done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_task}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@window_task}')
 
 # --- Claude status: read pane files, bucket by window index ---
 declare -A win_claude_state win_claude_fade win_claude_unseen
@@ -120,13 +122,18 @@ for idx in "${!win_pane_path[@]}"; do
 	if [[ $task != "${win_cur_task[$idx]:-}" ]]; then
 		tmux set -qw -t "$target" @window_task "$task"
 		labels_changed=1
-		# Fallback windows (no feature branch) get a Haiku-summarized title in
-		# place of the raw prompt. The namer self-gates on @issue_id, debounces,
-		# and caches; kicked only on task change so it isn't spawned every tick.
-		cur_branch="${win_cur_branch[$idx]:-}"
-		if ((AI_NAMING)) && [[ -z $cur_branch || $cur_branch == "main" || $cur_branch == "master" ]]; then
-			tmux-ai-window-name "$target" >/dev/null 2>&1 &
-		fi
+	fi
+
+	# AI name: the active pane's Claude-set window title (claude-status-update
+	# name set, prompted by the UserPromptSubmit nudge on fallback windows).
+	# build_window_label prefers it over the raw task. Mirror like the task —
+	# free-form, set directly, only on change so reflow isn't kicked every tick.
+	ai_name=""
+	[[ -f "$CLAUDE_NAMES_DIR/${win_active_pane[$idx]}" ]] &&
+		IFS= read -r ai_name <"$CLAUDE_NAMES_DIR/${win_active_pane[$idx]}"
+	if [[ $ai_name != "${win_cur_name[$idx]:-}" ]]; then
+		tmux set -qw -t "$target" @window_ai_name "$ai_name"
+		labels_changed=1
 	fi
 
 	# Branch detection forks git per window. A branch only changes in the window
