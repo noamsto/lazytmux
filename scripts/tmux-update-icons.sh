@@ -12,6 +12,7 @@ source @lib_claude@
 
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 MAX_ICONS=@MAX_ICONS@
+AI_NAMING=@AI_NAMING@ # 1 when programs.lazytmux.aiNaming.enable, else 0
 
 setup_claude_colors
 
@@ -115,6 +116,13 @@ for idx in "${!win_pane_path[@]}"; do
 	if [[ $task != "${win_cur_task[$idx]:-}" ]]; then
 		tmux set -qw -t "$target" @window_task "$task"
 		labels_changed=1
+		# Fallback windows (no feature branch) get a Haiku-summarized title in
+		# place of the raw prompt. The namer self-gates on @issue_id, debounces,
+		# and caches; kicked only on task change so it isn't spawned every tick.
+		cur_branch="${win_cur_branch[$idx]:-}"
+		if ((AI_NAMING)) && [[ -z $cur_branch || $cur_branch == "main" || $cur_branch == "master" ]]; then
+			tmux-ai-window-name "$target" >/dev/null 2>&1 &
+		fi
 	fi
 
 	# Branch detection forks git per window. A branch only changes in the window
