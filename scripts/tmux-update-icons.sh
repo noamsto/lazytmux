@@ -185,6 +185,12 @@ for idx in "${all_idx[@]}"; do
 	# Unpadded (for window names — process icons + colored claude)
 	tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$idx]}'"$'\n'
 
+	# Re-assert automatic-rename: window names are derived (label + icon via
+	# automatic-rename-format) and allow-rename is off, so it must stay on.
+	# tmux-state restore creates windows with `new-window -n`, which flips it
+	# off and freezes the name on a stale label; this self-heals that each tick.
+	tmux_cmds+="set -qw -t '$target' automatic-rename on"$'\n'
+
 	# Padded (for status bar — process icons + claude, fixed width)
 	pad_to_width "${win_icons[$idx]}" "${win_icon_dw[$idx]}" "$TARGET_DW"
 	tmux_cmds+="set -qw -t '$target' @window_icon_padded '$REPLY'"$'\n'
