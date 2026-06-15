@@ -289,6 +289,33 @@ setup() {
 	[ "$REPLY" = "L ENG-1 fix thing" ]
 }
 
+@test "build_window_label: ai_name wins over raw task on default branch" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "fix the reflow logic again" "reflow-fix"
+	[ "$REPLY" = "reflow-fix" ]
+	[ "$REPLY_ID" = "" ]
+	[ "$REPLY_REST" = "reflow-fix" ]
+}
+
+@test "build_window_label: ai_name used when task is empty (branch-less)" {
+	build_window_label short "" "" "" "" "" "" "" /home/noams/proj "" "" "debug-splash"
+	[ "$REPLY" = "debug-splash" ]
+}
+
+@test "build_window_label: feature branch wins over ai_name" {
+	build_window_label short "" "" "" "" "" "" feature/fix-login /x "" "some task" "ai-title"
+	[ "$REPLY" = "fix-login" ]
+}
+
+@test "build_window_label: issue id wins over ai_name" {
+	build_window_label long linear ENG-1 "fix thing" "" "" "" main /x "" "some task" "ai-title"
+	[ "$REPLY" = "L ENG-1 fix thing" ]
+}
+
+@test "build_window_label: empty ai_name falls through to task" {
+	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "do the thing" ""
+	[ "$REPLY" = "do the thing" ]
+}
+
 @test "build_window_label: plain branch with merged PR keeps name plain, PR separate (long)" {
 	build_window_label long "" "" "" 1921 merged success chore/nango-coding-agent-skill /x
 	[ "$REPLY" = "chore/nango-coding-agent-skill" ]

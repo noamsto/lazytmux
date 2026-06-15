@@ -117,6 +117,11 @@
     splashEnable = cfg.splash.enable;
     splashTips = cfg.splash.tips;
     splashTimeout = cfg.splash.timeout;
+    aiNamingEnable = cfg.aiNaming.enable;
+    aiNamingModel = cfg.aiNaming.model;
+    aiNamingCommand = cfg.aiNaming.command;
+    aiNamingDebounce = cfg.aiNaming.debounceSeconds;
+    aiNamingMaxChars = cfg.aiNaming.maxChars;
   };
 
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
@@ -342,6 +347,45 @@ in {
           }
         ];
         description = "Keybind cheatsheet shown in the welcome buffer. Empty = mascot only.";
+      };
+    };
+
+    aiNaming = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether fallback windows — no tracked issue, on the default branch —
+          get a short AI-summarized title in place of the raw captured prompt.
+          A background `claude -p` call (debounced, cached by task) runs when
+          such a window's task changes. Requires the `command` CLI to be a
+          logged-in Claude Code (OAuth/subscription or ANTHROPIC_API_KEY).
+        '';
+      };
+      model = lib.mkOption {
+        type = lib.types.str;
+        default = "claude-haiku-4-5";
+        description = "Model passed to `claude -p --model` for title generation.";
+      };
+      command = lib.mkOption {
+        type = lib.types.str;
+        default = "claude";
+        description = ''
+          Claude Code CLI used to generate titles. A bare name is resolved
+          against PATH and the common Nix/Homebrew profile dirs (the tmux
+          server's PATH omits the user profile); an absolute path is used
+          as-is.
+        '';
+      };
+      debounceSeconds = lib.mkOption {
+        type = lib.types.ints.between 0 300;
+        default = 20;
+        description = "Seconds to wait out further prompts before generating a title (a newer prompt cancels the pending one).";
+      };
+      maxChars = lib.mkOption {
+        type = lib.types.ints.between 8 60;
+        default = 24;
+        description = "Hard cap on the generated title length (trailing partial word dropped).";
       };
     };
 
