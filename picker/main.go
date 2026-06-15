@@ -361,7 +361,9 @@ func collectSessionResources(sessions []sessionData) map[string]sessionResources
 		}
 	}
 
-	psOut, err := exec.Command("ps", "-eo", "pid,ppid,pcpu,rss", "--no-headers").Output()
+	// No --no-headers: it's GNU-only and BSD ps (macOS) errors on it. The header
+	// row that reappears is skipped below since "PID" parses to 0 (pid <= 0 guard).
+	psOut, err := exec.Command("ps", "-eo", "pid,ppid,pcpu,rss").Output()
 	if err != nil {
 		return nil
 	}
