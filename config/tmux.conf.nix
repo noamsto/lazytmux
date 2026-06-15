@@ -29,14 +29,11 @@
   splashEnable ? true,
   splashTips ? [],
   splashTimeout ? 10,
-  # AI window naming (threaded from the home-manager module). When enabled,
-  # fallback windows (no tracked issue, on the default branch) get a short
-  # Haiku-summarized title via `claude -p` in place of the raw captured prompt.
+  # AI window naming (threaded from the home-manager module). When enabled, a
+  # UserPromptSubmit hook nudges the pane's Claude to name fallback windows (no
+  # tracked issue, on the default branch) for itself via `claude-status-update
+  # name set`. Exposed to the plugin hook as the @ai_naming global.
   aiNamingEnable ? false,
-  aiNamingModel ? "claude-haiku-4-5",
-  aiNamingCommand ? "claude",
-  aiNamingDebounce ? 20,
-  aiNamingMaxChars ? 24,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -197,17 +194,6 @@
   in
     pkgs.writeShellScriptBin name patched;
 
-  # AI window namer: lib-claude + model/command/debounce/cap substitution.
-  mkScriptAi = name: let
-    raw = builtins.readFile ../scripts/${name}.sh;
-    patched =
-      builtins.replaceStrings
-      ["@lib_claude@" "@ai_model@" "@ai_command@" "@ai_debounce@" "@ai_max_chars@"]
-      ["${lib-claude}" aiNamingModel aiNamingCommand (toString aiNamingDebounce) (toString aiNamingMaxChars)]
-      raw;
-  in
-    pkgs.writeShellScriptBin name patched;
-
   # Build claude-status first — other scripts reference it by full path
   claude-status-pkg = mkScriptWithLibs "claude-status";
   claude-status-bin = "${claude-status-pkg}/bin/claude-status";
@@ -228,7 +214,6 @@
     "tmux-session-picker"
     "tmux-window-picker"
     "tmux-update-icons"
-    "tmux-ai-window-name"
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-apply-theme-colors"
@@ -249,8 +234,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@" "@AI_NAMING@"]
-      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}" aiNamingFlag]
+      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@"]
+      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}"]
       raw;
   in
     pkgs.writeShellScriptBin name patched;
@@ -302,8 +287,6 @@
     then mkScriptEnrich name
     else if builtins.elem name scriptsWithIcons
     then mkScriptFull name
-    else if name == "tmux-ai-window-name"
-    then mkScriptAi name
     else if name == "claude-status"
     then claude-status-pkg
     else if name == "tmux-splash-maybe"
@@ -537,6 +520,10 @@
     set -g status 2
     set -g @window_split 999
     set -g @window_split2 999
+
+    # Read by the CC plugin's UserPromptSubmit hook to gate the window-naming
+    # nudge (programs.lazytmux.aiNaming.enable).
+    set -g @ai_naming "${aiNamingFlag}"
 
     # Icon variables
     set -g @icon_session "${icons.session}"

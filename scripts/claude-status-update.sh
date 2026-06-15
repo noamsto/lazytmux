@@ -12,6 +12,7 @@ STATE_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 PANES_DIR="$STATE_DIR/panes"
 ISSUES_DIR="$STATE_DIR/issues"
 TASKS_DIR="$STATE_DIR/tasks"
+NAMES_DIR="$STATE_DIR/names"
 IMAGES_DIR="$STATE_DIR/images"
 
 # Ensure directories exist
@@ -49,12 +50,12 @@ cleanup_stale_panes() {
 		local pane_file="${pf##*/}"
 
 		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
-			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
+			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$NAMES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
 		fi
 	done
 
-	# Orphaned issue / task files (pane gone)
-	for inf in "$ISSUES_DIR"/* "$TASKS_DIR"/*; do
+	# Orphaned issue / task / name files (pane gone)
+	for inf in "$ISSUES_DIR"/* "$TASKS_DIR"/* "$NAMES_DIR"/*; do
 		[[ -f $inf ]] || continue
 		if [[ -z ${pane_exists[${inf##*/}]+x} ]]; then
 			rm -f "$inf"
@@ -204,6 +205,62 @@ if [[ $state == "task" ]]; then
 	exit 0
 fi
 
+# Window name self-report: a short descriptive title for a fallback window (no
+# tracked issue, on the default branch), set by the pane's Claude when nudged by
+# the UserPromptSubmit hook. Kept in its own file; tmux-update-icons mirrors it
+# to @window_ai_name, which build_window_label prefers over the raw task. Unlike
+# the task (raw prompt), this is Claude's context-aware summary of the work.
+if [[ $state == "name" ]]; then
+	action="${1:-}"
+	shift || true
+	text=""
+	case "$action" in
+	set)
+		text="${1:-}"
+		shift || true
+		;;
+	clear) ;;
+	*)
+		echo "Error: Invalid name action '$action'. Use: set, clear" >&2
+		exit 1
+		;;
+	esac
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--pane)
+			pane_id="$2"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+	[[ -z $pane_id ]] && exit 0
+	names_file="$NAMES_DIR/${pane_id#%}"
+	case "$action" in
+	set)
+		# One line, no control chars, trimmed, capped at 40 cells — the value
+		# becomes a window name segment. '|' is mapped to a space: it's the
+		# delimiter of the list-panes format tmux-update-icons reads. Byte-oriented
+		# tr -d '[:cntrl:]' (not keep [:print:]) preserves UTF-8.
+		clean=$(printf '%s' "$text" | tr '\n\r\t|' '    ' | tr -d '[:cntrl:]' | tr -s ' ')
+		clean="${clean# }"
+		clean="${clean:0:40}"
+		clean="${clean% }"
+		if [[ -n $clean ]]; then
+			mkdir -p "$NAMES_DIR"
+			printf '%s\n' "$clean" >"$names_file"
+		fi
+		;;
+	clear)
+		rm -f "$names_file"
+		;;
+	esac
+	if [[ -n ${TMUX:-} ]]; then
+		tmux refresh-client -S 2>/dev/null || true
+	fi
+	exit 0
+fi
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--pane)
@@ -302,7 +359,7 @@ pane_file="${pane_id#%}"
 
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
-	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file"
+	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file" "$NAMES_DIR/$pane_file"
 	# Force immediate tmux refresh
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true

@@ -152,7 +152,7 @@ provider_priority_list() {
 # priority); the branch remainder after the id is the fallback title. Issue
 # windows show "<provider> <id>[ <title>]"; feature branches with no issue show
 # the branch (long=full, short=basename); default-branch (main/master) and
-# branch-less windows show AI_NAME (a Haiku-summarized title, when present),
+# branch-less windows show AI_NAME (a title Claude set for itself, when present),
 # else TASK ("what Claude is doing", self-reported), else the directory
 # basename — so multiple Claudes in one checkout stay distinct.
 #
@@ -255,8 +255,8 @@ build_window_label() {
 			REPLY_REST="${branch##*/}"
 		fi
 	elif [[ -n $ai_name ]]; then
-		# Default-branch / branch-less window: a Haiku-summarized title of what
-		# Claude is doing reads better than the raw captured prompt below.
+		# Default-branch / branch-less window: the title Claude set for itself
+		# (claude-status-update name set) reads better than the raw prompt below.
 		REPLY_REST="$ai_name"
 	elif [[ -n $task ]]; then
 		# No AI title yet — show the raw self-reported task so sibling windows in
