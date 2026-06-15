@@ -19,7 +19,11 @@ setup_claude_colors
 declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task
 active_pane_proc=""
 active_win_idx=""
-while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_task; do
+# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
+# window with no @branch yet) collapses and shifts every later field left,
+# corrupting cur_branch/active flags. '@window_task' is free-form so it stays
+# last — read drops any stray '|' it contains into that final field.
+while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_task; do
 	pane_to_win["${pane_id#%}"]="$idx"
 	# First pane per window wins for path/branch/task — panes in a window share a
 	# cwd, and @window_task/@branch are window options (same for every pane).
@@ -41,7 +45,7 @@ while IFS=$'\t' read -r pane_id idx pane_path proc cur_branch pane_active window
 	*" $proc "*) ;;
 	*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 	esac
-done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}	#{window_index}	#{pane_current_path}	#{pane_current_command}	#{@branch}	#{pane_active}	#{window_active}	#{@window_task}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_task}')
 
 # --- Claude status: read pane files, bucket by window index ---
 declare -A win_claude_state win_claude_fade win_claude_unseen
