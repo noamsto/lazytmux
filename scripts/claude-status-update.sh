@@ -205,11 +205,12 @@ if [[ $state == "task" ]]; then
 	exit 0
 fi
 
-# Window name self-report: a short descriptive title for a fallback window (no
-# tracked issue, on the default branch), set by the pane's Claude when nudged by
-# the UserPromptSubmit hook. Kept in its own file; tmux-update-icons mirrors it
-# to @window_ai_name, which build_window_label prefers over the raw task. Unlike
-# the task (raw prompt), this is Claude's context-aware summary of the work.
+# Window name: a short descriptive title for a fallback window (no tracked issue,
+# on the default branch). On the first such prompt the UserPromptSubmit hook
+# seeds it mechanically from the prompt, then nudges the pane's Claude to replace
+# the seed with a concise context-aware title. Kept in its own file;
+# tmux-update-icons mirrors it to @window_ai_name, which build_window_label
+# prefers over the raw task.
 if [[ $state == "name" ]]; then
 	action="${1:-}"
 	shift || true
