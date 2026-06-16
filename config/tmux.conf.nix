@@ -480,6 +480,7 @@
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
+    bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' gh-dash
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
@@ -654,7 +655,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
     '';
     meta.mainProgram = "tmux";
   };
