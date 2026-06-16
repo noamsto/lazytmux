@@ -647,6 +647,22 @@
   # so no self-referential substitution needed
   tmuxConf = tmuxConfText;
 
+  # Pinned to 4.23.2: the bubbletea-v2 rewrite in 4.24.0 panics in
+  # issueview.renderBody when the issues view syncs its preview sidebar, which
+  # closes the `prefix + G` popup (display-popup -E). Unpin once upstream ships
+  # a fixed 4.24.x. Shared with the module's popupTools so a single version runs.
+  gh-dash = pkgs.gh-dash.overrideAttrs (_: rec {
+    version = "4.23.2";
+    src = pkgs.fetchFromGitHub {
+      owner = "dlvhdr";
+      repo = "gh-dash";
+      tag = "v${version}";
+      hash = "sha256-C06LPVoE23ITJpMG0x75Djgeup+eb5uYwA8wL7xxvWU=";
+    };
+    vendorHash = "sha256-4AbeoH0l7eIS7d0yyJxM7+woC7Q/FCh0BOJj3d1zyX4=";
+    ldflags = ["-s" "-w" "-X github.com/dlvhdr/gh-dash/v4/cmd.Version=${version}" "-buildid="];
+  });
+
   # --- Wrapped tmux binary ---
   tmux-wrapped = pkgs.symlinkJoin {
     name = "tmux-wrapped";
@@ -655,10 +671,10 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
     '';
     meta.mainProgram = "tmux";
   };
 in {
-  inherit tmux-wrapped tmuxConf script;
+  inherit tmux-wrapped tmuxConf script gh-dash;
 }

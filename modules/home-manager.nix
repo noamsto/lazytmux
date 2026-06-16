@@ -398,16 +398,18 @@ in {
 
     popupTools = lib.mkOption {
       type = lib.types.listOf lib.types.package;
-      default = [pkgs.sesh pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop];
-      defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop]";
+      default = [pkgs.sesh pkgs.lazygit tmuxConfig.gh-dash pkgs.yazi pkgs.btop];
+      defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit tmuxConfig.gh-dash pkgs.yazi pkgs.btop]";
       description = ''
         Tools installed via home.packages so popup keybindings
         (prefix+g → lazygit, prefix+G → gh-dash, prefix+b → btop,
         prefix+y → yazi) resolve in
         shells that don't inherit the tmux wrapper's PATH prepends — e.g.
         fish login shells opened by display-popup, or direnv-loaded
-        devshells. sesh has no binding anymore but stays for external
-        `sesh connect` CLI workflows.
+        devshells. gh-dash is the same 4.23.2-pinned build the wrapper uses
+        (see config/tmux.conf.nix) so the popup never gets nixpkgs' 4.24.x,
+        which panics on the issues view. sesh has no binding anymore but stays
+        for external `sesh connect` CLI workflows.
 
         Set to [] to opt out entirely, or drop individual entries if you
         install those tools elsewhere (home-manager errors if two
