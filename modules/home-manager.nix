@@ -330,6 +330,10 @@ in {
             label = "LazyGit";
           }
           {
+            key = "prefix + G";
+            label = "gh-dash";
+          }
+          {
             key = "prefix + b";
             label = "btop";
           }
@@ -394,11 +398,12 @@ in {
 
     popupTools = lib.mkOption {
       type = lib.types.listOf lib.types.package;
-      default = [pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop];
-      defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit pkgs.yazi pkgs.btop]";
+      default = [pkgs.sesh pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop];
+      defaultText = lib.literalExpression "[pkgs.sesh pkgs.lazygit pkgs.gh-dash pkgs.yazi pkgs.btop]";
       description = ''
         Tools installed via home.packages so popup keybindings
-        (prefix+g → lazygit, prefix+b → btop, prefix+y → yazi) resolve in
+        (prefix+g → lazygit, prefix+G → gh-dash, prefix+b → btop,
+        prefix+y → yazi) resolve in
         shells that don't inherit the tmux wrapper's PATH prepends — e.g.
         fish login shells opened by display-popup, or direnv-loaded
         devshells. sesh has no binding anymore but stays for external
