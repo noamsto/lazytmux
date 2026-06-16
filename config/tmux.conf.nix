@@ -172,6 +172,13 @@
       (builtins.readFile ../scripts/${name}.sh)
     );
 
+  # gh-dash launcher: needs the pinned gh-dash + yq store paths.
+  mkScriptGhDash = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings ["@gh_dash@" "@yq@"] ["${gh-dash}/bin/gh-dash" "${pkgs.yq-go}/bin/yq"]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # claude-status needs lib substitution but not self-reference
   mkScriptWithLibs = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -223,6 +230,7 @@
     "tmux-issue-stamp-github"
     "tmux-pr-enrich"
     "tmux-splash-maybe"
+    "tmux-gh-dash"
     "lazytmux-log-event"
     "lazytmux-debug"
   ];
@@ -291,6 +299,8 @@
     then claude-status-pkg
     else if name == "tmux-splash-maybe"
     then mkScriptSplash name
+    else if name == "tmux-gh-dash"
+    then mkScriptGhDash name
     else if builtins.elem name scriptsWithLog
     then mkScriptWithLog name
     else mkScript name);
@@ -480,7 +490,7 @@
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
-    bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' gh-dash
+    bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
