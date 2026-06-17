@@ -133,6 +133,7 @@
             // {
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
               carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+              carousel-default = inputs.aeye.packages.${pkgs.system}.default;
               carouselPluginSkills = "${inputs.aeye}/adapters/claude-code/plugin/skills";
             });
       };
