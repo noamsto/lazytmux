@@ -29,8 +29,6 @@ TTL_NONE=15
 # eventually; --force (prefix+i r) checks immediately.
 TTL_TERMINAL=3600
 
-mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
-
 # --- arg parse ---
 mode="tick"
 target="" branch="" dir="" force=0
@@ -134,7 +132,7 @@ fetch_branch_pr() {
 	if [[ -f $cache ]]; then
 		exists=1
 		content="$(<"$cache")"
-		age=$(($(date +%s) - $(file_mtime "$cache")))
+		age=$((EPOCHSECONDS - $(file_mtime "$cache")))
 	fi
 	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE" "$TTL_TERMINAL"
 	if [[ $REPLY == "serve" ]]; then
@@ -180,13 +178,26 @@ apply_cache_to_target() {
 		write_pr_options "$tgt" "none" "" "" "" "" "" "$br"
 		return
 	fi
+	# One jq pass emits every field on its own line (line-by-line `read`
+	# preserves empty fields — a tab/space delimiter would collapse them); the
+	# rollup stays compact JSON for collapse_check_rollup. PR titles are
+	# single-line, so newline-delimiting is safe.
 	local number title url state rollup mergeable
-	number="$(jq -r '.[0].number // ""' <<<"$json")"
-	title="$(jq -r '.[0].title // ""' <<<"$json")"
-	url="$(jq -r '.[0].url // ""' <<<"$json")"
-	state="$(jq -r '(.[0].state // "") | ascii_downcase' <<<"$json")"
-	mergeable="$(jq -r '(.[0].mergeable // "") | ascii_downcase' <<<"$json")"
-	rollup="$(jq -c '.[0].statusCheckRollup // []' <<<"$json")"
+	{
+		IFS= read -r number
+		IFS= read -r state
+		IFS= read -r mergeable
+		IFS= read -r url
+		IFS= read -r rollup
+		IFS= read -r title
+	} < <(jq -r '
+		(.[0].number // "" | tostring),
+		(.[0].state // "" | ascii_downcase),
+		(.[0].mergeable // "" | ascii_downcase),
+		(.[0].url // ""),
+		((.[0].statusCheckRollup // []) | @json),
+		(.[0].title // "")
+	' <<<"$json")
 	collapse_check_rollup "$rollup"
 	local check="$REPLY"
 	sanitize_title "$title"
@@ -294,12 +305,14 @@ fi
 
 # --- tickrun: the detached child re-invoked itself; run exactly one pass ---
 if [[ $mode == "tickrun" ]]; then
+	mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 	run_full_pass
 	exit 0
 fi
 
 # --- single-target mode (from dispatcher / force refresh) ---
 if [[ -n $target && -n $branch ]]; then
+	mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 	cache="$(fetch_branch_pr "$dir" "$branch")"
 	apply_cache_to_target "$target" "$cache" "$branch"
 	exit 0
@@ -308,11 +321,12 @@ fi
 # --- tick mode: cheap gate, then daemonize a full pass ---
 last_tick="$ENRICH_CACHE_DIR/.last-tick"
 if ((force == 0)) && [[ -f $last_tick ]]; then
-	tick_age=$(($(date +%s) - $(file_mtime "$last_tick")))
+	tick_age=$((EPOCHSECONDS - $(file_mtime "$last_tick")))
 	((tick_age < REFRESH_SECONDS)) && exit 0
 fi
 # Mark the tick fresh BEFORE daemonizing: best-effort — if the detached pass
 # crashes we wait one cycle; --force / the prefix+i r keybind force a retry.
+mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 touch "$last_tick"
 
 # Detach so the status refresh returns immediately. The child re-invokes with
