@@ -10,6 +10,11 @@ setup() {
 	unset TMUX TMUX_PANE
 }
 
+# Current state string written for a pane file.
+pane_state() {
+	grep -m1 '^state=' "$CLAUDE_STATUS_DIR/panes/$1" | cut -d= -f2
+}
+
 @test "issue add: creates issues file with id" {
 	bash "$CSU" issue add ENG-123 --pane %7
 	[ "$(cat "$CLAUDE_STATUS_DIR/issues/7")" = "ENG-123" ]
@@ -83,6 +88,39 @@ setup() {
 	bash "$CSU" issue add ENG-123 --pane %7
 	bash "$CSU" processing --pane %7
 	[ "$(cat "$CLAUDE_STATUS_DIR/issues/7")" = "ENG-123" ]
+}
+
+# State guard: only `error` (a stopped turn) is protected from routine
+# processing/done writes. waiting/denied must yield to the resume write that
+# follows an approved prompt / continued-after-denial, or the clock glyph sticks.
+@test "guard: waiting yields to the processing resume after a prompt is approved" {
+	bash "$CSU" waiting --pane %7
+	bash "$CSU" processing --pane %7
+	[ "$(pane_state 7)" = "processing" ]
+}
+
+@test "guard: denied yields to the processing resume when work continues" {
+	bash "$CSU" denied --pane %7
+	bash "$CSU" processing --pane %7
+	[ "$(pane_state 7)" = "processing" ]
+}
+
+@test "guard: error survives a routine processing write" {
+	bash "$CSU" error --pane %7
+	bash "$CSU" processing --pane %7
+	[ "$(pane_state 7)" = "error" ]
+}
+
+@test "guard: error survives a done write (failure stays visible through Stop)" {
+	bash "$CSU" error --pane %7
+	bash "$CSU" "done" --pane %7
+	[ "$(pane_state 7)" = "error" ]
+}
+
+@test "guard: --force clears a protected error (a new prompt resets)" {
+	bash "$CSU" error --pane %7
+	bash "$CSU" processing --force --pane %7
+	[ "$(pane_state 7)" = "processing" ]
 }
 
 @test "clear state removes pane, issues, and tasks files" {
