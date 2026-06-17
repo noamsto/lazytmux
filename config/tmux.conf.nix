@@ -223,6 +223,7 @@
     "tmux-update-icons"
     "tmux-branch-display"
     "tmux-dir-display"
+    "tmux-window-nav"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
     "tmux-issue-stamp"
@@ -458,9 +459,12 @@
     bind -r -T prefix M-Left  resize-pane -L 5
     bind -r -T prefix M-Right resize-pane -R 5
 
-    # Alt-shift window navigation
+    # Alt-shift window navigation: H/L step within a row, J/K move row-to-row in
+    # the reflowed multi-line window grid (no-op when there is no row that way).
     bind -n M-H previous-window
     bind -n M-L next-window
+    bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{session_name} #{window_index} #{@window_per}'
+    bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{session_name} #{window_index} #{@window_per}'
 
     # Session/window pickers (wrappers pre-compute claude status)
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
