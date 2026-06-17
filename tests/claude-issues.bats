@@ -195,6 +195,49 @@ pane_state() {
 	[ ! -e "$CLAUDE_STATUS_DIR/tasks" ] || [ -z "$(ls -A "$CLAUDE_STATUS_DIR/tasks")" ]
 }
 
+@test "name set: writes the title to the names file" {
+	bash "$CSU" name set "Fix the reflow" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/names/7")" = "Fix the reflow" ]
+}
+
+@test "name set: strips a leading U+258E quote-bar from a pasted seed" {
+	bash "$CSU" name set $'▎ "PR review #2128' --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/names/7")" = 'PR review #2128' ]
+}
+
+@test "name set: strips a leading markdown quote marker" {
+	bash "$CSU" name set "> do the thing" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/names/7")" = "do the thing" ]
+}
+
+@test "name set: preserves interior # and capitalization" {
+	bash "$CSU" name set "PR review #2128" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/names/7")" = "PR review #2128" ]
+}
+
+@test "name set: maps | to a space" {
+	bash "$CSU" name set "foo|bar" --pane %7
+	[ "$(cat "$CLAUDE_STATUS_DIR/names/7")" = "foo bar" ]
+}
+
+@test "name set: truncates to 40 chars" {
+	long=$(printf 'x%.0s' {1..60})
+	bash "$CSU" name set "$long" --pane %7
+	got=$(cat "$CLAUDE_STATUS_DIR/names/7")
+	[ "${#got}" -eq 40 ]
+}
+
+@test "name set: decoration-only input writes nothing" {
+	bash "$CSU" name set $'▎ " ' --pane %7
+	[ ! -e "$CLAUDE_STATUS_DIR/names/7" ]
+}
+
+@test "name clear: removes the file" {
+	bash "$CSU" name set "Fix the reflow" --pane %7
+	bash "$CSU" name clear --pane %7
+	[ ! -e "$CLAUDE_STATUS_DIR/names/7" ]
+}
+
 @test "format_issue_list: no ids yields empty" {
 	setup_lib_claude
 	format_issue_list 3

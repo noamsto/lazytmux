@@ -245,6 +245,12 @@ if [[ $state == "name" ]]; then
 		# tr -d '[:cntrl:]' (not keep [:print:]) preserves UTF-8.
 		clean=$(printf '%s' "$text" | tr '\n\r\t|' '    ' | tr -d '[:cntrl:]' | tr -s ' ')
 		clean="${clean# }"
+		# Strip leading decoration: when seeded from a quoted/pasted first prompt the
+		# text carries a U+258E "▎" quote-bar, a leading quote, or a markdown marker
+		# (> - # *). Drop the leading non-alphanumeric run so the title starts at the
+		# first real word. C-locale [:alnum:] is byte-oriented, so the multibyte ▎
+		# (e2 96 8e) is non-alnum and stripped whole; interior chars (#2143) survive.
+		clean=$(printf '%s' "$clean" | LC_ALL=C sed -E 's/^[^[:alnum:]]+//')
 		clean="${clean:0:40}"
 		clean="${clean% }"
 		if [[ -n $clean ]]; then
