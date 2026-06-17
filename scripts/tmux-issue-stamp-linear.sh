@@ -24,12 +24,20 @@ id="$key"
 # If the linear CLI is available, enrich title + url from within the worktree.
 # NOTE: three separate `linear` calls assume the CLI resolves the same issue
 # (from the worktree's branch) across all three. A single `linear issue json`
-# call would remove this seam if/when the CLI supports it.
+# call would remove this seam if/when the CLI supports it. The three are
+# independent network round-trips, so run them concurrently — the post-switch
+# hook waits on the slowest call, not their sum.
 if command -v linear >/dev/null 2>&1 && [[ -d $worktree ]]; then
-	title="$(cd "$worktree" && linear issue title 2>/dev/null)" || title=""
-	url="$(cd "$worktree" && linear issue url 2>/dev/null)" || url=""
+	tmpd="$(mktemp -d)"
+	(cd "$worktree" && linear issue title 2>/dev/null) >"$tmpd/title" &
+	(cd "$worktree" && linear issue url 2>/dev/null) >"$tmpd/url" &
+	(cd "$worktree" && linear issue id 2>/dev/null) >"$tmpd/id" &
+	wait
+	title="$(<"$tmpd/title")"
+	url="$(<"$tmpd/url")"
+	cli_id="$(<"$tmpd/id")"
+	rm -rf "$tmpd"
 	# Prefer the CLI's canonical id when present.
-	cli_id="$(cd "$worktree" && linear issue id 2>/dev/null)" || cli_id=""
 	[[ -n $cli_id ]] && id="$cli_id"
 fi
 
