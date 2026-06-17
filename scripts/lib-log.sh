@@ -14,6 +14,12 @@ LAZYTMUX_DEBUG_SENTINEL="${LAZYTMUX_DEBUG_SENTINEL:-/tmp/lazytmux-debug.on}"
 # log_enabled: true when debug is armed. Fork-free builtin test — the hot-path gate.
 log_enabled() { [[ -f $LAZYTMUX_DEBUG_SENTINEL ]]; }
 
+# file_size / file_mtime FILE -> bytes / mtime-epoch on stdout (0 if absent).
+# Portable: GNU `stat -c` first, BSD/macOS `stat -f` fallback. Home is lib-log
+# because every stat-using script already sources it.
+file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+
 # _json_escape STR -> REPLY  (JSON-safe inner string, no surrounding quotes).
 # Backslash first, then quote/tab/cr; newlines stripped; remaining C0 controls stripped.
 _json_escape() {
@@ -33,12 +39,12 @@ _log_rotate() {
 	[[ -f $LAZYTMUX_LOG_FILE ]] || return 0
 	local cap="${LAZYTMUX_LOG_MAX_BYTES:-5242880}"
 	local size
-	size=$(stat -c %s "$LAZYTMUX_LOG_FILE" 2>/dev/null || echo 0)
+	size=$(file_size "$LAZYTMUX_LOG_FILE")
 	((size < cap)) && return 0
 	(
 		flock -n 9 || exit 0
 		local s
-		s=$(stat -c %s "$LAZYTMUX_LOG_FILE" 2>/dev/null || echo 0)
+		s=$(file_size "$LAZYTMUX_LOG_FILE")
 		((s >= cap)) && mv -f "$LAZYTMUX_LOG_FILE" "$LAZYTMUX_LOG_FILE.1"
 	) 9>"$LAZYTMUX_LOG_DIR/.rotate.lock"
 }
@@ -49,8 +55,11 @@ log_event() {
 	local cat=$1
 	shift
 	mkdir -p "$LAZYTMUX_LOG_DIR"
-	local ts
-	ts=$(date '+%FT%T.%3N')
+	# Millisecond ISO-8601, fork-free: bash strftime + EPOCHREALTIME. Avoids
+	# date's GNU-only %N (BSD date has no sub-second). [.,] tolerates a comma
+	# radix under a non-C LC_NUMERIC.
+	local ts us=${EPOCHREALTIME#*[.,]}
+	printf -v ts '%(%FT%T)T.%s' -1 "${us:0:3}"
 	_json_escape "$cat"
 	local line="{\"ts\":\"$ts\",\"cat\":\"$REPLY\""
 	local k v ek

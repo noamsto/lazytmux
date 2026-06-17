@@ -134,7 +134,7 @@ fetch_branch_pr() {
 	if [[ -f $cache ]]; then
 		exists=1
 		content="$(<"$cache")"
-		age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
+		age=$(($(date +%s) - $(file_mtime "$cache")))
 	fi
 	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE" "$TTL_TERMINAL"
 	if [[ $REPLY == "serve" ]]; then
@@ -308,7 +308,7 @@ fi
 # --- tick mode: cheap gate, then daemonize a full pass ---
 last_tick="$ENRICH_CACHE_DIR/.last-tick"
 if ((force == 0)) && [[ -f $last_tick ]]; then
-	tick_age=$(($(date +%s) - $(stat -c %Y "$last_tick" 2>/dev/null || echo 0)))
+	tick_age=$(($(date +%s) - $(file_mtime "$last_tick")))
 	((tick_age < REFRESH_SECONDS)) && exit 0
 fi
 # Mark the tick fresh BEFORE daemonizing: best-effort — if the detached pass

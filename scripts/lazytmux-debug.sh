@@ -26,7 +26,7 @@ toggle) if [[ -f $LAZYTMUX_DEBUG_SENTINEL ]]; then disarm; else arm; fi ;;
 status)
 	if [[ -f $LAZYTMUX_DEBUG_SENTINEL ]]; then
 		size=0
-		[[ -f $LAZYTMUX_LOG_FILE ]] && size=$(stat -c %s "$LAZYTMUX_LOG_FILE" 2>/dev/null || echo 0)
+		[[ -f $LAZYTMUX_LOG_FILE ]] && size=$(file_size "$LAZYTMUX_LOG_FILE")
 		msg="lazytmux debug: ON — $LAZYTMUX_LOG_FILE (${size} bytes)"
 	else
 		msg="lazytmux debug: OFF"
