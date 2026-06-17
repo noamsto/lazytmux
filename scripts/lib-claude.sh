@@ -41,12 +41,13 @@ read_pane_state() {
 	local pane_file="$1"
 	[[ -f $pane_file ]] || return 1
 
-	local state="" timestamp="" unseen="" key val
+	local state="" timestamp="" unseen="" session="" key val
 	while IFS='=' read -r key val; do
 		case "$key" in
 		state) state="$val" ;;
 		timestamp) timestamp="$val" ;;
 		unseen) unseen="$val" ;;
+		session) session="$val" ;;
 		esac
 	done <"$pane_file"
 
@@ -75,6 +76,7 @@ read_pane_state() {
 	REPLY_UNSEEN=0
 	[[ $unseen == "1" ]] && REPLY_UNSEEN=1
 
+	REPLY_SESSION="$session"
 	REPLY="$state"
 }
 
@@ -102,7 +104,11 @@ setup_claude_colors() {
 	local theme_file="${XDG_STATE_HOME:-$HOME/.local/state}/theme-state.json"
 	local theme="dark"
 	if [[ -f $theme_file ]]; then
-		theme=$(grep -o '"theme"[[:space:]]*:[[:space:]]*"[^"]*"' "$theme_file" 2>/dev/null | cut -d'"' -f4) || true
+		# Fork-free parse: slurp the small file and regex out the theme value
+		# (grep|cut here forked twice on every colored status render).
+		local content=""
+		IFS= read -r -d '' content <"$theme_file" 2>/dev/null || true
+		[[ $content =~ \"theme\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && theme="${BASH_REMATCH[1]}"
 	fi
 
 	if [[ $theme == "light" ]]; then
