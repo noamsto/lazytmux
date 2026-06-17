@@ -368,10 +368,17 @@ if [[ $state == "clear" ]]; then
 	exit 0
 fi
 
-# Don't let benign transitions overwrite higher-priority interactive states.
-# - "processing" from rapid Pre/PostToolUse hooks must not clobber waiting/error/denied.
-# - "done" from Stop must not clobber error/waiting/denied — if a tool failed
-#   right before Stop fired, the user should still see the failure.
+# Don't let a routine "processing"/"done" write clobber a genuine failure.
+# Only `error` (StopFailure) is protected: the turn ended, the agent is stopped,
+# so any later processing/done is stale noise — keep the error icon up until the
+# next prompt clears it (--force).
+#
+# `waiting`/`denied` are deliberately NOT protected. A permission or elicitation
+# dialog fully blocks the turn — no tool hook fires while it's pending — so the
+# first processing/done write after one of them is always the genuine resume
+# (PostToolUse after approval, ElicitationResult, or Stop). Protecting them froze
+# the clock glyph for the rest of the session even though the agent was working.
+#
 # --force bypasses this guard (used by UserPromptSubmit: a new user prompt is an
 # explicit reset signal and must clear any stale terminal state).
 if [[ $force -eq 0 ]] && [[ $state == "processing" || $state == "done" ]] && [[ -f "$PANES_DIR/$pane_file" ]]; then
@@ -383,7 +390,7 @@ if [[ $force -eq 0 ]] && [[ $state == "processing" || $state == "done" ]] && [[ 
 		}
 	done <"$PANES_DIR/$pane_file"
 	case "$cur_state" in
-	waiting | error | denied) exit 0 ;;
+	error) exit 0 ;;
 	esac
 fi
 
