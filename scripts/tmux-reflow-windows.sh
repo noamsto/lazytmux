@@ -250,6 +250,14 @@ if ((needs_multiline)); then
 	fi
 fi
 
+# Columns per row in the reflowed grid (single-line mode keeps all on one row).
+# Consumed by tmux-window-nav for vertical (row-to-row) window movement.
+if ((needs_multiline)); then
+	window_per=$per
+else
+	window_per=$total
+fi
+
 # --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
@@ -274,6 +282,7 @@ done
 # Split points and status line count
 tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
 tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
+tmux_cmds+=("set -t '$SESSION' @window_per '$window_per'")
 tmux_cmds+=("set -t '$SESSION' @reflow_key '$cache_key'")
 tmux_cmds+=("set -t '$SESSION' @labels_mode '${labels_mode}'")
 
