@@ -41,9 +41,15 @@ esac
 # (detail mode + column width) depends only on the window set + width, not on
 # which window is active — focus only changes the active tab's color, which tmux
 # re-renders on its own without a reflow.
-cache_key="$(tmux display-message -t "$SESSION" -p '#{session_windows}'):${WIDTH}"
-if ((!FORCE)) && [[ $cache_key == "$(tmux display-message -t "$SESSION" -p '#{@reflow_key}' 2>/dev/null)" ]]; then
-	log_enabled && log_event reflow event cache_hit wins "${cache_key%%:*}" width "$WIDTH" sess "$SESSION"
+# One display-message fetches both the window count and the stored key (the
+# fast path runs on every reflow, so halving its forks matters).
+{
+	IFS= read -r win_count
+	IFS= read -r prev_key
+} < <(tmux display-message -t "$SESSION" -p $'#{session_windows}\n#{@reflow_key}' 2>/dev/null)
+cache_key="${win_count}:${WIDTH}"
+if ((!FORCE)) && [[ $cache_key == "$prev_key" ]]; then
+	log_enabled && log_event reflow event cache_hit wins "$win_count" width "$WIDTH" sess "$SESSION"
 	exit 0
 fi
 
@@ -247,18 +253,22 @@ fi
 # --- Batch simple commands via tmux source, direct calls for complex formats ---
 declare -a tmux_cmds=()
 
-# Per-window vars set directly (not via `tmux source -`): labels carry free-form
-# issue titles whose quotes/';'/'#' would break the batched command parser.
+# Per-window vars use tmux's argv command-sequence form — one tmux exec per
+# window, the 8 sets joined by literal ';' arguments — instead of one exec per
+# set (8N execs before). Not `tmux source -`: source re-parses a text stream, so
+# free-form issue titles with quotes/';'/'#' would break it. In argv form each
+# value is its own execve argument and is never reparsed, so titles pass verbatim.
 for idx in "${indices[@]}"; do
 	target="${SESSION}:${idx}"
-	tmux set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}"
-	tmux set -w -t "$target" @window_label_short "${win_short[$idx]}"
-	tmux set -w -t "$target" @window_label_id "${win_id[$idx]}"
-	tmux set -w -t "$target" @window_label_rest_short "${win_rest_short[$idx]}"
-	tmux set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}"
-	tmux set -w -t "$target" @window_label_disp "${win_disp[$idx]}"
-	tmux set -w -t "$target" @window_pr_plain "${win_pr[$idx]}"
-	tmux set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}"
+	tmux \
+		set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}" ';' \
+		set -w -t "$target" @window_label_short "${win_short[$idx]}" ';' \
+		set -w -t "$target" @window_label_id "${win_id[$idx]}" ';' \
+		set -w -t "$target" @window_label_rest_short "${win_rest_short[$idx]}" ';' \
+		set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}" ';' \
+		set -w -t "$target" @window_label_disp "${win_disp[$idx]}" ';' \
+		set -w -t "$target" @window_pr_plain "${win_pr[$idx]}" ';' \
+		set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}"
 done
 
 # Split points and status line count
