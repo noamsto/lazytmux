@@ -15,7 +15,12 @@ if [[ ${1:-} == task ]]; then
 	# wrapped in a hyphenated XML-ish tag (<task-notification>, <system-reminder>,
 	# <local-command-stdout>…). Captured as the task label / name seed they produce
 	# garbage like "task-notification> <task-id>…", so skip the hook for them.
-	[[ $prompt =~ ^[[:space:]]*\<[a-z]+-[a-z-]+\> ]] && exit 0
+	# The pattern lives in a variable so its <> stay literal regex chars: inline
+	# in [[ =~ ]] bash parses bare <> as operators, and escaping them (\< \>)
+	# turns them into GNU word-boundary anchors that match a bare leading word
+	# and miss the real <tag>.
+	synthetic_tag='^[[:space:]]*<[a-z]+-[a-z-]+>'
+	[[ $prompt =~ $synthetic_tag ]] && exit 0
 	claude-status-update task set "$prompt"
 
 	# Window naming. On a fallback window (no tracked issue, on the default branch)

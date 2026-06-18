@@ -132,6 +132,16 @@
               bats tests/interrupt.bats
               touch $out
             '';
+
+          naming-seed-tests =
+            pkgs.runCommand "naming-seed-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils];
+            } ''
+              cp -r ${./claude-plugin} claude-plugin
+              cp -r ${./tests} tests
+              bats tests/naming-seed.bats
+              touch $out
+            '';
         };
 
         packages = {
