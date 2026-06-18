@@ -24,7 +24,7 @@ source @lib_claude@
 
 # --- Counting ---
 
-count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 total=0
+count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 count_interrupted=0 total=0
 min_fade=100 # freshest pane wins: 0 = fresh/full color, 100 = fully dim
 any_unseen=0 # set if any pane has unseen=1
 
@@ -53,6 +53,7 @@ tally_state() {
 	idle) ((count_idle++)) || true ;;
 	error) ((count_error++)) || true ;;
 	denied) ((count_denied++)) || true ;;
+	interrupted) ((count_interrupted++)) || true ;;
 	esac
 	((REPLY_FADE < min_fade)) && min_fade=$REPLY_FADE
 	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1 || true
@@ -79,7 +80,7 @@ count_for_session() {
 }
 
 get_priority_state() {
-	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle" "$count_error" "$count_denied"
+	claude_priority_state "$count_waiting" "$count_compacting" "$count_processing" "$count_done" "$count_idle" "$count_error" "$count_denied" "$count_interrupted"
 }
 
 # --- Output Formatting ---
@@ -115,6 +116,7 @@ format_output() {
 	long)
 		local parts=()
 		[[ $count_processing -eq 0 ]] || parts+=("$count_processing processing")
+		[[ $count_interrupted -eq 0 ]] || parts+=("$count_interrupted interrupted")
 		[[ $count_waiting -eq 0 ]] || parts+=("$count_waiting waiting")
 		[[ $count_compacting -eq 0 ]] || parts+=("$count_compacting compacting")
 		[[ $count_denied -eq 0 ]] || parts+=("$count_denied denied")
@@ -132,6 +134,7 @@ format_output() {
 		waiting) gum_color=216 label="$count_waiting waiting" ;;
 		compacting) gum_color=117 label="$count_compacting compacting" ;;
 		processing) gum_color=183 label="$count_processing working" ;;
+		interrupted) gum_color=141 label="$count_interrupted interrupted" ;;
 		done) gum_color=151 label="$count_done done" ;;
 		idle) gum_color=245 label="$count_idle idle" ;;
 		error) gum_color=196 label="$count_error error" ;;

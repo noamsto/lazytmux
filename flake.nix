@@ -120,6 +120,18 @@
               bats tests/splash.bats
               touch $out
             '';
+
+          interrupt-tests =
+            pkgs.runCommand "interrupt-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/interrupt.bats
+              touch $out
+            '';
         };
 
         packages = {

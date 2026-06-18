@@ -13,8 +13,9 @@ CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
 CLAUDE_ICON_DONE="󰸞"
 CLAUDE_ICON_IDLE="󰒲"
-CLAUDE_ICON_ERROR="󰅚"  # nerd: nf-md-close_circle_outline
-CLAUDE_ICON_DENIED="󰔟" # same clock as waiting, different color
+CLAUDE_ICON_ERROR="󰅚"       # nerd: nf-md-close_circle_outline
+CLAUDE_ICON_DENIED="󰔟"      # same clock as waiting, different color
+CLAUDE_ICON_INTERRUPTED="󰜺" # nerd: nf-md-cancel — user-interrupted (Esc) turn
 
 # Timestamp cache (set once per script invocation)
 printf -v CLAUDE_NOW '%(%s)T' -1
@@ -29,6 +30,18 @@ CLAUDE_STALE_ERROR=120
 CLAUDE_STALE_DENIED=60
 CLAUDE_FADE_DURATION=45
 
+# Interrupt detection. No Claude Code hook fires on an Esc-interrupt, so a turn
+# abandoned mid-flight just leaves the pane stuck at `processing` forever. The
+# only durable trace is a marker line the interrupt writes into the transcript.
+# read_pane_state reclassifies such a pane to `interrupted` — but only once it
+# has been quiet past CLAUDE_INTERRUPT_CHECK_AGE, so normal tool churn (which
+# refreshes the timestamp every PreToolUse/PostToolUse) never reads a transcript.
+# A genuinely long-running tool keeps its `tool_use` block at the tail, not the
+# marker, so it is not a false positive — it just costs one tail per read while
+# it runs.
+CLAUDE_INTERRUPT_CHECK_AGE=8
+CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
+
 # read_pane_state PANE_FILE_PATH
 # Reads a pane state file and computes its staleness fade.
 # Sets REPLY to the state string, REPLY_FADE to 0..100 (0 = fresh/full color,
@@ -41,17 +54,32 @@ read_pane_state() {
 	local pane_file="$1"
 	[[ -f $pane_file ]] || return 1
 
-	local state="" timestamp="" unseen="" session="" key val
+	local state="" timestamp="" unseen="" session="" transcript="" key val
 	while IFS='=' read -r key val; do
 		case "$key" in
 		state) state="$val" ;;
 		timestamp) timestamp="$val" ;;
 		unseen) unseen="$val" ;;
 		session) session="$val" ;;
+		transcript) transcript="$val" ;;
 		esac
 	done <"$pane_file"
 
 	[[ -n $state ]] || return 1
+
+	# Reclassify a long-quiet `processing` pane as `interrupted` when the
+	# transcript tail holds the interrupt marker (see CLAUDE_INTERRUPT_* above).
+	# Pinned bright (no stale entry → fade 0; unseen=1) so the window stays
+	# noticeable until the next prompt overwrites the file back to `processing`.
+	if [[ $state == processing && -n $transcript && -n $timestamp ]] &&
+		((CLAUDE_NOW - timestamp > CLAUDE_INTERRUPT_CHECK_AGE)); then
+		local tailbuf
+		tailbuf=$(tail -n 2 "$transcript" 2>/dev/null) || tailbuf=""
+		if [[ $tailbuf == *"$CLAUDE_INTERRUPT_MARKER"* ]]; then
+			state="interrupted"
+			unseen="1"
+		fi
+	fi
 
 	REPLY_FADE=0
 	if [[ -n $timestamp ]]; then
@@ -92,6 +120,7 @@ claude_state_icon() {
 	idle) REPLY="$CLAUDE_ICON_IDLE" ;;
 	error) REPLY="$CLAUDE_ICON_ERROR" ;;
 	denied) REPLY="$CLAUDE_ICON_DENIED" ;;
+	interrupted) REPLY="$CLAUDE_ICON_INTERRUPTED" ;;
 	*) REPLY="" ;;
 	esac
 }
@@ -112,11 +141,11 @@ setup_claude_colors() {
 	fi
 
 	if [[ $theme == "light" ]]; then
-		H_W="#fe640b" H_K="#04a5e5" H_P="#179299" H_D="#40a02b" H_I="#6c6f85" H_E="#d20f39" H_DN="#df8e1d"
+		H_W="#fe640b" H_K="#04a5e5" H_P="#179299" H_D="#40a02b" H_I="#6c6f85" H_E="#d20f39" H_DN="#df8e1d" H_INT="#8839ef"
 	else
-		H_W="#fab387" H_K="#89dceb" H_P="#94e2d5" H_D="#a6e3a1" H_I="#6c7086" H_E="#f38ba8" H_DN="#f9e2af"
+		H_W="#fab387" H_K="#89dceb" H_P="#94e2d5" H_D="#a6e3a1" H_I="#6c7086" H_E="#f38ba8" H_DN="#f9e2af" H_INT="#cba6f7"
 	fi
-	C_W="#[fg=$H_W]" C_K="#[fg=$H_K]" C_P="#[fg=$H_P]" C_D="#[fg=$H_D]" C_I="#[fg=$H_I]" C_E="#[fg=$H_E]" C_DN="#[fg=$H_DN]"
+	C_W="#[fg=$H_W]" C_K="#[fg=$H_K]" C_P="#[fg=$H_P]" C_D="#[fg=$H_D]" C_I="#[fg=$H_I]" C_E="#[fg=$H_E]" C_DN="#[fg=$H_DN]" C_INT="#[fg=$H_INT]"
 	C_R="#[fg=default]"
 }
 
@@ -146,6 +175,7 @@ claude_faded_hex() {
 	idle) REPLY=$H_I ;;
 	error) REPLY=$H_E ;;
 	denied) REPLY=$H_DN ;;
+	interrupted) REPLY=$H_INT ;;
 	*)
 		REPLY=""
 		return
@@ -176,11 +206,11 @@ claude_colored_icon() {
 	REPLY="#[fg=${REPLY}]${icon}${C_R} "
 }
 
-# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR DENIED
+# claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR DENIED INTERRUPTED
 # Given counts per state, returns the highest-priority non-zero state.
 # Sets REPLY to state string, empty if all zero.
 claude_priority_state() {
-	local w=$1 k=$2 p=$3 d=$4 i=$5 e=${6:-0} dn=${7:-0}
+	local w=$1 k=$2 p=$3 d=$4 i=$5 e=${6:-0} dn=${7:-0} int=${8:-0}
 	if ((e > 0)); then
 		REPLY="error"
 	elif ((w > 0)); then
@@ -189,6 +219,8 @@ claude_priority_state() {
 		REPLY="denied"
 	elif ((k > 0)); then
 		REPLY="compacting"
+	elif ((int > 0)); then
+		REPLY="interrupted"
 	elif ((p > 0)); then
 		REPLY="processing"
 	elif ((d > 0)); then

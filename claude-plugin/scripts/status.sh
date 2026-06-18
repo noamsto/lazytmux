@@ -47,4 +47,16 @@ REMINDER
 	exit 0
 fi
 
+# Forward the hook's transcript path so claude-status-update can record it for
+# interrupt detection. Esc-interrupts fire no hook, so the only durable trace is
+# a marker line in the transcript; read_pane_state tails this path to find it.
+# Fork-free slurp + regex (no jq dependency), mirroring the theme-file parse.
+input=""
+IFS= read -r -d '' input || true
+transcript=""
+[[ $input =~ \"transcript_path\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && transcript="${BASH_REMATCH[1]}"
+
+if [[ -n $transcript ]]; then
+	exec claude-status-update "$@" --transcript "$transcript"
+fi
 exec claude-status-update "$@"
