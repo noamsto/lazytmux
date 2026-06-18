@@ -221,21 +221,19 @@ build_window_label() {
 	# PR at a glance. Returned as its own segment (REPLY_PR), never fused into
 	# the name, so the template can color it by check state in isolation.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
-		# Conflicts trump check state: a conflicting PR needs a rebase, which
-		# re-runs checks anyway. GitHub only reports CONFLICTING for open PRs.
-		if [[ $pr_mergeable == "conflicting" ]]; then
+		# A merged PR is terminal: its rollup is historical noise (a leftover
+		# pending/failed check must not mask the merge), so the merged glyph wins
+		# over check state. Then conflicts trump check state — a conflicting PR
+		# needs a rebase, which re-runs checks anyway (open PRs only).
+		if [[ $pr_state == "merged" ]]; then
+			pr_glyph="$ENRICH_ICON_MERGED"
+		elif [[ $pr_mergeable == "conflicting" ]]; then
 			pr_glyph="$ENRICH_ICON_CONFLICT"
 		else
 			case "$pr_check" in
 			failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
 			pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
-			*)
-				if [[ $pr_state == "merged" ]]; then
-					pr_glyph="$ENRICH_ICON_MERGED"
-				else
-					pr_glyph="$ENRICH_ICON_SUCCESS"
-				fi
-				;;
+			*) pr_glyph="$ENRICH_ICON_SUCCESS" ;;
 			esac
 		fi
 		REPLY_PR=" ${pr_glyph} #${pr_number}"
