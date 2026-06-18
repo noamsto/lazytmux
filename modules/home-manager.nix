@@ -80,7 +80,12 @@
       set-hook -g window-linked[99]         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
       set-hook -g client-detached[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
 
-      set-hook -g pane-died[99]             'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
+      # Hook pane-exited, not pane-died: pane-died only fires when remain-on-exit
+      # is on (off by default), so it never caught a normal close. Capture happens
+      # after the pane is gone (tmux-state diffs against the prior snapshot), so
+      # the live pane isn't needed. Kind stays "pane-died" — tmux-state's diff
+      # switches on it.
+      set-hook -g pane-exited[99]           'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
@@ -88,7 +93,7 @@
         run-shell -b '${tmuxStateBin} restore --auto'
       ''}
 
-      bind   u    run-shell '${tmuxStateBin} undo --pop'
+      bind   u    run-shell '${tmuxStateBin} undo --pop 2>/dev/null || tmux display-message "Nothing to undo"'
       # The picker is a bubbletea TUI (tmux-state >= 0.2.0); launching it through
       # the `env` binary breaks its TTY init and renders a blank popup, so invoke
       # it directly. (The old `env -u FZF_DEFAULT_OPTS` wrapper was only needed for
