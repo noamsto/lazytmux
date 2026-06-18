@@ -9,11 +9,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781706732,
-        "narHash": "sha256-fyki/qDcg1eL/4zMqVMgXD+ZC2YeXkVru1YmVV2Btaw=",
+        "lastModified": 1781787873,
+        "narHash": "sha256-3U8ZzbQyGdN9xNXUykBU2Vp8EHvgL3VQ+R2bObslevY=",
         "owner": "noamsto",
         "repo": "aeye",
-        "rev": "ad83c99a3651619a2b822c3e1f72bf2bbcccab67",
+        "rev": "113bd7d0c335bf2bf7c66df254694c3a3b0b7650",
         "type": "github"
       },
       "original": {
