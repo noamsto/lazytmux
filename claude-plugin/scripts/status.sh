@@ -10,6 +10,12 @@ if [[ ${1:-} == task ]]; then
 	command -v jq >/dev/null 2>&1 || exit 0
 	prompt=$(jq -r '.prompt // empty' 2>/dev/null) || exit 0
 	[[ -n $prompt ]] || exit 0
+	# Claude Code re-injects non-user text through UserPromptSubmit — background-task
+	# completion notices, system reminders, bang/slash-command envelopes — each
+	# wrapped in a hyphenated XML-ish tag (<task-notification>, <system-reminder>,
+	# <local-command-stdout>…). Captured as the task label / name seed they produce
+	# garbage like "task-notification> <task-id>…", so skip the hook for them.
+	[[ $prompt =~ ^[[:space:]]*\<[a-z]+-[a-z-]+\> ]] && exit 0
 	claude-status-update task set "$prompt"
 
 	# Window naming. On a fallback window (no tracked issue, on the default branch)
