@@ -334,11 +334,13 @@ IDX="#{p${idx_width}:window_index}"
 # default bg. The pill bg spans the whole slot (name, icons, PR) and is reset
 # at the end of ENTRY so it never leaks into the separator.
 BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
-# PR segment colored by state on every tab (conflicting/failing=red,
-# pending=peach, merged=mauve, success/open=green). No PR → no color directive,
-# and @window_pr_disp is just column padding. Rendered last in the slot, so its
-# state color only runs into the separator, which sets its own color.
-PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}},}"
+# PR segment colored by state on every tab. Merged is terminal and checked
+# first (mauve), so a leftover pending/failed rollup on a merged PR can't tint
+# it peach/red; then conflicting/failing=red, pending=peach, success/open=green.
+# No PR → no color directive, and @window_pr_disp is just column padding.
+# Rendered last in the slot, so its state color only runs into the separator,
+# which sets its own color.
+PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}},}"
 ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[bg=#{@thm_bg}]#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded

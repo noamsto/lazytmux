@@ -187,6 +187,16 @@ setup() {
 	[ "$REPLY_PR" = " M #9" ]
 }
 
+@test "build_window_label: merged glyph wins over a leftover pending rollup" {
+	build_window_label short linear ENG-1 "t" 9 merged pending br /x
+	[ "$REPLY_PR" = " M #9" ]
+}
+
+@test "build_window_label: merged glyph wins over a leftover failing rollup" {
+	build_window_label short linear ENG-1 "t" 9 merged failure br /x
+	[ "$REPLY_PR" = " M #9" ]
+}
+
 @test "build_window_label: conflicting PR uses conflict glyph" {
 	build_window_label short linear ENG-1 "t" 9 open success br /x conflicting
 	[ "$REPLY_PR" = " C #9" ]

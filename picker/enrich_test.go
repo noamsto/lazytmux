@@ -120,6 +120,8 @@ func TestColorPRBadge(t *testing.T) {
 		{"failing checks", "  #2", "open", "failure", "mergeable", false, "<f>"},
 		{"pending checks", "  #3", "open", "pending", "mergeable", false, "<p>"},
 		{"merged", "  #4", "merged", "success", "mergeable", false, "<m>"},
+		{"merged wins over leftover pending", "  #6", "merged", "pending", "unknown", false, "<m>"},
+		{"merged wins over leftover failure", "  #7", "merged", "failure", "unknown", false, "<m>"},
 		{"clean success", "  #5", "open", "success", "mergeable", false, "<s>"},
 	}
 	for _, c2 := range cases {
