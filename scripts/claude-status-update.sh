@@ -68,6 +68,7 @@ state="${1:-}"
 pane_id="${TMUX_PANE:-}"
 session_name=""
 force=0
+transcript_path=""
 
 shift || true
 
@@ -282,6 +283,10 @@ while [[ $# -gt 0 ]]; do
 		force=1
 		shift
 		;;
+	--transcript)
+		transcript_path="$2"
+		shift 2
+		;;
 	*)
 		shift
 		;;
@@ -432,12 +437,26 @@ if log_enabled; then
 	fi
 fi
 
+# Transcript path powers interrupt detection (read_pane_state tails it). Every
+# state hook delivers it on stdin; preserve the stored one when a write doesn't,
+# so a single missing value can't blind the detector mid-session.
+if [[ -z $transcript_path && -f "$PANES_DIR/$pane_file" ]]; then
+	while IFS='=' read -r key val; do
+		[[ $key == "transcript" ]] && {
+			transcript_path="$val"
+			break
+		}
+	done <"$PANES_DIR/$pane_file"
+fi
+transcript_line=""
+[[ -n $transcript_path ]] && transcript_line=$'\n'"transcript=$transcript_path"
+
 # Write pane state with timestamp
 printf -v _now '%(%s)T' -1
 cat >"$PANES_DIR/$pane_file" <<EOF
 state=$state
 timestamp=$_now
-session=$session_name${unseen_line}
+session=$session_name${unseen_line}${transcript_line}
 EOF
 
 # Force immediate tmux status bar refresh (if in tmux)
