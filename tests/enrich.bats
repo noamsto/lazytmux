@@ -82,6 +82,11 @@ setup() {
 	[ "$REPLY" = "title[31mcolored" ]
 }
 
+@test "sanitize_title: strips shell-unsafe quote and hash" {
+	sanitize_title "Don't fix #123"
+	[ "$REPLY" = "Dont fix 123" ]
+}
+
 @test "truncate_ellipsis: short string is unchanged" {
 	truncate_ellipsis "short" 25
 	[ "$REPLY" = "short" ]

@@ -53,12 +53,15 @@ branch_to_gh_issue_number() {
 }
 
 # sanitize_title RAW
-# Strips CR, LF, and ESC control chars, then hard-truncates to 50 chars.
-# Sets REPLY to the cleaned title.
+# Strips CR, LF, ESC control chars plus ' and # (titles ride single-quoted
+# #() argv in status-format[0]; ' breaks the shell quoting, # is a tmux format
+# char), then hard-truncates to 50 chars. Sets REPLY to the cleaned title.
 sanitize_title() {
 	local clean="${1//$'\r'/}"
 	clean="${clean//$'\n'/}"
 	clean="${clean//$'\033'/}"
+	clean="${clean//\'/}"
+	clean="${clean//\#/}"
 	REPLY="${clean:0:50}"
 }
 
