@@ -11,12 +11,16 @@ source @lib_icons@
 source @lib_claude@
 
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
+# $2 is #{@resume_claude}, expanded by the status format — avoids a show-option
+# fork per tick. "on" enables stamping each Claude pane's @ts_relaunch override
+# so tmux-state resumes the session (not a bare shell) on restore.
+RESUME_CLAUDE=${2:-}
 MAX_ICONS=@MAX_ICONS@
 
 setup_claude_colors
 
 # --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
-declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name
+declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
 active_pane_proc=""
 active_win_idx=""
 # '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
@@ -24,9 +28,11 @@ active_win_idx=""
 # corrupting cur_branch/active flags. '@window_task' is free-form so it stays
 # last — read drops any stray '|' it contains into that final field.
 # @window_ai_name is sanitized free of '|' (claude-status-update), so it is safe
-# as a fixed middle field.
-while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_task; do
+# as a fixed middle field. @ts_relaunch is "claude --resume <uuid>" — no '|'
+# either, so it also stays a fixed middle field before the free-form task.
+while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_task; do
 	pane_to_win["${pane_id#%}"]="$idx"
+	pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
 	# First pane per window wins for path/branch/task — panes in a window share a
 	# cwd, and @window_task/@branch are window options (same for every pane).
 	if [[ -z ${win_pane_path[$idx]+x} ]]; then
@@ -48,7 +54,7 @@ while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_a
 	*" $proc "*) ;;
 	*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 	esac
-done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@window_task}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_task}')
 
 # --- Claude status: read pane files, bucket by window index ---
 declare -A win_claude_state win_claude_fade win_claude_unseen
@@ -65,6 +71,20 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 		state="$REPLY"
 		fade=$REPLY_FADE
 		unseen=$REPLY_UNSEEN
+
+		# Stamp the pane's resume override so tmux-state relaunches the actual
+		# Claude session (not a bare shell) on restore. The transcript basename
+		# is the session UUID. Set only on change — @ts_relaunch is read back via
+		# the batched list-panes above, so a stable pane forks nothing per tick.
+		if [[ $RESUME_CLAUDE == on ]]; then
+			uuid="${REPLY_TRANSCRIPT##*/}"
+			uuid="${uuid%.jsonl}"
+			desired=""
+			[[ -n $uuid ]] && desired="claude --resume $uuid"
+			if [[ $desired != "${pane_cur_relaunch[$pane_file]:-}" ]]; then
+				tmux set -pq -t "%$pane_file" @ts_relaunch "$desired"
+			fi
+		fi
 		# Session aggregate: count states, freshest pane wins the fade
 		case "$state" in
 		error) ((sess_e++)) ;;

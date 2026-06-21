@@ -126,6 +126,8 @@
     splashTips = cfg.splash.tips;
     splashTimeout = cfg.splash.timeout;
     aiNamingEnable = cfg.aiNaming.enable;
+    # Only stamp @ts_relaunch when tmux-state is actually installed to read it.
+    resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
   };
 
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
@@ -243,6 +245,18 @@ in {
           Behavior on tmux server start. "off" disables auto-restore (manual
           `prefix + R` still works). "auto" applies the smart filter and restores.
           "interactive" prompts via picker (not yet implemented — falls back to "off").
+        '';
+      };
+
+      resumeClaude = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Resume Claude Code sessions when a window is restored. When on,
+          tmux-update-icons stamps each Claude pane's @ts_relaunch override with
+          its session id, so tmux-state relaunches `claude --resume <uuid>` on
+          restore instead of a bare shell. Restore is manual-by-default
+          (restoreMode = "off"), so this only fires on an explicit restore.
         '';
       };
 
