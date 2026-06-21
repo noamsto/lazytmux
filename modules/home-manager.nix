@@ -93,7 +93,9 @@
         run-shell -b '${tmuxStateBin} restore --auto'
       ''}
 
-      bind   u    run-shell '${tmuxStateBin} undo --pop 2>/dev/null || tmux display-message "Nothing to undo"'
+      # Surface tmux-state's own error (e.g. "nothing to undo — no recoverable
+      # close event") instead of a blanket "Nothing to undo" that hides why.
+      bind   u    run-shell 'err=$(${tmuxStateBin} undo --pop 2>&1) || tmux display-message "undo: $err"'
       # The picker is a bubbletea TUI (tmux-state >= 0.2.0); launching it through
       # the `env` binary breaks its TTY init and renders a blank popup, so invoke
       # it directly. (The old `env -u FZF_DEFAULT_OPTS` wrapper was only needed for
