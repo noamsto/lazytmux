@@ -105,6 +105,7 @@ read_pane_state() {
 	[[ $unseen == "1" ]] && REPLY_UNSEEN=1
 
 	REPLY_SESSION="$session"
+	REPLY_TRANSCRIPT="$transcript"
 	REPLY="$state"
 }
 
