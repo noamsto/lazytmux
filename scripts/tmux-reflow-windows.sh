@@ -143,6 +143,10 @@ zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 SEP_WIDTH=3 # " │ "
 MAX_WIN_LINES=3
+# Floor for rung 2.5 (truncated long grid): keep it only while each column can
+# still show the id + ~12 chars of branch (≈24 for typical 8-char issue ids).
+# Below it the grid degrades to illegible slivers, so fall through to short.
+LONG_TRUNC_FLOOR=24
 
 # Aggregate widths for the long and short label variants.
 colw_long=0
@@ -169,9 +173,10 @@ lines_for_colw() {
 	REPLY=$(((total + per - 1) / per))
 }
 
-# Detail ladder: long on one row → long within MAX rows → short (compact id) on
-# one row → short within MAX rows → short truncated to fit. Compact is preferred
-# over truncating; truncation is the last resort.
+# Detail ladder: long on one row → long within MAX rows → long truncated within
+# MAX rows → short (compact id) on one row → short within MAX rows → short
+# truncated to fit. Keeping the branch clipped beats dropping it for a bare id;
+# a compact line still beats illegible slivers, so it is the deeper rung.
 labels_mode=long
 colw=$colw_long
 trunc=0
@@ -185,21 +190,36 @@ else
 	if ((REPLY <= MAX_WIN_LINES)); then
 		labels_mode=long
 		colw=$colw_long
-	elif ((total_short + zoom_extra <= available)); then
-		labels_mode=short
-		colw=$colw_short
-		needs_multiline=0
 	else
-		labels_mode=short
-		colw=$colw_short
-		lines_for_colw "$colw_short"
-		if ((REPLY > MAX_WIN_LINES)); then
-			# even compact ids overflow the rows → truncate to fit
+		# Rung 2.5: long labels truncated into MAX rows. Pack the fewest columns
+		# that fit every window in MAX_WIN_LINES and clip the branch/title to the
+		# resulting width — the id (never-truncated prefix) and PR (its own
+		# reserved column) survive. Taken only while a column clears
+		# LONG_TRUNC_FLOOR; below that the grid is slivers, so fall through to
+		# the short ladder.
+		long_cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
+		long_trunc_colw=$(((available - (long_cols - 1) * SEP_WIDTH) / long_cols - overhead))
+		((long_trunc_colw > colw_long)) && long_trunc_colw=$colw_long
+		if ((long_trunc_colw >= LONG_TRUNC_FLOOR)); then
+			labels_mode=long
+			colw=$long_trunc_colw
 			trunc=1
-			cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
-			colw=$(((available - (cols - 1) * SEP_WIDTH) / cols - overhead))
-			((colw < 6)) && colw=6
-			((colw > colw_short)) && colw=$colw_short
+		elif ((total_short + zoom_extra <= available)); then
+			labels_mode=short
+			colw=$colw_short
+			needs_multiline=0
+		else
+			labels_mode=short
+			colw=$colw_short
+			lines_for_colw "$colw_short"
+			if ((REPLY > MAX_WIN_LINES)); then
+				# even compact ids overflow the rows → truncate to fit
+				trunc=1
+				cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
+				colw=$(((available - (cols - 1) * SEP_WIDTH) / cols - overhead))
+				((colw < 6)) && colw=6
+				((colw > colw_short)) && colw=$colw_short
+			fi
 		fi
 	fi
 fi
