@@ -665,6 +665,26 @@ in {
               else
                 tmux switch-client -t "$SESS:$WIN"
               fi
+              # A tag can outlive the cd that earned it: the take-over branch
+              # below stamps @worktree synchronously but moves the pane via
+              # send-keys, which can silently fail to land. The pane is then
+              # stranded outside the worktree while still carrying the tag, and
+              # because this matcher trusts the tag every later switch resolves
+              # here and select-window's to a no-op. Re-issue the cd when the
+              # matched single-pane shell isn't actually sitting at the worktree.
+              M_PATH=$(tmux display-message -t "$SESS:$WIN" -p '#{pane_current_path}')
+              case "$M_PATH" in
+                "{{ worktree_path }}" | "{{ worktree_path }}"/*) ;;
+                *)
+                  M_CMD=$(tmux display-message -t "$SESS:$WIN" -p '#{pane_current_command}')
+                  M_PANES=$(tmux display-message -t "$SESS:$WIN" -p '#{window_panes}')
+                  case "$M_CMD" in
+                    wt | fish | bash | zsh | sh)
+                      [ "$M_PANES" = "1" ] && tmux send-keys -t "$SESS:$WIN" "cd '{{ worktree_path }}'" Enter
+                      ;;
+                  esac
+                  ;;
+              esac
               # Auto-tag matched-by-path windows so the next call hits the primary signal.
               tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
               tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
