@@ -353,11 +353,13 @@ ICON='#{@window_icon_padded}'
 NAME="#[bold]#{@window_label_id}#[nobold]#{@window_label_disp}"
 LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-# Base tab color: the active window gets lavender (Catppuccin's
-# active/focused accent) on a raised surface_0 pill, the rest dim on the
-# default bg. The pill bg spans the whole slot (name, icons, PR) and is reset
-# at the end of ENTRY so it never leaks into the separator.
-BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
+# Base tab color: the active window is a solid mauve pill with dark text
+# (Catppuccin's accent as a filled, selected-tab look), the rest dim on the
+# default bg. The pill bg spans name + icons; ENTRY resets it to default bg
+# before the PR segment so the badge keeps its state color (merged is mauve and
+# would otherwise vanish on the mauve pill). The badge's leading space puts the
+# seam on whitespace, so the pill just ends at the icon.
+BASE="#{?window_active,#[fg=#{@thm_bg}#,bg=#{@thm_mauve}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
 # PR segment colored by state on every tab. Merged is terminal and checked
 # first (mauve), so a leftover pending/failed rollup on a merged PR can't tint
 # it peach/red; then conflicting/failing=red, pending=peach, success/open=green.
@@ -370,7 +372,7 @@ PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},me
 # value (and an empty value, for active/non-claude windows) always occupies the
 # same cells — this is what keeps grid columns aligned as the value ticks and appears.
 AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[bg=#{@thm_bg}]#[norange]"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}#[bg=#{@thm_bg}]${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
