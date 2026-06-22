@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -119,5 +120,39 @@ func TestClaudeSegment(t *testing.T) {
 
 	if got := claudeSegment(dir, "absent", "dark", now); got != "" {
 		t.Fatalf("absent session = %q, want empty", got)
+	}
+}
+
+func TestClaudeSegmentHaltedShowsAge(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/panes", 0o755)
+	now := int64(5000)
+
+	// idle is a halted state → the segment carries a dim "last active" time.
+	os.WriteFile(dir+"/panes/3", []byte("state=idle\ntimestamp=4700\nsession=h\n"), 0o644)
+	got := claudeSegment(dir, "h", "dark", now)
+	if !strings.Contains(got, "]5m#[fg=default] ") {
+		t.Fatalf("idle segment %q missing dim age 5m", got)
+	}
+
+	// processing is active → no age, the live icon already conveys it.
+	os.WriteFile(dir+"/panes/3", []byte("state=processing\ntimestamp=4700\nsession=h\n"), 0o644)
+	if got := claudeSegment(dir, "h", "dark", now); strings.Contains(got, "5m") {
+		t.Fatalf("active segment %q must not show an age", got)
+	}
+}
+
+func TestRelAgo(t *testing.T) {
+	cases := []struct {
+		secs int64
+		want string
+	}{
+		{0, "0s"}, {47, "47s"}, {60, "1m"}, {300, "5m"},
+		{3600, "1h"}, {7200, "2h"}, {86400, "1d"}, {259200, "3d"},
+	}
+	for _, c := range cases {
+		if got := relAgo(c.secs); got != c.want {
+			t.Errorf("relAgo(%d) = %q, want %q", c.secs, got, c.want)
+		}
 	}
 }

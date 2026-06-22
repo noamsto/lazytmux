@@ -341,7 +341,13 @@ BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_
 # Rendered last in the slot, so its state color only runs into the separator,
 # which sets its own color.
 PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}},}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}#[bg=#{@thm_bg}]#[norange]"
+# "Last active" suffix for halted Claude windows (@window_claude_ago, kept fresh
+# by tmux-update-icons; empty for active/non-claude windows → renders nothing).
+# Trailing bonus text, NOT in the slot-width math: it is short (≤4 cells), dim,
+# and sparse, and its value drifts between reflows (5m→12m), so budgeting a
+# fixed column would still drift. Worst case it eats a little trailing slack.
+AGO="#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[bg=#{@thm_bg}]#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted

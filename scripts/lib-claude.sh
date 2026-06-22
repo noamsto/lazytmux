@@ -45,7 +45,8 @@ CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 # read_pane_state PANE_FILE_PATH
 # Reads a pane state file and computes its staleness fade.
 # Sets REPLY to the state string, REPLY_FADE to 0..100 (0 = fresh/full color,
-# 100 = fully dim), REPLY_UNSEEN to 0 or 1.
+# 100 = fully dim), REPLY_UNSEEN to 0 or 1, REPLY_TS to the pane's last-write
+# epoch (the "last active" time; empty when the file carries no timestamp).
 # Unseen means the agent reached a terminal state while the user was in another
 # window. It pins the fade to 0 — the icon stays bright until the user focuses
 # that window.
@@ -106,7 +107,24 @@ read_pane_state() {
 
 	REPLY_SESSION="$session"
 	REPLY_TRANSCRIPT="$transcript"
+	REPLY_TS="$timestamp"
 	REPLY="$state"
+}
+
+# claude_ago SECONDS
+# Formats an age in seconds as a single compact unit: 47s, 5m, 2h, 3d.
+# Sets REPLY. Mirrors relAgo in picker/statusline/claude.go.
+claude_ago() {
+	local s="$1"
+	if ((s < 60)); then
+		REPLY="${s}s"
+	elif ((s < 3600)); then
+		REPLY="$((s / 60))m"
+	elif ((s < 86400)); then
+		REPLY="$((s / 3600))h"
+	else
+		REPLY="$((s / 86400))d"
+	fi
 }
 
 # claude_state_icon STATE

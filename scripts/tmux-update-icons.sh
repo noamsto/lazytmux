@@ -57,7 +57,7 @@ while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_a
 done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_task}')
 
 # --- Claude status: read pane files, bucket by window index ---
-declare -A win_claude_state win_claude_fade win_claude_unseen
+declare -A win_claude_state win_claude_fade win_claude_unseen win_claude_ts
 # Session-wide tally drives the status-bar session-name tint (@claude_session_fg)
 sess_w=0 sess_k=0 sess_p=0 sess_d=0 sess_i=0 sess_e=0 sess_dn=0 sess_int=0
 sess_min_fade=100 sess_unseen=0
@@ -85,6 +85,9 @@ if [[ -d $CLAUDE_PANES_DIR ]]; then
 				tmux set -pq -t "%$pane_file" @ts_relaunch "$desired"
 			fi
 		fi
+		# Freshest pane timestamp per window drives the "last active" label
+		[[ -n $REPLY_TS ]] && ((REPLY_TS > ${win_claude_ts[$win_idx]:-0})) &&
+			win_claude_ts[$win_idx]=$REPLY_TS
 		# Session aggregate: count states, freshest pane wins the fade
 		case "$state" in
 		error) ((sess_e++)) ;;
@@ -178,6 +181,7 @@ for idx in "${!win_pane_path[@]}"; do
 	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
 	proc_icon_str="${REPLY% }"
 	icon="$REPLY"
+	# shellcheck disable=SC2153 # REPLY_DW set by build_proc_icons (sourced lib)
 	icon_dw=$REPLY_DW
 
 	# Append colored claude status icon (shares the icon column)
@@ -195,6 +199,22 @@ for idx in "${!win_pane_path[@]}"; do
 	win_icons[$idx]="$icon"
 	win_icon_dw[$idx]=$icon_dw
 	win_display[$idx]="$display"
+
+	# "Last active" time: shown only for halted states (the live icon already
+	# conveys active ones). A bare unit like "5m" is parser-safe, so batch it.
+	# Set every tick (cleared to "" when active) — it ticks over each minute and
+	# does not trigger reflow, so gating on change would only add a read.
+	ago=""
+	case "$c_state" in
+	idle | done | interrupted | error)
+		ts="${win_claude_ts[$idx]:-0}"
+		if ((ts > 0 && CLAUDE_NOW > ts)); then
+			claude_ago "$((CLAUDE_NOW - ts))"
+			ago="$REPLY"
+		fi
+		;;
+	esac
+	tmux_cmds+="set -qw -t '$target' @window_claude_ago '$ago'"$'\n'
 done
 
 # Set active pane icon for top-right display (from batched data)
