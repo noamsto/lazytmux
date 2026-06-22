@@ -117,7 +117,7 @@
       if emulatorCfg != null
       then emulatorCfg.term
       else null;
-    extraConfText = tmuxStateConf;
+    extraConfText = tmuxStateConf + cfg.extraConfig;
     enrichEnable = cfg.enrich.enable;
     enrichProviders = cfg.enrich.providers;
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
@@ -189,6 +189,17 @@ in {
       default = {};
       example = lib.literalExpression ''{ "my-app" = "⚡"; }'';
       description = "Extra process name → icon mappings. Overrides built-in defaults on collision.";
+    };
+
+    extraConfig = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      example = lib.literalExpression "''set -ga update-environment KITTY_LISTEN_ON''";
+      description = ''
+        Extra verbatim lines appended to the generated tmux.conf after all
+        built-in settings (including persist hooks). Use for one-off tmux
+        options that lazytmux does not expose as structured options.
+      '';
     };
 
     prefix = lib.mkOption {
