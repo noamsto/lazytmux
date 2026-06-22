@@ -191,6 +191,7 @@ type sessionAgg struct {
 	minFade int
 	unseen  bool
 	issues  []string
+	lastTs  int64
 }
 
 // aggregateSession scans <dir>/panes/*, filters by the session= field, and
@@ -236,6 +237,9 @@ func aggregateSession(dir, session string, now int64) sessionAgg {
 		agg.counts.tally(state)
 		if f := fadePct(state, now, ts); f < agg.minFade {
 			agg.minFade = f
+		}
+		if ts > agg.lastTs {
+			agg.lastTs = ts
 		}
 		if unseen {
 			agg.unseen = true
@@ -291,6 +295,25 @@ func stateIcon(state string, now int64) string {
 	return ""
 }
 
+// haltedStates carry a "last active" time: the session has stopped working, so
+// the timestamp is when it halted. Active states (processing/waiting/compacting/
+// denied) are live — their icon already conveys them, no time shown.
+var haltedStates = map[string]bool{"idle": true, "done": true, "error": true}
+
+// relAgo formats an age in seconds as a single compact unit: 47s, 5m, 2h, 3d.
+func relAgo(secs int64) string {
+	switch {
+	case secs < 60:
+		return strconv.FormatInt(secs, 10) + "s"
+	case secs < 3600:
+		return strconv.FormatInt(secs/60, 10) + "m"
+	case secs < 86400:
+		return strconv.FormatInt(secs/3600, 10) + "h"
+	default:
+		return strconv.FormatInt(secs/86400, 10) + "d"
+	}
+}
+
 // claudeSegment mirrors `claude-status --session <s> --format icon-color`.
 func claudeSegment(dir, session, theme string, now int64) string {
 	agg := aggregateSession(dir, session, now)
@@ -305,6 +328,9 @@ func claudeSegment(dir, session, theme string, now int64) string {
 	pal := claudePalette(theme)
 	hue := pal.fadedHue(state, agg.minFade, agg.unseen)
 	out := "#[fg=" + hue + "]" + icon + "#[fg=default] "
+	if haltedStates[state] && agg.lastTs > 0 && now > agg.lastTs {
+		out += "#[fg=" + pal.idle + "]" + relAgo(now-agg.lastTs) + "#[fg=default] "
+	}
 	if list := formatIssueList(3, agg.issues); list != "" {
 		out += "#[fg=" + pal.idle + "]" + list + "#[fg=default] "
 	}
