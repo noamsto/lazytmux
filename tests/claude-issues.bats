@@ -15,6 +15,11 @@ pane_state() {
 	grep -m1 '^state=' "$CLAUDE_STATUS_DIR/panes/$1" | cut -d= -f2
 }
 
+# "Last active" timestamp written for a pane file.
+pane_ts() {
+	grep -m1 '^timestamp=' "$CLAUDE_STATUS_DIR/panes/$1" | cut -d= -f2
+}
+
 @test "issue add: creates issues file with id" {
 	bash "$CSU" issue add ENG-123 --pane %7
 	[ "$(cat "$CLAUDE_STATUS_DIR/issues/7")" = "ENG-123" ]
@@ -88,6 +93,30 @@ pane_state() {
 	bash "$CSU" issue add ENG-123 --pane %7
 	bash "$CSU" processing --pane %7
 	[ "$(cat "$CLAUDE_STATUS_DIR/issues/7")" = "ENG-123" ]
+}
+
+# "Last active" = time since real work. A passive idle write (the idle_prompt
+# notification, a session resume) must NOT reset the clock, or a long-idle
+# window keeps reporting ~1m. A real event (done) always stamps fresh.
+@test "idle preserves the prior timestamp (idle_prompt must not reset last-active)" {
+	mkdir -p "$CLAUDE_STATUS_DIR/panes"
+	printf 'state=done\ntimestamp=1000000000\nsession=work\n' >"$CLAUDE_STATUS_DIR/panes/7"
+	bash "$CSU" idle --pane %7
+	[ "$(pane_state 7)" = "idle" ]
+	[ "$(pane_ts 7)" = "1000000000" ]
+}
+
+@test "done stamps a fresh timestamp (work just finished)" {
+	mkdir -p "$CLAUDE_STATUS_DIR/panes"
+	printf 'state=idle\ntimestamp=1000000000\nsession=work\n' >"$CLAUDE_STATUS_DIR/panes/7"
+	bash "$CSU" "done" --pane %7
+	[ "$(pane_ts 7)" != "1000000000" ]
+}
+
+@test "first idle with no prior file stamps a fresh timestamp" {
+	bash "$CSU" idle --pane %7
+	[ -n "$(pane_ts 7)" ]
+	[ "$(pane_ts 7)" != "1000000000" ]
 }
 
 # State guard: only `error` (a stopped turn) is protected from routine

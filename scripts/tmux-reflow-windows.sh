@@ -135,8 +135,17 @@ done
 # fit test by pr_colw × window count and flips to compact despite free space.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
+# AGO_W: the multi-line grid reserves a fixed "last active" column — 1 leading
+# space + a right-aligned unit of up to 3 cells (e.g. "59s"/"12m"/"23h"). It is
+# charged into the multi-line slot only; single-line entries fall back to the
+# global status-format, which renders the ago unpadded and trailing. Reserving a
+# constant column (rather than budgeting the live value) is drift-proof: the ago
+# ticks over between reflows (5m→6m) and flips empty↔set on Claude state changes
+# without a reflow, so a value-sized column would misalign. A fixed column always
+# holds; empty values render as spaces (#{p-3:…}).
+AGO_W=4
 slot_overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
-overhead=$((slot_overhead + pr_colw))             # + shared pr column (multi-line)
+overhead=$((slot_overhead + pr_colw + AGO_W))     # + shared pr column + ago column (multi-line)
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -361,12 +370,11 @@ BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_surface_0}],#[fg=#{@thm_
 # Rendered last in the slot, so its state color only runs into the separator,
 # which sets its own color.
 PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}},}"
-# "Last active" suffix for halted Claude windows (@window_claude_ago, kept fresh
-# by tmux-update-icons; empty for active/non-claude windows → renders nothing).
-# Trailing bonus text, NOT in the slot-width math: it is short (≤4 cells), dim,
-# and sparse, and its value drifts between reflows (5m→12m), so budgeting a
-# fixed column would still drift. Worst case it eats a little trailing slack.
-AGO="#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}"
+# "Last active" column for halted Claude windows (@window_claude_ago, kept fresh
+# by tmux-update-icons). Right-aligned and padded to AGO_W's fixed width so the
+# value (and an empty value, for active/non-claude windows) always occupies the
+# same cells — this is what keeps grid columns aligned as the value ticks and appears.
+AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
 ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[bg=#{@thm_bg}]#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
