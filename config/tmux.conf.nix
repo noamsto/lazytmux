@@ -235,6 +235,7 @@
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-window-nav"
+    "tmux-reconcile-window"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
     "tmux-issue-stamp"
@@ -293,6 +294,24 @@
   enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
+  # The cwd-derived window reconciler. Always built (tagging drives navigation
+  # even with enrich off); the @issue_stamp@ kick is empty when enrich is off.
+  mkScriptReconcile = name: let
+    raw = builtins.readFile ../scripts/${name}.sh;
+    patched =
+      builtins.replaceStrings
+      ["@issue_stamp@"]
+      [
+        (
+          if enrichEnable
+          then "${script.tmux-issue-stamp}/bin/tmux-issue-stamp"
+          else ""
+        )
+      ]
+      raw;
+  in
+    pkgs.writeShellScriptBin name patched;
+
   # Individual script references for full store paths in config.
   # Reuse the pre-built enrich provider/poller derivations (also referenced by
   # the dispatcher's substitution) instead of rebuilding them via mkScriptEnrich.
@@ -313,6 +332,8 @@
     then mkScriptSplash name
     else if name == "tmux-gh-dash"
     then mkScriptGhDash name
+    else if name == "tmux-reconcile-window"
+    then mkScriptReconcile name
     else if builtins.elem name scriptsWithLog
     then mkScriptWithLog name
     else mkScript name);
@@ -595,6 +616,17 @@
     set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+
+    # Tag every newly-created window as a worktree window from its cwd — at
+    # creation, regardless of creator or CLAUDECODE (issue #95). new-session
+    # doesn't fire after-new-window for its first window, so both are needed; -b
+    # keeps the git probe off the creation path and avoids the foreground
+    # run-shell re-entrancy that cascades the hook. Indexed so they coexist with
+    # the index-0 reflow hooks; the bare `set-hook -gu` above clears them on reload.
+    # Target by #{window_id} alone (globally unique): #{session_id} is "$N", and
+    # run-shell's sh -c would re-expand the leading $ (e.g. $0 -> "sh").
+    set-hook -g after-new-window[10]  'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
+    set-hook -g after-new-session[10] 'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
     set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id}"'
