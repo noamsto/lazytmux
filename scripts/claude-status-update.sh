@@ -451,11 +451,8 @@ fi
 transcript_line=""
 [[ -n $transcript_path ]] && transcript_line=$'\n'"transcript=$transcript_path"
 
-# Write pane state with timestamp. The timestamp is the "last active" time —
-# when the agent last did real work. A passive `idle` write (the idle_prompt
-# notification or a session resume) means the pane just kept sitting where it
-# was, so it must not reset the clock: carry the stored timestamp forward.
-# Real events (done/error/waiting/processing) always stamp fresh.
+# Write pane state with timestamp. A passive idle write (idle_prompt, resume)
+# preserves the prior timestamp so the "last active" label reflects real work.
 printf -v _now '%(%s)T' -1
 ts=$_now
 if [[ $state == idle && -f "$PANES_DIR/$pane_file" ]]; then

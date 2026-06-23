@@ -15,7 +15,6 @@ pane_state() {
 	grep -m1 '^state=' "$CLAUDE_STATUS_DIR/panes/$1" | cut -d= -f2
 }
 
-# "Last active" timestamp written for a pane file.
 pane_ts() {
 	grep -m1 '^timestamp=' "$CLAUDE_STATUS_DIR/panes/$1" | cut -d= -f2
 }

@@ -135,14 +135,9 @@ done
 # fit test by pr_colw × window count and flips to compact despite free space.
 last_idx=${indices[$((total - 1))]}
 idx_width=${#last_idx}
-# AGO_W: the multi-line grid reserves a fixed "last active" column — 1 leading
-# space + a right-aligned unit of up to 3 cells (e.g. "59s"/"12m"/"23h"). It is
-# charged into the multi-line slot only; single-line entries fall back to the
-# global status-format, which renders the ago unpadded and trailing. Reserving a
-# constant column (rather than budgeting the live value) is drift-proof: the ago
-# ticks over between reflows (5m→6m) and flips empty↔set on Claude state changes
-# without a reflow, so a value-sized column would misalign. A fixed column always
-# holds; empty values render as spaces (#{p-3:…}).
+# Fixed ago column in the multi-line slot: the value ticks between reflows and
+# flips empty↔set on Claude state changes without triggering a reflow, so a
+# live-width column would drift. 1 space + 3 right-aligned cells = 4.
 AGO_W=4
 slot_overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
 overhead=$((slot_overhead + pr_colw + AGO_W))     # + shared pr column + ago column (multi-line)
