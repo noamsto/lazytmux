@@ -142,6 +142,17 @@
               bats tests/naming-seed.bats
               touch $out
             '';
+
+          reconcile-tests =
+            pkgs.runCommand "reconcile-tests" {
+              # git: the test derives tags from a real repo it builds in $HOME.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.git];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/reconcile.bats
+              touch $out
+            '';
         };
 
         packages = {

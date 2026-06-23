@@ -696,9 +696,8 @@ in {
                   esac
                   ;;
               esac
-              # Auto-tag matched-by-path windows so the next call hits the primary signal.
-              tmux set-option -t "$SESS:$WIN" -w @worktree "{{ worktree_path }}"
-              tmux set-option -t "$SESS:$WIN" -w @branch "{{ branch | sanitize }}"
+              # Tagging (incl. auto-tag of matched-by-path windows, so the next
+              # call hits the primary signal) is done by the reconcile tail below.
               STAMP_TARGET="$SESS:$WIN"
             else
               # Take over the current window when it's a single pane whose
@@ -726,27 +725,26 @@ in {
               esac
               if [ -n "$DUP" ]; then
                 CUR_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#{session_id}:#{window_index}')
-                tmux set-option -t "$CUR_TARGET" -w @worktree "{{ worktree_path }}"
-                tmux set-option -t "$CUR_TARGET" -w @branch "{{ branch | sanitize }}"
-                # Queued in the pty; the shell reads it once wt exits.
+                # Queued in the pty; the shell reads it once wt exits. Tagging is
+                # done by the reconcile tail below (explicit mode, so it doesn't
+                # depend on this still-pending cd landing).
                 tmux send-keys -t "$CUR_TARGET" "cd '{{ worktree_path }}'" Enter
                 STAMP_TARGET="$CUR_TARGET"
               else
-                # Capture the new window as a precise target ($N:idx session-id form,
-                # immune to numeric session names). A bare session target resolves to
-                # the *currently active* window, and the backgrounded issue-stamp
-                # finishes seconds later — by then the user may have switched windows
-                # and the stamp would land on the wrong one.
-                NEW_WIN=$(tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}" -P -F '#{session_id}:#{window_index}')
-                tmux set-option -t "$NEW_WIN" -w @worktree "{{ worktree_path }}"
-                tmux set-option -t "$NEW_WIN" -w @branch "{{ branch | sanitize }}"
-                STAMP_TARGET="$NEW_WIN"
+                # A bare `new-window` is enough: its after-new-window hook fires
+                # tmux-reconcile-window, which tags the new window from its cwd
+                # ({{ worktree_path }}, via -c). No STAMP_TARGET — the reconcile
+                # tail is only for the reused-window branches above.
+                tmux new-window -a -t "$CUR_SESSION" -c "{{ worktree_path }}"
               fi
-            fi${lib.optionalString cfg.enrich.enable ''
-
-              if [ -n "''${STAMP_TARGET:-}" ]; then
-                ${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp "$STAMP_TARGET" "{{ worktree_path }}" "{{ branch | sanitize }}" >/dev/null 2>&1 &
-              fi''}
+            fi
+            # Single source of truth for tagging the reused window: sets
+            # @worktree/@branch/@git_root and (with enrich) kicks the issue stamp.
+            # Unconditional — navigation needs the tags even with enrich off;
+            # foreground so the tag is set before any rapid re-switch.
+            if [ -n "''${STAMP_TARGET:-}" ]; then
+              ${tmuxConfig.script.tmux-reconcile-window}/bin/tmux-reconcile-window "$STAMP_TARGET" "{{ worktree_path }}" "{{ branch | sanitize }}" >/dev/null 2>&1
+            fi
             """
             zoxide = """
             command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
