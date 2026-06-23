@@ -451,11 +451,21 @@ fi
 transcript_line=""
 [[ -n $transcript_path ]] && transcript_line=$'\n'"transcript=$transcript_path"
 
-# Write pane state with timestamp
+# Write pane state with timestamp. A passive idle write (idle_prompt, resume)
+# preserves the prior timestamp so the "last active" label reflects real work.
 printf -v _now '%(%s)T' -1
+ts=$_now
+if [[ $state == idle && -f "$PANES_DIR/$pane_file" ]]; then
+	while IFS='=' read -r key val; do
+		[[ $key == "timestamp" && -n $val ]] && {
+			ts="$val"
+			break
+		}
+	done <"$PANES_DIR/$pane_file"
+fi
 cat >"$PANES_DIR/$pane_file" <<EOF
 state=$state
-timestamp=$_now
+timestamp=$ts
 session=$session_name${unseen_line}${transcript_line}
 EOF
 
