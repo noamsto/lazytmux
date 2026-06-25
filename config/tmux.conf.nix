@@ -366,6 +366,18 @@
     lib.optionalString (carousel-toggle != null)
     "bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'";
 
+  # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
+  # know about tmux focus, so reconcile it whenever the on-screen window changes —
+  # stashing carousels for off-screen panes and restoring the visible one. Indexed
+  # ([60]) to coexist with the reflow (index 0) and splash ([50]) hooks on the same
+  # events. -b so focus changes never block; --reconcile self-gates to kitty mode,
+  # so it's a fast no-op for tmux-split users.
+  carouselHooks = lib.optionalString (carousel-toggle != null) ''
+    set-hook -g client-session-changed[60] 'run-shell -b "${carousel-toggle}/bin/tmux-claude-images --reconcile"'
+    set-hook -g session-window-changed[60] 'run-shell -b "${carousel-toggle}/bin/tmux-claude-images --reconcile"'
+    set-hook -g client-attached[60]        'run-shell -b "${carousel-toggle}/bin/tmux-claude-images --reconcile"'
+  '';
+
   # --- Plugin config options (set before run-shell) ---
   pluginConfigs = ''
     # catppuccin theme
@@ -697,6 +709,8 @@
       set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
       set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
     ''}
+
+    ${carouselHooks}
 
     ${extraConfText}
   '';
