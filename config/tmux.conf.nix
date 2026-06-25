@@ -443,6 +443,10 @@
     # kitty remote-control socket, so `kitty @` (carousel reconcile) reaches the
     # enclosing kitty from panes attached after the server started outside it.
     set -ga update-environment KITTY_LISTEN_ON
+    # kitty-pane carousel opt-in. The reconcile hook runs in the session env, not
+    # the user's interactive shell, so thread AEYE_HOST in on attach — otherwise
+    # the carousel never follows tmux focus and the launcher degrades to a split.
+    set -ga update-environment AEYE_HOST
 
     # Timing
     set -s escape-time 0
