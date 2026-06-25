@@ -440,6 +440,9 @@
     set -ga update-environment COLORTERM
     set -ga update-environment TERMINFO
     set -ga update-environment TERMINFO_DIRS
+    # kitty remote-control socket, so `kitty @` (carousel reconcile) reaches the
+    # enclosing kitty from panes attached after the server started outside it.
+    set -ga update-environment KITTY_LISTEN_ON
 
     # Timing
     set -s escape-time 0
