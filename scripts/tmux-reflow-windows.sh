@@ -355,11 +355,14 @@ LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
 # Base tab color: the active window is a solid mauve pill with dark text
 # (Catppuccin's accent as a filled, selected-tab look), the rest dim on the
-# default bg. The pill bg spans name + icons; ENTRY resets it to default bg
-# before the PR segment so the badge keeps its state color (merged is mauve and
-# would otherwise vanish on the mauve pill). The badge's leading space puts the
-# seam on whitespace, so the pill just ends at the icon.
+# default bg. The pill bg spans the index + label only; ICONFG ends it before
+# the icon column so process glyphs and the Claude status icon keep their own
+# colors instead of being dulled to the dark pill text.
 BASE="#{?window_active,#[fg=#{@thm_bg}#,bg=#{@thm_mauve}],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
+# End the active pill before the icons: bright fg on the default bg, so glyphs
+# render as on inactive tabs (only brighter) and the colored Claude icon shows
+# its state color. No-op on inactive tabs (they already carry subtext_0/bg).
+ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}],}"
 # PR segment colored by state on every tab. Merged is terminal and checked
 # first (mauve), so a leftover pending/failed rollup on a merged PR can't tint
 # it peach/red; then conflicting/failing=red, pending=peach, success/open=green.
@@ -372,7 +375,7 @@ PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},me
 # value (and an empty value, for active/non-claude windows) always occupies the
 # same cells — this is what keeps grid columns aligned as the value ticks and appears.
 AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICON}#[bg=#{@thm_bg}]${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z} ${ICONFG}${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
