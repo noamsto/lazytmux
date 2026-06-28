@@ -40,8 +40,7 @@
     doCheck = false;
     doInstallCheck = false;
   };
-in
-  mkTmuxPlugin {
+  plugin = mkTmuxPlugin {
     inherit (fingers) version src;
     pluginName = "tmux-fingers";
     rtpFilePath = "tmux-fingers.tmux";
@@ -51,7 +50,11 @@ in
         tmuxFingersDir = "${fingers}/bin";
       })
     ];
-
-    # Exposed so keybindings can invoke the binary with a custom env (TERM).
-    passthru = {inherit fingers;};
-  }
+  };
+in
+  # Expose the binary so keybindings can invoke it with a custom env (TERM).
+  # Attach it after mkTmuxPlugin rather than via a `passthru` arg: newer
+  # nixpkgs sets `passthru.updateScript` inside mkTmuxPlugin with a shallow
+  # `//`, and its `overrideAttrs` re-invokes mkTmuxPlugin — both paths clobber
+  # a caller-supplied `passthru`. A plain `//` on the result survives.
+  plugin // {passthru = (plugin.passthru or {}) // {inherit fingers;};}
