@@ -361,10 +361,13 @@
     "set -g default-shell ${defaultShell}\n    ";
 
   # prefix+I bind for the agent-carousel image gallery, emitted only when the
-  # toggle package is wired in (carousel-toggle != null).
+  # toggle package is wired in (carousel-toggle != null). tmux's run-shell does not
+  # export TMUX_PANE, so the toggle can't key the manifest to the pressing pane and
+  # reports "no images yet for this pane". Inject it via #{pane_id}, which tmux
+  # format-expands in the command string before exec.
   carouselBind =
     lib.optionalString (carousel-toggle != null)
-    "bind I run-shell '${carousel-toggle}/bin/tmux-claude-images'";
+    "bind I run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images'";
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
