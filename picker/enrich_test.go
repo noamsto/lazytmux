@@ -105,7 +105,7 @@ func TestBranchEchoesName(t *testing.T) {
 }
 
 func TestColorPRBadge(t *testing.T) {
-	c := prColors{success: "<s>", failure: "<f>", pending: "<p>", merged: "<m>", reset: "<r>"}
+	c := prColors{success: "<s>", failure: "<f>", pending: "<p>", merged: "<m>", closed: "<c>", reset: "<r>"}
 	cases := []struct {
 		name       string
 		prPlain    string
@@ -122,6 +122,8 @@ func TestColorPRBadge(t *testing.T) {
 		{"merged", "  #4", "merged", "success", "mergeable", false, "<m>"},
 		{"merged wins over leftover pending", "  #6", "merged", "pending", "unknown", false, "<m>"},
 		{"merged wins over leftover failure", "  #7", "merged", "failure", "unknown", false, "<m>"},
+		{"closed", "  #8", "closed", "success", "mergeable", false, "<c>"},
+		{"closed wins over leftover failure", "  #9", "closed", "failure", "unknown", false, "<c>"},
 		{"clean success", "  #5", "open", "success", "mergeable", false, "<s>"},
 	}
 	for _, c2 := range cases {

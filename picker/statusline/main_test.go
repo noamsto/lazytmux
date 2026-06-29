@@ -91,6 +91,18 @@ func TestPRBadgeConflictWinsColorAndGlyph(t *testing.T) {
 	}
 }
 
+func TestPRBadgeClosedWinsOverStaleCheck(t *testing.T) {
+	a := args{
+		prNumber: "9", branch: "x", prBranch: "x", prState: "closed",
+		prCheck: "failure", prMergeable: "unknown",
+		thmOverlay0: "#666", iconClosed: "XX", prTitle: "T",
+	}
+	want := "#[fg=#666]XX #9 T  "
+	if got := prBadge(a); got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestRenderLineFull(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(dir+"/panes", 0o755)

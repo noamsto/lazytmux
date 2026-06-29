@@ -11,6 +11,7 @@ setup_lib_enrich() {
 		-e 's/@enrich_icon_success@/S/g' \
 		-e 's/@enrich_icon_failure@/F/g' \
 		-e 's/@enrich_icon_merged@/M/g' \
+		-e 's/@enrich_icon_closed@/X/g' \
 		-e 's/@enrich_icon_conflict@/C/g' \
 		scripts/lib-enrich.sh >"$tmp"
 	# shellcheck source=/dev/null

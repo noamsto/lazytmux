@@ -16,6 +16,7 @@ ENRICH_ICON_PENDING="@enrich_icon_pending@"
 ENRICH_ICON_SUCCESS="@enrich_icon_success@"
 ENRICH_ICON_FAILURE="@enrich_icon_failure@"
 ENRICH_ICON_MERGED="@enrich_icon_merged@"
+ENRICH_ICON_CLOSED="@enrich_icon_closed@"
 ENRICH_ICON_CONFLICT="@enrich_icon_conflict@"
 
 # branch_to_linear_key BRANCH
@@ -221,12 +222,15 @@ build_window_label() {
 	# PR at a glance. Returned as its own segment (REPLY_PR), never fused into
 	# the name, so the template can color it by check state in isolation.
 	if [[ -n $pr_number && $pr_number != "none" ]]; then
-		# A merged PR is terminal: its rollup is historical noise (a leftover
-		# pending/failed check must not mask the merge), so the merged glyph wins
-		# over check state. Then conflicts trump check state — a conflicting PR
-		# needs a rebase, which re-runs checks anyway (open PRs only).
+		# Terminal states are historical: a leftover pending/failed rollup must
+		# not mask them, so merged/closed glyphs win over check state. A closed
+		# (non-merged) PR is dead/superseded — distinct dim glyph, never a live
+		# check. Then conflicts trump check state — a conflicting PR needs a
+		# rebase, which re-runs checks anyway (open PRs only).
 		if [[ $pr_state == "merged" ]]; then
 			pr_glyph="$ENRICH_ICON_MERGED"
+		elif [[ $pr_state == "closed" ]]; then
+			pr_glyph="$ENRICH_ICON_CLOSED"
 		elif [[ $pr_mergeable == "conflicting" ]]; then
 			pr_glyph="$ENRICH_ICON_CONFLICT"
 		else
