@@ -348,21 +348,22 @@ fi
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
 # Name column: bold identity prefix + column-padded remainder (id + disp fill
-# colw exactly). Label content changes outside structural events (issue stamp,
-# PR arrival) re-enter via the providers' forced reflow calls.
-NAME="#[bold]#{@window_label_id}#[nobold]#{@window_label_disp}"
+# colw exactly). The id is always bold; the remainder stays bold on the active
+# window (BASE turns bold on for the whole marker) and drops to regular weight
+# elsewhere. Label content changes outside structural events (issue stamp, PR
+# arrival) re-enter via the providers' forced reflow calls.
+NAME="#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{@window_label_disp}"
 LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
-# Base tab color: the active window gets lavender (Catppuccin's active/focused
-# accent) + an underscore on the name; the rest dim on the default bg. The
-# accent is scoped to "index: label" — ICONFG ends it (resets fg/bg, drops the
-# underscore) before the icon column, so process glyphs and the Claude status
-# icon keep their own colors instead of being tinted or underlined.
-BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_bg}#,underscore],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
-# End the active accent before the icons: bright fg on the default bg with the
-# underscore off, so glyphs render as on inactive tabs (only brighter) and the
-# colored Claude icon shows its state color. No-op on inactive tabs.
-ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nounderscore],}"
+# Base tab color: the active window's "index: label" text takes bold mauve
+# (Catppuccin's accent); the rest dim on the default bg. Text-only — no fill, no
+# underline — so colored process glyphs and the PR badge keep their own colors.
+# The accent is scoped to "index: label"; ICONFG ends it before the icon column.
+BASE="#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}"
+# End the active accent before the icons: bright fg on the default bg with bold
+# off, so glyphs render as on inactive tabs (only brighter) and the colored
+# Claude icon shows its state color. No-op on inactive tabs.
+ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],}"
 # PR segment colored by state on every tab. Merged/closed are terminal and
 # checked first (merged=mauve, closed=overlay0), so a leftover pending/failed
 # rollup can't tint them peach/red; then conflicting/failing=red, pending=peach,
