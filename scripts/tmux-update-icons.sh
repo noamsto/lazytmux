@@ -250,9 +250,9 @@ printf '%s' "$tmux_cmds" | tmux source -
 
 # A branch or task change means window labels (built by reflow from
 # @branch/@issue_*/@window_task) are stale — no tmux hook fires on cd or a new
-# prompt, so kick a forced reflow here. The wrapped tmux puts all lazytmux
-# scripts on the server's PATH.
+# prompt, so kick a forced reflow here. The call below is the reflow store path
+# (not a bare name) so a config reload repoints it without a tmux server restart.
 if ((branch_changed || labels_changed)); then
-	tmux-reflow-windows "$SESSION" --force >/dev/null 2>&1 &
+	@reflow@ "$SESSION" --force >/dev/null 2>&1 &
 	disown
 fi
