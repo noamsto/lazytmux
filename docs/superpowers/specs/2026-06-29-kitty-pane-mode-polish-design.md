@@ -1,0 +1,202 @@
+# kitty-pane mode polish: launch-hidden follow-focus + seamless ctrl+hjkl
+
+**Issue:** [noamsto/aeye#103](https://github.com/noamsto/aeye/issues/103)
+**Status:** Design — pending review
+**Repos:** aeye · lazytmux · nix-config
+
+## Goal
+
+Close two rough edges in kitty-pane mode (`AEYE_HOST=kitty`), where the aeye
+carousel opens as a kitty vsplit beside the tmux host instead of a tmux split:
+
+1. **Auto-open ignores tmux focus** — a carousel auto-opened for an off-screen
+   pane appears over whatever window the user is currently viewing.
+2. **`ctrl+hjkl` can't cross the tmux/kitty boundary** — navigation into and out
+   of the kitty carousel was never wired.
+
+Both were known gaps: cross-surface navigation was explicitly punted as
+out-of-scope in aeye #90 and the carousel-follows-focus design.
+
+## Background
+
+In kitty-pane mode there is one kitty OS window hosting the tmux client (window
+WIN-host) plus a kitty carousel window (tagged `claude_img_src=<pane>`) placed as
+a vsplit beside it. The carousel "follows tmux focus" via a reconcile step
+(`tmux-claude-images --reconcile`) fired from tmux focus hooks
+(`client-session-changed` / `session-window-changed` / `client-attached`): it
+stashes off-screen carousels into a hidden tab and unstashes the on-screen one.
+
+Verified building blocks: kitty 0.47.4 (`kitty @ action`), tmux 3.6a
+(`#{pane_at_right}` / `#{pane_at_left}` / `#{pane_at_top}` / `#{pane_at_bottom}`).
+`kitty @` is reachable from a tmux `run-shell` / key-binding context because
+`update-environment KITTY_LISTEN_ON` puts the socket in the session environment.
+
+## Part 1 — launch-hidden follow-focus (aeye)
+
+### Problem
+
+`scripts/tmux-claude-images.sh` `launch_kitty()` always creates the carousel
+*visible* (`kitty @ launch … --location=vsplit --next-to … --keep-focus`) with
+no check of whether the owning pane (`$KEY`) is on the currently-visible tmux
+window. The capture hooks fire `tmux-claude-images --ensure-open`
+(`adapters/.../diagrams.sh:112`, image capture) from the *capturing* pane,
+regardless of where the user is looking. Reconcile only stashes off-screen
+carousels on tmux *focus-change* hooks — never as a consequence of the launch.
+So a diagram captured in pane A while the user views window B pops the carousel
+over B and leaves it there until the next focus change.
+
+### Fix
+
+On an `--ensure-open` launch, when `$KEY` is **not** on a visible window, create
+the carousel **stashed** instead of as a visible vsplit; the existing reconcile
+reveals it when the user focuses the owning window.
+
+```sh
+# launch_kitty(), after the reachability + toggle guards:
+if [[ -n $ENSURE_OPEN ]] && ! _key_on_screen; then
+    _ensure_stash_tab
+    kitty @ launch --type=window --match "var:aeye_stash=1" --keep-focus \
+        --var claude_img_src="$KEY" \
+        --env AEYE_DIR="$STATE_DIR" --env CLAUDE_STATUS_DIR="$STATE_DIR" \
+        "$VIEWER_BIN" "$KEY" >/dev/null
+    return
+fi
+# else: existing visible-vsplit launch
+```
+
+The manual toggle path (`prefix+I`) is unaffected: there `$KEY` is the user's
+current pane, always on-screen → still opens visible.
+
+### Env-independent on-screen check
+
+The launch runs in the *capturing* pane's tmux context, so reconcile's
+context-dependent `tmux list-panes` would always count its own pane as current.
+Use an `-a` query filtered to the active window of an attached session:
+
+```sh
+_key_on_screen() {
+    tmux list-panes -a -F '#{pane_id} #{window_active} #{session_attached}' 2>/dev/null \
+        | awk -v k="$KEY" '$1==k && $2==1 && $3>=1 {f=1} END{exit !f}'
+}
+```
+
+Reconcile's own query is left as-is (it runs from focus hooks where the context
+is already the visible window, and it ships working today).
+
+## Part 2 — seamless ctrl+hjkl (lazytmux + nix-config)
+
+Full smart-splits. The boundary is asymmetric: tmux→kitty happens inside a tmux
+pane (tmux owns it); kitty→tmux happens in a kitty window not running tmux (kitty
+owns it). Both sides are required.
+
+### tmux side (lazytmux)
+
+A small packaged helper keeps the binding readable and pulls the branching out of
+tmux's quoting:
+
+```sh
+# tmux-smart-nav  <select-flag> <kitty-dir> <zoomed> <at_edge>
+flag=$1 dir=$2 zoomed=$3 edge=$4
+[ "$zoomed" = 1 ] && exit 0
+if [ "$edge" = 1 ] && [ -n "$KITTY_LISTEN_ON" ] && command -v kitty >/dev/null 2>&1; then
+    kitty @ action neighboring_window "$dir" 2>/dev/null && exit 0
+fi
+tmux select-pane -"$flag"
+```
+
+The four bindings in `config/tmux.conf.nix` (currently `select-pane -{L,D,U,R}`)
+call it, passing the edge format var per direction:
+
+```
+bind -n C-l if-shell "$is_vim" "send-keys C-l" \
+    "run-shell 'tmux-smart-nav R right #{window_zoomed_flag} #{pane_at_right}'"
+# C-h → L left pane_at_left ; C-j → D down pane_at_bottom ; C-k → U up pane_at_top
+```
+
+Self-gates on `KITTY_LISTEN_ON`, so non-kitty tmux users and tmux-split-mode
+users keep exactly today's behavior; intra-tmux moves (non-edge) stay plain
+`select-pane`.
+
+### kitty side (nix-config, generated by the lazytmux HM option)
+
+A `pass_keys.py` kitten bound to `ctrl+hjkl`:
+
+```
+map ctrl+h kitten pass_keys.py left  ctrl+h tmux   # + l/j/k
+```
+
+The kitten checks the focused window's foreground process:
+- process **is** tmux → pass the key through to the window → tmux's Part-2
+  binding decides (intra-tmux move, or edge→kitty). Intra-tmux nav never changes.
+- otherwise (carousel viewer) → `neighboring_window <dir>` → back into tmux.
+
+This is the canonical kitty-FAQ pass-keys recipe; lift it verbatim rather than
+reconstruct the kitten API.
+
+### End-to-end flow
+
+- `C-l` mid-tmux → kitten passes → tmux `select-pane -R`.
+- `C-l` at tmux right edge → kitten passes → tmux `kitty @ action
+  neighboring_window right` → carousel focused.
+- `C-h` in carousel → kitten `neighboring_window left` → tmux focused.
+
+## Ownership and DX
+
+"kitty integration" is three concerns at three layers, each owned by its existing
+layer in the `nix-config → lazytmux → aeye` dependency chain:
+
+| Concern | Owner |
+|---|---|
+| carousel-as-kitty-window (launch, placement, follow-focus, visibility, drag-out, var tag) | **aeye** |
+| tmux's side of any tmux↔kitty boundary (C-hjkl, edge handoff, `KITTY_LISTEN_ON` threading, reconcile hooks) | **lazytmux** |
+| kitty's own keymaps/kittens | **kitty config** |
+
+For the **NixOS best-DX path**, the kitty-config layer is *generated* by a single
+opt-in Home Manager option in lazytmux's module (`modules/home-manager.nix`,
+`options.programs.lazytmux`), since lazytmux is already the NixOS integration
+layer (it consumes aeye via `carousel-toggle` / `carousel-aeye` and wires the
+carousel's tmux hooks). Proposed:
+
+```nix
+programs.lazytmux.carousel.kittyNav.enable = true;   # nix-config: one line
+```
+
+When enabled the module:
+- wires the tmux side (`tmux-smart-nav` on PATH + the four `C-hjkl` bindings);
+- writes `pass_keys.py` via `xdg.configFile."kitty/pass_keys.py"`;
+- injects the `ctrl+hjkl` maps via `programs.kitty.keybindings`.
+
+Both nav halves are co-generated by one module, so the kitten and its maps stay
+together (the "kitten lives with its maps" invariant) — materialized
+declaratively. HM attrset merge means the injected kitty keys compose with the
+user's own `programs.kitty` config (no `ctrl+hjkl` collision today). The option
+asserts the kitty-pane prerequisites (`allow_remote_control`, `AEYE_HOST=kitty`).
+
+Non-Nix users: **aeye's README** documents the manual `pass_keys.py` + map +
+`tmux.conf` snippets, extending the existing "Enable kitty-pane mode" section.
+
+## Testing
+
+- `bats` for `tmux-smart-nav`: zoomed → no-op; non-edge → `select-pane`; edge +
+  no `KITTY_LISTEN_ON` → `select-pane`; edge + kitty → `kitty @ action` (stub
+  `kitty`/`tmux`, assert argv).
+- `bats` for the aeye on-screen-launch branch: stub `kitty`/`tmux` so
+  `_key_on_screen` returns false → assert launch targets `var:aeye_stash=1`;
+  returns true → assert visible-vsplit launch.
+- Manual checklist for live focus behavior and the kitten pass-through (focus
+  movement can't be unit-tested): capture a diagram while on another window →
+  carousel stays hidden; focus the owning window → it appears; `C-l` from the
+  Claude pane → carousel; `C-h` in carousel → back.
+
+## Out of scope
+
+- Replacing kitty-pane mode with a tmux split by default (considered; rejected —
+  keep the mode, fix it).
+- Reworking reconcile's existing on-screen query (works from hooks; unchanged).
+- Multi-client tmux (two clients viewing different windows) — inherits the
+  single-attached-client assumption the carousel already makes.
+
+## References
+
+- aeye #90 / carousel-follows-focus design — cross-surface nav noted out-of-scope.
+- kitty FAQ: "mapping key presses depending on the program running" (pass_keys).
