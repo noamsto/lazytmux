@@ -22,7 +22,7 @@ type args struct {
 
 	// glyphs (tmux @icon_* options + Nix enrich icon set)
 	iconSession, iconBranch, iconDir                                                        string
-	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconConflict string
+	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconClosed, iconConflict string
 }
 
 // branchDisplay mirrors tmux-branch-display.sh: prefer the cached @branch,
@@ -96,30 +96,36 @@ func prBadge(a args) string {
 		return ""
 	}
 
+	// merged/closed are terminal: a leftover pending/failed rollup must not
+	// mask them, so they win over check state (closed = a dead/superseded PR,
+	// dimmed so it can't read as live). Then conflict/failure → red, pending →
+	// peach, else green.
 	var color string
 	switch {
-	case a.prCheck == "failure" || a.prMergeable == "conflicting":
-		color = a.thmRed
-	case a.prCheck == "pending":
-		color = a.thmPeach
 	case a.prState == "merged":
 		color = a.thmMauve
 	case a.prState == "closed":
 		color = a.thmOverlay0
+	case a.prCheck == "failure" || a.prMergeable == "conflicting":
+		color = a.thmRed
+	case a.prCheck == "pending":
+		color = a.thmPeach
 	default:
 		color = a.thmGreen
 	}
 
 	var glyph string
 	switch {
+	case a.prState == "merged":
+		glyph = a.iconMerged
+	case a.prState == "closed":
+		glyph = a.iconClosed
 	case a.prMergeable == "conflicting":
 		glyph = a.iconConflict
 	case a.prCheck == "failure":
 		glyph = a.iconFailure
 	case a.prCheck == "pending":
 		glyph = a.iconPending
-	case a.prState == "merged":
-		glyph = a.iconMerged
 	default:
 		glyph = a.iconSuccess
 	}
@@ -187,6 +193,7 @@ func main() {
 	flag.StringVar(&a.iconSuccess, "icon-success", "", "")
 	flag.StringVar(&a.iconFailure, "icon-failure", "", "")
 	flag.StringVar(&a.iconMerged, "icon-merged", "", "")
+	flag.StringVar(&a.iconClosed, "icon-closed", "", "")
 	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
 	flag.Parse()
 

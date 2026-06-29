@@ -917,13 +917,14 @@ func branchEchoesName(branch, name string) bool {
 
 // prColors holds the four PR badge tints, mirroring the status bar's check-state
 // coloring.
-type prColors struct{ success, failure, pending, merged, reset string }
+type prColors struct{ success, failure, pending, merged, closed, reset string }
 
 // colorPRBadge tints a plain PR badge (" <glyph> #<n>" from @window_pr_plain) by
-// check state, mirroring build_window_label's glyph choice: a merged PR →
-// merged (terminal, so a leftover pending/failed rollup can't mask it), a
-// conflicting merge or failing checks → failure, pending → pending, else
-// success. Returns "" when there is no PR.
+// check state, mirroring build_window_label's glyph choice: merged/closed PRs →
+// terminal (so a leftover pending/failed rollup can't mask them — closed is a
+// dead/superseded PR, dimmed so it can't read as live), a conflicting merge or
+// failing checks → failure, pending → pending, else success. Returns "" when
+// there is no PR.
 func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
 	badge := strings.TrimSpace(prPlain)
 	if badge == "" {
@@ -933,6 +934,8 @@ func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
 	switch {
 	case state == "merged":
 		col = c.merged
+	case state == "closed":
+		col = c.closed
 	case mergeable == "conflicting", check == "failure":
 		col = c.failure
 	case check == "pending":

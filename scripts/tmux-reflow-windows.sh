@@ -363,13 +363,14 @@ BASE="#{?window_active,#[fg=#{@thm_lavender}#,bg=#{@thm_bg}#,underscore],#[fg=#{
 # underscore off, so glyphs render as on inactive tabs (only brighter) and the
 # colored Claude icon shows its state color. No-op on inactive tabs.
 ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nounderscore],}"
-# PR segment colored by state on every tab. Merged is terminal and checked
-# first (mauve), so a leftover pending/failed rollup on a merged PR can't tint
-# it peach/red; then conflicting/failing=red, pending=peach, success/open=green.
-# No PR → no color directive, and @window_pr_disp is just column padding.
-# Rendered last in the slot, so its state color only runs into the separator,
-# which sets its own color.
-PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}},}"
+# PR segment colored by state on every tab. Merged/closed are terminal and
+# checked first (merged=mauve, closed=overlay0), so a leftover pending/failed
+# rollup can't tint them peach/red; then conflicting/failing=red, pending=peach,
+# success/open=green. closed = a dead/superseded PR, dimmed so it can't read as
+# a live one. No PR → no color directive, and @window_pr_disp is just column
+# padding. Rendered last in the slot, so its state color only runs into the
+# separator, which sets its own color.
+PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}}},}"
 # "Last active" column for halted Claude windows (@window_claude_ago, kept fresh
 # by tmux-update-icons). Right-aligned and padded to AGO_W's fixed width so the
 # value (and an empty value, for active/non-claude windows) always occupies the

@@ -980,6 +980,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	thmPeach := envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387")
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
 	thmOverlay1 := envOrMap("THM_OVERLAY_1", tmuxOpts, "@thm_overlay_1", "#7f849c")
+	thmOverlay0 := envOrMap("THM_OVERLAY_0", tmuxOpts, "@thm_overlay_0", "#6c7086")
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
 	iBranch := envOrMap("PICKER_ICON_BRANCH", tmuxOpts, "@icon_branch", iconBranch)
 
@@ -989,8 +990,9 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	// Peach for pending mirrors the status bar (tmux-reflow-windows PRCOLOR).
-	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, reset: reset}
+	// Peach for pending mirrors the status bar (tmux-reflow-windows PRCOLOR);
+	// closed = overlay0 (dim), matching the dead/superseded-PR treatment there.
+	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), reset: reset}
 
 	type sessGroup struct {
 		name     string

@@ -202,6 +202,16 @@ setup() {
 	[ "$REPLY_PR" = " M #9" ]
 }
 
+@test "build_window_label: closed PR uses closed glyph" {
+	build_window_label short linear ENG-1 "t" 9 closed success br /x
+	[ "$REPLY_PR" = " X #9" ]
+}
+
+@test "build_window_label: closed glyph wins over a leftover failing rollup" {
+	build_window_label short linear ENG-1 "t" 9 closed failure br /x
+	[ "$REPLY_PR" = " X #9" ]
+}
+
 @test "build_window_label: conflicting PR uses conflict glyph" {
 	build_window_label short linear ENG-1 "t" 9 open success br /x conflicting
 	[ "$REPLY_PR" = " C #9" ]
