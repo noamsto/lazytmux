@@ -42,3 +42,12 @@ setup() {
 	grep -q '@ action neighboring_window right' "$KITTY_LOG"
 	[ ! -s "$TMUX_LOG" ]
 }
+
+@test "edge with kitty failing (no neighbor): falls back to select-pane" {
+	export KITTY_LISTEN_ON=unix:/tmp/k
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$STUB/kitty"
+	chmod +x "$STUB/kitty"
+	run bash "$SCRIPT" R right 0 1
+	grep -q 'select-pane -R' "$TMUX_LOG"
+	[ ! -s "$KITTY_LOG" ]
+}

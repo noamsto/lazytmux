@@ -4,6 +4,7 @@
 # (e.g. the aeye carousel); otherwise move within tmux. Self-gates on
 # KITTY_LISTEN_ON so non-kitty / tmux-split users get plain select-pane.
 #   args: <select-pane-flag L|D|U|R> <kitty-dir left|down|up|right> <zoomed 0|1> <at_edge 0|1>
+# no set -e: a failing 'kitty @' must fall through to select-pane
 set -u
 flag=$1 dir=$2 zoomed=$3 edge=$4
 [ "$zoomed" = 1 ] && exit 0
