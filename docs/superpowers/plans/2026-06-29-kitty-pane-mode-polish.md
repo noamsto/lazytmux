@@ -102,18 +102,18 @@ T
 	export PATH="$STUB:$PATH"
 }
 
-@test "ensure-open launches stashed when the owning pane is off-screen" {
+@test "ensure-open launches stashed (and never steals focus) when off-screen" {
 	printf '%%9 0 1\n' >"$VISIBLE_ROWS"   # %9 present but window_active=0
 	run bash "$APP" --ensure-open
 	[ "$status" -eq 0 ]
-	grep -q 'launch --type=window --match var:aeye_stash=1 .*claude_img_src=%9' "$KITTY_LOG"
+	grep -q 'launch --type=window --match var:aeye_stash=1 .*--keep-focus.*claude_img_src=%9' "$KITTY_LOG"
 }
 
-@test "ensure-open launches a visible vsplit when the owning pane is on-screen" {
+@test "ensure-open launches a visible vsplit (keep-focus) when on-screen" {
 	printf '%%9 1 1\n' >"$VISIBLE_ROWS"   # %9 is the active window of an attached session
 	run bash "$APP" --ensure-open
 	[ "$status" -eq 0 ]
-	grep -q 'launch --type=window --location=vsplit .*claude_img_src=%9' "$KITTY_LOG"
+	grep -q 'launch --type=window .*--location=vsplit.*--keep-focus.*claude_img_src=%9' "$KITTY_LOG"
 	! grep -q 'launch --type=window --match var:aeye_stash=1 .*claude_img_src=%9' "$KITTY_LOG"
 }
 ```
@@ -174,6 +174,69 @@ Expected: no new warnings.
 ```bash
 git add scripts/tmux-claude-images.sh tests/launch-hidden.bats
 git commit -m "fix(carousel): launch hidden when the owning pane is off-screen (#103)"
+```
+
+### Task A1b: reveal focuses the tmux host window (not the carousel)
+
+**Files:**
+- Modify: `scripts/tmux-claude-images.sh` — `_reconcile_apply()`'s focus-restore block (the `if [[ $touched -eq 1 && -n $host_tab ]]` at ~line 316).
+- Test: `tests/carousel-reconcile.bats` (extend).
+
+**Why:** verified live — `kitty @ detach-window --target-tab` makes the moved carousel the *active* window in the host tab, so the existing `focus-tab` leaves focus on the carousel, not the tmux pane. Focus the host window explicitly.
+
+- [ ] **Step 1: Write the failing test** — append to `tests/carousel-reconcile.bats`. (The existing `kitty` stub logs every non-`ls` subcommand to `$KITTY_LOG`, and `ls` cats `$KITTY_LS_JSON`; the unstash fixture `kitty-ls-stashed-9.json` parks `%9` in the stash tab. Confirm the host (tmux) window id in that fixture — adjust the asserted id to match it.)
+
+```bash
+@test "revealing a stashed carousel focuses the tmux host window, not the carousel" {
+	export AEYE_HOST=kitty
+	cp "$FIX/kitty-ls-stashed-9.json" "$KITTY_LS_JSON" # %9 parked in the stash tab
+	printf '%%9\n' >"$VISIBLE_PANES"                   # visible window has %9 → unstash it
+	run bash "$APP" --reconcile
+	[ "$status" -eq 0 ]
+	# Focus must land on the host window (no claude_img_src / aeye_stash var),
+	# not on a focus-tab that leaves the carousel active.
+	grep -q 'focus-window --match id:' "$KITTY_LOG"
+	! grep -qE 'focus-tab' "$KITTY_LOG"
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `cd <aeye-worktree> && direnv exec . bats tests/carousel-reconcile.bats`
+Expected: the new test FAILS — today's code emits `focus-tab`, not `focus-window`.
+
+- [ ] **Step 3: Replace the focus-restore block** in `_reconcile_apply()`:
+
+```sh
+	# detach-window leaves the moved carousel active in the host tab, so focus the
+	# tmux host window explicitly (the host-tab window with neither carousel nor
+	# stash var) — focus-tab alone would land on the carousel. host_win comes from
+	# the pre-move snapshot; the tmux host window never moves.
+	if [[ $touched -eq 1 && -n $host_tab ]]; then
+		local host_win
+		host_win="$(jq -r --arg t "$host_tab" '
+			.[].tabs[] | select((.id|tostring) == $t) | .windows[]
+			| select((.user_vars.claude_img_src // "") == "" and (.user_vars.aeye_stash // "") == "")
+			| .id' <<<"$ls" | head -1)"
+		if [[ -n $host_win ]]; then
+			kitty @ focus-window --match "id:$host_win" >/dev/null 2>&1 || true
+		else
+			kitty @ focus-tab --match "id:$host_tab" >/dev/null 2>&1 || true
+		fi
+	fi
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `direnv exec . bats tests/carousel-reconcile.bats`
+Expected: all PASS (the new test + the existing stash/unstash tests; the prior tests asserted `detach-window`, not `focus-tab`, so they're unaffected).
+
+- [ ] **Step 5: shellcheck + commit**
+
+```bash
+shellcheck scripts/tmux-claude-images.sh
+git add scripts/tmux-claude-images.sh tests/carousel-reconcile.bats
+git commit -m "fix(carousel): reveal focuses the tmux host window, not the carousel (#103)"
 ```
 
 ### Task A2: viewer handles ctrl+hjkl → kitty neighbor
@@ -522,6 +585,8 @@ Live behavior that can't be unit-tested (kitty-pane mode active: `AEYE_HOST=kitt
 
 - [ ] **Launch-hidden:** while focused on tmux window B, trigger a diagram capture in window A (e.g. have Claude write a `.d2` in A's pane). The carousel must **not** appear over B.
 - [ ] **Reveal on focus:** switch to window A → the carousel appears as a vsplit beside it.
+- [ ] **Open never steals focus:** when the carousel opens (auto or `prefix+I`), the cursor/focus stays on the tmux pane — keystrokes still go to tmux, not the carousel.
+- [ ] **Reveal never steals focus:** when a stashed carousel is revealed on focus change, focus stays on the tmux pane (not the carousel window).
 - [ ] **Stay-hidden idempotence:** switch back to B → carousel hides again; a second capture in A does not pop it over B.
 - [ ] **tmux→carousel:** from the Claude pane (right edge), `Ctrl-l` moves focus into the carousel window.
 - [ ] **carousel→tmux:** in the carousel, `Ctrl-h` moves focus back to the Claude pane.
@@ -532,7 +597,7 @@ Live behavior that can't be unit-tested (kitty-pane mode active: `AEYE_HOST=kitt
 
 ## Self-review
 
-- **Spec coverage:** Part 1 (launch-hidden) → A1; Part 2 tmux side → B1+B2; Part 2 viewer side → A2; README/docs → A3; flake integration → C1. Testing section → A1 bats, A2 go test, B1 bats, manual checklist. All covered.
+- **Spec coverage:** Part 1 (launch-hidden) → A1; Part 1 focus invariant (launch keep-focus + reveal host-window focus) → A1 asserts + A1b; Part 2 tmux side → B1+B2; Part 2 viewer side → A2; README/docs → A3; flake integration → C1. Testing section → A1/A1b bats, A2 go test, B1 bats, manual checklist. All covered.
 - **Type/name consistency:** `_key_on_screen` (A1), `neighborForKey`/`kittyNeighbor` (A2), `tmux-smart-nav` arg order `<flag> <dir> <zoomed> <edge>` (B1) match their call sites (A1 launch branch, A2 Update cases, B2 bindings).
 - **No placeholders:** every code step carries complete code; commands have expected output.
 - **Ordering:** Phase C depends on A + B (flake bump); A and B are independent and can run in parallel.

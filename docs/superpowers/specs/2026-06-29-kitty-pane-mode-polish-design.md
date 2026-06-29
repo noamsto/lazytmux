@@ -112,6 +112,25 @@ beside — called out here so it's a known limit, not a surprise. If it bites,
 scope the query to the session/window of the client attached to `$KEY`'s session
 rather than all attached sessions.
 
+### Opening / revealing must never steal focus
+
+Two paths must keep the user's focus on their tmux pane:
+
+- **Launch** — every `kitty @ launch` already passes `--keep-focus` (the visible
+  vsplit via `kitty_place_args`, the new stash-launch, and `_ensure_stash_tab`),
+  so creating the window never moves focus. This is now an invariant: assert
+  `--keep-focus` is present in the launch argv.
+- **Reveal (reconcile unstash)** — **this currently steals focus** (verified):
+  `kitty @ detach-window --target-tab` makes the moved carousel the *active*
+  window in the host tab, and `_reconcile_apply`'s `focus-tab --match id:host_tab`
+  only focuses the tab, not the prior window — so after a reveal, focus lands on
+  the carousel, not the tmux pane. Fix: after any reconcile move, focus the tmux
+  **host window** explicitly — the window in the host tab whose `user_vars` has
+  neither `claude_img_src` nor `aeye_stash` — via `kitty @ focus-window --match
+  id:<host_window>`, falling back to `focus-tab` only if no such window is found.
+  The host window id can be read from the same `kitty @ ls` snapshot
+  `_reconcile_apply` already captured (the tmux host window doesn't move).
+
 ## Part 2 — seamless ctrl+hjkl (lazytmux + aeye)
 
 The boundary is asymmetric, and each side is owned by the layer that controls it:
@@ -244,7 +263,9 @@ configs, extending the existing "Enable kitty-pane mode" section.
 
 - Replacing kitty-pane mode with a tmux split by default (considered; rejected —
   keep the mode, fix it).
-- Reworking reconcile's existing on-screen query (works from hooks; unchanged).
+- Reworking reconcile's on-screen *query* (works from hooks; unchanged) — note
+  the reveal *focus* restoration IS changed (see "Opening / revealing must never
+  steal focus").
 - Multi-client tmux (two clients viewing different windows) — inherits the
   single-attached-client assumption the carousel already makes.
 - General smart-splits for an arbitrary *third* kitty window — the viewer-handled
