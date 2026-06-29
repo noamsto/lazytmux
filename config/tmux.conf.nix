@@ -235,6 +235,7 @@
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-window-nav"
+    "tmux-smart-nav"
     "tmux-reconcile-window"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
