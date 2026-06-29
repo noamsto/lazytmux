@@ -255,15 +255,24 @@
   # Scripts that need icon map + library + claude-status path substitution
   scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
-  mkScriptFull = name: let
-    raw = builtins.readFile ../scripts/${name}.sh;
-    patched =
-      builtins.replaceStrings
-      ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@"]
-      ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}"]
-      raw;
-  in
-    pkgs.writeShellScriptBin name patched;
+  iconSubstFrom = ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@"];
+  iconSubstTo = ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}"];
+
+  mkScriptFull = name:
+    pkgs.writeShellScriptBin name
+    (builtins.replaceStrings iconSubstFrom iconSubstTo (builtins.readFile ../scripts/${name}.sh));
+
+  # tmux-update-icons kicks a forced reflow on branch/task change. Pin that call
+  # to the reflow store path via @reflow@ so a config reload alone repoints it; a
+  # bare name resolves against the tmux server's frozen PATH and stays stale
+  # until a full server restart. Built apart from mkScriptFull so reflow itself
+  # (also icon-substituted) never references its own store path.
+  mkScriptIcons = name:
+    pkgs.writeShellScriptBin name
+    (builtins.replaceStrings
+      (iconSubstFrom ++ ["@reflow@"])
+      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows"])
+      (builtins.readFile ../scripts/${name}.sh));
 
   # Scripts that need enrich library + provider/icon/config substitution
   scriptsWithEnrich = ["tmux-issue-stamp" "tmux-issue-stamp-linear" "tmux-issue-stamp-github" "tmux-pr-enrich"];
@@ -328,6 +337,8 @@
     then enrich-pr-bin
     else if builtins.elem name scriptsWithEnrich
     then mkScriptEnrich name
+    else if name == "tmux-update-icons"
+    then mkScriptIcons name
     else if builtins.elem name scriptsWithIcons
     then mkScriptFull name
     else if name == "claude-status"
