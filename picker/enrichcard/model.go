@@ -25,7 +25,7 @@ type model struct {
 
 const (
 	widthFloor  = 34 // below this: drop the worktree path line, truncate harder
-	heightFloor = 12 // below this: drop the Claude block, keep identity + footer
+	heightFloor = 12 // below this: drop the branch + Claude blocks, keep identity + footer
 )
 
 func (m model) sty(hex string) lipgloss.Style {
@@ -148,17 +148,18 @@ func (m model) claudeBlock() string {
 
 func (m model) footer() string {
 	c := m.cfg
-	items := []string{"[o] issue", "[p] PR"}
+	plain := m.sty(c.subtext0)
+	items := []string{plain.Render("[o] issue"), plain.Render("[p] PR")}
 	if m.win.branch == "" {
 		items = append(items, m.sty(c.overlay0).Render("[r] no branch"))
 	} else {
-		items = append(items, "[r] refresh")
+		items = append(items, plain.Render("[r] refresh"))
 	}
-	items = append(items, "[q] close")
+	items = append(items, plain.Render("[q] close"))
 	if m.flash != "" {
 		items = append(items, m.sty(c.green).Render(m.flash))
 	}
-	return m.sty(c.subtext0).Render(strings.Join(items, "   "))
+	return strings.Join(items, "   ")
 }
 
 // card renders the full bordered popup. Pure over model state (no tmux calls).
