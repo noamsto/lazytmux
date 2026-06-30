@@ -386,3 +386,17 @@ EOF
 	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
 	[ -f "$CLAUDE_STATUS_DIR/tasks/7" ]
 }
+
+# An empty list-panes (server hiccup, or CC running outside tmux so the query
+# hits the wrong/no server) must never read as "every pane is gone" — that would
+# wipe live panes' status files in one sweep and blank their status icons.
+@test "cleanup: empty pane list keeps all live files" {
+	write_pane_fixture 7 work "ENG-123"
+	mkdir -p "$CLAUDE_STATUS_DIR/tasks"
+	printf 'fix the reflow\n' >"$CLAUDE_STATUS_DIR/tasks/7"
+	stub_tmux
+	PANE_LIST='' bash "$CSU" cleanup
+	[ -f "$CLAUDE_STATUS_DIR/panes/7" ]
+	[ -f "$CLAUDE_STATUS_DIR/issues/7" ]
+	[ -f "$CLAUDE_STATUS_DIR/tasks/7" ]
+}
