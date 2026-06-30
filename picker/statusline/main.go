@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
 
 type args struct {
@@ -96,39 +98,24 @@ func prBadge(a args) string {
 		return ""
 	}
 
-	// merged/closed are terminal: a leftover pending/failed rollup must not
-	// mask them, so they win over check state (closed = a dead/superseded PR,
-	// dimmed so it can't read as live). Then conflict/failure → red, pending →
-	// peach, else green.
-	var color string
-	switch {
-	case a.prState == "merged":
-		color = a.thmMauve
-	case a.prState == "closed":
-		color = a.thmOverlay0
-	case a.prCheck == "failure" || a.prMergeable == "conflicting":
-		color = a.thmRed
-	case a.prCheck == "pending":
-		color = a.thmPeach
-	default:
-		color = a.thmGreen
-	}
+	cr, gr := enrichstate.Classify(a.prState, a.prCheck, a.prMergeable)
 
-	var glyph string
-	switch {
-	case a.prState == "merged":
-		glyph = a.iconMerged
-	case a.prState == "closed":
-		glyph = a.iconClosed
-	case a.prMergeable == "conflicting":
-		glyph = a.iconConflict
-	case a.prCheck == "failure":
-		glyph = a.iconFailure
-	case a.prCheck == "pending":
-		glyph = a.iconPending
-	default:
-		glyph = a.iconSuccess
-	}
+	color := map[enrichstate.ColorRole]string{
+		enrichstate.ColorMerged:  a.thmMauve,
+		enrichstate.ColorClosed:  a.thmOverlay0,
+		enrichstate.ColorFailure: a.thmRed,
+		enrichstate.ColorPending: a.thmPeach,
+		enrichstate.ColorSuccess: a.thmGreen,
+	}[cr]
+
+	glyph := map[enrichstate.GlyphRole]string{
+		enrichstate.GlyphMerged:   a.iconMerged,
+		enrichstate.GlyphClosed:   a.iconClosed,
+		enrichstate.GlyphConflict: a.iconConflict,
+		enrichstate.GlyphFailure:  a.iconFailure,
+		enrichstate.GlyphPending:  a.iconPending,
+		enrichstate.GlyphSuccess:  a.iconSuccess,
+	}[gr]
 
 	return "#[fg=" + color + "]" + glyph + " #" + a.prNumber + " " + a.prTitle + "  "
 }
