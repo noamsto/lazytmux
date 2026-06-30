@@ -11,7 +11,7 @@ type winState struct {
 	issueProvider, issueID, issueTitle, issueURL           string
 	prNumber, prTitle, prState, prCheck, prURL, prMergeable string
 	branch, worktree, gitRoot                              string
-	task, aiName, claudeAgo, paneIcon                      string
+	task, claudeAgo, paneIcon                              string
 }
 
 // readWindowState runs one `tmux show-options -w -t <target>` and parses it.
@@ -65,14 +65,26 @@ func parseWindowOptions(out string, w *winState) {
 			w.gitRoot = val
 		case "@window_task":
 			w.task = val
-		case "@window_ai_name":
-			w.aiName = val
 		case "@window_claude_ago":
 			w.claudeAgo = val
 		case "@active_pane_icon":
 			w.paneIcon = val
 		}
 	}
+}
+
+// detectBaseBranch returns the repo's default branch (e.g. "main"/"master") via
+// origin/HEAD, or "" if it can't be determined. Run once at launch — the base
+// doesn't change during a popup's lifetime, so it stays out of the tick.
+func detectBaseBranch(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "origin/")
 }
 
 func unquote(s string) string {

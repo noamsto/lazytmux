@@ -14,13 +14,14 @@ import (
 // refresh, the theme palette, and the enrich glyphs (raw — NOT ##-escaped).
 type cfg struct {
 	target, prEnrichBin string
-	bg, fg, mauve, red, green, peach, blue, overlay0, subtext0, lavender string
+	fg, mauve, red, green, peach, blue, overlay0, subtext0 string
 	icLinear, icGitHub, icPending, icSuccess, icFailure, icMerged, icClosed, icConflict string
 }
 
 type model struct {
 	cfg           cfg
 	win           winState
+	baseBranch    string
 	width, height int
 	refreshing    bool
 	flash         string // transient footer note ("opened ↗"), cleared on next tick
@@ -119,8 +120,11 @@ func (m model) prBlock() string {
 
 func (m model) branchBlock() string {
 	c, w := m.cfg, m.win
-	target := "main"
-	line := m.sty(c.subtext0).Render(w.branch + "  →  " + target)
+	head := w.branch
+	if m.baseBranch != "" {
+		head = w.branch + "  →  " + m.baseBranch
+	}
+	line := m.sty(c.subtext0).Render(head)
 	dir := w.worktree
 	if dir == "" {
 		dir = w.gitRoot
@@ -222,7 +226,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tickMsg:
-		m.win = readWindowState(m.cfg.target)
+		if !m.refreshing {
+			m.win = readWindowState(m.cfg.target)
+		}
 		m.flash = ""
 		return m, tickCmd()
 	case refreshDoneMsg:

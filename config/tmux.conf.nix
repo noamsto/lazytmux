@@ -557,10 +557,10 @@
       bind-key i display-popup -E -w 64 -h 18 "${picker-card-bin} \
         --target '#{session_id}:#{window_id}' \
         --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
-        --thm-bg '#{@thm_bg}' --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
+        --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
         --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
         --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \
-        --thm-subtext0 '#{@thm_subtext_0}' --thm-lavender '#{@thm_lavender}' \
+        --thm-subtext0 '#{@thm_subtext_0}' \
         --icon-linear '${enrichIconSetRaw.linear}' --icon-github '${enrichIconSetRaw.github}' \
         --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
         --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \

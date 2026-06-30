@@ -13,9 +13,9 @@ func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 func testCfg() cfg {
 	return cfg{
 		target: "$0:@0", prEnrichBin: "/bin/true",
-		bg: "#1e1e2e", fg: "#cdd6f4", mauve: "#cba6f7", red: "#f38ba8",
+		fg: "#cdd6f4", mauve: "#cba6f7", red: "#f38ba8",
 		green: "#a6e3a1", peach: "#fab387", blue: "#89b4fa",
-		overlay0: "#6c7086", subtext0: "#a6adc8", lavender: "#b4befe",
+		overlay0: "#6c7086", subtext0: "#a6adc8",
 		icLinear: "L", icGitHub: "G", icPending: "P", icSuccess: "S",
 		icFailure: "F", icMerged: "M", icClosed: "C", icConflict: "X",
 	}
