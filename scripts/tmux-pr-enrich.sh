@@ -145,13 +145,14 @@ fetch_branch_pr() {
 		return
 	}
 
-	# Locked fetch in a subshell: flock on fd 9 releases when the subshell
-	# exits, scoping the lock to THIS branch's fetch (not the whole pass).
-	# If another process holds the lock, skip the fetch and serve the cache.
-	# A failed gh call (offline, auth, rate limit) leaves the cache untouched
-	# so the last-known PR state keeps showing instead of wiping to "none".
+	# Locked fetch in a subshell: acquire_lock's EXIT trap releases when the
+	# subshell exits, scoping the lock to THIS branch's fetch (not the whole
+	# pass). If another process holds the lock, skip the fetch and serve the
+	# cache. A failed gh call (offline, auth, rate limit) leaves the cache
+	# untouched so the last-known PR state keeps showing instead of wiping to
+	# "none".
 	(
-		flock -n 9 || exit 0
+		acquire_lock "$lock" || exit 0
 		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
 		local json
 		json="$(gh pr list --head "$b" --state open --limit 1 \
@@ -161,7 +162,7 @@ fetch_branch_pr() {
 				--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
 		fi
 		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
-	) 9>"$lock"
+	)
 	printf '%s' "$cache"
 }
 
@@ -331,6 +332,5 @@ touch "$last_tick"
 
 # Detach so the status refresh returns immediately. The child re-invokes with
 # --tick-run, which runs run_full_pass once and exits (no re-daemonize).
-setsid "${BASH_SOURCE[0]}" --tick-run >/dev/null 2>&1 &
-disown
+detach "${BASH_SOURCE[0]}" --tick-run
 exit 0
