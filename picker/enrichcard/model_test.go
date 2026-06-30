@@ -69,3 +69,25 @@ func TestCardRefreshingSpinner(t *testing.T) {
 		t.Errorf("expected refreshing spinner")
 	}
 }
+
+func TestHandleKeyQuitAndActions(t *testing.T) {
+	base := model{cfg: testCfg(), width: 60, height: 18, win: winState{
+		issueURL: "http://x", prURL: "http://y", branch: "b", prNumber: "1"}}
+
+	if _, cmd := base.handleKey("q"); cmd == nil {
+		t.Error("q should return a quit cmd")
+	}
+	if _, cmd := base.handleKey("ctrl+c"); cmd == nil {
+		t.Error("ctrl+c should return a quit cmd")
+	}
+	m2, cmd := base.handleKey("r")
+	if cmd == nil || !m2.(model).refreshing {
+		t.Error("r with a branch should start refreshing")
+	}
+
+	noBranch := base
+	noBranch.win.branch = ""
+	if m3, _ := noBranch.handleKey("r"); m3.(model).refreshing {
+		t.Error("r with empty branch must NOT start refreshing")
+	}
+}

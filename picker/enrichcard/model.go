@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os/exec"
 	"strings"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
@@ -178,4 +181,92 @@ func (m model) card() string {
 		BorderForeground(lipgloss.Color(m.cfg.overlay0)).
 		Padding(0, 1).
 		Render(inner)
+}
+
+type tickMsg struct{}
+type refreshDoneMsg struct{}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func openCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		_ = exec.Command("xdg-open", url).Start() // best-effort; Linux-only (parity w/ old keybind)
+		return nil
+	}
+}
+
+// refreshCmd runs the poller's single-target --force pass and BLOCKS until it
+// exits (a synchronous gh call, ~1-2s), then signals done. This converges the
+// spinner deterministically rather than guessing from a value-diff.
+func refreshCmd(c cfg, w winState) tea.Cmd {
+	dir := w.worktree
+	if dir == "" {
+		dir = w.gitRoot
+	}
+	return func() tea.Msg {
+		_ = exec.Command(c.prEnrichBin, "--target", c.target, "--branch", w.branch, "--dir", dir, "--force").Run()
+		return refreshDoneMsg{}
+	}
+}
+
+// Init only schedules the first tick; the initial window read is done in main
+// (the value-receiver model passed to NewProgram is what bubbletea seeds with,
+// so assigning m.win here would not persist).
+func (m model) Init() tea.Cmd { return tickCmd() }
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+	case tickMsg:
+		m.win = readWindowState(m.cfg.target)
+		m.flash = ""
+		return m, tickCmd()
+	case refreshDoneMsg:
+		m.refreshing = false
+		m.win = readWindowState(m.cfg.target)
+		return m, nil
+	case tea.KeyPressMsg:
+		return m.handleKey(msg.String())
+	}
+	return m, nil
+}
+
+func (m model) handleKey(k string) (tea.Model, tea.Cmd) {
+	switch k {
+	case "q", "esc", "ctrl+c":
+		return m, tea.Quit
+	case "o":
+		if m.win.issueURL != "" {
+			m.flash = "opened ↗"
+			return m, openCmd(m.win.issueURL)
+		}
+	case "p":
+		if m.win.prURL != "" {
+			m.flash = "opened ↗"
+			return m, openCmd(m.win.prURL)
+		}
+	case "r":
+		if m.win.branch != "" && !m.refreshing {
+			m.refreshing = true
+			return m, refreshCmd(m.cfg, m.win)
+		}
+	}
+	return m, nil
+}
+
+func (m model) View() tea.View {
+	w, h := m.width, m.height
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	v := tea.NewView(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, m.card()))
+	v.AltScreen = true
+	return v
 }
