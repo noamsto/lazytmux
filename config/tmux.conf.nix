@@ -573,7 +573,13 @@
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
 
-    bind-key x kill-pane
+    # An idle shell kills instantly; anything else running (Claude, vim, a
+    # build, a REPL) prompts first, so a reflexive prefix+x can't silently take
+    # down a working pane. Normalize the nix makeWrapper decoration
+    # (.foo-wrapped -> foo, see set-titles-string) before matching the shell.
+    bind-key x if-shell -F '#{m/r:^(bash|fish|zsh|sh|dash)$,#{s|^\.(.*)-wrapped$|\1|:pane_current_command}}' \
+      kill-pane \
+      'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane'
     bind-key & confirm-before -p "kill-window #W? (y/n)" kill-window
     set -g detach-on-destroy off
 
