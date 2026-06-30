@@ -227,6 +227,7 @@
   picker-generate-bin = "${picker-generate}/bin/tmux-picker-generate";
   picker-splash-bin = "${picker-generate}/bin/tmux-splash";
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
+  picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
 
   scriptNames = [
     "claude-status"
@@ -550,14 +551,20 @@
 
     ${lib.optionalString enrichEnable ''
       # === Issue/PR enrichment ===
-      # prefix + i enters the enrich table: i open issue, p open PR, r refresh.
-      bind-key i switch-client -T enrich
-      bind-key -T enrich i run-shell 'url="#{@issue_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
-      bind-key -T enrich p run-shell 'url="#{@pr_url}"; [ -n "$url" ] && xdg-open "$url" >/dev/null 2>&1'
-      # run-shell inherits the tmux server's cwd (not a repo) — pass a repo dir
-      # so gh has context. Same @worktree→@git_root chain as the full pass (so
-      # both resolve the same cache key), with the pane path as a last resort.
-      bind-key -T enrich r run-shell '${script.tmux-pr-enrich}/bin/tmux-pr-enrich --target "#{session_id}:#{window_id}" --branch "#{@branch}" --dir "#{?#{@worktree},#{@worktree},#{?#{@git_root},#{@git_root},#{pane_current_path}}}" --force'
+      # prefix + i opens the enrich card popup (issue/PR/branch/Claude identity
+      # + o/p/r/q actions). Icons use the RAW set: the popup's stdout is not
+      # re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
+      bind-key i display-popup -E -w 64 -h 18 "${picker-card-bin} \
+        --target '#{session_id}:#{window_id}' \
+        --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
+        --thm-bg '#{@thm_bg}' --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
+        --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
+        --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \
+        --thm-subtext0 '#{@thm_subtext_0}' --thm-lavender '#{@thm_lavender}' \
+        --icon-linear '${enrichIconSetRaw.linear}' --icon-github '${enrichIconSetRaw.github}' \
+        --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
+        --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
+        --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}'"
     ''}
 
     # Floating popups
