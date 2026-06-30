@@ -44,6 +44,12 @@ cleanup_stale_panes() {
 		pane_exists["${pid#%}"]=1
 	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
 
+	# A successful query always lists at least this hook's own pane, so an empty
+	# map means list-panes failed (server hiccup) or hit the wrong/no server (CC
+	# run outside tmux). Bail rather than treat "saw nothing" as "everything is
+	# gone" — that would wipe every live pane's status files in one sweep.
+	[[ -n ${pane_exists[*]:-} ]] || return 0
+
 	# Check each pane file
 	for pf in "$PANES_DIR"/*; do
 		[[ -f $pf ]] || continue
