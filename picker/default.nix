@@ -63,12 +63,13 @@ in
     version = "0.1.0";
     inherit src;
     vendorHash = "sha256-cMht9LTwEE5g58af+7eExzTWqDdR0YkhXcjwNUFIYw8=";
-    subPackages = ["." "splash" "statusline"];
+    subPackages = ["." "splash" "statusline" "enrichcard"];
     ldflags = ["-s" "-w"]; # strip debug info for smaller binary + faster startup
     # Binary name matches pname (Go module produces "picker" by default)
     postInstall = ''
       mv $out/bin/picker $out/bin/tmux-picker-generate
       mv $out/bin/splash $out/bin/tmux-splash
       mv $out/bin/statusline $out/bin/tmux-statusline
+      mv $out/bin/enrichcard $out/bin/tmux-enrich-card
     '';
   }
