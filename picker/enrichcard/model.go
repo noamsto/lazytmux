@@ -120,19 +120,25 @@ func (m model) prBlock() string {
 
 func (m model) branchBlock() string {
 	c, w := m.cfg, m.win
-	head := w.branch
-	if m.baseBranch != "" {
-		head = w.branch + "  →  " + m.baseBranch
-	}
-	line := m.sty(c.subtext0).Render(head)
 	dir := w.worktree
 	if dir == "" {
 		dir = w.gitRoot
 	}
-	if dir == "" || m.width < widthFloor {
-		return line
+	var lines []string
+	if w.branch != "" {
+		head := w.branch
+		if m.baseBranch != "" {
+			head += "  →  " + m.baseBranch
+		}
+		lines = append(lines, m.sty(c.subtext0).Render(head))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, line, m.sty(c.overlay0).Render(truncate(dir, m.titleWidth())))
+	if dir != "" && m.width >= widthFloor {
+		lines = append(lines, m.sty(c.overlay0).Render(truncate(dir, m.titleWidth())))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m model) claudeBlock() string {
