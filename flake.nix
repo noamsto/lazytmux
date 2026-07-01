@@ -42,6 +42,13 @@
           # Shell
           shellcheck.enable = true;
           shfmt.enable = true;
+          macos-portability = {
+            enable = true;
+            name = "macos-portability";
+            description = "Reject Linux-only binaries that break on nix-darwin";
+            entry = "bash ${./tests/check-portability.sh}";
+            files = "^scripts/.*\\.sh$";
+          };
 
           # General
           typos.enable = true;

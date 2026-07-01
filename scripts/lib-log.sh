@@ -20,6 +20,46 @@ log_enabled() { [[ -f $LAZYTMUX_DEBUG_SENTINEL ]]; }
 file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
 file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 
+# acquire_lock DIR — non-blocking lock via atomic mkdir; `flock` is Linux-only
+# (absent on macOS), so it can't be the primitive. Call INSIDE the subshell
+# whose exit should release the lock: a successful acquire arms an EXIT trap
+# that rmdir's it, mirroring flock's release-on-fd-close. Returns 1 when a live
+# holder owns it. A crashed holder can't fire its trap, so a dir older than the
+# stale window is stolen; a leftover plain file (e.g. from the old `9>"$lock"`
+# redirect) is cleared too.
+LAZYTMUX_LOCK_STALE_SECONDS="${LAZYTMUX_LOCK_STALE_SECONDS:-60}"
+acquire_lock() {
+	local dir="$1"
+	mkdir "$dir" 2>/dev/null && {
+		# shellcheck disable=SC2064  # bake $dir now; the local is gone at EXIT
+		trap "rmdir \"$dir\" 2>/dev/null" EXIT
+		return 0
+	}
+	if [[ -d $dir ]]; then
+		local age
+		age=$(($(date +%s) - $(file_mtime "$dir")))
+		((age < LAZYTMUX_LOCK_STALE_SECONDS)) && return 1
+		rmdir "$dir" 2>/dev/null
+	else
+		rm -f "$dir" 2>/dev/null
+	fi
+	mkdir "$dir" 2>/dev/null && {
+		# shellcheck disable=SC2064  # bake $dir now; the local is gone at EXIT
+		trap "rmdir \"$dir\" 2>/dev/null" EXIT
+		return 0
+	}
+	return 1
+}
+
+# detach CMD [ARGS...] — run CMD fully backgrounded and disconnected from the
+# caller's stdio, surviving the caller's exit. Portable stand-in for `setsid …
+# &` (setsid is Linux-only): the subshell backgrounds the job and returns at
+# once so tmux's #() reaps immediately, the grandchild reparents to init, and
+# nohup detaches it from SIGHUP. Redirecting fds releases tmux's status pipe.
+detach() {
+	(nohup "$@" >/dev/null 2>&1 &)
+}
+
 # _json_escape STR -> REPLY  (JSON-safe inner string, no surrounding quotes).
 # Backslash first, then quote/tab/cr; newlines stripped; remaining C0 controls stripped.
 _json_escape() {
@@ -33,7 +73,7 @@ _json_escape() {
 	REPLY=$s
 }
 
-# _log_rotate: flock-guarded size rotation, keeps events.log.1. Cap is read live
+# _log_rotate: lock-guarded size rotation, keeps events.log.1. Cap is read live
 # from LAZYTMUX_LOG_MAX_BYTES (default 5 MiB) so tests can shrink it.
 _log_rotate() {
 	[[ -f $LAZYTMUX_LOG_FILE ]] || return 0
@@ -42,11 +82,11 @@ _log_rotate() {
 	size=$(file_size "$LAZYTMUX_LOG_FILE")
 	((size < cap)) && return 0
 	(
-		flock -n 9 || exit 0
+		acquire_lock "$LAZYTMUX_LOG_DIR/.rotate.lock" || exit 0
 		local s
 		s=$(file_size "$LAZYTMUX_LOG_FILE")
 		((s >= cap)) && mv -f "$LAZYTMUX_LOG_FILE" "$LAZYTMUX_LOG_FILE.1"
-	) 9>"$LAZYTMUX_LOG_DIR/.rotate.lock"
+	)
 }
 
 # log_event CATEGORY [KEY VALUE]...  No-op unless debug armed. One JSON line.
