@@ -749,6 +749,21 @@ in {
             zoxide = """
             command -v zoxide >/dev/null 2>&1 && zoxide add "{{ worktree_path }}"
             """
+            devshell = """
+            # Materialize the flake devShell once in a freshly-created worktree so
+            # its shellHook side effects exist before the first commit — notably the
+            # git-hooks.nix .pre-commit-config.yaml symlink, which is gitignored and
+            # absent until a devshell loads. Without this, commits from a non-direnv
+            # shell (agents, scripts) fail with "No .pre-commit-config.yaml file".
+            # No $CLAUDECODE guard: the agent case is the one this most helps.
+            wt="{{ worktree_path }}"
+            [ -f "$wt/flake.nix" ] || exit 0
+            [ -e "$wt/.pre-commit-config.yaml" ] && exit 0
+            command -v nix >/dev/null 2>&1 || exit 0
+            hook=$(git -C "$wt" rev-parse --git-path hooks/pre-commit 2>/dev/null) || exit 0
+            [ -f "$hook" ] && grep -q pre-commit "$hook" 2>/dev/null || exit 0
+            ( cd "$wt" && nix develop --quiet --command true ) >/dev/null 2>&1 || true
+            """
 
             [post-remove]
             tmux = """
