@@ -42,4 +42,22 @@ func TestUnquote(t *testing.T) {
 	if got := unquote("bare"); got != "bare" {
 		t.Errorf("unquote bare = %q", got)
 	}
+	// tmux renders an empty option value as '' and single-quotes some values;
+	// both must strip so a cleared option parses as "" (see the empty-branch guard).
+	if got := unquote("''"); got != "" {
+		t.Errorf("unquote empty single-quote = %q, want empty", got)
+	}
+	if got := unquote("'main'"); got != "main" {
+		t.Errorf("unquote single-quoted = %q, want main", got)
+	}
+}
+
+func TestParseWindowOptionsEmptyClears(t *testing.T) {
+	// A cleared branch comes back as `@branch ''`; it must parse to "" so the
+	// card shows "no branch" and disables refresh, not a literal "''".
+	var w winState
+	parseWindowOptions("@branch ''\n@pr_number none\n", &w)
+	if w.branch != "" {
+		t.Errorf("branch = %q, want empty", w.branch)
+	}
 }
