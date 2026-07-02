@@ -46,63 +46,105 @@ This installs a `tmux` wrapper that automatically loads the configuration. Your 
 
 | Feature | Description |
 |---------|-------------|
-| **Catppuccin Mocha theme** | Consistent colors across status bar and pane borders |
+| **Catppuccin theme** | Consistent Mocha/Latte colors across status bar and pane borders, following your light/dark theme |
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, OpenCode, etc.) |
 | **AI agent status** | Real-time spinner/icon in status bar for Claude Code and OpenCode |
+| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, and issue/PR badges |
+| **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
-| **fzf pickers** | Session and window pickers with AI status per entry |
-| **vim-tmux-navigator** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes |
+| **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
 | **tmux-fingers** | Smart copy with hints for URLs, hashes, file paths, JIRA tickets |
 | **tmux-state persistence** | Periodic snapshots, undo for closed windows, optional smart auto-restore |
+| **Welcome splash** | Animated braille-cat welcome buffer with a keybind cheatsheet, once per server |
+| **Image carousel** | View a Claude session's images/diagrams in a split (`prefix + I`) |
 | **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |
 
 ## Requirements
 
 - **Nerd Font terminal** — any terminal with a Nerd Font renders window icons correctly (Kitty, Alacritty, WezTerm, etc.)
-- **tmux 3.4+** — multi-line status bar requires 3.4; the Nix package provides a compatible version automatically
+- Nothing else — the Nix package bundles tmux 3.6a; your own `~/.tmux.conf` and system tmux are not used
 
 ---
 
-## `wt` — Git Worktree Manager
+## Keybindings
 
-A separate package for managing git worktrees with tmux window integration.
-Each worktree gets its own tmux window; sessions map to repositories.
+The prefix defaults to <kbd>`</kbd> (backtick); set it via `programs.lazytmux.prefix`.
+Press <kbd>prefix</kbd> then <kbd>C-Space</kbd> for the in-terminal cheatsheet.
+
+### Prefix bindings
+
+| Key | Action |
+|-----|--------|
+| <kbd>r</kbd> | Reload config |
+| <kbd>\|</kbd> / <kbd>_</kbd> | Split pane horizontal / vertical |
+| <kbd>c</kbd> | New window |
+| <kbd>N</kbd> | New session (prompts for name) |
+| <kbd>x</kbd> | Kill pane — instant on an idle shell, confirm otherwise |
+| <kbd>&</kbd> | Kill window (confirm) |
+| <kbd>M-Up/Down/Left/Right</kbd> | Resize pane (repeatable) |
+| <kbd>s</kbd> | Session picker |
+| <kbd>w</kbd> | Window picker |
+| <kbd>a</kbd> | Claude-window picker (only windows with a running agent) |
+| <kbd>i</kbd> | Issue / PR enrich card (Linear/GitHub + PR state) |
+| <kbd>g</kbd> | LazyGit popup |
+| <kbd>G</kbd> | gh-dash popup |
+| <kbd>b</kbd> | btop popup |
+| <kbd>y</kbd> | yazi (new window) |
+| <kbd>p</kbd> | Scratchpad |
+| <kbd>Y</kbd> | Yank pane's cwd to clipboard |
+| <kbd>I</kbd> | Toggle the image/diagram carousel |
+| <kbd>C-Space</kbd> | Welcome splash + cheatsheet |
+| <kbd>u</kbd> / <kbd>U</kbd> | Undo close / close-event picker |
+| <kbd>R</kbd> | Snapshot picker |
+| <kbd>C-s</kbd> | Save snapshot now |
+| <kbd>F</kbd> / <kbd>J</kbd> | tmux-fingers copy / jump mode |
+| <kbd>D</kbd> | Toggle debug logging |
+
+<kbd>u</kbd>/<kbd>U</kbd>/<kbd>R</kbd>/<kbd>C-s</kbd> require `persist.enable` (on by default);
+<kbd>i</kbd> requires `enrich.enable`; <kbd>I</kbd> requires the image carousel.
+
+### No-prefix bindings
+
+| Key | Action |
+|-----|--------|
+| <kbd>Ctrl-h/j/k/l</kbd> | Navigate panes, falling through to vim splits (zoom-aware) |
+| <kbd>M-H</kbd> / <kbd>M-L</kbd> | Previous / next window |
+| <kbd>M-J</kbd> / <kbd>M-K</kbd> | Move down / up a row in the reflowed window grid |
+| <kbd>M-l</kbd> | Clear screen |
+| <kbd>S-Enter</kbd> | Newline in Claude Code / Amp / OpenCode |
+
+### Copy mode (vi)
+
+| Key | Action |
+|-----|--------|
+| <kbd>v</kbd> | Begin selection |
+| <kbd>C-v</kbd> | Toggle rectangle selection |
+| <kbd>y</kbd> | Copy selection to clipboard |
+
+---
+
+## Git Worktree Integration
+
+Lazytmux integrates with [worktrunk](https://worktrunk.dev/) (`wt`) so
+each git worktree maps to its own tmux window, and each repository to a session. Enable
+it and the `post-switch` navigation hook via the home-manager module:
+
+```nix
+programs.lazytmux.worktrunk.enable = true;
+```
 
 ```bash
-# Run directly
-nix run github:noamsto/lazytmux#wt -- <branch>
-
-# Or install alongside tmux
-nix profile install github:noamsto/lazytmux
-wt <branch>
+wt switch <branch>      # switch to a worktree (creates it if the branch exists)
+wt switch -c <branch>   # create branch + worktree, then switch
+wt switch               # interactive picker
+wt list                 # list worktrees
+wt remove               # remove the current worktree
+wt merge                # merge the current branch into its target
 ```
 
-### Usage
-
-```
-wt <branch>           Smart switch/create (prompts before creating)
-wt -y <branch>        Skip confirmation prompts
-wt -q <branch>        Quiet mode (only output the worktree path)
-wt -n <branch>        No tmux operations (skip window creation/switching)
-wt -yqn <branch>      Combine flags — designed for use in Claude/scripts
-wt z [query]          Fuzzy-find worktree, output path
-wt main               Switch to the root repository window
-wt list               List all worktrees
-wt remove <branch>    Remove worktree and kill its tmux window
-wt clean              Remove stale worktrees (merged, squash-merged, or remote-deleted)
-wt help               Show full help
-```
-
-**Model:** one tmux session per repository, one window per worktree/branch.
-
-**In scripts or with Claude Code:**
-
-```bash
-cd "$(wt -yqn feature-branch)"
-```
-
-**Worktrees are created at** `.worktrees/<branch-name>` inside the repo root.
+**Model:** one tmux session per repository, one window per worktree/branch. See the
+[worktrunk docs](https://worktrunk.dev/) for the full command set.
 
 ---
 
