@@ -1,0 +1,8 @@
+id = "codex"
+match_commands = ["codex"]
+
+[[rules]]
+state = "processing"
+priority = 100
+region = "whole"
+contains = ["esc to interrupt"]
