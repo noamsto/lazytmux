@@ -711,8 +711,11 @@
     set -g window-style "fg=#{@thm_fg},bg=#{@thm_mantle}"
     set -g window-active-style "fg=#{@thm_fg},bg=#{@thm_bg}"
 
-    # Pane scrollbars (tmux 3.6+) - disabled
-    set -g pane-scrollbars off
+    # Pane scrollbars (tmux 3.6+): modal so a pane is only narrowed while its
+    # scrollbar is visible (copy/view mode), never in normal editing.
+    set -g pane-scrollbars modal
+    set -g pane-scrollbars-style "fg=#{@thm_mauve},bg=#{@thm_surface_0},width=1"
+    set -g pane-scrollbars-position right
 
     # Prompt cursor styling (tmux 3.6+)
     set -g prompt-cursor-style "blinking-bar"
