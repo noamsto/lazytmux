@@ -239,6 +239,7 @@
     "tmux-branch-display"
     "tmux-dir-display"
     "tmux-window-nav"
+    "tmux-kill-pane-guard"
     "tmux-smart-nav"
     "tmux-reconcile-window"
     "tmux-apply-theme-colors"
@@ -344,6 +345,8 @@
     then mkScriptFull name
     else if name == "claude-status"
     then claude-status-pkg
+    else if name == "tmux-kill-pane-guard"
+    then mkScriptWithLibs name
     else if name == "tmux-splash-maybe"
     then mkScriptSplash name
     else if name == "tmux-gh-dash"
@@ -573,11 +576,12 @@
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
 
-    # An idle shell kills instantly; anything else running (Claude, vim, a
-    # build, a REPL) prompts first, so a reflexive prefix+x can't silently take
-    # down a working pane. Normalize the nix makeWrapper decoration
-    # (.foo-wrapped -> foo, see set-titles-string) before matching the shell.
-    bind-key x if-shell -F '#{m/r:^(bash|fish|zsh|sh|dash)$,#{s|^\.(.*)-wrapped$|\1|:pane_current_command}}' \
+    # An idle shell and an idle Claude pane kill instantly; a Claude pane
+    # mid-work (processing/compacting/waiting/denied) or anything else running
+    # (vim, a build, a REPL) prompts first, so a reflexive prefix+x can't
+    # silently take down a working pane. The guard reads the pane's claude-status
+    # state and normalizes the nix makeWrapper decoration before matching shells.
+    bind-key x if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{pane_id} #{pane_current_command}' \
       kill-pane \
       'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane'
     bind-key & confirm-before -p "kill-window #W? (y/n)" kill-window
