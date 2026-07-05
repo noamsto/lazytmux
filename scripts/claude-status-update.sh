@@ -14,6 +14,7 @@ ISSUES_DIR="$STATE_DIR/issues"
 TASKS_DIR="$STATE_DIR/tasks"
 NAMES_DIR="$STATE_DIR/names"
 IMAGES_DIR="$STATE_DIR/images"
+SCREEN_DIR="$STATE_DIR/screen"
 
 # Ensure directories exist
 mkdir -p "$PANES_DIR"
@@ -56,12 +57,12 @@ cleanup_stale_panes() {
 		local pane_file="${pf##*/}"
 
 		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
-			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$NAMES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl"
+			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$NAMES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl" "$SCREEN_DIR/${pf##*/}"
 		fi
 	done
 
-	# Orphaned issue / task / name files (pane gone)
-	for inf in "$ISSUES_DIR"/* "$TASKS_DIR"/* "$NAMES_DIR"/*; do
+	# Orphaned issue / task / name / screen files (pane gone)
+	for inf in "$ISSUES_DIR"/* "$TASKS_DIR"/* "$NAMES_DIR"/* "$SCREEN_DIR"/*; do
 		[[ -f $inf ]] || continue
 		if [[ -z ${pane_exists[${inf##*/}]+x} ]]; then
 			rm -f "$inf"
@@ -377,7 +378,7 @@ pane_file="${pane_id#%}"
 
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
-	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file" "$NAMES_DIR/$pane_file"
+	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file" "$NAMES_DIR/$pane_file" "$SCREEN_DIR/$pane_file"
 	# Force immediate tmux refresh
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true
