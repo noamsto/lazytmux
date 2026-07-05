@@ -48,3 +48,10 @@ func TestMatchLastLines(t *testing.T) {
 		t.Fatalf("last_lines match = (%q,%v)", got, ok)
 	}
 }
+
+func TestMatchEmptyRuleDoesNotMatch(t *testing.T) {
+	m := mkManifest(Rule{State: "idle", Priority: 100, Region: "whole"})
+	if got, ok := Match(m, "anything at all", "", false); ok {
+		t.Fatalf("empty rule should not match, got (%q,%v)", got, ok)
+	}
+}

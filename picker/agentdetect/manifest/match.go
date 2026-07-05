@@ -52,7 +52,7 @@ func ruleMatches(r Rule, region string) bool {
 			return false
 		}
 	}
-	return true
+	return len(r.Contains) > 0 || r.Regex != "" || len(r.Not) > 0
 }
 
 func predMatches(p Predicate, lc string) bool {
