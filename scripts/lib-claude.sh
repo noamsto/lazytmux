@@ -5,6 +5,7 @@
 # shellcheck disable=SC2034  # used by scripts that source this library
 CLAUDE_STATUS_DIR="${CLAUDE_STATUS_DIR:-/tmp/claude-status}"
 CLAUDE_PANES_DIR="$CLAUDE_STATUS_DIR/panes"
+CLAUDE_SCREEN_DIR="$CLAUDE_STATUS_DIR/screen"
 CLAUDE_ISSUES_DIR="$CLAUDE_STATUS_DIR/issues"
 CLAUDE_TASKS_DIR="$CLAUDE_STATUS_DIR/tasks"
 CLAUDE_NAMES_DIR="$CLAUDE_STATUS_DIR/names"
@@ -50,36 +51,84 @@ CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 # Unseen means the agent reached a terminal state while the user was in another
 # window. It pins the fade to 0 — the icon stays bright until the user focuses
 # that window.
-# Returns 1 if file doesn't exist or has no state.
+#
+# Merges two sources keyed by the same pane id: the hook-written pane file
+# (PANE_FILE_PATH, e.g. panes/<id>) and a screen-scraped state at
+# screen/<id> (written by agent-detect for non-Claude agents). A fresh hook
+# always wins — screen is only ground truth once the hook has gone stale
+# (past its CLAUDE_STALE_* threshold) with no fresher signal of its own. The
+# interrupt reclassifier below only makes sense for a stale *hook* reading
+# with no screen fallback, so it's gated to that path.
+# Returns 1 if neither source has a state.
 read_pane_state() {
 	local pane_file="$1"
-	[[ -f $pane_file ]] || return 1
 
 	local state="" timestamp="" unseen="" session="" transcript="" key val
-	while IFS='=' read -r key val; do
-		case "$key" in
-		state) state="$val" ;;
-		timestamp) timestamp="$val" ;;
-		unseen) unseen="$val" ;;
-		session) session="$val" ;;
-		transcript) transcript="$val" ;;
+	if [[ -f $pane_file ]]; then
+		while IFS='=' read -r key val; do
+			case "$key" in
+			state) state="$val" ;;
+			timestamp) timestamp="$val" ;;
+			unseen) unseen="$val" ;;
+			session) session="$val" ;;
+			transcript) transcript="$val" ;;
+			esac
+		done <"$pane_file"
+	fi
+
+	local screen_file="$CLAUDE_SCREEN_DIR/${pane_file##*/}"
+	local screen_state="" screen_timestamp=""
+	if [[ -f $screen_file ]]; then
+		while IFS='=' read -r key val; do
+			case "$key" in
+			state) screen_state="$val" ;;
+			timestamp) screen_timestamp="$val" ;;
+			esac
+		done <"$screen_file"
+	fi
+
+	if [[ -n $state ]]; then
+		local max_age=0
+		case "$state" in
+		waiting) max_age=$CLAUDE_STALE_WAITING ;;
+		compacting) max_age=$CLAUDE_STALE_COMPACTING ;;
+		processing) max_age=$CLAUDE_STALE_PROCESSING ;;
+		done) max_age=$CLAUDE_STALE_DONE ;;
+		error) max_age=$CLAUDE_STALE_ERROR ;;
+		denied) max_age=$CLAUDE_STALE_DENIED ;;
 		esac
-	done <"$pane_file"
 
-	[[ -n $state ]] || return 1
-
-	# Reclassify a long-quiet `processing` pane as `interrupted` when the
-	# transcript tail holds the interrupt marker (see CLAUDE_INTERRUPT_* above).
-	# Pinned bright (no stale entry → fade 0; unseen=1) so the window stays
-	# noticeable until the next prompt overwrites the file back to `processing`.
-	if [[ $state == processing && -n $transcript && -n $timestamp ]] &&
-		((CLAUDE_NOW - timestamp > CLAUDE_INTERRUPT_CHECK_AGE)); then
-		local tailbuf
-		tailbuf=$(tail -n 2 "$transcript" 2>/dev/null) || tailbuf=""
-		if [[ $tailbuf == *"$CLAUDE_INTERRUPT_MARKER"* ]]; then
-			state="interrupted"
-			unseen="1"
+		if ((max_age > 0)) && ((CLAUDE_NOW - timestamp > max_age)) && [[ -n $screen_state ]]; then
+			# Hook stale past its threshold and a parser reading exists — screen
+			# is live ground truth. Skip the reclassifier below: it only makes
+			# sense for the hook's own `processing` state.
+			state="$screen_state"
+			timestamp="$screen_timestamp"
+			unseen=""
+			session=""
+			transcript=""
+		else
+			# Hook governs (fresh, no threshold, or stale with no screen
+			# fallback). Reclassify a long-quiet `processing` pane as
+			# `interrupted` when the transcript tail holds the interrupt marker
+			# (see CLAUDE_INTERRUPT_* above). Pinned bright (no stale entry →
+			# fade 0; unseen=1) so the window stays noticeable until the next
+			# prompt overwrites the file back to `processing`.
+			if [[ $state == processing && -n $transcript && -n $timestamp ]] &&
+				((CLAUDE_NOW - timestamp > CLAUDE_INTERRUPT_CHECK_AGE)); then
+				local tailbuf
+				tailbuf=$(tail -n 2 "$transcript" 2>/dev/null) || tailbuf=""
+				if [[ $tailbuf == *"$CLAUDE_INTERRUPT_MARKER"* ]]; then
+					state="interrupted"
+					unseen="1"
+				fi
+			fi
 		fi
+	elif [[ -n $screen_state ]]; then
+		state="$screen_state"
+		timestamp="$screen_timestamp"
+	else
+		return 1
 	fi
 
 	REPLY_FADE=0
