@@ -160,6 +160,26 @@ read_pane_state() {
 	REPLY="$state"
 }
 
+# claude_pane_ids
+# Emits the union of pane ids (basenames, no leading %) that have EITHER a
+# hook state file (panes/<id>) OR a screen state file (screen/<id>), one per
+# line, deduped, sorted. Renderers iterate this instead of globbing panes/*
+# alone so screen-only panes (non-Claude agents with no hook, e.g. Codex)
+# surface too — read_pane_state already merges both sources once handed a
+# panes/<id> path. Sorted output gives callers (e.g. issue-id collection) a
+# stable order — associative-array iteration order is unspecified.
+claude_pane_ids() {
+	local -A seen=()
+	local f id
+	for f in "$CLAUDE_PANES_DIR"/* "$CLAUDE_SCREEN_DIR"/*; do
+		[[ -f $f ]] || continue
+		id="${f##*/}"
+		seen["$id"]=1
+	done
+	local k
+	for k in "${!seen[@]}"; do printf '%s\n' "$k"; done | sort
+}
+
 # claude_ago SECONDS
 # Formats an age in seconds as a single compact unit: 47s, 5m, 2h, 3d.
 # Sets REPLY. Mirrors relAgo in picker/statusline/claude.go.

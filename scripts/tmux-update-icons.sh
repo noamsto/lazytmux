@@ -85,60 +85,57 @@ main() {
 	# Session-wide tally drives the status-bar session-name tint (@claude_session_fg)
 	sess_w=0 sess_k=0 sess_p=0 sess_d=0 sess_i=0 sess_e=0 sess_dn=0 sess_int=0
 	sess_min_fade=100 sess_unseen=0
-	if [[ -d $CLAUDE_PANES_DIR ]]; then
-		for pf in "$CLAUDE_PANES_DIR"/*; do
-			[[ -f $pf ]] || continue
-			pane_file="${pf##*/}"
-			win_idx="${pane_to_win[$pane_file]:-}"
-			[[ -n $win_idx ]] || continue
-			read_pane_state "$pf" || continue
-			state="$REPLY"
-			fade=$REPLY_FADE
-			unseen=$REPLY_UNSEEN
+	while IFS= read -r pane_file; do
+		[[ -n $pane_file ]] || continue
+		win_idx="${pane_to_win[$pane_file]:-}"
+		[[ -n $win_idx ]] || continue
+		read_pane_state "$CLAUDE_PANES_DIR/$pane_file" || continue
+		state="$REPLY"
+		fade=$REPLY_FADE
+		unseen=$REPLY_UNSEEN
 
-			# Stamp the pane's resume override so tmux-state relaunches the actual
-			# Claude session (not a bare shell) on restore. The transcript basename
-			# is the session UUID. Set only on change — @ts_relaunch is read back via
-			# the batched list-panes above, so a stable pane forks nothing per tick.
-			if [[ $RESUME_CLAUDE == on ]]; then
-				uuid="${REPLY_TRANSCRIPT##*/}"
-				uuid="${uuid%.jsonl}"
-				desired=""
-				[[ -n $uuid ]] && desired="claude --resume $uuid"
-				if [[ $desired != "${pane_cur_relaunch[$pane_file]:-}" ]]; then
-					tmux set -pq -t "%$pane_file" @ts_relaunch "$desired"
-				fi
+		# Stamp the pane's resume override so tmux-state relaunches the actual
+		# Claude session (not a bare shell) on restore. The transcript basename
+		# is the session UUID. Set only on change — @ts_relaunch is read back via
+		# the batched list-panes above, so a stable pane forks nothing per tick.
+		if [[ $RESUME_CLAUDE == on ]]; then
+			uuid="${REPLY_TRANSCRIPT##*/}"
+			uuid="${uuid%.jsonl}"
+			desired=""
+			[[ -n $uuid ]] && desired="claude --resume $uuid"
+			if [[ $desired != "${pane_cur_relaunch[$pane_file]:-}" ]]; then
+				tmux set -pq -t "%$pane_file" @ts_relaunch "$desired"
 			fi
-			# Freshest pane timestamp per window drives the "last active" label
-			[[ -n $REPLY_TS ]] && ((REPLY_TS > ${win_claude_ts[$win_idx]:-0})) &&
-				win_claude_ts[$win_idx]=$REPLY_TS
-			# Session aggregate: count states, freshest pane wins the fade
-			case "$state" in
-			error) ((sess_e++)) ;;
-			waiting) ((sess_w++)) ;;
-			compacting) ((sess_k++)) ;;
-			interrupted) ((sess_int++)) ;;
-			processing) ((sess_p++)) ;;
-			done) ((sess_d++)) ;;
-			idle) ((sess_i++)) ;;
-			denied) ((sess_dn++)) ;;
-			esac
-			((fade < sess_min_fade)) && sess_min_fade=$fade
-			[[ $unseen == 1 ]] && sess_unseen=1
-			# Priority merge: error > waiting > compacting > interrupted > processing > done > idle
-			# Fade and unseen track the winning state's pane
-			current="${win_claude_state[$win_idx]:-}"
-			case "$state" in
-			error) win_claude_state[$win_idx]="error" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			interrupted) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="interrupted" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" && $current != "interrupted" ]] && win_claude_state[$win_idx]="processing" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-			esac
-		done
-	fi
+		fi
+		# Freshest pane timestamp per window drives the "last active" label
+		[[ -n $REPLY_TS ]] && ((REPLY_TS > ${win_claude_ts[$win_idx]:-0})) &&
+			win_claude_ts[$win_idx]=$REPLY_TS
+		# Session aggregate: count states, freshest pane wins the fade
+		case "$state" in
+		error) ((sess_e++)) ;;
+		waiting) ((sess_w++)) ;;
+		compacting) ((sess_k++)) ;;
+		interrupted) ((sess_int++)) ;;
+		processing) ((sess_p++)) ;;
+		done) ((sess_d++)) ;;
+		idle) ((sess_i++)) ;;
+		denied) ((sess_dn++)) ;;
+		esac
+		((fade < sess_min_fade)) && sess_min_fade=$fade
+		[[ $unseen == 1 ]] && sess_unseen=1
+		# Priority merge: error > waiting > compacting > interrupted > processing > done > idle
+		# Fade and unseen track the winning state's pane
+		current="${win_claude_state[$win_idx]:-}"
+		case "$state" in
+		error) win_claude_state[$win_idx]="error" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		interrupted) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="interrupted" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" && $current != "interrupted" ]] && win_claude_state[$win_idx]="processing" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
+		esac
+	done < <(claude_pane_ids)
 
 	# Session-name color: tint with the aggregate claude state, faded by the
 	# freshest pane's age. Empty when no claude panes — the format falls back to

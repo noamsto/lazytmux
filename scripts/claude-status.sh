@@ -68,15 +68,17 @@ count_for_window() {
 }
 
 count_for_session() {
-	for pf in "$CLAUDE_PANES_DIR"/*; do
-		[[ -f $pf ]] || continue
+	local id pf
+	while IFS= read -r id; do
+		[[ -n $id ]] || continue
+		pf="$CLAUDE_PANES_DIR/$id"
 		# Single read: read_pane_state now also captures the session, so the
 		# file is opened once instead of twice (separate session-key scan).
 		read_pane_state "$pf" || continue
 		[[ $REPLY_SESSION == "$1" ]] || continue
 		tally_state "$REPLY"
-		collect_pane_issues "${pf##*/}"
-	done
+		collect_pane_issues "$id"
+	done < <(claude_pane_ids)
 }
 
 get_priority_state() {
