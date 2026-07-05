@@ -27,7 +27,7 @@ type Rule struct {
 }
 
 type Manifest struct {
-	ID            string `toml:"id"`
+	ID            string   `toml:"id"`
 	MatchCommands []string `toml:"match_commands"`
 	Rules         []Rule   `toml:"rules"`
 }
