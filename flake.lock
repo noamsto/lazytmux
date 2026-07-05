@@ -422,11 +422,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1782906566,
-        "narHash": "sha256-CFI+ajHYXgtU+v87CrsL6oVqKa3/b5CL7PSHQw8A66A=",
+        "lastModified": 1783237810,
+        "narHash": "sha256-v/yiK+6H/0c4/jrCnDaSIQSRrreCWmMFHE+tnWsdmtk=",
         "ref": "refs/heads/main",
-        "rev": "85d20c0567673e9e1bc95b4c227b440b47a81c5a",
-        "revCount": 73,
+        "rev": "ab2f1e65e40b6f0d49308c63db97041fa1cbe327",
+        "revCount": 74,
         "type": "git",
         "url": "ssh://git@github.com/noamsto/prdash"
       },
