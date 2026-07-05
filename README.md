@@ -16,7 +16,11 @@ Provides a fully configured tmux binary via a Nix flake — no dotfile managemen
 
 ---
 
-<!-- TODO: Add a showcase screenshot/gif of the full tmux setup in action -->
+<div align="center">
+
+https://github.com/user-attachments/assets/8c6381fc-1eb8-4942-bc5b-521ad7fbf464
+
+</div>
 
 ## Quick Start
 
