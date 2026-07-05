@@ -424,15 +424,15 @@
       "locked": {
         "lastModified": 1783237810,
         "narHash": "sha256-v/yiK+6H/0c4/jrCnDaSIQSRrreCWmMFHE+tnWsdmtk=",
-        "ref": "refs/heads/main",
+        "owner": "noamsto",
+        "repo": "prdash",
         "rev": "ab2f1e65e40b6f0d49308c63db97041fa1cbe327",
-        "revCount": 74,
-        "type": "git",
-        "url": "ssh://git@github.com/noamsto/prdash"
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "ssh://git@github.com/noamsto/prdash"
+        "owner": "noamsto",
+        "repo": "prdash",
+        "type": "github"
       }
     },
     "root": {

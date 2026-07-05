@@ -14,9 +14,8 @@
       url = "github:noamsto/aeye";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Private repo: github: refs fail without auth, so pin over ssh.
     prdash = {
-      url = "git+ssh://git@github.com/noamsto/prdash";
+      url = "github:noamsto/prdash";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
