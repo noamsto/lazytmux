@@ -522,7 +522,7 @@
     bind c if-shell -F '#{m:scratch-*,#{session_name}}' \
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
-    bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
