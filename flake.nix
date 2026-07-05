@@ -14,6 +14,10 @@
       url = "github:noamsto/aeye";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    prdash = {
+      url = "github:noamsto/prdash";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {flake-parts, ...}:
@@ -31,6 +35,7 @@
         tmuxConfig = import ./config/tmux.conf.nix {
           inherit pkgs lib;
           carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+          prdash = inputs.prdash.packages.${pkgs.system}.prdash;
         };
       in {
         pre-commit.settings.hooks = {
@@ -175,6 +180,7 @@
               carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
               carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
               carouselPluginSkills = "${inputs.aeye}/adapters/claude-code/plugin/skills";
+              prdash = inputs.prdash.packages.${pkgs.system}.prdash;
             });
       };
     };

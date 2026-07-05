@@ -25,6 +25,8 @@
   defaultShell ? null,
   # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
+  # prdash PR dashboard package (threaded from the flake input; used by the prefix+p popup).
+  prdash ? null,
   # Welcome-buffer splash (threaded from the home-manager module).
   splashEnable ? true,
   splashTips ? [],
@@ -381,6 +383,13 @@
     lib.optionalString (carousel-toggle != null)
     "bind I run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images'";
 
+  # prdash PR dashboard popup (prefix+p), scoped to the pane's repo. `enter` opens
+  # a git worktree: prdash execs `wt switch` itself as it exits the popup, so the
+  # tmux window switches when the popup closes.
+  prdashBind =
+    lib.optionalString (prdash != null)
+    "bind-key p display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${prdash}/bin/prdash";
+
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
   # stashing carousels for off-screen panes and restoring the visible one. Indexed
@@ -567,6 +576,7 @@
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
     bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
+    ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
@@ -778,7 +788,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };
