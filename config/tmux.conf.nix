@@ -228,6 +228,7 @@
   picker-splash-bin = "${picker-generate}/bin/tmux-splash";
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
+  picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   scriptNames = [
     "claude-status"
@@ -272,8 +273,8 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@"])
-      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows"])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@"])
+      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows" picker-agent-detect-bin])
       (builtins.readFile ../scripts/${name}.sh));
 
   # Scripts that need enrich library + provider/icon/config substitution
