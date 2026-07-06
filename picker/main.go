@@ -76,6 +76,8 @@ type windowData struct {
 	prState     string // @pr_state
 	prCheck     string // @pr_check_state
 	prMergeable string // @pr_mergeable
+	crewName    string // @crew_name  — agent codename (fan-out harness) or ""
+	crewColor   string // @crew_color — tmux colour code paired with the codename
 }
 
 type claudeCounts struct {
@@ -211,7 +213,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}").Output()
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}").Output()
 	if err != nil {
 		return nil
 	}
@@ -232,6 +234,8 @@ func collectWindows() []windowData {
 		prState     string
 		prCheck     string
 		prMergeable string
+		crewName    string
+		crewColor   string
 		seen        map[string]bool
 		procs       []string
 	}
@@ -246,7 +250,7 @@ func collectWindows() []windowData {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 14)
+		parts := strings.SplitN(line, "\t", 16)
 		if len(parts) < 6 {
 			continue
 		}
@@ -270,6 +274,8 @@ func collectWindows() []windowData {
 				prState:     field(parts, 11),
 				prCheck:     field(parts, 12),
 				prMergeable: field(parts, 13),
+				crewName:    field(parts, 14),
+				crewColor:   field(parts, 15),
 				seen:        make(map[string]bool),
 			}
 			m[k] = wi
@@ -317,6 +323,8 @@ func collectWindows() []windowData {
 			prState:     wi.prState,
 			prCheck:     wi.prCheck,
 			prMergeable: wi.prMergeable,
+			crewName:    wi.crewName,
+			crewColor:   wi.crewColor,
 		})
 	}
 	return windows
@@ -949,6 +957,19 @@ func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
 // ---------------------------------------------------------------------------
 // Theme / tmux helpers
 // ---------------------------------------------------------------------------
+
+// ansiFgTmux turns a tmux colour value into an ANSI fg escape. It accepts the
+// 256-palette form ("colour210") the crew harness stamps and the "#rrggbb" theme
+// form; returns "" for anything else (incl. "default").
+func ansiFgTmux(c string) string {
+	if n, ok := strings.CutPrefix(c, "colour"); ok {
+		if v, err := strconv.Atoi(n); err == nil && v >= 0 && v < 256 {
+			return fmt.Sprintf("\033[38;5;%dm", v)
+		}
+		return ""
+	}
+	return ansiFg(c)
+}
 
 func ansiFg(hex string) string {
 	hex = strings.TrimPrefix(hex, "#")

@@ -188,11 +188,13 @@ main() {
 		# A window with no @branch yet (manual new-window, restore) is polled once to
 		# seed it, then trusted — this caps the steady git fork rate at ~1/tick.
 		if [[ $idx == "$active_win_idx" || -z ${win_cur_branch[$idx]:-} ]]; then
-			branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
+			# timeout so a stuck git (NFS stall, held index.lock) can't wedge the
+			# whole icon updater — it degrades to the cached branch for that tick.
+			branch=$(timeout 2 git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
 			if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
 				tmux_cmds+="set -qw -t '$target' @branch '$branch'"$'\n'
 				# Re-derive git root when branch changes (different repo or worktree)
-				git_root=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
+				git_root=$(timeout 2 git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
 				tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
 				branch_changed=1
 			fi

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/exec"
@@ -11,12 +12,26 @@ import (
 	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
 
+// gitOutput runs git with a short timeout so a stalled repo (NFS, held
+// index.lock) can't wedge the once-a-second statusline render. Returns the
+// trimmed stdout and whether it succeeded.
+func gitOutput(dir string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
 type args struct {
 	session, prefix                                            string
 	issueID, issueBranch, issueProvider, issueTitle            string
 	branch, panePath, gitRoot                                  string
 	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
 	paneIcon, paneCmd, claudeFg                                string
+	crewName, crewColor                                        string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
@@ -36,20 +51,18 @@ func branchDisplay(branch, panePath string) string {
 	if panePath == "" {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", panePath, "branch", "--show-current").Output()
-	if err != nil {
-		return ""
+	if s, ok := gitOutput(panePath, "branch", "--show-current"); ok {
+		return s
 	}
-	return strings.TrimSpace(string(out))
+	return ""
 }
 
 // dirDisplay mirrors tmux-dir-display.sh: path relative to git root as ./sub,
 // "./" at root, else ~-collapsed absolute path.
 func dirDisplay(panePath, gitRoot string) string {
 	if gitRoot == "" && panePath != "" {
-		out, err := exec.Command("git", "-C", panePath, "rev-parse", "--show-toplevel").Output()
-		if err == nil {
-			gitRoot = strings.TrimSpace(string(out))
+		if s, ok := gitOutput(panePath, "rev-parse", "--show-toplevel"); ok {
+			gitRoot = s
 		}
 	}
 	if gitRoot != "" && strings.HasPrefix(panePath, gitRoot) {
@@ -76,6 +89,16 @@ func sessionSegment(a args, prefixActive bool) string {
 		b.WriteString("#[fg=" + a.thmMauve + "]")
 	}
 	b.WriteString(" " + a.iconSession + " " + a.session + "  ")
+
+	// Agent-codename badge for the active window (fan-out harness stamp). Tinted
+	// by its @crew_color when set; the issue/branch block below re-sets fg.
+	if a.crewName != "" {
+		fg := a.crewColor
+		if fg == "" {
+			fg = a.thmMauve
+		}
+		b.WriteString("#[fg=" + fg + "]" + a.crewName + "  ")
+	}
 
 	if a.issueID != "" && a.issueBranch == a.branch {
 		glyph := a.iconGitHub
@@ -161,6 +184,8 @@ func main() {
 	flag.StringVar(&a.paneIcon, "pane-icon", "", "")
 	flag.StringVar(&a.paneCmd, "pane-cmd", "", "")
 	flag.StringVar(&a.claudeFg, "claude-fg", "", "")
+	flag.StringVar(&a.crewName, "crew-name", "", "")
+	flag.StringVar(&a.crewColor, "crew-color", "", "")
 	flag.StringVar(&a.thmBg, "thm-bg", "", "")
 	flag.StringVar(&a.thmRed, "thm-red", "", "")
 	flag.StringVar(&a.thmMauve, "thm-mauve", "", "")

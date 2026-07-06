@@ -25,6 +25,8 @@
   defaultShell ? null,
   # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
+  # prdash PR dashboard package (threaded from the flake input; used by the prefix+p popup).
+  prdash ? null,
   # Welcome-buffer splash (threaded from the home-manager module).
   splashEnable ? true,
   splashTips ? [],
@@ -382,6 +384,13 @@
     lib.optionalString (carousel-toggle != null)
     "bind I run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images'";
 
+  # prdash PR dashboard popup (prefix+p), scoped to the pane's repo. `enter` opens
+  # a git worktree: prdash execs `wt switch` itself as it exits the popup, so the
+  # tmux window switches when the popup closes.
+  prdashBind =
+    lib.optionalString (prdash != null)
+    "bind-key p display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${prdash}/bin/prdash";
+
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
   # stashing carousels for off-screen panes and restoring the visible one. Indexed
@@ -514,7 +523,7 @@
     bind c if-shell -F '#{m:scratch-*,#{session_name}}' \
       'display-message "scratchpad: new windows disabled"' \
       'new-window -c "#{pane_current_path}"'
-    bind p run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
@@ -568,6 +577,7 @@
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
     bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
+    ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
     bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
@@ -628,13 +638,15 @@
     set -g @picker_zoxide_exclude "${zoxideExclude}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | App info (right)
-    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --prefix '#{client_prefix}' --claude-fg '#{@claude_session_fg}' --issue-id '#{@issue_id}' --issue-branch '#{@issue_branch}' --issue-provider '#{@issue_provider}' --issue-title '#{@issue_title}' --branch '#{@branch}' --path '#{pane_current_path}' --git-root '#{@git_root}' --pr-number '#{@pr_number}' --pr-branch '#{@pr_branch}' --pr-state '#{@pr_state}' --pr-check '#{@pr_check_state}' --pr-mergeable '#{@pr_mergeable}' --pr-title '#{@pr_title}' --pane-icon '#{@active_pane_icon}' --pane-cmd '#{pane_current_command}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay0 '#{@thm_overlay_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}' --icon-pending '${enrichIconSet.pending}' --icon-success '${enrichIconSet.success}' --icon-failure '${enrichIconSet.failure}' --icon-merged '${enrichIconSet.merged}' --icon-closed '${enrichIconSet.closed}' --icon-conflict '${enrichIconSet.conflict}')"
+    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --prefix '#{client_prefix}' --claude-fg '#{@claude_session_fg}' --crew-name '#{@crew_name}' --crew-color '#{@crew_color}' --issue-id '#{@issue_id}' --issue-branch '#{@issue_branch}' --issue-provider '#{@issue_provider}' --issue-title '#{@issue_title}' --branch '#{@branch}' --path '#{pane_current_path}' --git-root '#{@git_root}' --pr-number '#{@pr_number}' --pr-branch '#{@pr_branch}' --pr-state '#{@pr_state}' --pr-check '#{@pr_check_state}' --pr-mergeable '#{@pr_mergeable}' --pr-title '#{@pr_title}' --pane-icon '#{@active_pane_icon}' --pane-cmd '#{pane_current_command}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay0 '#{@thm_overlay_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}' --icon-pending '${enrichIconSet.pending}' --icon-success '${enrichIconSet.success}' --icon-failure '${enrichIconSet.failure}' --icon-merged '${enrichIconSet.merged}' --icon-closed '${enrichIconSet.closed}' --icon-conflict '${enrichIconSet.conflict}')"
 
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
-    # A window with @crew_color set (e.g. a fan-out worker tagged by an external
-    # orchestrator) tints its index+label with that color instead of the default
-    # mauve/subtext0, so each agent's tab is identifiable at a glance; the PR
-    # segment keeps its own check-state color either way.
+    # A window tagged by an external fan-out orchestrator (@crew_name codename +
+    # @crew_color) shows the codename as a leading badge and tints its index+label
+    # with that color instead of the default mauve/subtext0, so each agent's tab is
+    # identifiable at a glance; the PR segment keeps its own check-state color
+    # either way. tmux-reflow-windows reserves a shared codename column for the
+    # multi-line variants (see its @window_crew_disp).
     # Tab anatomy: idx + bold identity prefix (@window_label_id) + remainder +
     # icons, then the PR segment last, colored by check state on every tab
     # (closed=overlay0, failing=red, pending=peach, merged=mauve,
@@ -642,7 +654,7 @@
     # last so its state color only runs into the separator, which sets its own
     # color. tmux-reflow-windows mirrors this layout for the multi-line
     # variants with column-padded segments.
-    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?#{@crew_color},#{?window_active,#[fg=#{@crew_color}#,bg=#{@thm_bg}#,bold],#[fg=#{@crew_color}#,bg=#{@thm_bg}]},#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}}#{window_index}: #[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
+    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?#{@crew_color},#{?window_active,#[fg=#{@crew_color}#,bg=#{@thm_bg}#,bold],#[fg=#{@crew_color}#,bg=#{@thm_bg}]},#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}}#{?#{@crew_name},#{@crew_name} ,}#{window_index}: #[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
     set -g status-format[2] ""
     set -g status-format[3] ""
 
@@ -666,7 +678,11 @@
     set-hook -g after-new-window        'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g window-unlinked         'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g client-resized          'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    # client-resized fires on every step of a terminal drag; each distinct width
+    # is a cache miss → full O(N) recompute. Background it (-b, off the server's
+    # command queue) with --debounce so a drag coalesces to one reflow at the
+    # final width — see the debounce block in tmux-reflow-windows.
+    set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
 
@@ -702,8 +718,11 @@
     set -g window-style "fg=#{@thm_fg},bg=#{@thm_mantle}"
     set -g window-active-style "fg=#{@thm_fg},bg=#{@thm_bg}"
 
-    # Pane scrollbars (tmux 3.6+) - disabled
-    set -g pane-scrollbars off
+    # Pane scrollbars (tmux 3.6+): modal so a pane is only narrowed while its
+    # scrollbar is visible (copy/view mode), never in normal editing.
+    set -g pane-scrollbars modal
+    set -g pane-scrollbars-style "fg=#{@thm_mauve},bg=#{@thm_surface_0},width=1"
+    set -g pane-scrollbars-position right
 
     # Prompt cursor styling (tmux 3.6+)
     set -g prompt-cursor-style "blinking-bar"
@@ -730,10 +749,14 @@
     # Only scan built-ins we actually use. Dropped: digit (too noisy — matches
     # any 4+ digit run), git-status, git-status-branch, diff (niche).
     set -g @fingers-enabled-builtin-patterns "url,path,ip,uuid,sha,hex,kubernetes"
-    run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
-    # Apply theme-dependent colors (must run after catppuccin loads)
+    # Apply theme-dependent colors (must run after catppuccin loads, and
+    # before tmux-fingers loads: load-config snapshots @fingers-*-style into
+    # its own config.json, so the styles must be set first or fingers renders
+    # the previous theme's colors until the next toggle).
     run-shell "${script.tmux-apply-theme-colors}/bin/tmux-apply-theme-colors"
+
+    run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Synchronous init on config load so icons + window bar are ready before the user sees it
     run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
@@ -779,7 +802,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle)}
+        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };

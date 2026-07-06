@@ -15,15 +15,17 @@ source @lib_enrich@
 # shellcheck source=/dev/null
 source @lib_log@
 
-# Accept --force (cache bypass, used by enrich scripts after writing vars).
+# Accept --force (cache bypass, used by enrich scripts after writing vars) and
+# --debounce (coalesce a resize burst, see below).
 FORCE=0
+DEBOUNCE=0
 pos=()
 for a in "$@"; do
-	if [[ $a == --force ]]; then
-		FORCE=1
-	else
-		pos+=("$a")
-	fi
+	case "$a" in
+	--force) FORCE=1 ;;
+	--debounce) DEBOUNCE=1 ;;
+	*) pos+=("$a") ;;
+	esac
 done
 set -- "${pos[@]}"
 
@@ -36,6 +38,21 @@ MAX_ICONS=@MAX_ICONS@
 case "$SESSION" in
 scratch-*) exit 0 ;;
 esac
+
+# Debounce a resize burst: client-resized fires once per drag step, and every
+# distinct width misses the cache below → a full O(N) recompute each time. The
+# hook backgrounds this (-b), so the sleep is off the server's command queue.
+# Each invocation stamps a token and waits out the burst; only the last one to
+# stamp (the final width) survives the token check and reflows — the rest bail.
+if ((DEBOUNCE)); then
+	stamp="/tmp/lazytmux-reflow-debounce.${SESSION//\//_}"
+	token=$EPOCHREALTIME
+	printf '%s' "$token" >"$stamp" 2>/dev/null
+	sleep 0.12
+	last=""
+	[[ -f $stamp ]] && last=$(<"$stamp")
+	[[ $last == "$token" ]] || exit 0
+fi
 
 # Fast-path: skip if window count + width unchanged since last reflow. Layout
 # (detail mode + column width) depends only on the window set + width, not on
@@ -64,11 +81,16 @@ has_zoom=0
 # @window_task is last: free-form text may contain '|', and read drops any extra
 # delimiters into the final field, so it can't shift the columns before it.
 # @window_ai_name is sanitized (kebab, no '|') so it sits safely before it.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@window_ai_name}|#{@window_task}'
+# @crew_name (agent codename, stamped by an external fan-out harness) is
+# token-safe (no '|'). Its @crew_color pairs with it but is read straight from the
+# window option in the template, so only the name is pulled here (for width).
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
-pr_colw=0 # widest PR segment → shared PR column width (0 when no window has a PR)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch wai wtask; do
+declare -A win_crew win_crew_dw win_crew_disp
+pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
+crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai wtask; do
 	indices+=("$idx")
 	((zoomed)) && has_zoom=1
 
@@ -93,6 +115,20 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	measure_display_width "${win_pr[$idx]}"
 	win_pr_dw[$idx]=$REPLY_DW
 	((win_pr_dw[$idx] > pr_colw)) && pr_colw=${win_pr_dw[$idx]}
+
+	# Agent codename badge (external fan-out harness stamps @crew_name/@crew_color).
+	# Its own shared column, mirroring the PR pattern: charged per-window in the
+	# single-line fit test, as a uniform padded column in the multi-line grid. The
+	# trailing separator space is folded into the segment so the width math is exact.
+	if [[ -n $crew ]]; then
+		win_crew[$idx]="${crew} "
+		measure_display_width "${win_crew[$idx]}"
+		win_crew_dw[$idx]=$REPLY_DW
+		((win_crew_dw[$idx] > crew_colw)) && crew_colw=${win_crew_dw[$idx]}
+	else
+		win_crew[$idx]=""
+		win_crew_dw[$idx]=0
+	fi
 
 	# Long mode only changes the remainder (title / full branch); the id and PR
 	# segments are mode-independent.
@@ -139,8 +175,8 @@ idx_width=${#last_idx}
 # flips empty↔set on Claude state changes without triggering a reflow, so a
 # live-width column would drift. 1 space + 3 right-aligned cells = 4.
 AGO_W=4
-slot_overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
-overhead=$((slot_overhead + pr_colw + AGO_W))     # + shared pr column + ago column (multi-line)
+slot_overhead=$((idx_width + 3 + max_icon_width))         # ": " + trailing space + icons
+overhead=$((slot_overhead + pr_colw + crew_colw + AGO_W)) # + shared pr, agent-badge, ago columns (multi-line)
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -160,8 +196,8 @@ total_short=0
 for idx in "${indices[@]}"; do
 	((win_long_dw[$idx] > colw_long)) && colw_long=${win_long_dw[$idx]}
 	((win_short_dw[$idx] > colw_short)) && colw_short=${win_short_dw[$idx]}
-	((total_long += win_long_dw[$idx] + slot_overhead + win_pr_dw[$idx]))
-	((total_short += win_short_dw[$idx] + slot_overhead + win_pr_dw[$idx]))
+	((total_long += win_long_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
+	((total_short += win_short_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
 done
 total_long=$((total_long + (total - 1) * SEP_WIDTH))
 total_short=$((total_short + (total - 1) * SEP_WIDTH))
@@ -255,6 +291,11 @@ for idx in "${indices[@]}"; do
 
 	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
 	win_pr_disp[$idx]="$REPLY"
+
+	# Agent badge padded to the shared column so grid rows align; blank (spaces)
+	# for untagged windows. Emitted only when some window is tagged (crew_colw > 0).
+	pad_to_width "${win_crew[$idx]}" "${win_crew_dw[$idx]}" "$crew_colw"
+	win_crew_disp[$idx]="$REPLY"
 done
 
 # Split points (uniform columns): break after every REPLY_PER windows.
@@ -300,7 +341,8 @@ for idx in "${indices[@]}"; do
 		set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}" ';' \
 		set -w -t "$target" @window_label_disp "${win_disp[$idx]}" ';' \
 		set -w -t "$target" @window_pr_plain "${win_pr[$idx]}" ';' \
-		set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}"
+		set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}" ';' \
+		set -w -t "$target" @window_crew_disp "${win_crew_disp[$idx]}"
 done
 
 # Split points and status line count
@@ -377,7 +419,13 @@ PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},me
 # value (and an empty value, for active/non-claude windows) always occupies the
 # same cells — this is what keeps grid columns aligned as the value ticks and appears.
 AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
+# Leading agent-badge column: the codename tinted by its stamped @crew_color (the
+# padded @window_crew_disp already carries a trailing separator space). Included
+# only when at least one window is tagged, so untagged grids are unchanged; blank
+# windows in a tagged grid render crew_colw spaces to keep columns aligned.
+CREW=""
+((crew_colw > 0)) && CREW="#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@window_crew_disp}"
+ENTRY="#[range=window|#{window_index}]#[nobold]${CREW}${BASE}${IDX}: ${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted

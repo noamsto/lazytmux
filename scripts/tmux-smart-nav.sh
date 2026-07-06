@@ -9,6 +9,8 @@ set -u
 flag=$1 dir=$2 zoomed=$3 edge=$4
 [ "$zoomed" = 1 ] && exit 0
 if [ "$edge" = 1 ] && [ -n "${KITTY_LISTEN_ON:-}" ] && command -v kitty >/dev/null 2>&1; then
-	kitty @ action neighboring_window "$dir" 2>/dev/null && exit 0
+	# timeout so a stalled kitty remote-control socket can't hang the C-hjkl
+	# bind (and the server's command queue); on timeout, fall through to tmux.
+	timeout 1 kitty @ action neighboring_window "$dir" 2>/dev/null && exit 0
 fi
 tmux select-pane -"$flag"
