@@ -400,3 +400,26 @@ EOF
 	[ -f "$CLAUDE_STATUS_DIR/issues/7" ]
 	[ -f "$CLAUDE_STATUS_DIR/tasks/7" ]
 }
+
+@test "cleanup: removes screen file for a pane that no longer exists" {
+	mkdir -p "$CLAUDE_STATUS_DIR/screen"
+	printf 'pane=7\nscreens=[]\n' >"$CLAUDE_STATUS_DIR/screen/9"
+	stub_tmux
+	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	[ ! -f "$CLAUDE_STATUS_DIR/screen/9" ]
+}
+
+@test "cleanup: keeps screen file for a live pane" {
+	mkdir -p "$CLAUDE_STATUS_DIR/screen"
+	printf 'pane=7\nscreens=[]\n' >"$CLAUDE_STATUS_DIR/screen/7"
+	stub_tmux
+	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	[ -f "$CLAUDE_STATUS_DIR/screen/7" ]
+}
+
+@test "clear state removes screen file" {
+	mkdir -p "$CLAUDE_STATUS_DIR/screen"
+	printf 'pane=7\nscreens=[]\n' >"$CLAUDE_STATUS_DIR/screen/7"
+	bash "$CSU" clear --pane %7
+	[ ! -f "$CLAUDE_STATUS_DIR/screen/7" ]
+}

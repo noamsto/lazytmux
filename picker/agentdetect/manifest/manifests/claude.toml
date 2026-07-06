@@ -1,0 +1,36 @@
+id = "claude"
+match_commands = ["claude"]
+
+[[rules]]
+state = "processing"
+priority = 100
+region = "title"
+regex = '^[\x{2800}-\x{28FF}] '
+
+[[rules]]
+state = "skip"
+priority = 95
+region = "whole"
+contains = ["showing detailed transcript"]
+
+[[rules]]
+state = "skip"
+priority = 94
+region = "whole"
+contains = ["select model", "esc to cancel"]
+
+[[rules]]
+state = "waiting"
+priority = 80
+region = "whole"
+contains = ["do you want to proceed?"]
+
+[[rules]]
+state = "idle"
+priority = 10
+# last_lines:6 not :3 — real Claude renders 3 lines below the ❯ prompt (box
+# bottom border, the 🤖 status line, and the -- INSERT -- mode hint), so ❯ sits
+# ~4 lines from the bottom. Verified against live idle panes.
+region = "last_lines:6"
+regex = '❯'
+not = [ { contains = ["do you want to proceed?"] } ]

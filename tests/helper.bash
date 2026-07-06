@@ -47,3 +47,17 @@ make_claude_status() {
 	CLAUDE_STATUS_SCRIPT="$BATS_TEST_TMPDIR/claude-status.sh"
 	sed "s|@lib_claude@|$PWD/scripts/lib-claude.sh|" scripts/claude-status.sh >"$CLAUDE_STATUS_SCRIPT"
 }
+
+# Sources claude-status.sh's function definitions (count_for_session,
+# count_for_window, tally_state, ...) into the current shell, stopping before
+# the "# --- Main ---" CLI-parsing section so it's safe to call under bats
+# without the script consuming bats' own args or exiting early.
+setup_claude_status_functions() {
+	setup_lib_claude
+	local tmp
+	tmp="$(mktemp)"
+	sed -n '1,/^# --- Main ---/p' scripts/claude-status.sh | sed '$d; /^source @lib_claude@$/d' >"$tmp"
+	# shellcheck source=/dev/null
+	source "$tmp"
+	rm -f "$tmp"
+}

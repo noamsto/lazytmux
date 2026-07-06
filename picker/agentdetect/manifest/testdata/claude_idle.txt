@@ -1,0 +1,7 @@
+TITLE:✳ lazytmux
+ Assistant: Done — let me know if you want anything else.
+──────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────
+  🤖 Opus 4.8 🧠 high | 📊 200k/1M | ⚡ 68%
+  -- INSERT -- ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

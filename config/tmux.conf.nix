@@ -230,6 +230,7 @@
   picker-splash-bin = "${picker-generate}/bin/tmux-splash";
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
+  picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   scriptNames = [
     "claude-status"
@@ -274,8 +275,8 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@"])
-      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows"])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@"])
+      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows" picker-agent-detect-bin])
       (builtins.readFile ../scripts/${name}.sh));
 
   # Scripts that need enrich library + provider/icon/config substitution
@@ -697,7 +698,7 @@
     set-hook -g after-new-session[10] 'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
-    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id}"'
+    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id}"'
 
     # A scratchpad dies with its parent session ([99] is tmux-state's capture-event)
     set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'

@@ -62,8 +62,8 @@ in
     pname = "lazytmux-go-tools";
     version = "0.1.0";
     inherit src;
-    vendorHash = "sha256-cMht9LTwEE5g58af+7eExzTWqDdR0YkhXcjwNUFIYw8=";
-    subPackages = ["." "splash" "statusline" "enrichcard"];
+    vendorHash = "sha256-dsX+zjAOdPtRj9mD64ZWaG6yYiutzyYD/+jYSQRT4gs=";
+    subPackages = ["." "splash" "statusline" "enrichcard" "agentdetect"];
     ldflags = ["-s" "-w"]; # strip debug info for smaller binary + faster startup
     # Binary name matches pname (Go module produces "picker" by default)
     postInstall = ''
@@ -71,5 +71,6 @@ in
       mv $out/bin/splash $out/bin/tmux-splash
       mv $out/bin/statusline $out/bin/tmux-statusline
       mv $out/bin/enrichcard $out/bin/tmux-enrich-card
+      mv $out/bin/agentdetect $out/bin/agent-detect
     '';
   }
