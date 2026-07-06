@@ -32,6 +32,26 @@
           inherit pkgs lib;
           carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
         };
+
+        # buildGoModule's checkPhase only runs `go test ./<pkg>` per subPackage
+        # (non-recursive), so the default `picker` derivation never exercises
+        # picker/agentdetect's nested debounce/manifest/screen/statefile
+        # packages. Override checkPhase to scope it to `./agentdetect/...`.
+        pickerAgentDetect =
+          (import ./picker {
+            inherit pkgs lib;
+            processIcons = import ./config/process-icons.nix;
+            fallbackIcon = "";
+            maxIconsPicker = "5";
+          }).overrideAttrs (_old: {
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              export GOFLAGS=''${GOFLAGS//-trimpath/}
+              go test ./agentdetect/...
+              runHook postCheck
+            '';
+          });
       in {
         pre-commit.settings.hooks = {
           # Nix
@@ -160,6 +180,38 @@
               bats tests/reconcile.bats
               touch $out
             '';
+
+          agent-detect-arm-tests =
+            pkgs.runCommand "agent-detect-arm-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-detect-arm.bats
+              touch $out
+            '';
+
+          agent-detect-merge-tests =
+            pkgs.runCommand "agent-detect-merge-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-detect-merge.bats
+              touch $out
+            '';
+
+          agent-detect-enum-tests =
+            pkgs.runCommand "agent-detect-enum-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-detect-enum.bats
+              touch $out
+            '';
+
+          agent-detect-go-tests = pickerAgentDetect;
         };
 
         packages = {
