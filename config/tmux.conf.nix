@@ -742,10 +742,14 @@
     # Only scan built-ins we actually use. Dropped: digit (too noisy — matches
     # any 4+ digit run), git-status, git-status-branch, diff (niche).
     set -g @fingers-enabled-builtin-patterns "url,path,ip,uuid,sha,hex,kubernetes"
-    run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
-    # Apply theme-dependent colors (must run after catppuccin loads)
+    # Apply theme-dependent colors (must run after catppuccin loads, and
+    # before tmux-fingers loads: load-config snapshots @fingers-*-style into
+    # its own config.json, so the styles must be set first or fingers renders
+    # the previous theme's colors until the next toggle).
     run-shell "${script.tmux-apply-theme-colors}/bin/tmux-apply-theme-colors"
+
+    run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Synchronous init on config load so icons + window bar are ready before the user sees it
     run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
