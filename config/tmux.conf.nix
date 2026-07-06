@@ -583,10 +583,10 @@
     bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
-    # yazi crashes in display-popup (tmux popups don't support passthrough, yazi needs it for terminal detection)
-    bind-key "y" if-shell -F '#{m:scratch-*,#{session_name}}' \
-      'display-message "scratchpad: new windows disabled"' \
-      "new-window -S -n yazi -c '#{pane_current_path}' yazi"
+    # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
+    # full escape-sequence passthrough, so yazi's image preview / terminal
+    # detection work. Scoped to the launching window (no window-line entry).
+    bind-key "y" new-pane -c '#{pane_current_path}' -x 90% -y 85% yazi
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
