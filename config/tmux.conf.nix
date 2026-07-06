@@ -1,6 +1,11 @@
 {
   pkgs,
   lib,
+  # tmux package to wrap. Defaults to pkgs.tmux; pinned to a 3.6a nixpkgs by the
+  # flake because tmux 3.7 no longer freezes background panes under a popup
+  # (tmux/tmux#4920), which repaints/flickers every popup while a Claude pane is
+  # redrawing behind it. See the flake input comment for the unpin condition.
+  tmuxPkg ? pkgs.tmux,
   extraProcessIcons ? {},
   # TERM string of the outer terminal emulator (e.g. "xterm-ghostty", "xterm-kitty").
   # When set, adds a terminal-features line for RGB true-color + extended keys.
@@ -481,11 +486,7 @@
     # Extended keyboard + clipboard
     set -g extended-keys on
     set -g extended-keys-format csi-u
-    # sync (DEC mode 2026): tmux 3.7 repaints open popups on every background
-    # status update (issue 4920 fix) — without synchronized output that repaint
-    # tears, flickering the popup's top edge once per second while the Claude
-    # spinner animates. Terminals that lack 2026 ignore the private-mode escape.
-    ${terminalConfig}set -as terminal-features '*:hyperlinks:sync'
+    ${terminalConfig}set -as terminal-features '*:hyperlinks'
     set -s set-clipboard on
     set -s copy-command '${
       if pkgs.stdenv.hostPlatform.isDarwin
@@ -801,12 +802,12 @@
   # --- Wrapped tmux binary ---
   tmux-wrapped = pkgs.symlinkJoin {
     name = "tmux-wrapped";
-    paths = [pkgs.tmux];
+    paths = [tmuxPkg];
     nativeBuildInputs = [pkgs.makeWrapper];
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([pkgs.tmux] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
+        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };
