@@ -2,6 +2,21 @@ package main
 
 import "testing"
 
+func TestAnsiFgTmux(t *testing.T) {
+	cases := map[string]string{
+		"colour210": "\033[38;5;210m",
+		"#a6e3a1":   "\033[38;2;166;227;161m",
+		"default":   "",
+		"colour999": "", // out of the 0-255 palette
+		"":          "",
+	}
+	for in, want := range cases {
+		if got := ansiFgTmux(in); got != want {
+			t.Errorf("ansiFgTmux(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // withFilter re-inserts the zoxide divider before the first surviving
 // suggestion row. These cases pin that branch.
 func TestWithFilterZoxideHeader(t *testing.T) {

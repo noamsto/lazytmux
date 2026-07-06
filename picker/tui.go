@@ -1049,9 +1049,12 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 		idSearch      string // searchable text (no glyphs/color)
 		prBadge       string // colored
 		prPlain       string
+		crewColored   string // agent codename, colored by @crew_color
+		crewName      string // plain codename (search + width)
+		crewDW        int
 	}
 	winRows := make(map[string][]renderedWin)
-	maxIconDW, maxWinLabelDW, maxIdentityDW := 0, 0, 0
+	maxIconDW, maxWinLabelDW, maxIdentityDW, maxCrewDW := 0, 0, 0, 0
 	anyPR := false
 	for _, g := range groups {
 		for _, w := range g.windows {
@@ -1098,15 +1101,28 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				anyPR = true
 			}
 
+			// Agent codename badge (fan-out harness stamp), tinted by @crew_color.
+			var crewColored string
+			crewDW := iconCellWidth(w.crewName)
+			if w.crewName != "" {
+				if c := ansiFgTmux(w.crewColor); c != "" {
+					crewColored = c + w.crewName + reset
+				} else {
+					crewColored = w.crewName
+				}
+			}
+
 			winRows[g.name] = append(winRows[g.name], renderedWin{
 				win: w, name: name, icons: icons, iconDW: dw,
 				winLabel: winLabel, winLabelDW: winLabelDW,
 				identity: idColored, identityPlain: idPlain, identityDW: idDW,
 				idSearch: idSearch, prBadge: prBadge, prPlain: prPlain,
+				crewColored: crewColored, crewName: w.crewName, crewDW: crewDW,
 			})
 			maxIconDW = max(maxIconDW, dw)
 			maxWinLabelDW = max(maxWinLabelDW, winLabelDW)
 			maxIdentityDW = max(maxIdentityDW, idDW)
+			maxCrewDW = max(maxCrewDW, crewDW)
 		}
 	}
 	iconCol := max(maxIconDW+1, 3)
@@ -1168,15 +1184,25 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 
 			winLabel := padToWidth(r.winLabel, r.winLabelDW, maxWinLabelDW)
 
-			display := fmt.Sprintf("%s %s %s %s",
+			// Leading agent-codename column, reserved only when some window in the
+			// list is tagged; blank (padded) otherwise so labels stay aligned.
+			crewCell, crewCellPlain := "", ""
+			if maxCrewDW > 0 {
+				crewCell = padToWidth(r.crewColored, r.crewDW, maxCrewDW) + " "
+				crewCellPlain = padToWidth(r.crewName, r.crewDW, maxCrewDW) + " "
+			}
+
+			display := fmt.Sprintf("%s %s %s%s %s",
 				cDim+tree+reset,
 				activeMarker,
+				crewCell,
 				winLabel,
 				icons,
 			)
-			plain := fmt.Sprintf("%s %s %s %s",
+			plain := fmt.Sprintf("%s %s %s%s %s",
 				tree,
 				strings.TrimSpace(stripANSI(activeMarker)),
+				crewCellPlain,
 				winLabel,
 				stripANSI(icons),
 			)
@@ -1197,6 +1223,9 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			}
 			if r.prPlain != "" {
 				search += " " + r.prPlain
+			}
+			if r.crewName != "" {
+				search += " " + r.crewName
 			}
 			items = append(items, listItem{
 				target:          fmt.Sprintf("%s:%d", g.name, w.index),

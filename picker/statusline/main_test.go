@@ -48,6 +48,42 @@ func TestSessionSegmentIssueVariant(t *testing.T) {
 	}
 }
 
+func TestSessionSegmentCrewBadge(t *testing.T) {
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo",
+		crewName: "coral", crewColor: "colour210",
+		iconSession: "S", iconBranch: "B",
+		thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
+	}
+	got := sessionSegment(a, false)
+	want := "#[fg=#c6a] S work  #[fg=colour210]coral  #[fg=#89b,bold]B feat/x"
+	if got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestSessionSegmentCrewBadgeColorFallback(t *testing.T) {
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo",
+		crewName: "coral", crewColor: "",
+		iconSession: "S", iconBranch: "B",
+		thmMauve: "#c6a", thmBlue: "#89b",
+	}
+	if got := sessionSegment(a, false); !strings.Contains(got, "#[fg=#c6a]coral  ") {
+		t.Fatalf("empty crew-color should fall back to mauve, got %q", got)
+	}
+}
+
+func TestSessionSegmentNoCrewBadge(t *testing.T) {
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo",
+		iconSession: "S", iconBranch: "B", thmMauve: "#c6a", thmBlue: "#89b",
+	}
+	if got := sessionSegment(a, false); strings.Contains(got, "coral") || strings.Count(got, "#[fg=") != 2 {
+		t.Fatalf("untagged window should have no badge segment, got %q", got)
+	}
+}
+
 func TestSessionSegmentPrefixColor(t *testing.T) {
 	a := args{session: "s", iconSession: "S", thmRed: "#f00", thmMauve: "#c6a", branch: "m", iconBranch: "B", thmBlue: "#89b"}
 	got := sessionSegment(a, true)

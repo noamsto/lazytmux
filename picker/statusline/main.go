@@ -17,6 +17,7 @@ type args struct {
 	branch, panePath, gitRoot                                  string
 	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
 	paneIcon, paneCmd, claudeFg                                string
+	crewName, crewColor                                        string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
@@ -76,6 +77,16 @@ func sessionSegment(a args, prefixActive bool) string {
 		b.WriteString("#[fg=" + a.thmMauve + "]")
 	}
 	b.WriteString(" " + a.iconSession + " " + a.session + "  ")
+
+	// Agent-codename badge for the active window (fan-out harness stamp). Tinted
+	// by its @crew_color when set; the issue/branch block below re-sets fg.
+	if a.crewName != "" {
+		fg := a.crewColor
+		if fg == "" {
+			fg = a.thmMauve
+		}
+		b.WriteString("#[fg=" + fg + "]" + a.crewName + "  ")
+	}
 
 	if a.issueID != "" && a.issueBranch == a.branch {
 		glyph := a.iconGitHub
@@ -161,6 +172,8 @@ func main() {
 	flag.StringVar(&a.paneIcon, "pane-icon", "", "")
 	flag.StringVar(&a.paneCmd, "pane-cmd", "", "")
 	flag.StringVar(&a.claudeFg, "claude-fg", "", "")
+	flag.StringVar(&a.crewName, "crew-name", "", "")
+	flag.StringVar(&a.crewColor, "crew-color", "", "")
 	flag.StringVar(&a.thmBg, "thm-bg", "", "")
 	flag.StringVar(&a.thmRed, "thm-red", "", "")
 	flag.StringVar(&a.thmMauve, "thm-mauve", "", "")
