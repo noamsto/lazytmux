@@ -1,0 +1,33 @@
+id = "claude"
+match_commands = ["claude"]
+
+[[rules]]
+state = "processing"
+priority = 100
+region = "title"
+regex = '^[\x{2800}-\x{28FF}] '
+
+[[rules]]
+state = "skip"
+priority = 95
+region = "whole"
+contains = ["showing detailed transcript"]
+
+[[rules]]
+state = "skip"
+priority = 94
+region = "whole"
+contains = ["select model", "esc to cancel"]
+
+[[rules]]
+state = "waiting"
+priority = 80
+region = "whole"
+contains = ["do you want to proceed?"]
+
+[[rules]]
+state = "idle"
+priority = 10
+region = "last_lines:3"
+regex = '❯'
+not = [ { contains = ["do you want to proceed?"] } ]

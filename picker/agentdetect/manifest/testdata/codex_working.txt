@@ -1,0 +1,4 @@
+TITLE:codex
+Working… (Esc to interrupt)
+
+  Analyzing repository structure.

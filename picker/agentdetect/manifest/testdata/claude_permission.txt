@@ -1,0 +1,6 @@
+TITLE:✳ lazytmux
+ Assistant: I need to run a command to continue.
+
+Do you want to proceed?
+❯ 1. Yes
+  2. No
