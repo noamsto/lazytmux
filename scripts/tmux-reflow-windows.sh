@@ -176,7 +176,7 @@ idx_width=${#last_idx}
 # live-width column would drift. 1 space + 3 right-aligned cells = 4.
 AGO_W=4
 slot_overhead=$((idx_width + 3 + max_icon_width))         # ": " + trailing space + icons
-overhead=$((slot_overhead + pr_colw + crew_colw + AGO_W)) # + shared pr, agent-badge, ago columns (multi-line)
+overhead=$((slot_overhead + pr_colw + crew_colw + AGO_W)) # + shared pr, ago cols; crew_colw reserved so an inline badge never overflows a row
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -292,10 +292,11 @@ for idx in "${indices[@]}"; do
 	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
 	win_pr_disp[$idx]="$REPLY"
 
-	# Agent badge padded to the shared column so grid rows align; blank (spaces)
-	# for untagged windows. Emitted only when some window is tagged (crew_colw > 0).
-	pad_to_width "${win_crew[$idx]}" "${win_crew_dw[$idx]}" "$crew_colw"
-	win_crew_disp[$idx]="$REPLY"
+	# Agent badge: rendered inline on the tagged window only (its codename + a
+	# separator space), blank for untagged windows so they keep their position —
+	# only a tagged window's index shifts right, by its own badge. crew_colw stays
+	# reserved in `overhead` so the inline badge can't overflow the grid row.
+	win_crew_disp[$idx]="${win_crew[$idx]}"
 done
 
 # Split points (uniform columns): break after every REPLY_PER windows.
@@ -419,10 +420,10 @@ PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},me
 # value (and an empty value, for active/non-claude windows) always occupies the
 # same cells — this is what keeps grid columns aligned as the value ticks and appears.
 AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
-# Leading agent-badge column: the codename tinted by its stamped @crew_color (the
-# padded @window_crew_disp already carries a trailing separator space). Included
-# only when at least one window is tagged, so untagged grids are unchanged; blank
-# windows in a tagged grid render crew_colw spaces to keep columns aligned.
+# Leading agent-badge: the codename tinted by its stamped @crew_color (the
+# @window_crew_disp carries a trailing separator space). Emitted only when at
+# least one window is tagged; untagged windows carry an empty @window_crew_disp,
+# so they stay put and only the tagged window's index shifts by its badge width.
 CREW=""
 ((crew_colw > 0)) && CREW="#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@window_crew_disp}"
 ENTRY="#[range=window|#{window_index}]#[nobold]${CREW}${BASE}${IDX}: ${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
