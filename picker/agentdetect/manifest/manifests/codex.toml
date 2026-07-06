@@ -6,3 +6,12 @@ state = "processing"
 priority = 100
 region = "whole"
 contains = ["esc to interrupt"]
+
+[[rules]]
+# Codex keeps its `›` input prompt visible even while working, so idle is only
+# reached when the higher-priority "esc to interrupt" rule above doesn't match.
+# Verified against a live Codex pane (working line: "Working (Ns • esc to interrupt)").
+state = "idle"
+priority = 10
+region = "last_lines:3"
+contains = ["›"]

@@ -1,6 +1,7 @@
-// Fixtures under testdata/ are SYNTHETIC, hand-crafted screen text representative
-// of documented Claude/Codex TUI output — not captures from live agent sessions.
-// Real-agent detection accuracy is validated separately (see task 12).
+// Fixtures under testdata/ mirror real Claude/Codex TUI output — the idle/working
+// layouts (Claude's ❯ prompt box + trailing status lines, Codex's › prompt and
+// "Working (Ns • esc to interrupt)" line) were verified against live panes during
+// the task-12 smoke, then trimmed to representative form here.
 package manifest
 
 import (
@@ -31,6 +32,7 @@ func TestFixtures(t *testing.T) {
 		{"claude_idle.txt", "claude", "idle"},
 		{"claude_permission.txt", "claude", "waiting"},
 		{"codex_working.txt", "codex", "processing"},
+		{"codex_idle.txt", "codex", "idle"},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
