@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/exec"
@@ -10,6 +11,19 @@ import (
 
 	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
+
+// gitOutput runs git with a short timeout so a stalled repo (NFS, held
+// index.lock) can't wedge the once-a-second statusline render. Returns the
+// trimmed stdout and whether it succeeded.
+func gitOutput(dir string, args ...string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
 
 type args struct {
 	session, prefix                                            string
@@ -36,20 +50,18 @@ func branchDisplay(branch, panePath string) string {
 	if panePath == "" {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", panePath, "branch", "--show-current").Output()
-	if err != nil {
-		return ""
+	if s, ok := gitOutput(panePath, "branch", "--show-current"); ok {
+		return s
 	}
-	return strings.TrimSpace(string(out))
+	return ""
 }
 
 // dirDisplay mirrors tmux-dir-display.sh: path relative to git root as ./sub,
 // "./" at root, else ~-collapsed absolute path.
 func dirDisplay(panePath, gitRoot string) string {
 	if gitRoot == "" && panePath != "" {
-		out, err := exec.Command("git", "-C", panePath, "rev-parse", "--show-toplevel").Output()
-		if err == nil {
-			gitRoot = strings.TrimSpace(string(out))
+		if s, ok := gitOutput(panePath, "rev-parse", "--show-toplevel"); ok {
+			gitRoot = s
 		}
 	}
 	if gitRoot != "" && strings.HasPrefix(panePath, gitRoot) {

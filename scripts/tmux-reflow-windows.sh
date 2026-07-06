@@ -15,15 +15,17 @@ source @lib_enrich@
 # shellcheck source=/dev/null
 source @lib_log@
 
-# Accept --force (cache bypass, used by enrich scripts after writing vars).
+# Accept --force (cache bypass, used by enrich scripts after writing vars) and
+# --debounce (coalesce a resize burst, see below).
 FORCE=0
+DEBOUNCE=0
 pos=()
 for a in "$@"; do
-	if [[ $a == --force ]]; then
-		FORCE=1
-	else
-		pos+=("$a")
-	fi
+	case "$a" in
+	--force) FORCE=1 ;;
+	--debounce) DEBOUNCE=1 ;;
+	*) pos+=("$a") ;;
+	esac
 done
 set -- "${pos[@]}"
 
@@ -36,6 +38,21 @@ MAX_ICONS=@MAX_ICONS@
 case "$SESSION" in
 scratch-*) exit 0 ;;
 esac
+
+# Debounce a resize burst: client-resized fires once per drag step, and every
+# distinct width misses the cache below → a full O(N) recompute each time. The
+# hook backgrounds this (-b), so the sleep is off the server's command queue.
+# Each invocation stamps a token and waits out the burst; only the last one to
+# stamp (the final width) survives the token check and reflows — the rest bail.
+if ((DEBOUNCE)); then
+	stamp="/tmp/lazytmux-reflow-debounce.${SESSION//\//_}"
+	token=$EPOCHREALTIME
+	printf '%s' "$token" >"$stamp" 2>/dev/null
+	sleep 0.12
+	last=""
+	[[ -f $stamp ]] && last=$(<"$stamp")
+	[[ $last == "$token" ]] || exit 0
+fi
 
 # Fast-path: skip if window count + width unchanged since last reflow. Layout
 # (detail mode + column width) depends only on the window set + width, not on
