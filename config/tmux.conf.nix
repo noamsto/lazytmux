@@ -481,7 +481,11 @@
     # Extended keyboard + clipboard
     set -g extended-keys on
     set -g extended-keys-format csi-u
-    ${terminalConfig}set -as terminal-features '*:hyperlinks'
+    # sync (DEC mode 2026): tmux 3.7 repaints open popups on every background
+    # status update (issue 4920 fix) — without synchronized output that repaint
+    # tears, flickering the popup's top edge once per second while the Claude
+    # spinner animates. Terminals that lack 2026 ignore the private-mode escape.
+    ${terminalConfig}set -as terminal-features '*:hyperlinks:sync'
     set -s set-clipboard on
     set -s copy-command '${
       if pkgs.stdenv.hostPlatform.isDarwin
