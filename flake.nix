@@ -238,6 +238,7 @@
         homeManagerModules.default = {pkgs, ...} @ args:
           import ./modules/home-manager.nix (args
             // {
+              tmux-pkg = inputs.nixpkgs-tmux36.legacyPackages.${pkgs.system}.tmux;
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
               carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
               carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;

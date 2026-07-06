@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  tmux-pkg ? pkgs.tmux,
   tmux-state-pkg ? null,
   carousel-toggle ? null,
   carousel-aeye ? null,
@@ -108,6 +109,7 @@
 
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
+    tmuxPkg = cfg.tmuxPackage;
     inherit carousel-toggle;
     inherit prdash;
     extraProcessIcons = cfg.processIcons;
@@ -185,6 +187,19 @@
 in {
   options.programs.lazytmux = {
     enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";
+
+    tmuxPackage = lib.mkOption {
+      type = lib.types.package;
+      default = tmux-pkg;
+      defaultText = lib.literalExpression "inputs.nixpkgs-tmux36.legacyPackages.\${system}.tmux";
+      description = ''
+        The tmux package lazytmux wraps and installs. Defaults to the flake's
+        pinned tmux 3.6a: tmux 3.7 no longer freezes background panes under a
+        popup (tmux/tmux#4920), so a popup flickers whenever a full-screen TUI
+        redraws behind it. Override with pkgs.tmux to track unstable once
+        tmux/tmux#5336 is resolved, or point at a custom build.
+      '';
+    };
 
     processIcons = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
