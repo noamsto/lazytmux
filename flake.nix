@@ -143,6 +143,16 @@
               touch $out
             '';
 
+          codex-relaunch-stamp-tests =
+            pkgs.runCommand "codex-relaunch-stamp-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/codex-relaunch-stamp.bats
+              touch $out
+            '';
+
           log-tests =
             pkgs.runCommand "log-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.util-linux];
