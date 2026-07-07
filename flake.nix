@@ -143,6 +143,16 @@
               touch $out
             '';
 
+          codex-relaunch-stamp-tests =
+            pkgs.runCommand "codex-relaunch-stamp-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/codex-relaunch-stamp.bats
+              touch $out
+            '';
+
           log-tests =
             pkgs.runCommand "log-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.util-linux];
@@ -231,6 +241,9 @@
 
         packages = {
           default = tmuxConfig.tmux-wrapped;
+          # Stable store path for the Codex managed-hook config (lazytmux#140
+          # Task 3) to point its `command` at, independent of the tmux wrapper.
+          codex-relaunch-stamp = tmuxConfig.script.codex-relaunch-stamp;
         };
       };
 
