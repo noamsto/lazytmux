@@ -260,6 +260,7 @@
     "tmux-gh-dash"
     "lazytmux-log-event"
     "lazytmux-debug"
+    "codex-relaunch-stamp"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution

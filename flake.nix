@@ -231,6 +231,9 @@
 
         packages = {
           default = tmuxConfig.tmux-wrapped;
+          # Stable store path for the Codex managed-hook config (lazytmux#140
+          # Task 3) to point its `command` at, independent of the tmux wrapper.
+          codex-relaunch-stamp = tmuxConfig.script.codex-relaunch-stamp;
         };
       };
 
