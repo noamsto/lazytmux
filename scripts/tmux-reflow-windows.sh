@@ -188,14 +188,32 @@ MAX_WIN_LINES=3
 # Below it the grid degrades to illegible slivers, so fall through to short.
 LONG_TRUNC_FLOOR=24
 
-# Aggregate widths for the long and short label variants.
+# Aggregate widths for the long and short label variants. The grid column
+# (colw) is sized to the widest id + rest + badge, so a tagged window's label
+# and badge fit its own column — the badge is carved from rest_avail below, so
+# omitting it here lets the widest tagged window overflow past the icon column.
+# The rest (branch/title) is capped at MAX_REST_WIDTH so one very long name
+# can't stretch the whole grid; id and badge are never capped. any_capped forces
+# truncation on in the long grid rung. The single-line fit tests stay uncapped —
+# that path renders full names via the global format, so it must reserve them.
+MAX_REST_WIDTH=40
+any_capped=0
 colw_long=0
 colw_short=0
 total_long=0
 total_short=0
 for idx in "${indices[@]}"; do
-	((win_long_dw[$idx] > colw_long)) && colw_long=${win_long_dw[$idx]}
-	((win_short_dw[$idx] > colw_short)) && colw_short=${win_short_dw[$idx]}
+	rest_long=$((win_long_dw[$idx] - win_id_dw[$idx]))
+	((rest_long > MAX_REST_WIDTH)) && {
+		rest_long=$MAX_REST_WIDTH
+		any_capped=1
+	}
+	label_long=$((win_id_dw[$idx] + rest_long + win_crew_dw[$idx]))
+	((label_long > colw_long)) && colw_long=$label_long
+	rest_short=$((win_short_dw[$idx] - win_id_dw[$idx]))
+	((rest_short > MAX_REST_WIDTH)) && rest_short=$MAX_REST_WIDTH
+	label_short=$((win_id_dw[$idx] + rest_short + win_crew_dw[$idx]))
+	((label_short > colw_short)) && colw_short=$label_short
 	((total_long += win_long_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
 	((total_short += win_short_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
 done
@@ -230,6 +248,9 @@ else
 	if ((REPLY <= MAX_WIN_LINES)); then
 		labels_mode=long
 		colw=$colw_long
+		# colw_long caps the rest at MAX_REST_WIDTH; truncate the over-long names
+		# down to it so they fit the column instead of overflowing past the icons.
+		((any_capped)) && trunc=1
 	else
 		# Rung 2.5: long labels truncated into MAX rows. Pack the fewest columns
 		# that fit every window in MAX_WIN_LINES and clip the branch/title to the
