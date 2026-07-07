@@ -175,8 +175,8 @@ idx_width=${#last_idx}
 # flips empty↔set on Claude state changes without triggering a reflow, so a
 # live-width column would drift. 1 space + 3 right-aligned cells = 4.
 AGO_W=4
-slot_overhead=$((idx_width + 3 + max_icon_width))         # ": " + trailing space + icons
-overhead=$((slot_overhead + pr_colw + crew_colw + AGO_W)) # + shared pr, ago cols; crew_colw reserved so an inline badge never overflows a row
+slot_overhead=$((idx_width + 3 + max_icon_width)) # ": " + trailing space + icons
+overhead=$((slot_overhead + pr_colw + AGO_W))     # + shared pr, ago cols (crew badge is per-window, carved from the label below — not a shared column)
 
 available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
@@ -277,7 +277,9 @@ for idx in "${indices[@]}"; do
 	else
 		cur_rest="${win_rest_short[$idx]}"
 	fi
-	rest_avail=$((colw - win_id_dw[$idx]))
+	# The agent badge (win_crew_dw, 0 when untagged) renders after the index and
+	# steals from this window's label budget, so the slot stays colw+overhead wide.
+	rest_avail=$((colw - win_id_dw[$idx] - win_crew_dw[$idx]))
 	((rest_avail < 0)) && rest_avail=0
 	if ((rest_avail == 0)); then
 		cur_rest=""
@@ -292,10 +294,9 @@ for idx in "${indices[@]}"; do
 	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
 	win_pr_disp[$idx]="$REPLY"
 
-	# Agent badge: rendered inline on the tagged window only (its codename + a
-	# separator space), blank for untagged windows so they keep their position —
-	# only a tagged window's index shifts right, by its own badge. crew_colw stays
-	# reserved in `overhead` so the inline badge can't overflow the grid row.
+	# Agent badge: the codename + separator space, emitted after the index (see
+	# ENTRY). Blank for untagged windows, which then render a pristine full-width
+	# label with no leading gap.
 	win_crew_disp[$idx]="${win_crew[$idx]}"
 done
 
@@ -420,13 +421,14 @@ PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},me
 # value (and an empty value, for active/non-claude windows) always occupies the
 # same cells — this is what keeps grid columns aligned as the value ticks and appears.
 AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
-# Leading agent-badge: the codename tinted by its stamped @crew_color (the
-# @window_crew_disp carries a trailing separator space). Emitted only when at
-# least one window is tagged; untagged windows carry an empty @window_crew_disp,
-# so they stay put and only the tagged window's index shifts by its badge width.
+# Agent-badge segment, emitted after "index: " (the @window_crew_disp carries a
+# trailing separator space). Tinted by its stamped @crew_color; re-assert BASE
+# after it so the label reverts to the tab color instead of inheriting the tint.
+# Emitted only when at least one window is tagged (crew_colw > 0); untagged
+# windows carry an empty @window_crew_disp and render a gapless full-width label.
 CREW=""
-((crew_colw > 0)) && CREW="#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@window_crew_disp}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${CREW}${BASE}${IDX}: ${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
+((crew_colw > 0)) && CREW="#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@window_crew_disp}${BASE}"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${CREW}${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
