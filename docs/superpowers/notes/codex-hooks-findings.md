@@ -171,3 +171,125 @@ inherit `TMUX_PANE`.
   the user's first turn takes — acceptable for this feature, but worth a
   one-line comment in the writer so a future reader doesn't assume
   immediacy.
+
+## Hook trust pre-seeding
+
+Follow-up spike: the chosen design has the `SessionStart` hook stamp
+`@ts_relaunch` directly, so it must run with **no interactive approval and no
+`--dangerously-bypass-hook-trust`**. Question: can a Nix/home-manager config
+pre-seed trust declaratively? All findings below verified against
+codex-cli 0.142.3 with a throwaway `CODEX_HOME` (confirmed respected via the
+`CODEX_HOME` env var) plus binary `strings` and the official docs.
+
+### Where/how trust is stored
+
+Trust for a non-managed hook is persisted back into the **user
+`config.toml`** (`$CODEX_HOME/config.toml`) — verified by trusting a hook once
+in the TUI ("Hooks need review" → "Trust all and continue") and diffing the
+file. It appends a `[hooks.state]` table:
+
+```toml
+[hooks.state]
+
+[hooks.state."/home/noams/.cache/codex-hook-spike/config.toml:session_start:0:0"]
+trusted_hash = "sha256:3ec01a97faa48ed093329f104df43609013904e851c9820db17eb30a600d2956"
+```
+
+- The state **key** is `"<absolute config.toml path>:<event_snake>:<matcher_group_idx>:<hook_idx>"`
+  (here `session_start:0:0`). Path is absolute, event is snake_case.
+- `trusted_hash` is `sha256:` + hex of a **content hash over the normalized
+  hook definition**, versioned (the TUI labels a stale entry "rust-v1 hook is
+  new or changed"). It covers the hook body: **verified** by editing
+  `timeout = 30` → `60` while leaving the `trusted_hash` untouched — the hook
+  was then treated as untrusted and **skipped** in headless `codex exec`.
+
+### Can trust be pre-seeded declaratively?
+
+**Yes, two independent routes — with very different robustness.**
+
+Route A — hand-write `trusted_hash` into `~/.codex/config.toml`
+(**works, but NOT recommended**). A config.toml carrying both the
+`[[hooks.SessionStart]]` block and a matching `[hooks.state."…:session_start:0:0"]`
+`trusted_hash` runs the hook headlessly with no flag — **verified**: after the
+one-time TUI trust wrote the entry, `codex exec "…"` (no
+`--dangerously-bypass-hook-trust`) fired the hook and produced the payload.
+The blocker is computing the hash: it is an **undocumented, content-based,
+versioned** digest. I could not reproduce `sha256:3ec01a97…` from any
+plausible serialization (command string, script file bytes, TOML/JSON of the
+handler with/without event+matcher, `rust-v1` prefix variants — all tried,
+none matched). DeepWiki and the official docs both explicitly leave the
+algorithm undisclosed. So a Nix generator cannot reliably compute it, and any
+codex upgrade that bumps the "rust-v1" scheme (or any edit to the hook block)
+silently re-triggers review. **Do not pursue precomputing the hash.**
+
+Route B — **managed hooks (recommended).** A hook delivered through a
+**managed config layer** is marked managed, "trusted by policy, always on,"
+and **cannot be disabled or prompted** — no `trusted_hash`, no review, no
+bypass flag. This is the clean declarative answer. Managed layers (from
+binary strings + docs) are **fixed system paths, NOT relocatable via
+`CODEX_HOME`**:
+
+- `/etc/codex/config.toml` (admin/system)
+- `/etc/codex/managed_config.toml`
+- `/etc/codex/requirements.toml` (the docs' canonical managed-hooks file;
+  supports `allow_managed_hooks_only = true` + `[features] hooks = true`)
+- macOS MDM plist; cloud-managed config.
+
+Relevant keys: `hooks.managed_dir` / `hooks.windows_managed_dir` mark a
+**directory of trusted scripts** (codex does not install them — your tooling
+does); inline `[[hooks.<Event>]]` blocks placed in a managed layer are
+themselves managed. `allow_managed_hooks_only = true` additionally suppresses
+all user/project/session/plugin hooks while keeping managed ones.
+
+Caveat: the managed-layer behavior is confirmed from the official docs +
+binary strings (`allow_managed_hooks_only`, `ManagedHooksRequirementsToml`,
+the "Managed hooks are always on" TUI string, "trusted by policy" doc text),
+**not** locally executed, because it requires writing under `/etc` and this
+spike must not touch the real system. Route A was fully executed end-to-end.
+
+There is **no headless trust CLI** — no `codex trust` / `codex hooks`
+subcommand exists (checked `codex --help` and subcommands); trust is only via
+the interactive TUI review or a managed layer. `features.hooks` is stable and
+on by default, so no feature flag is needed.
+
+### Recommendation for the Nix module
+
+Primary (robust, survives codex upgrades): a **NixOS system module** writes
+the hook definition into a managed layer, e.g.
+
+```nix
+environment.etc."codex/managed_config.toml".text = ''
+  [[hooks.SessionStart]]
+  matcher = "startup|resume"
+
+  [[hooks.SessionStart.hooks]]
+  type = "command"
+  command = "${pkgs.lazytmux}/bin/lazytmux-codex-relaunch-stamp"
+  timeout = 30
+'';
+```
+
+Home-manager still owns the writer script itself (ship it to a stable store
+path and point the managed hook's `command` at it). Because the hook lives in
+a managed layer it runs with no approval and no bypass flag. This is
+system-scoped (needs `/etc`), which is the price of "no interactive approval."
+
+Pure home-manager fallback (user-scoped, no root): HM writes the
+`[[hooks.SessionStart]]` block into `~/.codex/config.toml` and the user does a
+**one-time** `/hooks` → "Trust all" (or accepts the first-run review) per
+machine. Fully declarative pre-seeding is **not** achievable this way because
+`trusted_hash` is an unreproducible versioned content hash — do not attempt to
+generate it.
+
+Rejected per requirements: launching `codex` via a wrapper with
+`--dangerously-bypass-hook-trust` (the only other zero-approval path) —
+excluded by the follow-up brief.
+
+Manual step to confirm Route B on this machine before committing the module
+to the managed path (spike could not write `/etc`): as root, drop the
+`[[hooks.SessionStart]]` block into `/etc/codex/managed_config.toml`, run
+`codex exec "hi"` as the user with **no** `--dangerously-bypass-hook-trust`,
+and confirm the hook fires (and that `/hooks` shows it as a non-toggleable
+"Admin/Managed" source). If `managed_config.toml` doesn't mark it managed, try
+`/etc/codex/requirements.toml` with `allow_managed_hooks_only = true` +
+`[features] hooks = true`.
