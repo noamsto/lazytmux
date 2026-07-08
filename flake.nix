@@ -169,6 +169,16 @@
               touch $out
             '';
 
+          prune-stale-state-tests =
+            pkgs.runCommand "prune-stale-state-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/prune-stale-state.bats
+              touch $out
+            '';
+
           log-tests =
             pkgs.runCommand "log-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.util-linux];

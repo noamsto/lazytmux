@@ -43,6 +43,33 @@ CLAUDE_FADE_DURATION=45
 CLAUDE_INTERRUPT_CHECK_AGE=8
 CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 
+# claude_prune_stale_state SERVER_START
+# Drops pane-id-keyed status files left behind by a previous tmux server. tmux
+# restarts pane ids at %0 on server (re)start, so a restored pane can reuse a
+# dead pane's id and inherit its cached name/task/issue — surfacing an unrelated
+# window's label. The files carry no server generation, so mtime vs the server's
+# start_time is the only signal: anything written before this server booted is
+# stale. A marker file holding the current start_time gates the directory scan
+# to once per server, so the per-tick status poller that calls this stays cheap.
+claude_prune_stale_state() {
+	local server_start=$1
+	[[ -z $server_start ]] && return 0
+	local marker="$CLAUDE_STATUS_DIR/.server_start"
+	[[ -r $marker && $(<"$marker") == "$server_start" ]] && return 0
+	local dir f mt
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR"; do
+		[[ -d $dir ]] || continue
+		for f in "$dir"/*; do
+			[[ -f $f ]] || continue
+			# GNU stat -c first, BSD/macOS stat -f fallback (mirrors lib-log.sh file_mtime).
+			mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+			((mt < server_start)) && rm -f "$f"
+		done
+	done
+	mkdir -p "$CLAUDE_STATUS_DIR"
+	printf '%s\n' "$server_start" >"$marker"
+}
+
 # read_pane_state PANE_FILE_PATH
 # Reads a pane state file and computes its staleness fade.
 # Sets REPLY to the state string, REPLY_FADE to 0..100 (0 = fresh/full color,
