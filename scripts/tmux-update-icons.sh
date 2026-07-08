@@ -37,9 +37,17 @@ main() {
 	# fork per tick. "on" enables stamping each Claude pane's @ts_relaunch override
 	# so tmux-state resumes the session (not a bare shell) on restore.
 	RESUME_CLAUDE=${2:-}
+	# $3 is #{start_time}, expanded by the status format like $2 — avoids a
+	# display-message fork per tick; direct invocations (hooks) fall back to one.
+	SERVER_START=${3:-$(tmux display-message -p '#{start_time}')}
 	MAX_ICONS=@MAX_ICONS@
 
 	setup_claude_colors
+
+	# Purge pane-keyed status left by a previous tmux server before deriving any
+	# label, so a restored pane that reused a dead pane's id doesn't inherit its
+	# name/task. No-op after the first tick of each server (marker-gated).
+	claude_prune_stale_state "$SERVER_START"
 
 	# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
