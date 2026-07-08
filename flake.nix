@@ -3,15 +3,20 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # Pinned solely for tmux 3.6a. In 3.7 an open display-popup is repainted on
-    # every overlapping background-pane redraw (side effect of the issue-4920
-    # "popup overwritten by background updates" fix), so a fullscreen TUI behind
-    # it — Claude, vim, btop — flickers the popup on every frame. 3.6a did not
-    # repaint popups from background output, and 3.7 has no option to restore
-    # that. Only the wrapped tmux comes from here.
+    # The wrapped tmux is built from our fork branch which carries the fix for
+    # the popup flicker: in 3.7 an open display-popup was repainted on every
+    # overlapping background-pane redraw (side effect of the issue-4920 "popup
+    # overwritten by background updates" fix), so a fullscreen TUI behind it —
+    # Claude, vim, btop — flickered the popup on every frame. This branch only
+    # repaints the overlay when it is actually flagged, restoring 3.6a
+    # behaviour. Once merged upstream, drop this input and use the release tmux.
+    # Fix:      https://github.com/noamsto/tmux/tree/fix/popup-overlay-flicker
     # Cause:    https://github.com/tmux/tmux/issues/4920
-    # Tracking: https://github.com/tmux/tmux/issues/5336  (unpin when resolved)
-    nixpkgs-tmux36.url = "github:NixOS/nixpkgs/567a49d1913ce81ac6e9582e3553dd90a955875f";
+    # Tracking: https://github.com/tmux/tmux/issues/5336
+    tmux-fork = {
+      url = "github:noamsto/tmux/fix/popup-overlay-flicker";
+      flake = false;
+    };
     flake-parts.url = "github:hercules-ci/flake-parts";
     git-hooks-nix.url = "github:cachix/git-hooks.nix";
     git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
@@ -29,7 +34,18 @@
     };
   };
 
-  outputs = inputs @ {flake-parts, ...}:
+  outputs = inputs @ {flake-parts, ...}: let
+    # tmux built from our fork branch (fix/popup-overlay-flicker). autoreconfHook
+    # and bison are already in nixpkgs tmux's nativeBuildInputs, so overriding
+    # src to a git branch (no pre-generated configure) just works. The version
+    # must be a substring of `tmux -V` output ("tmux next-3.8") for the
+    # versionCheckHook to pass.
+    mkTmux = pkgs:
+      pkgs.tmux.overrideAttrs (_old: {
+        version = "next-3.8";
+        src = inputs.tmux-fork;
+      });
+  in
     flake-parts.lib.mkFlake {inherit inputs;} {
       imports = [inputs.git-hooks-nix.flakeModule];
 
@@ -43,7 +59,7 @@
       }: let
         tmuxConfig = import ./config/tmux.conf.nix {
           inherit pkgs lib;
-          tmuxPkg = inputs.nixpkgs-tmux36.legacyPackages.${pkgs.system}.tmux;
+          tmuxPkg = mkTmux pkgs;
           carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
           prdash = inputs.prdash.packages.${pkgs.system}.prdash;
         };
@@ -251,7 +267,7 @@
         homeManagerModules.default = {pkgs, ...} @ args:
           import ./modules/home-manager.nix (args
             // {
-              tmux-pkg = inputs.nixpkgs-tmux36.legacyPackages.${pkgs.system}.tmux;
+              tmux-pkg = mkTmux pkgs;
               tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
               carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
               carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
