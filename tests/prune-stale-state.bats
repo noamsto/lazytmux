@@ -7,7 +7,7 @@ setup() {
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
 	unset TMUX TMUX_PANE
 	setup_lib_claude
-	mkdir -p "$CLAUDE_NAMES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_PANES_DIR"
+	mkdir -p "$CLAUDE_NAMES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_PANES_DIR" "$CLAUDE_INTERRUPT_DIR"
 }
 
 # A server that booted mid-2017 — after the fixed "old" mtime below, before now.
@@ -31,10 +31,12 @@ stamp() {
 	stamp "$CLAUDE_NAMES_DIR/8"
 	stamp "$CLAUDE_TASKS_DIR/8"
 	stamp "$CLAUDE_PANES_DIR/8"
+	stamp "$CLAUDE_INTERRUPT_DIR/8"
 	claude_prune_stale_state "$SERVER_START"
 	[ ! -e "$CLAUDE_NAMES_DIR/8" ]
 	[ ! -e "$CLAUDE_TASKS_DIR/8" ]
 	[ ! -e "$CLAUDE_PANES_DIR/8" ]
+	[ ! -e "$CLAUDE_INTERRUPT_DIR/8" ]
 }
 
 @test "prune records the server start marker" {
