@@ -9,6 +9,7 @@ CLAUDE_SCREEN_DIR="$CLAUDE_STATUS_DIR/screen"
 CLAUDE_ISSUES_DIR="$CLAUDE_STATUS_DIR/issues"
 CLAUDE_TASKS_DIR="$CLAUDE_STATUS_DIR/tasks"
 CLAUDE_NAMES_DIR="$CLAUDE_STATUS_DIR/names"
+CLAUDE_INTERRUPT_DIR="$CLAUDE_STATUS_DIR/interrupt"
 CLAUDE_SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
@@ -40,6 +41,11 @@ CLAUDE_FADE_DURATION=45
 # A genuinely long-running tool keeps its `tool_use` block at the tail, not the
 # marker, so it is not a false positive — it just costs one tail per read while
 # it runs.
+#
+# The verdict is cached per pane at interrupt/<id> and reused while the stamp
+# is newer than the transcript. Without it, a pane that stays `interrupted`
+# (a derived state — panes/<id> still says `processing`) would fork tail every
+# tick of every poller until its next prompt.
 CLAUDE_INTERRUPT_CHECK_AGE=8
 CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 
@@ -57,7 +63,7 @@ claude_prune_stale_state() {
 	local marker="$CLAUDE_STATUS_DIR/.server_start"
 	[[ -r $marker && $(<"$marker") == "$server_start" ]] && return 0
 	local dir f mt
-	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR"; do
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR" "$CLAUDE_INTERRUPT_DIR"; do
 		[[ -d $dir ]] || continue
 		for f in "$dir"/*; do
 			[[ -f $f ]] || continue
@@ -143,9 +149,22 @@ read_pane_state() {
 			# prompt overwrites the file back to `processing`.
 			if [[ $state == processing && -n $transcript && -n $timestamp ]] &&
 				((CLAUDE_NOW - timestamp > CLAUDE_INTERRUPT_CHECK_AGE)); then
-				local tailbuf
-				tailbuf=$(tail -n 2 "$transcript" 2>/dev/null) || tailbuf=""
-				if [[ $tailbuf == *"$CLAUDE_INTERRUPT_MARKER"* ]]; then
+				# Reuse the cached verdict while nothing was appended to the
+				# transcript ([[ -nt ]] is a fork-free mtime compare); a new
+				# marker makes the transcript newer and forces a re-read. An
+				# empty read (stamp caught mid-write by a concurrent poller)
+				# falls through to a recompute.
+				local stamp="$CLAUDE_INTERRUPT_DIR/${pane_file##*/}" verdict=""
+				[[ $stamp -nt $transcript ]] && IFS= read -r verdict <"$stamp" 2>/dev/null
+				if [[ -z $verdict ]]; then
+					local tailbuf
+					tailbuf=$(tail -n 2 "$transcript" 2>/dev/null) || tailbuf=""
+					verdict=0
+					[[ $tailbuf == *"$CLAUDE_INTERRUPT_MARKER"* ]] && verdict=1
+					[[ -d $CLAUDE_INTERRUPT_DIR ]] || mkdir -p "$CLAUDE_INTERRUPT_DIR"
+					printf '%s\n' "$verdict" >"$stamp"
+				fi
+				if [[ $verdict == 1 ]]; then
 					state="interrupted"
 					unseen="1"
 				fi
@@ -190,11 +209,13 @@ read_pane_state() {
 # claude_pane_ids
 # Emits the union of pane ids (basenames, no leading %) that have EITHER a
 # hook state file (panes/<id>) OR a screen state file (screen/<id>), one per
-# line, deduped, sorted. Renderers iterate this instead of globbing panes/*
-# alone so screen-only panes (non-Claude agents with no hook, e.g. Codex)
-# surface too — read_pane_state already merges both sources once handed a
-# panes/<id> path. Sorted output gives callers (e.g. issue-id collection) a
-# stable order — associative-array iteration order is unspecified.
+# line, deduped, sorted numerically. Renderers iterate this instead of
+# globbing panes/* alone so screen-only panes (non-Claude agents with no
+# hook, e.g. Codex) surface too — read_pane_state already merges both sources
+# once handed a panes/<id> path. Sorted output gives callers (e.g. issue-id
+# collection) a stable order — associative-array iteration order is
+# unspecified. Sorted in bash (ids are small integers, the set is a handful):
+# forking `sort` costs more than sorting on this once-a-second path.
 claude_pane_ids() {
 	local -A seen=()
 	local f id
@@ -203,8 +224,16 @@ claude_pane_ids() {
 		id="${f##*/}"
 		seen["$id"]=1
 	done
-	local k
-	for k in "${!seen[@]}"; do printf '%s\n' "$k"; done | sort
+	local ids=("${!seen[@]}") i j k
+	for ((i = 1; i < ${#ids[@]}; i++)); do
+		k=${ids[i]}
+		for ((j = i - 1; j >= 0 && ids[j] > k; j--)); do
+			ids[j + 1]=${ids[j]}
+		done
+		ids[j + 1]=$k
+	done
+	[[ -n ${ids[*]:-} ]] || return 0
+	printf '%s\n' "${ids[@]}"
 }
 
 # claude_ago SECONDS

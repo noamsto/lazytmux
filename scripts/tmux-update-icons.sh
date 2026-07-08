@@ -19,9 +19,14 @@ AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
 
 # Arms `agent-detect` on agent panes that don't already have a live pipe.
 # Using #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe
-# 0) self-heals on the next tick.
+# 0) self-heals on a later tick.
 arm_agent_detect() {
 	[[ $AGENT_DETECT_BIN == @* ]] && return 0
+	# The sweep is a full-server list-panes — a second tmux roundtrip per tick,
+	# multiplied by attached sessions. Arming (new pane, dead pipe) only needs
+	# seconds-level latency, so run every 5th tick (CLAUDE_NOW = this tick's
+	# epoch second).
+	((CLAUDE_NOW % 5)) && return 0
 
 	local pid cmd piped
 	while IFS=$'\t' read -r pid cmd piped; do

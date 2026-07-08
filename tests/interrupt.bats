@@ -3,6 +3,9 @@
 load helper
 
 setup() {
+	# Export before sourcing: lib-claude derives CLAUDE_*_DIR (including the
+	# interrupt verdict cache these tests write) from this at source time.
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
 	setup_lib_claude
 	PANE_DIR="$BATS_TEST_TMPDIR/panes"
 	mkdir -p "$PANE_DIR"
@@ -69,6 +72,39 @@ write_pane() {
 	write_pane "$PANE_DIR/p1" processing 120 "$BATS_TEST_TMPDIR/absent.jsonl"
 	read_pane_state "$PANE_DIR/p1"
 	[ "$REPLY" = "processing" ]
+}
+
+@test "read_pane_state: interrupt verdict is stamped to the cache" {
+	local tr="$BATS_TEST_TMPDIR/t.jsonl"
+	printf '%s\n' '{"text":"[Request interrupted by user]"}' >"$tr"
+	write_pane "$PANE_DIR/p1" processing 60 "$tr"
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "interrupted" ]
+	[ "$(cat "$CLAUDE_INTERRUPT_DIR/p1")" = "1" ]
+}
+
+@test "read_pane_state: cached verdict wins while the transcript is unchanged" {
+	local tr="$BATS_TEST_TMPDIR/t.jsonl"
+	printf '%s\n' '{"type":"assistant","text":"no marker here"}' >"$tr"
+	write_pane "$PANE_DIR/p1" processing 60 "$tr"
+	# A stamp newer than the transcript must be trusted verbatim — re-reading
+	# this marker-free transcript would say processing instead.
+	mkdir -p "$CLAUDE_INTERRUPT_DIR"
+	printf '1\n' >"$CLAUDE_INTERRUPT_DIR/p1"
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "interrupted" ]
+}
+
+@test "read_pane_state: transcript append invalidates the cached verdict" {
+	local tr="$BATS_TEST_TMPDIR/t.jsonl"
+	printf '%s\n' '{"text":"[Request interrupted by user]"}' >"$tr"
+	write_pane "$PANE_DIR/p1" processing 60 "$tr"
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "interrupted" ]
+	printf '%s\n' '{"type":"user","message":"resumed"}' '{"type":"assistant","message":"back"}' >>"$tr"
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "processing" ]
+	[ "$(cat "$CLAUDE_INTERRUPT_DIR/p1")" = "0" ]
 }
 
 @test "read_pane_state: terminal states are never reclassified" {
