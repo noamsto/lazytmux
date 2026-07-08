@@ -427,11 +427,11 @@
     "tmux-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1783521154,
-        "narHash": "sha256-hqnZ3sBQZdt1e62fgX9oyIsl+AzGuQpjAuhe7N1vBFk=",
+        "lastModified": 1783531949,
+        "narHash": "sha256-iofP8KeEUeXorE050CFF6WwUTlH7OoGrk4gh9sNIL28=",
         "owner": "noamsto",
         "repo": "tmux",
-        "rev": "5b7c1bc715e68b4be46f76800c5cd1e63f0d593c",
+        "rev": "2421d008c565cc56deb4f92d1893a4a714280880",
         "type": "github"
       },
       "original": {
