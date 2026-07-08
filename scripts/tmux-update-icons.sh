@@ -51,8 +51,11 @@ main() {
 
 	# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
+	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename
 	active_pane_proc=""
 	active_win_idx=""
+	cur_active_icon=""
+	cur_session_fg=""
 	# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
 	# window with no @branch yet) collapses and shifts every later field left,
 	# corrupting cur_branch/active flags. '@window_task' is free-form so it stays
@@ -60,9 +63,15 @@ main() {
 	# @window_ai_name is sanitized free of '|' (claude-status-update), so it is safe
 	# as a fixed middle field. @ts_relaunch is "claude --resume <uuid>" — no '|'
 	# either, so it also stays a fixed middle field before the free-form task.
-	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_task; do
+	# The icon/ago/rename/session fields are our own writes read back for
+	# change-gating: glyphs, #[fg=…] codes, spaces, and hex colors — never '|'.
+	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_task; do
 		pane_to_win["${pane_id#%}"]="$idx"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
+		# Session options (same on every row) must be copied here: the EOF read
+		# that ends the loop blanks the read variables themselves.
+		cur_active_icon="$opt_active_icon"
+		cur_session_fg="$opt_session_fg"
 		# First pane per window wins for path/branch/task — panes in a window share a
 		# cwd, and @window_task/@branch are window options (same for every pane).
 		if [[ -z ${win_pane_path[$idx]+x} ]]; then
@@ -70,6 +79,10 @@ main() {
 			win_cur_branch[$idx]="$cur_branch"
 			win_cur_task[$idx]="$cur_task"
 			win_cur_name[$idx]="$cur_ai_name"
+			win_cur_display[$idx]="$cur_display"
+			win_cur_padded[$idx]="$cur_padded"
+			win_cur_ago[$idx]="$cur_ago"
+			win_cur_rename[$idx]="$cur_rename"
 		fi
 		# The task file is keyed by the pane Claude runs in, so resolve the genuinely
 		# active pane (list-panes orders by index, not active-first).
@@ -84,7 +97,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_task}')
+	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@window_task}')
 
 	arm_agent_detect
 
@@ -233,8 +246,8 @@ main() {
 
 		# "Last active" time: shown only for halted states (the live icon already
 		# conveys active ones). A bare unit like "5m" is parser-safe, so batch it.
-		# Set every tick (cleared to "" when active) — it ticks over each minute and
-		# does not trigger reflow, so gating on change would only add a read.
+		# Gated on change (read back for free via the batched list-panes) — it only
+		# ticks over once a minute.
 		ago=""
 		case "$c_state" in
 		idle | done | interrupted | error)
@@ -245,7 +258,9 @@ main() {
 			fi
 			;;
 		esac
-		tmux_cmds+="set -qw -t '$target' @window_claude_ago '$ago'"$'\n'
+		if [[ $ago != "${win_cur_ago[$idx]:-}" ]]; then
+			tmux_cmds+="set -qw -t '$target' @window_claude_ago '$ago'"$'\n'
+		fi
 	done
 
 	# Set active pane icon for top-right display (from batched data)
@@ -253,8 +268,12 @@ main() {
 	# Normalize nix makeWrapper's `.foo-wrapped` to `foo` (see lib-icons).
 	[[ $active_pane_proc == .*-wrapped ]] && active_pane_proc="${active_pane_proc#.}" && active_pane_proc="${active_pane_proc%-wrapped}"
 	[[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
-	tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
-	tmux_cmds+="set -q -t '$SESSION' @claude_session_fg '$session_fg'"$'\n'
+	if [[ $active_icon != "$cur_active_icon" ]]; then
+		tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
+	fi
+	if [[ $session_fg != "$cur_session_fg" ]]; then
+		tmux_cmds+="set -q -t '$SESSION' @claude_session_fg '$session_fg'"$'\n'
+	fi
 
 	# --- Second pass: set unpadded + padded icon variables ---
 	# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
@@ -263,21 +282,31 @@ main() {
 		target="${SESSION}:${idx}"
 
 		# Unpadded (for window names — process icons + colored claude)
-		tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$idx]}'"$'\n'
+		if [[ ${win_display[$idx]} != "${win_cur_display[$idx]:-}" ]]; then
+			tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$idx]}'"$'\n'
+		fi
 
 		# Re-assert automatic-rename: window names are derived (label + icon via
 		# automatic-rename-format) and allow-rename is off, so it must stay on.
 		# tmux-state restore creates windows with `new-window -n`, which flips it
-		# off and freezes the name on a stale label; this self-heals that each tick.
-		tmux_cmds+="set -qw -t '$target' automatic-rename on"$'\n'
+		# off and freezes the name on a stale label; this self-heals it. Gated on
+		# the effective value (boolean options expand to 0/1 in formats).
+		if [[ ${win_cur_rename[$idx]:-} != 1 ]]; then
+			tmux_cmds+="set -qw -t '$target' automatic-rename on"$'\n'
+		fi
 
 		# Padded (for status bar — process icons + claude, fixed width)
 		pad_to_width "${win_icons[$idx]}" "${win_icon_dw[$idx]}" "$TARGET_DW"
-		tmux_cmds+="set -qw -t '$target' @window_icon_padded '$REPLY'"$'\n'
+		if [[ $REPLY != "${win_cur_padded[$idx]:-}" ]]; then
+			tmux_cmds+="set -qw -t '$target' @window_icon_padded '$REPLY'"$'\n'
+		fi
 	done
 
-	# Batch all tmux set commands in a single IPC call
-	printf '%s' "$tmux_cmds" | tmux source -
+	# Batch the surviving set commands in one IPC call; a steady-state tick
+	# (no spinner, no minute rollover) emits nothing, so skip the fork.
+	if [[ -n $tmux_cmds ]]; then
+		printf '%s' "$tmux_cmds" | tmux source -
+	fi
 
 	# A branch or task change means window labels (built by reflow from
 	# @branch/@issue_*/@window_task) are stale — no tmux hook fires on cd or a new
