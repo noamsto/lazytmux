@@ -56,7 +56,7 @@ main() {
 
 	# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
-	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename
+	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename win_cur_crew win_cur_crew_seen
 	active_pane_proc=""
 	active_win_idx=""
 	cur_active_icon=""
@@ -70,7 +70,9 @@ main() {
 	# either, so it also stays a fixed middle field before the free-form task.
 	# The icon/ago/rename/session fields are our own writes read back for
 	# change-gating: glyphs, #[fg=…] codes, spaces, and hex colors — never '|'.
-	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_task; do
+	# @crew_name (harness-stamped codename) and @crew_seen (our shadow of it) are
+	# kebab tokens, so they sit safely before the free-form task.
+	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_task; do
 		pane_to_win["${pane_id#%}"]="$idx"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
 		# Session options (same on every row) must be copied here: the EOF read
@@ -88,6 +90,8 @@ main() {
 			win_cur_padded[$idx]="$cur_padded"
 			win_cur_ago[$idx]="$cur_ago"
 			win_cur_rename[$idx]="$cur_rename"
+			win_cur_crew[$idx]="$cur_crew"
+			win_cur_crew_seen[$idx]="$cur_crew_seen"
 		fi
 		# The task file is keyed by the pane Claude runs in, so resolve the genuinely
 		# active pane (list-panes orders by index, not active-first).
@@ -102,7 +106,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@window_task}')
+	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@window_task}')
 
 	arm_agent_detect
 
@@ -205,6 +209,17 @@ main() {
 			IFS= read -r ai_name <"$CLAUDE_NAMES_DIR/${win_active_pane[$idx]}"
 		if [[ $ai_name != "${win_cur_name[$idx]:-}" ]]; then
 			tmux set -qw -t "$target" @window_ai_name "$ai_name"
+			labels_changed=1
+		fi
+
+		# Crew badge: the fan-out harness stamps @crew_name directly, and no tmux
+		# hook fires on a user-option set — so poll for a change here and kick the
+		# forced reflow, like task/branch. The multi-line grid's badge column is
+		# reflow-computed (@window_crew_disp + crew_colw), so a name change must
+		# recompute; @crew_color is read live by the format and needs no reflow.
+		# @crew_seen is our own shadow of the last name we acted on.
+		if [[ ${win_cur_crew[$idx]:-} != "${win_cur_crew_seen[$idx]:-}" ]]; then
+			tmux set -qw -t "$target" @crew_seen "${win_cur_crew[$idx]:-}"
 			labels_changed=1
 		fi
 

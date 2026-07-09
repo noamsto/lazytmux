@@ -263,6 +263,21 @@
             '';
 
           agent-detect-go-tests = pickerAgentDetect;
+
+          reflow-fanout-tests =
+            pkgs.runCommand "reflow-fanout-tests" {
+              # tmux: the test drives a private, config-less tmux server so the
+              # scripts' bare `tmux` calls hit it, never the dev's own server.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.tmux];
+              # reflow measures display width, which needs a UTF-8 locale.
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/reflow-fanout.bats
+              touch $out
+            '';
         };
 
         packages = {

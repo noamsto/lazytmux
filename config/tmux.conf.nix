@@ -682,9 +682,15 @@
     set-hook -gu after-kill-pane
     set-hook -gu pane-focus-in
 
-    # Hooks to reflow windows across status lines
-    set-hook -g after-new-window        'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g window-unlinked         'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    # Hooks to reflow windows across status lines.
+    # after-new-window / window-unlinked are the burst-prone ones (dispatcher
+    # fan-out, mass close): run them backgrounded (-b) so the reflow lock's
+    # brief retry-wait (see tmux-reflow-windows, issue #150) stays off the
+    # server's command queue instead of wedging it. session-window-changed
+    # fires on every switch but is a win_count:WIDTH cache hit that exits before
+    # the lock, so it stays synchronous.
+    set-hook -g after-new-window        'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g window-unlinked         'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     # client-resized fires on every step of a terminal drag; each distinct width
     # is a cache miss → full O(N) recompute. Background it (-b, off the server's
