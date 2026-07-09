@@ -74,7 +74,12 @@ teardown() {
 
 run_update_icons() {
 	: >"$REFLOW_LOG"
-	bash "$UPDATE_ICONS" S >/dev/null 2>&1
+	# `|| true`: update-icons fires the reflow with `… & disown`; our fake reflow
+	# is instant, so it can be reaped before `disown` runs and make disown (the
+	# last command) exit non-zero. tmux ignores this #() callback's exit code, and
+	# the reflow log is written before disown regardless — so assert on the log,
+	# not the exit status.
+	bash "$UPDATE_ICONS" S >/dev/null 2>&1 || true
 	# update-icons backgrounds the reflow (`& disown`); wait briefly for the log.
 	for _ in $(seq 1 40); do
 		[[ -s $REFLOW_LOG ]] && return 0
