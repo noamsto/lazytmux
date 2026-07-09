@@ -28,7 +28,7 @@ func TestSessionSegmentBranchVariant(t *testing.T) {
 		thmRed: "#f00", thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd", claudeFg: "",
 	}
 	got := sessionSegment(a, false)
-	want := "#[fg=#c6a] S work  #[fg=#89b,bold]B feat/x"
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  #[fg=#89b,bold]B feat/x"
 	if got != want {
 		t.Fatalf("\n got %q\nwant %q", got, want)
 	}
@@ -42,7 +42,7 @@ func TestSessionSegmentIssueVariant(t *testing.T) {
 		thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd", claudeFg: "",
 	}
 	got := sessionSegment(a, false)
-	want := "#[fg=#c6a] S work  #[fg=#89b,bold]L ENG-7 #[fg=#cdd,nobold]Do it"
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  #[fg=#89b,bold]L ENG-7 #[fg=#cdd,nobold]Do it"
 	if got != want {
 		t.Fatalf("\n got %q\nwant %q", got, want)
 	}
@@ -56,7 +56,7 @@ func TestSessionSegmentCrewBadge(t *testing.T) {
 		thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
 	}
 	got := sessionSegment(a, false)
-	want := "#[fg=#c6a] S work  #[fg=colour210]coral  #[fg=#89b,bold]B feat/x"
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  #[fg=colour210]coral  #[fg=#89b,bold]B feat/x"
 	if got != want {
 		t.Fatalf("\n got %q\nwant %q", got, want)
 	}
@@ -87,7 +87,7 @@ func TestSessionSegmentNoCrewBadge(t *testing.T) {
 func TestSessionSegmentPrefixColor(t *testing.T) {
 	a := args{session: "s", iconSession: "S", thmRed: "#f00", thmMauve: "#c6a", branch: "m", iconBranch: "B", thmBlue: "#89b"}
 	got := sessionSegment(a, true)
-	if !strings.HasPrefix(got, "#[fg=#f00,bold] S s") {
+	if !strings.HasPrefix(got, "#[fg=#f00,bold] #[range=left]S s") {
 		t.Fatalf("prefix variant = %q", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestRenderLineFull(t *testing.T) {
 
 	got := renderLine(a, dir, "dark", false, now)
 	want := "#[align=left,bg=#000]" +
-		"#[fg=#c6a] S work  #[fg=#89b,bold]B feat/x" +
+		"#[fg=#c6a] #[range=left]S work#[norange]  #[fg=#89b,bold]B feat/x" +
 		"  #[fg=#9a8,nobold]D ./" +
 		"  #[fg=#777]#[fg=#94e2d5]󰪞#[fg=default] " +
 		" #[align=right]" +

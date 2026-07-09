@@ -552,8 +552,9 @@
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
-    # Click session name in status bar to open session picker
-    bind -T root MouseDown1StatusLeft choose-tree -Zs
+    # Click session name in status bar (the #[range=left] marker in the Go
+    # statusline) to open the session picker.
+    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
 
     ${lib.optionalString splashEnable ''
       # Summon the welcome splash on demand (bypasses the once-per-session gate;

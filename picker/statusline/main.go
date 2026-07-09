@@ -88,7 +88,9 @@ func sessionSegment(a args, prefixActive bool) string {
 	default:
 		b.WriteString("#[fg=" + a.thmMauve + "]")
 	}
-	b.WriteString(" " + a.iconSession + " " + a.session + "  ")
+	// range=left marks the session name as a click target; MouseDown1StatusLeft
+	// opens the session picker.
+	b.WriteString(" #[range=left]" + a.iconSession + " " + a.session + "#[norange]  ")
 
 	// Agent-codename badge for the active window (fan-out harness stamp). Tinted
 	// by its @crew_color when set; the issue/branch block below re-sets fg.
