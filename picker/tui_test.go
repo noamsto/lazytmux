@@ -95,3 +95,67 @@ func TestPadToWidth(t *testing.T) {
 		t.Errorf("wider than target should be unchanged, got %q", got)
 	}
 }
+
+func TestListIndexAt(t *testing.T) {
+	// Landscape (width >= 2*height): list on the left of listWidth, cursor at 0
+	// so scrollStart is 0 and row y maps to index y-listRowTop.
+	m := tuiModel{
+		width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
+		visible: []listItem{
+			{target: "a", display: "a"},
+			{target: "b", display: "b"},
+			{display: "hdr"}, // empty target -> not selectable
+			{target: "d", display: "d"},
+		},
+	}
+	if top := m.listRowTop(); top != 2 {
+		t.Fatalf("listRowTop = %d, want 2", top)
+	}
+	cases := []struct {
+		name    string
+		x, y    int
+		wantIdx int
+		wantOk  bool
+	}{
+		{"first row", 5, 2, 0, true},
+		{"second row", 5, 3, 1, true},
+		{"header row not selectable", 5, 4, 0, false},
+		{"row after header", 5, 5, 3, true},
+		{"above list in search", 5, 1, 0, false},
+		{"preview column", 70, 2, 0, false},
+		{"below the list", 5, 90, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			idx, ok := m.listIndexAt(c.x, c.y)
+			if ok != c.wantOk || (ok && idx != c.wantIdx) {
+				t.Errorf("listIndexAt(%d,%d) = (%d,%v), want (%d,%v)", c.x, c.y, idx, ok, c.wantIdx, c.wantOk)
+			}
+		})
+	}
+}
+
+func TestInPreview(t *testing.T) {
+	land := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
+	if !land.inPreview(70, 2) {
+		t.Error("landscape: right of listWidth should be preview")
+	}
+	if land.inPreview(5, 2) {
+		t.Error("landscape: left column should be the list")
+	}
+	off := land
+	off.showPreview = false
+	if off.inPreview(70, 2) {
+		t.Error("preview hidden -> never in preview")
+	}
+
+	// Portrait (width < 2*height): preview sits below the list + separator.
+	port := tuiModel{width: 40, height: 40, ready: true, showPreview: true, theme: "dark"}
+	below := port.listRowTop() + port.listHeight() + 1
+	if !port.inPreview(5, below) {
+		t.Errorf("portrait: y=%d should be preview", below)
+	}
+	if port.inPreview(5, port.listRowTop()) {
+		t.Error("portrait: top list row should not be preview")
+	}
+}

@@ -200,6 +200,37 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		mouse := msg.Mouse()
+		if m.inPreview(mouse.X, mouse.Y) {
+			var cmd tea.Cmd
+			m.preview, cmd = m.preview.Update(msg)
+			return m, cmd
+		}
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			m = m.moveCursor(-1)
+		case tea.MouseWheelDown:
+			m = m.moveCursor(1)
+		}
+		return m, m.loadPreviewCmd()
+
+	case tea.MouseClickMsg:
+		mouse := msg.Mouse()
+		if mouse.Button != tea.MouseLeft {
+			return m, nil
+		}
+		idx, ok := m.listIndexAt(mouse.X, mouse.Y)
+		if !ok {
+			return m, nil
+		}
+		if idx == m.cursor {
+			return m.activateCurrent() // click the highlighted row to switch
+		}
+		m.statusMsg = ""
+		m.cursor = idx
+		return m, m.loadPreviewCmd()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -233,18 +264,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreviewCmd()
 
 	case "enter":
-		if item, ok := m.currentItem(); ok && item.target != "" {
-			if item.createPath != "" {
-				if err := createAndSwitch(item.createName, item.createPath); err != nil {
-					m.statusMsg = err.Error()
-					return m, nil
-				}
-			} else {
-				logEvent("picker", "event", "switch", "target", item.target)
-				exec.Command("tmux", "switch-client", "-t", item.target).Run() //nolint:errcheck
-			}
-			return m, tea.Quit
-		}
+		return m.activateCurrent()
 
 	case "ctrl+x":
 		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" {
@@ -352,6 +372,7 @@ func (m tuiModel) View() tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -584,6 +605,63 @@ func (m tuiModel) currentItem() (listItem, bool) {
 		return listItem{}, false
 	}
 	return m.visible[m.cursor], true
+}
+
+// activateCurrent switches to (or creates) the highlighted target and quits.
+func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
+	item, ok := m.currentItem()
+	if !ok || item.target == "" {
+		return m, nil
+	}
+	if item.createPath != "" {
+		if err := createAndSwitch(item.createName, item.createPath); err != nil {
+			m.statusMsg = err.Error()
+			return m, nil
+		}
+	} else {
+		logEvent("picker", "event", "switch", "target", item.target)
+		exec.Command("tmux", "switch-client", "-t", item.target).Run() //nolint:errcheck
+	}
+	return m, tea.Quit
+}
+
+// listRowTop is the first screen row of the list body — just below the search
+// box, whose lipgloss bottom border sets its height. The list body has no top
+// border, so its first row sits directly beneath.
+func (m tuiModel) listRowTop() int {
+	return lipgloss.Height(m.renderSearch())
+}
+
+// listIndexAt maps screen coords to the selectable visible index under them.
+func (m tuiModel) listIndexAt(x, y int) (int, bool) {
+	if !m.ready {
+		return 0, false
+	}
+	h := m.listHeight()
+	vy := y - m.listRowTop()
+	if vy < 0 || vy >= h {
+		return 0, false
+	}
+	if !m.portrait() && m.showPreview && x >= m.listWidth() {
+		return 0, false // click landed in the separator/preview column
+	}
+	idx := m.scrollStart(h) + vy
+	if idx < 0 || idx >= len(m.visible) || !m.isSelectable(m.visible[idx]) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// inPreview reports whether screen coords fall in the preview pane (right of
+// the list in landscape, below it in portrait).
+func (m tuiModel) inPreview(x, y int) bool {
+	if !m.showPreview || !m.ready {
+		return false
+	}
+	if m.portrait() {
+		return y >= m.listRowTop()+m.listHeight()+1 // past the separator row
+	}
+	return x >= m.listWidth()
 }
 
 // --- Filter ---
