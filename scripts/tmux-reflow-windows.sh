@@ -70,6 +70,22 @@ if ((!FORCE)) && [[ $cache_key == "$prev_key" ]]; then
 	exit 0
 fi
 
+# Serialize compute+write across concurrent reflows (issue #150). A dispatcher
+# fan-out fires a burst of reflows — sync window hooks racing backgrounded
+# --force reflows from the enrich/icon scripts — with no ordering guarantee, so
+# a reflow that read partial state could finish last and clobber the correct
+# layout (then freeze it, since the win_count:WIDTH cache key can't see the
+# stale content). Reads happen below, inside the lock, so whoever runs last sees
+# the freshest window state and its render wins. acquire_lock is non-blocking
+# (flock is Linux-only); the burst-prone hooks run backgrounded (-b), so retry
+# briefly instead of racing. On pathological contention, proceed unlocked rather
+# than wedge — a later reflow still settles it.
+reflow_lock="${TMPDIR:-/tmp}/lazytmux-reflow.lock.${SESSION//\//_}"
+for ((i = 0; i < 40; i++)); do
+	acquire_lock "$reflow_lock" && break
+	sleep 0.05
+done
+
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
 # --- Single pass: collect window data + pane processes ---
