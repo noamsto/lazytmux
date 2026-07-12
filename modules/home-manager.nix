@@ -138,6 +138,10 @@
 
   persistEnabled = cfg.persist.enable && cfg.persist.package != null;
 
+  # Only provision the codex hook when tmux-state is actually installed to
+  # act on @ts_relaunch, mirroring resumeClaudeEnable above.
+  resumeCodexEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCodex;
+
   # Stable startup script shared by the Linux systemd service and the darwin
   # launchd agent. Resolves tmux from the user profile so the unit/plist never
   # embeds a nix store path (no churn on update).
@@ -284,6 +288,28 @@ in {
           tmux-update-icons stamps each Claude pane's @ts_relaunch override with
           its session id, so tmux-state relaunches `claude --resume <uuid>` on
           restore instead of a bare shell. Restore is manual-by-default
+          (restoreMode = "off"), so this only fires on an explicit restore.
+        '';
+      };
+
+      resumeCodex = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Resume Codex sessions when a window is restored. When on, home-manager
+          activation idempotently ensures a `[[hooks.SessionStart]]` block exists
+          in `~/.codex/config.toml`, pointing at the `codex-relaunch-stamp`
+          binary (matcher `"startup|resume"`); the hook stamps each Codex pane's
+          `@ts_relaunch` with its resumable session id, so tmux-state relaunches
+          `codex resume <uuid>` on restore instead of a bare shell.
+
+          Defaults to false, unlike resumeClaude: this mutates an EXTERNAL
+          tool's config file (not just internal tmux state), and codex requires
+          a one-time manual trust step per machine before the hook is allowed to
+          run headlessly — run `codex`, open `/hooks`, and choose "Trust all".
+          There is no way to pre-seed that trust declaratively (the trust hash is
+          an undocumented, versioned, content-based digest), so this is opt-in
+          until you've done that step. Restore is manual-by-default
           (restoreMode = "off"), so this only fires on an explicit restore.
         '';
       };
@@ -636,6 +662,39 @@ in {
             done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
           fi
         '';
+
+        # Idempotently ensure the codex SessionStart hook block exists in the
+        # user's ~/.codex/config.toml. Codex only auto-loads that one file
+        # globally (confirmed via `codex --help`'s -c flag doc and the #140
+        # spike notes: no drop-in dir, no CODEX_HOME layered profile without
+        # `-p`); a real config.toml can carry substantial hand-edited content
+        # (model, mcp_servers, per-project trust), so home.file would clobber
+        # it — this appends the block once, guarded by a marker, and never
+        # touches existing content. Trust for the hook itself still requires a
+        # one-time manual `/hooks` -> "Trust all" per machine (see the
+        # resumeCodex option doc) — that step cannot be pre-seeded (the trust
+        # hash is an undocumented, versioned, content-based digest).
+        activation.provisionCodexResumeHook = lib.mkIf resumeCodexEnable (
+          lib.hm.dag.entryAfter ["writeBoundary"] ''
+            CONFIG="$HOME/.codex/config.toml"
+            MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
+            mkdir -p "$(dirname "$CONFIG")"
+            touch "$CONFIG"
+            if ! grep -qF "$MARKER" "$CONFIG"; then
+              {
+                echo ""
+                echo "$MARKER"
+                echo '[[hooks.SessionStart]]'
+                echo 'matcher = "startup|resume"'
+                echo ""
+                echo '[[hooks.SessionStart.hooks]]'
+                echo 'type = "command"'
+                echo "command = \"${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp\""
+                echo 'timeout = 30'
+              } >> "$CONFIG"
+            fi
+          ''
+        );
       };
 
       xdg.configFile = {
