@@ -77,12 +77,19 @@ listener_promote() {
 		REPLY="ok existing"
 		return 0
 	fi
-	# Isolate the pane into its own window, relocate that window into a fresh
-	# session, drop the placeholder, follow the client. Exact incantation is
-	# the one item pinned against a live server (Task 6).
-	tmux break-pane -d -s "$pane" -n "$session" -t "=$target-tmp" 2>/dev/null || true
-	tmux new-session -d -s "=$target" 2>/dev/null || true
-	tmux move-window -s "=$target-tmp:" -t "=$target:" 2>/dev/null || true
+	# Isolate the ssh pane into its own window, create the target session, move
+	# the isolated window in, drop the placeholder window, follow the client.
+	# The '=' exact-match prefix is only valid on -t targets — never on the -s/-n
+	# NAME of new-session/break-pane, where a leading '=' becomes part of the name.
+	local new_win placeholder
+	new_win="$(tmux break-pane -d -s "$pane" -n "$session" -P -F '#{window_id}')" || {
+		REPLY="refused break-failed"
+		return 1
+	}
+	tmux new-session -d -s "$target"
+	placeholder="$(tmux list-windows -t "=$target" -F '#{window_id}')"
+	tmux move-window -s "$new_win" -t "=$target:"
+	tmux kill-window -t "$placeholder"
 	tmux switch-client -c "$client" -t "=$target"
 	REPLY="ok promoted"
 	return 0

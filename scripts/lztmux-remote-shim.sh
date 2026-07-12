@@ -10,7 +10,7 @@ set -uo pipefail
 [[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
 LZTMUX_STATE="${LZTMUX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/lztmux}"
-LZTMUX_SOCK="/tmp/lztmux-outer-${USER}.sock"
+LZTMUX_SOCK="/tmp/lztmux-outer-${USER:-$(id -un)}.sock"
 
 shim_memory() { # host -> sets REPLY to always|never|"" from the memory file
 	REPLY=""

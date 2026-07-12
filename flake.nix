@@ -278,6 +278,29 @@
               bats tests/reflow-fanout.bats
               touch $out
             '';
+
+          remote-tests =
+            pkgs.runCommand "remote-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/remote.bats
+              touch $out
+            '';
+
+          remote-integration-tests =
+            pkgs.runCommand "remote-integration-tests" {
+              # tmux: the integration test drives a private, config-less tmux
+              # server (via a PATH shim injecting -L/-f) to pin the promote
+              # choreography against a live server.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/remote-integration.bats
+              touch $out
+            '';
         };
 
         packages = {
@@ -289,6 +312,8 @@
       };
 
       flake = {
+        nixosModules.default = import ./modules/nixos.nix;
+
         homeManagerModules.default = {pkgs, ...} @ args:
           import ./modules/home-manager.nix (args
             // {

@@ -50,8 +50,10 @@ setup() {
 
 setup_tmux_fake() {
 	FAKE_BIN="$(mktemp -d)"
-	cat >"$FAKE_BIN/tmux" <<'EOF'
-#!/usr/bin/env bash
+	# Resolve bash at write time: the nix check sandbox has no /usr/bin/env, and
+	# the fake uses bash-isms (arrays, ((...))) so /bin/sh will not do.
+	echo "#!$(command -v bash)" >"$FAKE_BIN/tmux"
+	cat >>"$FAKE_BIN/tmux" <<'EOF'
 # Fake tmux driven by files the test writes:
 #   $FAKE_STATE/cmd_<pane>   -> pane_current_command
 #   $FAKE_STATE/sess_<pane>  -> session_name
