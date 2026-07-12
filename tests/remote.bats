@@ -132,3 +132,37 @@ EOF
 	run listener_handle_line 'promote host sess notapane'
 	[ "$status" -ne 0 ]
 }
+
+@test "shim_decide: never-listed host -> plain, no prompt" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	LZTMUX_STATE="$(mktemp -d)"
+	echo "web01=never" >"$LZTMUX_STATE/remote-hosts"
+	SSH_CONNECTION=x TMUX="" TMUX_PANE="%5" LZTMUX_HOST=web01 shim_decide
+	[ "$REPLY" = "plain" ]
+}
+
+@test "shim_decide: always-listed host -> promote, no prompt" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	LZTMUX_STATE="$(mktemp -d)"
+	echo "web01=always" >"$LZTMUX_STATE/remote-hosts"
+	SSH_CONNECTION=x TMUX="" TMUX_PANE="%5" LZTMUX_HOST=web01 shim_decide
+	[ "$REPLY" = "promote" ]
+}
+
+@test "shim_decide: env gate fails -> plain" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	LZTMUX_STATE="$(mktemp -d)"
+	SSH_CONNECTION="" TMUX="" TMUX_PANE="%5" LZTMUX_HOST=web01 shim_decide
+	[ "$REPLY" = "plain" ]
+}
+
+@test "shim_decide: undecided host uses seeded answer y -> promote" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	LZTMUX_STATE="$(mktemp -d)"
+	SSH_CONNECTION=x TMUX="" TMUX_PANE="%5" LZTMUX_HOST=web01 LZTMUX_SHIM_ANSWER=y shim_decide
+	[ "$REPLY" = "promote" ]
+}
