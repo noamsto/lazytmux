@@ -13,7 +13,7 @@ LZTMUX_RATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/lztmux-last-promote"
 
 listener_pane_is_ssh() {
 	local cmd
-	cmd="$(tmux display-message -p '#{pane_current_command}' -t "$1" 2>/dev/null)"
+	cmd="$(tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null)"
 	[[ $cmd == ssh ]]
 }
 
@@ -23,7 +23,7 @@ listener_pane_is_ssh() {
 listener_resolve_client() {
 	REPLY=""
 	local sess clients count
-	sess="$(tmux display-message -p '#{session_name}' -t "$1" 2>/dev/null)"
+	sess="$(tmux display-message -p -t "$1" '#{session_name}' 2>/dev/null)"
 	[[ -n $sess ]] || return 1
 	clients="$(tmux list-clients -t "$sess" -F '#{client_name}' 2>/dev/null)"
 	count="$(grep -c . <<<"$clients")"

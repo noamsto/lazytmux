@@ -58,7 +58,7 @@ setup_tmux_fake() {
 #   $FAKE_STATE/clients_<session> -> newline list of client names
 case "$1" in
 display-message)
-	pane="${*: -1}"
+	pane=""; for ((i=1;i<=$#;i++)); do [[ ${!i} == -t ]] && { j=$((i+1)); pane="${!j}"; }; done
 	fmt=""
 	for a in "$@"; do case "$a" in "#{pane_current_command}") fmt=cmd ;; "#{session_name}") fmt=sess ;; esac; done
 	cat "$FAKE_STATE/${fmt}_${pane}" 2>/dev/null
