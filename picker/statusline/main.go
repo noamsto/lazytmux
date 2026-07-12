@@ -67,7 +67,7 @@ func (a *args) fetchVolatile() bool {
 }
 
 type args struct {
-	session, prefix                                            string
+	session                                                    string
 	issueID, issueBranch, issueProvider, issueTitle            string
 	branch, panePath, gitRoot                                  string
 	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
@@ -209,10 +209,9 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64) s
 
 func main() {
 	var a args
-	// Only stable args stay on the command line so tmux's #() job-output cache
-	// (keyed by the expanded command string) is reused tick-to-tick — see
-	// volatileFields. Session name is stable per client yet still needed for
-	// multi-client correctness; theme/icons change only on toggle/reload.
+	// Only stable args here (see volatileFields). Session stays an arg — stable
+	// per client, but needed to keep the #() distinct across clients on
+	// different sessions.
 	flag.StringVar(&a.session, "session", "", "")
 	flag.StringVar(&a.thmBg, "thm-bg", "", "")
 	flag.StringVar(&a.thmRed, "thm-red", "", "")
