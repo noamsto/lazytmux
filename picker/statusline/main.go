@@ -25,6 +25,47 @@ func gitOutput(dir string, args ...string) (string, bool) {
 	return strings.TrimSpace(string(out)), true
 }
 
+// volatileFields lists the tmux tokens fetched in one display-message call, in
+// output order. Keeping these OUT of the #() argv is what stops line 0 from
+// blinking: tmux keys each #() job's output cache by the fully-expanded command
+// string, so any changing arg (pane_current_command, client_prefix, @pr_*, …)
+// mints a fresh job whose output starts empty — a blank frame that becomes
+// visible once the machine is loaded enough that the recompute spans several
+// redraws. A command string that stays constant across ticks lets tmux reuse
+// the one job and keep the last line painted while this binary recomputes.
+var volatileFields = []string{
+	"#{client_prefix}",
+	"#{@issue_id}", "#{@issue_branch}", "#{@issue_provider}", "#{@issue_title}",
+	"#{@branch}", "#{pane_current_path}", "#{@git_root}",
+	"#{@pr_number}", "#{@pr_branch}", "#{@pr_state}", "#{@pr_check_state}", "#{@pr_mergeable}", "#{@pr_title}",
+	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
+	"#{@crew_name}", "#{@crew_color}",
+}
+
+// fetchVolatile fills the volatile fields via a single display-message
+// roundtrip to the session's active pane and reports whether prefix is active.
+// A failed call leaves the fields empty, degrading to a still-painted (never
+// blank) line. Fields are joined by US (0x1f), a byte no tmux value contains.
+func (a *args) fetchVolatile() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	format := strings.Join(volatileFields, "\x1f")
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", a.session, "-F", format).Output()
+	if err != nil {
+		return false
+	}
+	f := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
+	for len(f) < len(volatileFields) {
+		f = append(f, "")
+	}
+	a.issueID, a.issueBranch, a.issueProvider, a.issueTitle = f[1], f[2], f[3], f[4]
+	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]
+	a.prNumber, a.prBranch, a.prState, a.prCheck, a.prMergeable, a.prTitle = f[8], f[9], f[10], f[11], f[12], f[13]
+	a.paneIcon, a.paneCmd, a.claudeFg = f[14], f[15], f[16]
+	a.crewName, a.crewColor = f[17], f[18]
+	return f[0] == "1"
+}
+
 type args struct {
 	session, prefix                                            string
 	issueID, issueBranch, issueProvider, issueTitle            string
@@ -168,26 +209,11 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64) s
 
 func main() {
 	var a args
+	// Only stable args stay on the command line so tmux's #() job-output cache
+	// (keyed by the expanded command string) is reused tick-to-tick — see
+	// volatileFields. Session name is stable per client yet still needed for
+	// multi-client correctness; theme/icons change only on toggle/reload.
 	flag.StringVar(&a.session, "session", "", "")
-	prefix := flag.String("prefix", "", "client_prefix flag")
-	flag.StringVar(&a.issueID, "issue-id", "", "")
-	flag.StringVar(&a.issueBranch, "issue-branch", "", "")
-	flag.StringVar(&a.issueProvider, "issue-provider", "", "")
-	flag.StringVar(&a.issueTitle, "issue-title", "", "")
-	flag.StringVar(&a.branch, "branch", "", "")
-	flag.StringVar(&a.panePath, "path", "", "")
-	flag.StringVar(&a.gitRoot, "git-root", "", "")
-	flag.StringVar(&a.prNumber, "pr-number", "", "")
-	flag.StringVar(&a.prBranch, "pr-branch", "", "")
-	flag.StringVar(&a.prState, "pr-state", "", "")
-	flag.StringVar(&a.prCheck, "pr-check", "", "")
-	flag.StringVar(&a.prMergeable, "pr-mergeable", "", "")
-	flag.StringVar(&a.prTitle, "pr-title", "", "")
-	flag.StringVar(&a.paneIcon, "pane-icon", "", "")
-	flag.StringVar(&a.paneCmd, "pane-cmd", "", "")
-	flag.StringVar(&a.claudeFg, "claude-fg", "", "")
-	flag.StringVar(&a.crewName, "crew-name", "", "")
-	flag.StringVar(&a.crewColor, "crew-color", "", "")
 	flag.StringVar(&a.thmBg, "thm-bg", "", "")
 	flag.StringVar(&a.thmRed, "thm-red", "", "")
 	flag.StringVar(&a.thmMauve, "thm-mauve", "", "")
@@ -211,9 +237,11 @@ func main() {
 	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
 	flag.Parse()
 
+	prefixActive := a.fetchVolatile()
+
 	claudeDir := os.Getenv("CLAUDE_STATUS_DIR")
 	if claudeDir == "" {
 		claudeDir = "/tmp/claude-status"
 	}
-	os.Stdout.WriteString(renderLine(a, claudeDir, detectTheme(), *prefix != "" && *prefix != "0", time.Now().Unix()))
+	os.Stdout.WriteString(renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix()))
 }
