@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/agentdetect/debounce"
+	"github.com/noamsto/lazytmux/picker/agentdetect/drainbuf"
 	"github.com/noamsto/lazytmux/picker/agentdetect/manifest"
 	"github.com/noamsto/lazytmux/picker/agentdetect/screen"
 	"github.com/noamsto/lazytmux/picker/agentdetect/statefile"
@@ -17,6 +18,11 @@ import (
 const (
 	debounceWindow = 80 * time.Millisecond
 	stateDir       = "/tmp/claude-status/screen"
+	// Per-pane backlog cap. The reader always drains stdin into this buffer so
+	// tmux never buffers the pipe-pane backlog in-server; if the emulator can't
+	// keep up, oldest bytes are dropped and the emulator is resynced. 1 MiB
+	// holds many full-screen repaints, so normal bursts never truncate.
+	maxBufferedBytes = 1 << 20
 )
 
 func main() {
@@ -39,21 +45,30 @@ func main() {
 	deb := debounce.New(debounceWindow, nil)
 	w := statefile.New(stateDir, paneID)
 
-	bytesCh := make(chan []byte, 64)
-	go readStdin(bytesCh)
+	buf := drainbuf.New(maxBufferedBytes)
+	go readStdin(buf)
 
 	ticker := time.NewTicker(debounceWindow / 2)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case b, open := <-bytesCh:
-			if !open {
+		case <-buf.Notify():
+			data, truncated, closed := buf.Take()
+			if truncated {
+				// Dropped bytes broke VT continuity; resync from a blank
+				// screen so stale rows can't linger. The next full repaint
+				// (within a debounce window for an alt-screen TUI) restores it.
+				scr = screen.New(cols, rows)
+			}
+			if len(data) > 0 {
+				scr.Feed(data)
+				deb.Mark(time.Now())
+			}
+			if closed {
 				emit(scr, m, w) // final snapshot on EOF
 				return
 			}
-			scr.Feed(b)
-			deb.Mark(time.Now())
 		case <-ticker.C:
 			if deb.Due(time.Now()) {
 				emit(scr, m, w)
@@ -67,18 +82,16 @@ func emit(scr screen.Screen, m manifest.Manifest, w *statefile.Writer) {
 	_, _ = w.Update(state, time.Now())
 }
 
-func readStdin(ch chan<- []byte) {
+func readStdin(buf *drainbuf.Buffer) {
 	r := bufio.NewReader(os.Stdin)
-	buf := make([]byte, 4096)
+	b := make([]byte, 4096)
 	for {
-		n, err := r.Read(buf)
+		n, err := r.Read(b)
 		if n > 0 {
-			cp := make([]byte, n)
-			copy(cp, buf[:n])
-			ch <- cp
+			buf.Append(b[:n]) // Append copies; reusing b is safe
 		}
 		if err != nil {
-			close(ch)
+			buf.Close()
 			return
 		}
 	}
