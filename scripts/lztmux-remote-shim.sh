@@ -12,16 +12,53 @@ set -uo pipefail
 LZTMUX_STATE="${LZTMUX_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/lztmux}"
 LZTMUX_SOCK="/tmp/lztmux-outer-${USER}.sock"
 
-shim_memory() { # host -> echoes always|never|"" from the memory file
-	local host="$1"
+shim_memory() { # host -> sets REPLY to always|never|"" from the memory file
+	REPLY=""
+	local host="$1" h v
 	[[ -f "$LZTMUX_STATE/remote-hosts" ]] || return 0
-	sed -n "s/^${host}=//p" "$LZTMUX_STATE/remote-hosts" | head -n1
+	while IFS='=' read -r h v; do
+		[[ $h == "$host" ]] && {
+			REPLY="$v"
+			return 0
+		}
+	done <"$LZTMUX_STATE/remote-hosts"
+	return 0
 }
 
 shim_remember() { # host verdict
+	local host="$1" verdict="$2" h v
 	mkdir -p "$LZTMUX_STATE"
-	sed -i "/^$1=/d" "$LZTMUX_STATE/remote-hosts" 2>/dev/null || true
-	printf '%s=%s\n' "$1" "$2" >>"$LZTMUX_STATE/remote-hosts"
+	local tmp="$LZTMUX_STATE/remote-hosts.tmp"
+	: >"$tmp"
+	if [[ -f "$LZTMUX_STATE/remote-hosts" ]]; then
+		while IFS='=' read -r h v; do
+			[[ $h == "$host" ]] && continue
+			printf '%s=%s\n' "$h" "$v" >>"$tmp"
+		done <"$LZTMUX_STATE/remote-hosts"
+	fi
+	printf '%s=%s\n' "$host" "$verdict" >>"$tmp"
+	mv "$tmp" "$LZTMUX_STATE/remote-hosts"
+}
+
+# Pure argv classifier. Set REPLY to the target session name and return 0 when
+# the argv is a promotable form (bare `tmux`, or an attach verb optionally with
+# `-t <name>`); return non-zero for anything else (new-session, ls, -V, ...).
+shim_target_session() {
+	REPLY="default"
+	case "${1:-}" in
+	"") return 0 ;;
+	a | at | att | atta | attac | attach | attach-session) ;;
+	*) return 1 ;;
+	esac
+	shift
+	while [[ $# -gt 0 ]]; do
+		if [[ $1 == -t ]]; then
+			REPLY="${2:-default}"
+			return 0
+		fi
+		shift
+	done
+	return 0
 }
 
 # Set REPLY to promote|plain. Does NOT do the network handshake — that is the
@@ -30,7 +67,9 @@ shim_decide() {
 	REPLY="plain"
 	remote_env_gate || return 0
 	local host="${LZTMUX_HOST:-$(hostname -s)}" mem ans
-	mem="$(shim_memory "$host")"
+	shim_memory "$host"
+	mem="$REPLY"
+	REPLY="plain"
 	case "$mem" in
 	always)
 		REPLY="promote"
@@ -70,17 +109,16 @@ shim_handshake() { # returns 0 iff listener alive and version matches
 }
 
 if [[ -z ${LZTMUX_SHIM_LIB:-} ]]; then
-	shim_decide
-	if [[ $REPLY == promote ]] && shim_handshake; then
-		# Only bare `tmux` / `tmux a[ttach]` promote; anything else runs plain.
-		session="default"
-		case "${1:-}" in
-		"" | a | at | att | atta | attac | attach | attach-session)
-			session="${2:-default}"
-			printf 'promote %s %s %s\n' "$(hostname -s)" "$session" "$TMUX_PANE" |
+	# Only bare `tmux` / `tmux a[ttach]` promote. shim_decide (and its blocking
+	# prompt) must not run for `tmux ls`, `tmux -V`, `tmux new-session`, etc.
+	if shim_target_session "$@"; then
+		session="$REPLY"
+		host="${LZTMUX_HOST:-$(hostname -s)}"
+		shim_decide
+		if [[ $REPLY == promote ]] && shim_handshake; then
+			printf 'promote %s %s %s\n' "$host" "$session" "$TMUX_PANE" |
 				timeout 3 socat - "UNIX-CONNECT:$LZTMUX_SOCK" >/dev/null 2>&1 || true
-			;;
-		esac
+		fi
 	fi
 	exec tmux "$@"
 fi

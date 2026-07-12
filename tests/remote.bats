@@ -166,3 +166,52 @@ EOF
 	SSH_CONNECTION=x TMUX="" TMUX_PANE="%5" LZTMUX_HOST=web01 LZTMUX_SHIM_ANSWER=y shim_decide
 	[ "$REPLY" = "promote" ]
 }
+
+@test "shim_target_session: no args -> default, promotable" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	shim_target_session
+	[ "$REPLY" = "default" ]
+}
+
+@test "shim_target_session: attach -t work -> work" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	shim_target_session attach -t work
+	[ "$REPLY" = "work" ]
+}
+
+@test "shim_target_session: a -t work -> work" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	shim_target_session a -t work
+	[ "$REPLY" = "work" ]
+}
+
+@test "shim_target_session: bare attach -> default" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	shim_target_session attach
+	[ "$REPLY" = "default" ]
+}
+
+@test "shim_target_session: new-session -s foo -> not promotable" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	run shim_target_session new-session -s foo
+	[ "$status" -ne 0 ]
+}
+
+@test "shim_target_session: ls -> not promotable" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	run shim_target_session ls
+	[ "$status" -ne 0 ]
+}
+
+@test "shim_target_session: -V -> not promotable" {
+	# shellcheck source=/dev/null
+	LZTMUX_SHIM_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-shim.sh"
+	run shim_target_session -V
+	[ "$status" -ne 0 ]
+}
