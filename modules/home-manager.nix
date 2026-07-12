@@ -254,6 +254,21 @@ in {
       };
     };
 
+    remote = {
+      enable = lib.mkEnableOption "remote nested-session promotion (architecture C; opt-in, security-sensitive)";
+      trustedHosts = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = ["lab-*" "myserver"];
+        description = ''
+          ssh Host patterns that receive the RemoteForward + SendEnv block.
+          Only enable for hosts where root is you: a peer who can reach the
+          forwarded socket can force UI actions on this machine (see spec
+          security model).
+        '';
+      };
+    };
+
     persist = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -923,6 +938,19 @@ in {
               ExecStart = "${cfg.persist.package}/bin/tmux-state gc";
             };
           };
+
+          # Listens on a unix socket forwarded in from trusted remote hosts
+          # (see programs.ssh.matchBlocks."lztmux-remote" below); each
+          # connection execs lztmux-listener to promote a nested session.
+          lztmux-listener = lib.mkIf cfg.remote.enable {
+            Unit.Description = "lztmux remote-session promotion listener";
+            Install.WantedBy = ["default.target"];
+            Service = {
+              ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.local/state/lztmux";
+              ExecStart = "${pkgs.socat}/bin/socat UNIX-LISTEN:%h/.local/state/lztmux/listener.sock,fork,mode=0600,unlink-early EXEC:${tmuxConfig.script.lztmux-listener}/bin/lztmux-listener";
+              Restart = "on-failure";
+            };
+          };
         };
 
         timers = {
@@ -993,6 +1021,31 @@ in {
             };
           };
         };
+    })
+    # Remote nested-session promotion (architecture C): the shim replaces the
+    # `tmux` command on remote hosts so `tmux attach`/`new-session` there
+    # instead asks this machine's listener (over the RemoteForward'd socket
+    # below) to promote the session into a first-class local window.
+    (lib.mkIf cfg.remote.enable {
+      programs.fish.functions.tmux.body = ''${tmuxConfig.script.lztmux-remote-shim}/bin/lztmux-remote-shim $argv'';
+      programs.bash.initExtra = ''
+        tmux() { ${tmuxConfig.script.lztmux-remote-shim}/bin/lztmux-remote-shim "$@"; }
+      '';
+    })
+    (lib.mkIf (cfg.remote.enable && cfg.remote.trustedHosts != []) {
+      programs.ssh = {
+        enable = true;
+        matchBlocks."lztmux-remote" = {
+          host = lib.concatStringsSep " " cfg.remote.trustedHosts;
+          extraOptions = {
+            RemoteForward = "/tmp/lztmux-outer-%r.sock %d/.local/state/lztmux/listener.sock";
+            SendEnv = "TMUX_PANE";
+            SetEnv = "LZTMUX_OUTER=1";
+            StreamLocalBindUnlink = "yes";
+            ExitOnForwardFailure = "no";
+          };
+        };
+      };
     })
   ]);
 }
