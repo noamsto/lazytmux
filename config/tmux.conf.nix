@@ -183,6 +183,8 @@
   in
     pkgs.writeShellScript "lib-enrich" patched;
 
+  lib-remote = pkgs.writeShellScript "lib-remote" (builtins.readFile ../scripts/lib-remote.sh);
+
   # --- Helper scripts ---
   mkScript = name: pkgs.writeShellScriptBin name (builtins.readFile ../scripts/${name}.sh);
 
@@ -261,6 +263,8 @@
     "lazytmux-log-event"
     "lazytmux-debug"
     "codex-relaunch-stamp"
+    "lztmux-listener"
+    "lztmux-remote-shim"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -318,6 +322,14 @@
   enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
+  # Scripts that source lib-remote get its store path substituted
+  scriptsWithRemote = ["lztmux-listener" "lztmux-remote-shim"];
+  mkRemoteScript = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings ["@lib_remote@"] ["${lib-remote}"]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # The cwd-derived window reconciler. Always built (tagging drives navigation
   # even with enrich off); the @issue_stamp@ kick is empty when enrich is off.
   mkScriptReconcile = name: let
@@ -364,6 +376,8 @@
     then mkScriptReconcile name
     else if builtins.elem name scriptsWithLog
     then mkScriptWithLog name
+    else if builtins.elem name scriptsWithRemote
+    then mkRemoteScript name
     else mkScript name);
 
   scripts = lib.attrValues script;
@@ -816,7 +830,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
+        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa pkgs.socat] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };
