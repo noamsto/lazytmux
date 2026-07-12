@@ -47,3 +47,88 @@ setup() {
 	remote_session_name "web01" "mono"
 	[ "$REPLY" = "web01-mono" ]
 }
+
+setup_tmux_fake() {
+	FAKE_BIN="$(mktemp -d)"
+	cat >"$FAKE_BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+# Fake tmux driven by files the test writes:
+#   $FAKE_STATE/cmd_<pane>   -> pane_current_command
+#   $FAKE_STATE/sess_<pane>  -> session_name
+#   $FAKE_STATE/clients_<session> -> newline list of client names
+case "$1" in
+display-message)
+	pane="${*: -1}"
+	fmt=""
+	for a in "$@"; do case "$a" in "#{pane_current_command}") fmt=cmd ;; "#{session_name}") fmt=sess ;; esac; done
+	cat "$FAKE_STATE/${fmt}_${pane}" 2>/dev/null
+	;;
+list-clients)
+	# args: list-clients -t <session> -F <fmt>
+	sess=""; for ((i=1;i<=$#;i++)); do [[ ${!i} == -t ]] && { j=$((i+1)); sess="${!j}"; }; done
+	cat "$FAKE_STATE/clients_${sess}" 2>/dev/null
+	;;
+esac
+EOF
+	chmod +x "$FAKE_BIN/tmux"
+	FAKE_STATE="$(mktemp -d)"
+	export FAKE_STATE
+	PATH="$FAKE_BIN:$PATH"
+}
+
+@test "pane_is_ssh true only for ssh command" {
+	setup_tmux_fake
+	# shellcheck source=/dev/null
+	LZTMUX_LISTENER_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-listener.sh"
+	echo ssh >"$FAKE_STATE/cmd_%5"
+	run listener_pane_is_ssh "%5"
+	[ "$status" -eq 0 ]
+	echo bash >"$FAKE_STATE/cmd_%6"
+	run listener_pane_is_ssh "%6"
+	[ "$status" -ne 0 ]
+}
+
+@test "resolve_client returns the single client, refuses on 0 or 2" {
+	setup_tmux_fake
+	# shellcheck source=/dev/null
+	LZTMUX_LISTENER_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-listener.sh"
+	echo laptop >"$FAKE_STATE/sess_%5"
+	printf 'client0\n' >"$FAKE_STATE/clients_laptop"
+	run listener_resolve_client "%5"
+	[ "$status" -eq 0 ]
+	[ "$output" = "client0" ] || {
+		listener_resolve_client "%5"
+		[ "$REPLY" = "client0" ]
+	}
+	printf 'client0\nclient1\n' >"$FAKE_STATE/clients_laptop"
+	run listener_resolve_client "%5"
+	[ "$status" -ne 0 ]
+	: >"$FAKE_STATE/clients_laptop"
+	run listener_resolve_client "%5"
+	[ "$status" -ne 0 ]
+}
+
+@test "handle_line: hello matches version, rejects mismatch" {
+	# shellcheck source=/dev/null
+	LZTMUX_LISTENER_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-listener.sh"
+	listener_handle_line "hello 1"
+	[ "$REPLY" = "ok 1" ]
+	listener_handle_line "hello 999"
+	[ "$REPLY" = "incompatible" ]
+}
+
+@test "handle_line: unknown verb refused" {
+	# shellcheck source=/dev/null
+	LZTMUX_LISTENER_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-listener.sh"
+	run listener_handle_line "danger rm -rf /"
+	[ "$status" -ne 0 ]
+}
+
+@test "handle_line: promote with bad charset refused before any tmux call" {
+	# shellcheck source=/dev/null
+	LZTMUX_LISTENER_LIB=1 source "${BATS_TEST_DIRNAME}/../scripts/lztmux-listener.sh"
+	run listener_handle_line 'promote host sess;rm %5'
+	[ "$status" -ne 0 ]
+	run listener_handle_line 'promote host sess notapane'
+	[ "$status" -ne 0 ]
+}
