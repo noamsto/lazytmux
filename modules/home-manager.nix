@@ -473,6 +473,28 @@ in {
       };
     };
 
+    codexStatus = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Drive the tmux status line from Codex's native hooks (processing /
+          waiting / done / compacting / idle), giving Codex panes the same state
+          palette as Claude instead of the two states the screen-scraper
+          (agent-detect) can infer. When on, home-manager activation
+          idempotently appends `[[hooks.*]]` blocks to `~/.codex/config.toml`
+          (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification,
+          Stop, PreCompact) that call `claude-status-update <state>`, keyed off
+          the pane's $TMUX_PANE — no hook payload is parsed.
+
+          Defaults to false, like `persist.resumeCodex` and for the same reasons:
+          it mutates an EXTERNAL tool's config file, and codex requires a
+          one-time manual trust step per machine before the hooks run — run
+          `codex`, open `/hooks`, and choose "Trust all".
+        '';
+      };
+    };
+
     claudeIntegration = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -660,56 +682,138 @@ in {
         # status-format lines for all sessions with the new reflow script.
         # Run after restoreTheme (which sources the config and sets theme vars).
         # We only need to: ensure config is loaded, then reflow all sessions.
-        activation.reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
-          TMUX=${pkgs.tmux}/bin/tmux
-          REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
-          if $TMUX info &>/dev/null 2>&1; then
-            # Source config (restoreTheme may have already done this, but it's
-            # idempotent and handles the case where restoreTheme doesn't exist)
-            $TMUX source-file ${tmuxConfig.tmuxConf} || true
-            # Wait for async run-shell plugin commands to finish
-            sleep 1
-            # Reflow ALL sessions
-            WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
-            WIDTH=''${WIDTH:-200}
-            while read -r sess; do
-              [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
-            done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
-          fi
-        '';
-
-        # Idempotently ensure the codex SessionStart hook block exists in the
-        # user's ~/.codex/config.toml. Codex only auto-loads that one file
-        # globally (confirmed via `codex --help`'s -c flag doc and the #140
-        # spike notes: no drop-in dir, no CODEX_HOME layered profile without
-        # `-p`); a real config.toml can carry substantial hand-edited content
-        # (model, mcp_servers, per-project trust), so home.file would clobber
-        # it — this appends the block once, guarded by a marker, and never
-        # touches existing content. Trust for the hook itself still requires a
-        # one-time manual `/hooks` -> "Trust all" per machine (see the
-        # resumeCodex option doc) — that step cannot be pre-seeded (the trust
-        # hash is an undocumented, versioned, content-based digest).
-        activation.provisionCodexResumeHook = lib.mkIf resumeCodexEnable (
-          lib.hm.dag.entryAfter ["writeBoundary"] ''
-            CONFIG="$HOME/.codex/config.toml"
-            MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
-            mkdir -p "$(dirname "$CONFIG")"
-            touch "$CONFIG"
-            if ! grep -qF "$MARKER" "$CONFIG"; then
-              {
-                echo ""
-                echo "$MARKER"
-                echo '[[hooks.SessionStart]]'
-                echo 'matcher = "startup|resume"'
-                echo ""
-                echo '[[hooks.SessionStart.hooks]]'
-                echo 'type = "command"'
-                echo "command = \"${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp\""
-                echo 'timeout = 30'
-              } >> "$CONFIG"
+        activation = {
+          reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
+            TMUX=${pkgs.tmux}/bin/tmux
+            REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
+            if $TMUX info &>/dev/null 2>&1; then
+              # Source config (restoreTheme may have already done this, but it's
+              # idempotent and handles the case where restoreTheme doesn't exist)
+              $TMUX source-file ${tmuxConfig.tmuxConf} || true
+              # Wait for async run-shell plugin commands to finish
+              sleep 1
+              # Reflow ALL sessions
+              WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
+              WIDTH=''${WIDTH:-200}
+              while read -r sess; do
+                [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
+              done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
             fi
-          ''
-        );
+          '';
+
+          # Idempotently ensure the codex SessionStart hook block exists in the
+          # user's ~/.codex/config.toml. Codex only auto-loads that one file
+          # globally (confirmed via `codex --help`'s -c flag doc and the #140
+          # spike notes: no drop-in dir, no CODEX_HOME layered profile without
+          # `-p`); a real config.toml can carry substantial hand-edited content
+          # (model, mcp_servers, per-project trust), so home.file would clobber
+          # it — this appends the block once, guarded by a marker, and never
+          # touches existing content. Trust for the hook itself still requires a
+          # one-time manual `/hooks` -> "Trust all" per machine (see the
+          # resumeCodex option doc) — that step cannot be pre-seeded (the trust
+          # hash is an undocumented, versioned, content-based digest).
+          provisionCodexResumeHook = lib.mkIf resumeCodexEnable (
+            lib.hm.dag.entryAfter ["writeBoundary"] ''
+              CONFIG="$HOME/.codex/config.toml"
+              MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
+              mkdir -p "$(dirname "$CONFIG")"
+              touch "$CONFIG"
+              if ! grep -qF "$MARKER" "$CONFIG"; then
+                {
+                  echo ""
+                  echo "$MARKER"
+                  echo '[[hooks.SessionStart]]'
+                  echo 'matcher = "startup|resume"'
+                  echo ""
+                  echo '[[hooks.SessionStart.hooks]]'
+                  echo 'type = "command"'
+                  echo "command = \"${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp\""
+                  echo 'timeout = 30'
+                } >> "$CONFIG"
+              fi
+            ''
+          );
+
+          # Idempotently append codex status-line hook blocks to config.toml.
+          # Mirrors provisionCodexResumeHook (marker-guarded append, same one-time
+          # /hooks trust caveat — see that block and the codexStatus.enable doc).
+          # One [[hooks.<event>]] entry per state, mirroring hooks.json; codex
+          # resolves the pane from $TMUX_PANE so the commands carry no payload.
+          # The prompt/transcript-parsing enrichments (task label, naming,
+          # interrupt) are deferred until codex's payload shape is confirmed (#158).
+          provisionCodexStatusHooks = lib.mkIf cfg.codexStatus.enable (
+            lib.hm.dag.entryAfter ["writeBoundary"] (
+              let
+                csu = "${tmuxConfig.script.claude-status-update}/bin/claude-status-update";
+                hookBlock = ''
+                  # lazytmux-managed: codex status-line hooks
+                  [[hooks.SessionStart]]
+                  matcher = "startup|resume"
+
+                  [[hooks.SessionStart.hooks]]
+                  type = "command"
+                  command = "${csu} cleanup"
+                  timeout = 30
+
+                  [[hooks.SessionStart.hooks]]
+                  type = "command"
+                  command = "${csu} idle"
+                  timeout = 30
+
+                  [[hooks.UserPromptSubmit]]
+
+                  [[hooks.UserPromptSubmit.hooks]]
+                  type = "command"
+                  command = "${csu} processing --force"
+                  timeout = 30
+
+                  [[hooks.PreToolUse]]
+
+                  [[hooks.PreToolUse.hooks]]
+                  type = "command"
+                  command = "${csu} processing"
+                  timeout = 30
+
+                  [[hooks.PostToolUse]]
+
+                  [[hooks.PostToolUse.hooks]]
+                  type = "command"
+                  command = "${csu} processing"
+                  timeout = 30
+
+                  [[hooks.Notification]]
+
+                  [[hooks.Notification.hooks]]
+                  type = "command"
+                  command = "${csu} waiting"
+                  timeout = 30
+
+                  [[hooks.Stop]]
+
+                  [[hooks.Stop.hooks]]
+                  type = "command"
+                  command = "${csu} done"
+                  timeout = 30
+
+                  [[hooks.PreCompact]]
+
+                  [[hooks.PreCompact.hooks]]
+                  type = "command"
+                  command = "${csu} compacting"
+                  timeout = 30
+                '';
+              in ''
+                CONFIG="$HOME/.codex/config.toml"
+                MARKER='# lazytmux-managed: codex status-line hooks'
+                mkdir -p "$(dirname "$CONFIG")"
+                touch "$CONFIG"
+                if ! grep -qF "$MARKER" "$CONFIG"; then
+                  printf '\n%s' ${lib.escapeShellArg hookBlock} >>"$CONFIG"
+                fi
+              ''
+            )
+          );
+        };
       };
 
       xdg.configFile = {
