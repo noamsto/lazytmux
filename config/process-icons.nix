@@ -7,6 +7,7 @@
 {
   # Custom / project-specific
   claude = "🧠";
+  codex = "🤖";
   opencode = "🧠";
   amp = "⚡";
   nh = "❄";
