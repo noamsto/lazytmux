@@ -112,6 +112,9 @@ main() {
 
 	# --- Claude status: read pane files, bucket by window index ---
 	declare -A win_claude_state win_claude_fade win_claude_unseen win_claude_ts
+	# Per-window per-state counts + that state's freshest pane fade/unseen
+	# (keys: "<win_idx>,<state>"); the winning state is resolved after the loop.
+	declare -A win_cnt win_state_fade win_state_unseen win_has_claude
 	# Session-wide tally drives the status-bar session-name tint (@claude_session_fg)
 	sess_w=0 sess_k=0 sess_p=0 sess_d=0 sess_i=0 sess_e=0 sess_dn=0 sess_int=0
 	sess_min_fade=100 sess_unseen=0
@@ -153,19 +156,36 @@ main() {
 		esac
 		((fade < sess_min_fade)) && sess_min_fade=$fade
 		[[ $unseen == 1 ]] && sess_unseen=1
-		# Priority merge: error > waiting > compacting > interrupted > processing > done > idle
-		# Fade and unseen track the winning state's pane
-		current="${win_claude_state[$win_idx]:-}"
-		case "$state" in
-		error) win_claude_state[$win_idx]="error" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		waiting) [[ $current != "error" ]] && win_claude_state[$win_idx]="waiting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		compacting) [[ $current != "error" && $current != "waiting" ]] && win_claude_state[$win_idx]="compacting" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		interrupted) [[ $current != "error" && $current != "waiting" && $current != "compacting" ]] && win_claude_state[$win_idx]="interrupted" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		processing) [[ $current != "error" && $current != "waiting" && $current != "compacting" && $current != "interrupted" ]] && win_claude_state[$win_idx]="processing" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		done) [[ -z $current || $current == "idle" ]] && win_claude_state[$win_idx]="done" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		idle) [[ -z $current ]] && win_claude_state[$win_idx]="idle" win_claude_fade[$win_idx]=$fade win_claude_unseen[$win_idx]=$unseen ;;
-		esac
+		# Per-window: tally the state and track the freshest fade / any-unseen for
+		# it. The winning state (and its pane's fade) is picked after the loop.
+		key="$win_idx,$state"
+		win_cnt[$key]=$((${win_cnt[$key]:-0} + 1))
+		if [[ -z ${win_state_fade[$key]:-} ]] || ((fade < win_state_fade[$key])); then
+			win_state_fade[$key]=$fade
+		fi
+		[[ $unseen == 1 ]] && win_state_unseen[$key]=1
+		win_has_claude[$win_idx]=1
 	done < <(claude_pane_ids)
+
+	# Resolve each window's icon state from its counts via the shared priority
+	# order, then adopt the winning state's freshest pane fade/unseen. Using
+	# claude_priority_state (not a hand-rolled merge) keeps the ordering — and
+	# every state, incl. denied — identical to the session tint below. Counts are
+	# gathered in claude_priority_state's positional order; keys route through the
+	# scalar $key because a literal-comma subscript is unsafe (shfmt -s mangles it).
+	prio_order=(waiting compacting processing "done" idle error denied interrupted)
+	for win_idx in "${!win_has_claude[@]}"; do
+		counts=()
+		for st in "${prio_order[@]}"; do
+			key="$win_idx,$st"
+			counts+=("${win_cnt[$key]:-0}")
+		done
+		claude_priority_state "${counts[@]}"
+		key="$win_idx,$REPLY"
+		win_claude_state[$win_idx]="$REPLY"
+		win_claude_fade[$win_idx]="${win_state_fade[$key]:-0}"
+		win_claude_unseen[$win_idx]="${win_state_unseen[$key]:-0}"
+	done
 
 	# Session-name color: tint with the aggregate claude state, faded by the
 	# freshest pane's age. Empty when no claude panes — the format falls back to

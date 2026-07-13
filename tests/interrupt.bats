@@ -23,6 +23,15 @@ write_pane() {
 	return 0
 }
 
+# write_screen FILE STATE — the agent-detect scraper reading for FILE's pane id.
+write_screen() {
+	mkdir -p "$CLAUDE_SCREEN_DIR"
+	{
+		echo "state=$2"
+		echo "timestamp=$CLAUDE_NOW"
+	} >"$CLAUDE_SCREEN_DIR/${1##*/}"
+}
+
 @test "read_pane_state: stale processing with marker at tail → interrupted" {
 	local tr="$BATS_TEST_TMPDIR/t.jsonl"
 	printf '%s\n' \
@@ -135,4 +144,43 @@ write_pane() {
 	setup_claude_colors
 	claude_faded_hex interrupted
 	[ -n "$REPLY" ]
+}
+
+# The screen scraper only tells an active spinner from a quiet input box, so it
+# must never downgrade a human-blocking hook state (it reads those as idle).
+
+@test "read_pane_state: stale waiting is NOT downgraded by a screen idle reading" {
+	write_pane "$PANE_DIR/p1" waiting 60 # past CLAUDE_STALE_WAITING (30)
+	write_screen "$PANE_DIR/p1" idle
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "waiting" ]
+}
+
+@test "read_pane_state: stale error/denied survive a screen idle reading" {
+	write_pane "$PANE_DIR/p1" error 300
+	write_screen "$PANE_DIR/p1" idle
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "error" ]
+
+	write_pane "$PANE_DIR/p2" denied 300
+	write_screen "$PANE_DIR/p2" idle
+	read_pane_state "$PANE_DIR/p2"
+	[ "$REPLY" = "denied" ]
+}
+
+@test "read_pane_state: stale active state is still corrected from the screen" {
+	write_pane "$PANE_DIR/p1" compacting 120 # past CLAUDE_STALE_COMPACTING (60)
+	write_screen "$PANE_DIR/p1" idle
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "idle" ]
+}
+
+@test "claude_priority_state: denied outranks compacting/processing, loses to waiting/error" {
+	# args: waiting compacting processing done idle error denied interrupted
+	claude_priority_state 0 1 1 0 0 0 1 0
+	[ "$REPLY" = "denied" ]
+	claude_priority_state 1 0 0 0 0 0 1 0
+	[ "$REPLY" = "waiting" ]
+	claude_priority_state 0 0 0 0 0 1 1 0
+	[ "$REPLY" = "error" ]
 }
