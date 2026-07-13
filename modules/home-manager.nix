@@ -485,7 +485,10 @@ in {
           idempotently appends `[[hooks.*]]` blocks to `~/.codex/config.toml`
           (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification,
           Stop, PreCompact) that call `claude-status-update <state>`, keyed off
-          the pane's $TMUX_PANE — no hook payload is parsed.
+          the pane's $TMUX_PANE — no hook payload is parsed. Requires
+          claudeIntegration.enable (asserted): the hooks reference
+          claude-status-update by its rebuild-stable profile path so codex's hook
+          trust survives lazytmux bumps.
 
           Defaults to false, like `persist.resumeCodex` and for the same reasons:
           it mutates an EXTERNAL tool's config file, and codex requires a
@@ -637,6 +640,15 @@ in {
             but pkgs.${cfg.startupSession.terminal.emulator} is not available.
             Add it to your packages or set terminal.emulator = null and configure manually.
           '';
+        }
+        ++ lib.optional (cfg.codexStatus.enable && !cfg.claudeIntegration.enable) {
+          assertion = false;
+          message = ''
+            programs.lazytmux.codexStatus.enable requires claudeIntegration.enable:
+            the codex hooks call claude-status-update by its rebuild-stable profile
+            path, which claudeIntegration installs. Without it the binary isn't on
+            the profile and codex would re-prompt for hook trust on every bump.
+          '';
         };
 
       home = {
@@ -744,7 +756,12 @@ in {
           provisionCodexStatusHooks = lib.mkIf cfg.codexStatus.enable (
             lib.hm.dag.entryAfter ["writeBoundary"] (
               let
-                csu = "${tmuxConfig.script.claude-status-update}/bin/claude-status-update";
+                # Stable profile path, NOT a /nix/store path: codex records hook
+                # trust as a content hash over the config, so a store path that
+                # changes every lazytmux rebuild would force a fresh `/hooks` trust
+                # each bump. The profile path is rebuild-stable. Requires
+                # claudeIntegration.enable (asserted below) to put the binary there.
+                csu = "${config.home.profileDirectory}/bin/claude-status-update";
                 hookBlock = ''
                   # lazytmux-managed: codex status-line hooks
                   [[hooks.SessionStart]]
