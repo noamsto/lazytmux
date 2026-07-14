@@ -121,14 +121,19 @@ read_pane_state() {
 	fi
 
 	if [[ -n $state ]]; then
+		# max_age gates the screen-override only. The scraper distinguishes an
+		# active spinner from a quiet input box and nothing more, so it must not
+		# override a human-blocking hook state: `waiting`/`error`/`denied` look
+		# identical to `idle` on screen and would be wrongly downgraded (the
+		# session tally keeps them, so the window would silently disagree). Those
+		# states are self-correcting — the next hook write clears them — so only
+		# stale *active* states, which can stick when a completion hook is
+		# missed, are corrected from the screen's live reading.
 		local max_age=0
 		case "$state" in
-		waiting) max_age=$CLAUDE_STALE_WAITING ;;
 		compacting) max_age=$CLAUDE_STALE_COMPACTING ;;
 		processing) max_age=$CLAUDE_STALE_PROCESSING ;;
 		done) max_age=$CLAUDE_STALE_DONE ;;
-		error) max_age=$CLAUDE_STALE_ERROR ;;
-		denied) max_age=$CLAUDE_STALE_DENIED ;;
 		esac
 
 		if ((max_age > 0)) && ((CLAUDE_NOW - timestamp > max_age)) && [[ -n $screen_state ]]; then
