@@ -598,6 +598,7 @@
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
     bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
+    bind-key "k" display-popup -E -w 90% -h 90% "command -v k9s >/dev/null 2>&1 && exec k9s || exec ${pkgs.k9s}/bin/k9s"
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
