@@ -103,12 +103,17 @@ has_zoom=0
 FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
-declare -A win_crew win_crew_dw win_crew_disp
+declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
 while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai wtask; do
 	indices+=("$idx")
-	((zoomed)) && has_zoom=1
+	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
+	# windows; carve it from that window's label budget so its grid slot stays
+	# colw wide (mirrors the crew badge). has_zoom reserves the same 2 cells in
+	# the single-line fit test, where the marker is appended to the full label.
+	win_zoom_dw[$idx]=0
+	((zoomed)) && has_zoom=1 && win_zoom_dw[$idx]=2
 
 	# Stamp belongs to the branch it was written for. If the pane has since
 	# cd'd to a different branch, build the label from the current branch
@@ -314,9 +319,10 @@ for idx in "${indices[@]}"; do
 	else
 		cur_rest="${win_rest_short[$idx]}"
 	fi
-	# The agent badge (win_crew_dw, 0 when untagged) renders after the index and
-	# steals from this window's label budget, so the slot stays colw+overhead wide.
-	rest_avail=$((colw - win_id_dw[$idx] - win_crew_dw[$idx]))
+	# The agent badge (win_crew_dw, 0 when untagged) and zoom marker (win_zoom_dw,
+	# 0 unless zoomed) both render inline off this window's label; steal their
+	# width so the slot stays colw+overhead wide regardless.
+	rest_avail=$((colw - win_id_dw[$idx] - win_crew_dw[$idx] - win_zoom_dw[$idx]))
 	((rest_avail < 0)) && rest_avail=0
 	if ((rest_avail == 0)); then
 		cur_rest=""

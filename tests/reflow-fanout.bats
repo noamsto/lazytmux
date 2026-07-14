@@ -124,3 +124,31 @@ run_update_icons() {
 	# now it acquired, recomputed against fresh state, and stamped the real key
 	[ "$(tmux show -v @reflow_key)" = "3:200" ]
 }
+
+@test "zoom marker is carved from the label so the grid slot stays uniform" {
+	# The inline " 󰁌" marker (LABEL_Z) is 2 cells; a zoomed window must reserve
+	# them from its own label budget, or its grid slot renders 2 cells wide and
+	# shoves that row's icons/PR/separator right (issue #150 follow-up).
+	tmux set -wq -t S:0 @branch "aaa"
+	tmux new-window -d # S:1 -> the zoomed twin
+	tmux set -wq -t S:1 @branch "aaa"
+	tmux new-window -d # S:2 -> long branch drives colw so the twins pad, not clip
+	tmux set -wq -t S:2 @branch "a-very-long-branch-name-here"
+
+	tmux split-window -d -t S:1
+	tmux resize-pane -Z -t S:1
+	[ "$(tmux display -t S:1 -p '#{window_zoomed_flag}')" = "1" ]
+
+	# Narrow enough to force the multi-line grid (where the carve matters).
+	bash "$REFLOW" S 80 --force >/dev/null 2>&1
+
+	# shellcheck source=/dev/null
+	source "$TDIR/lib-icons.sh"
+	dw() { measure_display_width "$1"; }
+	dw "$(tmux show -wv -t S:0 @window_label_disp)"
+	local plain=$REPLY_DW
+	dw "$(tmux show -wv -t S:1 @window_label_disp)"
+	local zoomed=$REPLY_DW
+	# Same content + same colw; the zoomed twin's remainder is exactly 2 shorter.
+	[ "$plain" -eq "$((zoomed + 2))" ]
+}
