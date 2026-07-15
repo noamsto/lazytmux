@@ -89,19 +89,19 @@ Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when 
 
 Git worktree management is handled by the third-party `worktrunk` tool, configured via the home-manager module's `worktrunk.enable` option.
 
-### Persist (tmux-state)
+### Persist (tmux-remux)
 
-The [tmux-state](https://github.com/noamsto/tmux-state) Go binary is the persistence
+The [tmux-remux](https://github.com/noamsto/tmux-remux) Go binary is the persistence
 layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
 `programs.lazytmux.persist.enable`; set to `false` to opt out.
 
-- tmux hooks fire `tmux-state save` on structural change and
-  `tmux-state capture-event` on close.
-- systemd user timer runs `tmux-state save --reason=timer` every 60s; weekly GC
+- tmux hooks fire `tmux-remux save` on structural change and
+  `tmux-remux capture-event` on close.
+- systemd user timer runs `tmux-remux save --reason=timer` every 60s; weekly GC
   drops orphan scrollback files.
 - Keybindings: `prefix + u` (undo pop), `prefix + U` (close-event picker),
   `prefix + R` (snapshot picker), `prefix + Ctrl-s` (immediate save).
-- Storage: `$XDG_DATA_HOME/tmux-state/state.db` + scrollbacks dir.
+- Storage: `$XDG_DATA_HOME/tmux-remux/state.db` + scrollbacks dir.
 - `restoreMode` defaults to `"off"` (manual `prefix + R` only). Set to `"auto"`
   to apply the smart filter on tmux server start.
 

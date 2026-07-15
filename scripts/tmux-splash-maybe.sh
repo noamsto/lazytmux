@@ -16,7 +16,7 @@ if [ "$(tmux show-option -gqv @splash_shown)" = "1" ]; then exit 0; fi
 [ "$(tmux display-message -t "$session" -p '#{window_panes}')" = "1" ] || exit 0
 
 # Only when the pane is sitting at an interactive shell — never cover a
-# tmux-state–restored program/editor.
+# tmux-remux–restored program/editor.
 case "$(tmux display-message -t "$session" -p '#{pane_current_command}')" in
 fish | bash | zsh | sh | dash | nu) ;;
 *) exit 0 ;;

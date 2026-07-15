@@ -228,7 +228,7 @@
       "inputs": {
         "flake-compat": "flake-compat_4",
         "nixpkgs": [
-          "tmux-state",
+          "tmux-remux",
           "nixpkgs"
         ]
       },
@@ -375,7 +375,7 @@
         "nixpkgs": "nixpkgs",
         "prdash": "prdash",
         "tmux-fork": "tmux-fork",
-        "tmux-state": "tmux-state"
+        "tmux-remux": "tmux-remux"
       }
     },
     "tmux-fork": {
@@ -395,7 +395,7 @@
         "type": "github"
       }
     },
-    "tmux-state": {
+    "tmux-remux": {
       "inputs": {
         "flake-parts": "flake-parts_4",
         "git-hooks-nix": "git-hooks-nix_4",
@@ -404,16 +404,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1783691899,
-        "narHash": "sha256-Q/2WFfGebw6Oy8OGea5iwBAX9UiwolVzR/sojOzBeCY=",
+        "lastModified": 1784111507,
+        "narHash": "sha256-DRELhLNCIwBGk6JNu14luL8K88u/vOUOCNgqeb45ZDk=",
         "owner": "noamsto",
-        "repo": "tmux-state",
-        "rev": "85638178527318565a6e8265fd7486bb12fe6514",
+        "repo": "tmux-remux",
+        "rev": "3e437a2ba28fc5cdcb1cf40a4557fe2e005c4a0a",
         "type": "github"
       },
       "original": {
         "owner": "noamsto",
-        "repo": "tmux-state",
+        "repo": "tmux-remux",
         "type": "github"
       }
     },

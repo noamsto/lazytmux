@@ -20,8 +20,8 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     git-hooks-nix.url = "github:cachix/git-hooks.nix";
     git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
-    tmux-state = {
-      url = "github:noamsto/tmux-state";
+    tmux-remux = {
+      url = "github:noamsto/tmux-remux";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     aeye = {
@@ -318,7 +318,7 @@
           import ./modules/home-manager.nix (args
             // {
               tmux-pkg = mkTmux pkgs;
-              tmux-state-pkg = inputs.tmux-state.packages.${pkgs.system}.default;
+              tmux-remux-pkg = inputs.tmux-remux.packages.${pkgs.system}.default;
               carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
               carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
               carouselPluginSkills = "${inputs.aeye}/adapters/claude-code/plugin/skills";

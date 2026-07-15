@@ -3,7 +3,7 @@
   lib,
   pkgs,
   tmux-pkg ? pkgs.tmux,
-  tmux-state-pkg ? null,
+  tmux-remux-pkg ? null,
   carousel-toggle ? null,
   carousel-aeye ? null,
   carouselPluginSkills ? null,
@@ -58,23 +58,23 @@
     then emulatorCfg.terminfoPath
     else cfg.startupSession.terminal.terminfoPath;
 
-  # tmux-state binary path (null when persist is disabled or package missing).
+  # tmux-remux binary path (null when persist is disabled or package missing).
   # Resolving here keeps the conditional logic out of the conf string itself.
   tmuxStateBin =
     if cfg.persist.enable && cfg.persist.package != null
-    then "${cfg.persist.package}/bin/tmux-state"
+    then "${cfg.persist.package}/bin/tmux-remux"
     else null;
 
-  # Persist (tmux-state) tmux.conf snippet. Empty string when disabled — appended
+  # Persist (tmux-remux) tmux.conf snippet. Empty string when disabled — appended
   # verbatim to the generated tmux.conf via extraConfText. The hooks fire
-  # `tmux-state save` on structural change and `capture-event` on close so the
+  # `tmux-remux save` on structural change and `capture-event` on close so the
   # daemon can correlate (window closed at T, last save at T-2s ⇒ replay row).
   tmuxStateConf =
     if tmuxStateBin == null
     then ""
     else ''
 
-      # === tmux-state (Phase 2a, opt-in via programs.lazytmux.persist) ===
+      # === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===
       # Use index [99] so persist hooks coexist with lazytmux's index-0 hooks
       # (e.g. tmux-reflow-windows on window-unlinked). Same pattern as
       # claude-status-update + tmux-fingers in config/tmux.conf.nix.
@@ -84,8 +84,8 @@
 
       # Hook pane-exited, not pane-died: pane-died only fires when remain-on-exit
       # is on (off by default), so it never caught a normal close. Capture happens
-      # after the pane is gone (tmux-state diffs against the prior snapshot), so
-      # the live pane isn't needed. Kind stays "pane-died" — tmux-state's diff
+      # after the pane is gone (tmux-remux diffs against the prior snapshot), so
+      # the live pane isn't needed. Kind stays "pane-died" — tmux-remux's diff
       # switches on it.
       set-hook -g pane-exited[99]           'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
@@ -95,10 +95,10 @@
         run-shell -b '${tmuxStateBin} restore --auto'
       ''}
 
-      # Surface tmux-state's own error (e.g. "nothing to undo — no recoverable
+      # Surface tmux-remux's own error (e.g. "nothing to undo — no recoverable
       # close event") instead of a blanket "Nothing to undo" that hides why.
       bind   u    run-shell 'err=$(${tmuxStateBin} undo --pop 2>&1) || tmux display-message "undo: $err"'
-      # The picker is a bubbletea TUI (tmux-state >= 0.2.0); launching it through
+      # The picker is a bubbletea TUI (tmux-remux >= 0.2.0); launching it through
       # the `env` binary breaks its TTY init and renders a blank popup, so invoke
       # it directly. (The old `env -u FZF_DEFAULT_OPTS` wrapper was only needed for
       # the fzf-based picker, which no longer exists.)
@@ -130,7 +130,7 @@
     splashTips = cfg.splash.tips;
     splashTimeout = cfg.splash.timeout;
     aiNamingEnable = cfg.aiNaming.enable;
-    # Only stamp @ts_relaunch when tmux-state is actually installed to read it.
+    # Only stamp @remux_relaunch when tmux-remux is actually installed to read it.
     resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
   };
 
@@ -138,8 +138,8 @@
 
   persistEnabled = cfg.persist.enable && cfg.persist.package != null;
 
-  # Only provision the codex hook when tmux-state is actually installed to
-  # act on @ts_relaunch, mirroring resumeClaudeEnable above.
+  # Only provision the codex hook when tmux-remux is actually installed to
+  # act on @remux_relaunch, mirroring resumeClaudeEnable above.
   resumeCodexEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCodex;
 
   # Stable startup script shared by the Linux systemd service and the darwin
@@ -176,7 +176,7 @@
 
     # Try to create the session. If creation fails but the session now
     # exists anyway, something else won the race to create it (e.g.
-    # tmux-state auto-restore on server start). Treat that as success.
+    # tmux-remux auto-restore on server start). Treat that as success.
     if "$TMUX_BIN" new -s "$SESSION" -c "$DIRECTORY" -d; then
       exit 0
     fi
@@ -274,7 +274,7 @@ in {
         type = lib.types.bool;
         default = true;
         description = ''
-          Whether to enable tmux-state persistence (snapshots, undo, auto-restore).
+          Whether to enable tmux-remux persistence (snapshots, undo, auto-restore).
           Replaces tmux-resurrect/tmux-continuum.
         '';
       };
@@ -300,8 +300,8 @@ in {
         default = true;
         description = ''
           Resume Claude Code sessions when a window is restored. When on,
-          tmux-update-icons stamps each Claude pane's @ts_relaunch override with
-          its session id, so tmux-state relaunches `claude --resume <uuid>` on
+          tmux-update-icons stamps each Claude pane's @remux_relaunch override with
+          its session id, so tmux-remux relaunches `claude --resume <uuid>` on
           restore instead of a bare shell. Restore is manual-by-default
           (restoreMode = "off"), so this only fires on an explicit restore.
         '';
@@ -315,7 +315,7 @@ in {
           activation idempotently ensures a `[[hooks.SessionStart]]` block exists
           in `~/.codex/config.toml`, pointing at the `codex-relaunch-stamp`
           binary (matcher `"startup|resume"`); the hook stamps each Codex pane's
-          `@ts_relaunch` with its resumable session id, so tmux-state relaunches
+          `@remux_relaunch` with its resumable session id, so tmux-remux relaunches
           `codex resume <uuid>` on restore instead of a bare shell.
 
           Defaults to false, unlike resumeClaude: this mutates an EXTERNAL
@@ -331,10 +331,10 @@ in {
 
       package = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
-        default = tmux-state-pkg;
-        defaultText = lib.literalExpression "inputs.tmux-state.packages.\${system}.default";
+        default = tmux-remux-pkg;
+        defaultText = lib.literalExpression "inputs.tmux-remux.packages.\${system}.default";
         description = ''
-          The tmux-state package to use. Defaults to the flake input. Set to a
+          The tmux-remux package to use. Defaults to the flake input. Set to a
           different derivation to override (e.g. a local checkout for dev).
         '';
       };
@@ -867,7 +867,7 @@ in {
             # Fallback: match by pane_current_path — prefix match, so a pane
             # cd'd into a subdirectory still counts (but not into a nested
             # .worktrees/ checkout, which belongs to a different branch).
-            # @worktree tags are lost on tmux-state restore, so this path
+            # @worktree tags are lost on tmux-remux restore, so this path
             # also re-tags them (self-heal). Prefer the current window: when
             # we're already sitting in the worktree, re-tag in place instead
             # of navigating away.
@@ -1032,31 +1032,31 @@ in {
             };
           };
 
-          # Periodic snapshot — fires `tmux-state save --reason=timer` so the
+          # Periodic snapshot — fires `tmux-remux save --reason=timer` so the
           # daemon has a recent baseline even between structural-change hooks.
           #
-          # TMUX_TMPDIR points tmux-state at the user's actual socket
+          # TMUX_TMPDIR points tmux-remux at the user's actual socket
           # ($XDG_RUNTIME_DIR/tmux-$UID/default) instead of tmux's compiled-in
           # /tmp default; without it the timer queried a stale socket and
-          # bailed. (tmux-state >= 7f8c820 also synthesizes the TMUX env var
+          # bailed. (tmux-remux >= 7f8c820 also synthesizes the TMUX env var
           # internally so format-string control bytes survive — no need to set
           # TMUX here.)
-          lazytmux-state-save = lib.mkIf persistEnabled {
-            Unit.Description = "Save tmux-state snapshot";
+          lazytmux-remux-save = lib.mkIf persistEnabled {
+            Unit.Description = "Save tmux-remux snapshot";
             Service = {
               Type = "oneshot";
               Environment = ["TMUX_TMPDIR=%t"];
-              ExecStart = "${cfg.persist.package}/bin/tmux-state save --reason=timer";
+              ExecStart = "${cfg.persist.package}/bin/tmux-remux save --reason=timer";
             };
           };
 
           # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
           # was already pruned). Cheap to run; safe to skip on missed firings.
-          lazytmux-state-gc = lib.mkIf persistEnabled {
-            Unit.Description = "tmux-state garbage collection";
+          lazytmux-remux-gc = lib.mkIf persistEnabled {
+            Unit.Description = "tmux-remux garbage collection";
             Service = {
               Type = "oneshot";
-              ExecStart = "${cfg.persist.package}/bin/tmux-state gc";
+              ExecStart = "${cfg.persist.package}/bin/tmux-remux gc";
             };
           };
 
@@ -1075,21 +1075,21 @@ in {
         };
 
         timers = {
-          lazytmux-state-save = lib.mkIf persistEnabled {
-            Unit.Description = "Periodic tmux-state snapshot";
+          lazytmux-remux-save = lib.mkIf persistEnabled {
+            Unit.Description = "Periodic tmux-remux snapshot";
             Timer = {
               OnBootSec = "2min";
               OnUnitActiveSec = "${toString cfg.persist.saveInterval}s";
-              Unit = "lazytmux-state-save.service";
+              Unit = "lazytmux-remux-save.service";
             };
             Install.WantedBy = ["timers.target"];
           };
 
-          lazytmux-state-gc = lib.mkIf persistEnabled {
-            Unit.Description = "tmux-state GC (orphan scrollback files)";
+          lazytmux-remux-gc = lib.mkIf persistEnabled {
+            Unit.Description = "tmux-remux GC (orphan scrollback files)";
             Timer = {
               OnCalendar = "weekly";
-              Unit = "lazytmux-state-gc.service";
+              Unit = "lazytmux-remux-gc.service";
             };
             Install.WantedBy = ["timers.target"];
           };
@@ -1125,19 +1125,19 @@ in {
         }
         // lib.optionalAttrs persistEnabled {
           # Periodic snapshot. No TMUX_TMPDIR: darwin tmux uses its default
-          # /tmp/tmux-$UID socket, which tmux-state also resolves to by default.
-          lazytmux-state-save = {
+          # /tmp/tmux-$UID socket, which tmux-remux also resolves to by default.
+          lazytmux-remux-save = {
             enable = true;
             config = {
-              ProgramArguments = ["${cfg.persist.package}/bin/tmux-state" "save" "--reason=timer"];
+              ProgramArguments = ["${cfg.persist.package}/bin/tmux-remux" "save" "--reason=timer"];
               StartInterval = cfg.persist.saveInterval;
             };
           };
           # Weekly GC of orphaned scrollback files.
-          lazytmux-state-gc = {
+          lazytmux-remux-gc = {
             enable = true;
             config = {
-              ProgramArguments = ["${cfg.persist.package}/bin/tmux-state" "gc"];
+              ProgramArguments = ["${cfg.persist.package}/bin/tmux-remux" "gc"];
               StartCalendarInterval = [{Weekday = 0;}];
             };
           };

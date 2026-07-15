@@ -13,7 +13,7 @@
   terminalTerm ? null,
   # Additional tmux config text appended verbatim at the end of the generated
   # tmux.conf. Used by the home-manager module to inject opt-in features
-  # (e.g. tmux-state hooks/keybindings) without polluting the base config.
+  # (e.g. tmux-remux hooks/keybindings) without polluting the base config.
   extraConfText ? "",
   # Issue/PR enrichment config (threaded from the home-manager module).
   enrichEnable ? true,
@@ -41,8 +41,8 @@
   # tracked issue, on the default branch) for itself via `claude-status-update
   # name set`. Exposed to the plugin hook as the @ai_naming global.
   aiNamingEnable ? false,
-  # Resume Claude sessions on tmux-state restore (threaded from the module).
-  # When on, tmux-update-icons stamps each Claude pane's @ts_relaunch override
+  # Resume Claude sessions on tmux-remux restore (threaded from the module).
+  # When on, tmux-update-icons stamps each Claude pane's @remux_relaunch override
   # so restore relaunches `claude --resume <uuid>` instead of a bare shell.
   # Exposed as the @resume_claude global, read by update-icons each tick.
   resumeClaudeEnable ? true,
@@ -734,7 +734,7 @@
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
     set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id}"'
 
-    # A scratchpad dies with its parent session ([99] is tmux-state's capture-event)
+    # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
     set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'
 
     # Clear unseen claude status flags when user focuses a window

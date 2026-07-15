@@ -3,7 +3,7 @@
 # via the existing stamp. Idempotent, navigation-free, CLAUDECODE-agnostic. The
 # single place that defines HOW a window gets tagged: fired at window creation
 # (after-new-window/after-new-session) so any window — whoever created it (a raw
-# `tmux new-window`, a dispatcher, a tmux-state restore) — becomes a first-class
+# `tmux new-window`, a dispatcher, a tmux-remux restore) — becomes a first-class
 # worktree window, and reused by the worktrunk post-switch hook for navigation.
 #
 # Usage:
