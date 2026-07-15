@@ -10,8 +10,8 @@
     lib.mkEnableOption "accept lztmux remote-session env vars over sshd";
 
   config = lib.mkIf config.programs.lazytmux.remoteAcceptEnv {
-    # Additive across settings.AcceptEnv entries; if the host already sets it,
-    # use lib.mkAfter/list form per that host's config.
-    services.openssh.settings.AcceptEnv = "LZTMUX_OUTER TMUX_PANE";
+    # AcceptEnv is a listOf str; NixOS concatenates list definitions, so this
+    # merges additively with any AcceptEnv the host already sets.
+    services.openssh.settings.AcceptEnv = ["LZTMUX_OUTER" "TMUX_PANE"];
   };
 }
