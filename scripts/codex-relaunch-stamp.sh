@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Codex SessionStart hook: stamp this pane's @ts_relaunch so tmux-state resumes
+# Codex SessionStart hook: stamp this pane's @remux_relaunch so tmux-remux resumes
 # the Codex session (not a bare shell) on restore. Reads the hook's JSON payload
 # from stdin (session_id) and the pane from $TMUX_PANE. No-ops outside tmux.
 #
@@ -19,4 +19,4 @@ session_id=""
 [[ $input =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && session_id="${BASH_REMATCH[1]}"
 
 [[ -n $session_id ]] || exit 0
-tmux set-option -p -t "$TMUX_PANE" @ts_relaunch "codex resume $session_id"
+tmux set-option -p -t "$TMUX_PANE" @remux_relaunch "codex resume $session_id"

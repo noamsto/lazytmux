@@ -59,7 +59,7 @@ This installs a `tmux` wrapper that automatically loads the configuration. Your 
 | **Git branch display** | Current branch shown in the top status line |
 | **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
 | **tmux-fingers** | Smart copy with hints for URLs, hashes, file paths, JIRA tickets |
-| **tmux-state persistence** | Periodic snapshots, undo for closed windows, optional smart auto-restore |
+| **tmux-remux persistence** | Periodic snapshots, undo for closed windows, optional smart auto-restore |
 | **Welcome splash** | Animated braille-cat welcome buffer with a keybind cheatsheet, once per server |
 | **Image carousel** | View a Claude session's images/diagrams in a split (`prefix + I`) |
 | **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |

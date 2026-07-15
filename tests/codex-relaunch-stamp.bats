@@ -16,12 +16,12 @@ EOF
 	export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 }
 
-@test "stamps @ts_relaunch from session_id on stdin" {
+@test "stamps @remux_relaunch from session_id on stdin" {
 	run bash "$STAMP" <<'EOF'
 {"session_id":"019f3b53-487c-7973-8103-8e2828a5fd72","hook_event_name":"SessionStart","source":"startup"}
 EOF
 	[ "$status" -eq 0 ]
-	grep -qF 'set-option -p -t %7 @ts_relaunch codex resume 019f3b53-487c-7973-8103-8e2828a5fd72' "$TMUX_LOG"
+	grep -qF 'set-option -p -t %7 @remux_relaunch codex resume 019f3b53-487c-7973-8103-8e2828a5fd72' "$TMUX_LOG"
 }
 
 @test "no-op when TMUX_PANE unset" {

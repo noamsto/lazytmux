@@ -39,8 +39,8 @@ arm_agent_detect() {
 main() {
 	SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 	# $2 is #{@resume_claude}, expanded by the status format — avoids a show-option
-	# fork per tick. "on" enables stamping each Claude pane's @ts_relaunch override
-	# so tmux-state resumes the session (not a bare shell) on restore.
+	# fork per tick. "on" enables stamping each Claude pane's @remux_relaunch override
+	# so tmux-remux resumes the session (not a bare shell) on restore.
 	RESUME_CLAUDE=${2:-}
 	# $3 is #{start_time}, expanded by the status format like $2 — avoids a
 	# display-message fork per tick; direct invocations (hooks) fall back to one.
@@ -66,7 +66,7 @@ main() {
 	# corrupting cur_branch/active flags. '@window_task' is free-form so it stays
 	# last — read drops any stray '|' it contains into that final field.
 	# @window_ai_name is sanitized free of '|' (claude-status-update), so it is safe
-	# as a fixed middle field. @ts_relaunch is "claude --resume <uuid>" — no '|'
+	# as a fixed middle field. @remux_relaunch is "claude --resume <uuid>" — no '|'
 	# either, so it also stays a fixed middle field before the free-form task.
 	# The icon/ago/rename/session fields are our own writes read back for
 	# change-gating: glyphs, #[fg=…] codes, spaces, and hex colors — never '|'.
@@ -106,7 +106,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@ts_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@window_task}')
+	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@window_task}')
 
 	arm_agent_detect
 
@@ -127,9 +127,9 @@ main() {
 		fade=$REPLY_FADE
 		unseen=$REPLY_UNSEEN
 
-		# Stamp the pane's resume override so tmux-state relaunches the actual
+		# Stamp the pane's resume override so tmux-remux relaunches the actual
 		# Claude session (not a bare shell) on restore. The transcript basename
-		# is the session UUID. Set only on change — @ts_relaunch is read back via
+		# is the session UUID. Set only on change — @remux_relaunch is read back via
 		# the batched list-panes above, so a stable pane forks nothing per tick.
 		if [[ $RESUME_CLAUDE == on ]]; then
 			uuid="${REPLY_TRANSCRIPT##*/}"
@@ -137,7 +137,7 @@ main() {
 			desired=""
 			[[ -n $uuid ]] && desired="claude --resume $uuid"
 			if [[ $desired != "${pane_cur_relaunch[$pane_file]:-}" ]]; then
-				tmux set -pq -t "%$pane_file" @ts_relaunch "$desired"
+				tmux set -pq -t "%$pane_file" @remux_relaunch "$desired"
 			fi
 		fi
 		# Freshest pane timestamp per window drives the "last active" label
@@ -328,7 +328,7 @@ main() {
 
 		# Re-assert automatic-rename: window names are derived (label + icon via
 		# automatic-rename-format) and allow-rename is off, so it must stay on.
-		# tmux-state restore creates windows with `new-window -n`, which flips it
+		# tmux-remux restore creates windows with `new-window -n`, which flips it
 		# off and freezes the name on a stale label; this self-heals it. Gated on
 		# the effective value (boolean options expand to 0/1 in formats).
 		if [[ ${win_cur_rename[$idx]:-} != 1 ]]; then
