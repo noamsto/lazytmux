@@ -52,7 +52,7 @@ ssh -T -e none <host> -- env TMUX_TMPDIR=<remote-runtime-dir> <abs-tmux> \
 |-----------|-----------|
 | Render | parse control lines; for `%output %<pane> <data>` → **byte-oriented** octal unescape (`\NNN`→byte; multibyte UTF-8 may split across `%output` lines) → write raw bytes to stdout |
 | Input | read stdin bytes → `send-keys -H -t %<pane> <hex...>`, chunked under the command-size cap |
-| Resize | debounced SIGWINCH → `refresh-client -C -x W -y H` |
+| Resize | debounced SIGWINCH → `refresh-client -C WxH` |
 | Teardown | `%window-close`/`%exit`/EOF → bridge exits, pane closes; killing the pane drops ssh (remote session untouched) |
 
 **Initial-state snapshot** (control mode has NO scrollback replay — the acid test is
