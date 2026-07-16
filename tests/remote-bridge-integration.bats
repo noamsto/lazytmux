@@ -2,8 +2,12 @@
 
 setup() {
 	SOCK="$BATS_TEST_TMPDIR/t.sock"
-	BRIDGE="$BATS_TEST_TMPDIR/bridge"
-	(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$BRIDGE" ./remotebridge/)
+	# BRIDGE points at the prebuilt lztmux-remote-bridge binary; the nix check
+	# sets it to a store path, fall back to building from source for local runs.
+	if [[ -z ${BRIDGE:-} ]]; then
+		BRIDGE="$BATS_TEST_TMPDIR/bridge"
+		(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$BRIDGE" ./remotebridge/)
+	fi
 	tmux -S "$SOCK" -f /dev/null new-session -d -s src -x 80 -y 24
 	tmux -S "$SOCK" send-keys -t src "printf HELLO_BRIDGE" Enter
 	sleep 0.5

@@ -66,6 +66,8 @@
         # (non-recursive), so the default `picker` derivation never exercises
         # picker/agentdetect's nested debounce/manifest/screen/statefile
         # packages. Override checkPhase to scope it to `./agentdetect/...`.
+        # Reused (not just for its checkPhase) by remote-bridge-integration-tests
+        # below, which needs the prebuilt lztmux-remote-bridge binary offline.
         pickerAgentDetect =
           (import ./picker {
             inherit pkgs lib;
@@ -303,12 +305,13 @@
           remote-bridge-integration-tests =
             pkgs.runCommand "remote-bridge-integration-tests" {
               # tmux: same private, config-less server pattern as the other
-              # integration tests; go: the bats setup() builds the bridge
-              # binary from source (no prebuilt package yet).
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux pkgs.go];
+              # integration tests. The bridge binary is prebuilt via the
+              # vendored buildGoModule (pickerAgentDetect) so this check never
+              # invokes `go build` — a non-FOD sandbox has no network.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux];
+              BRIDGE = "${pickerAgentDetect}/bin/lztmux-remote-bridge";
             } ''
               cp -r ${./tests} tests
-              cp -r ${./picker} picker
               export HOME=$TMPDIR
               bats tests/remote-bridge-integration.bats
               touch $out
