@@ -308,7 +308,9 @@
               # integration tests. The bridge binary is prebuilt via the
               # vendored buildGoModule (pickerAgentDetect) so this check never
               # invokes `go build` — a non-FOD sandbox has no network.
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux];
+              # util-linux provides `script`, which the real-tty case uses to
+              # give the bridge a pty (so refresh-client + real cursor fire).
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux pkgs.util-linux];
               BRIDGE = "${pickerAgentDetect}/bin/lztmux-remote-bridge";
             } ''
               cp -r ${./tests} tests

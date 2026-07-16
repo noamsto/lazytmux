@@ -19,3 +19,18 @@ teardown() { tmux -S "$SOCK" kill-server 2>/dev/null || true; }
 	run timeout 5 "$BRIDGE" --ssh "" --tmux "tmux -S $SOCK" --session src --window 0 </dev/null
 	[[ $output == *HELLO_BRIDGE* ]]
 }
+
+# Real-tty path: under a pty, render.Size succeeds so the bridge sends
+# refresh-client and reads the real cursor — exercising the reply-block
+# ordering (each command consumes its OWN reply) that the </dev/null case
+# skips. Pre-fix this rendered the misconsumed cursor reply instead of the
+# capture, and used refresh-client syntax that errors on next-3.8.
+@test "bridge seeds multi-line content over a real tty (refresh-client path)" {
+	tmux -S "$SOCK" send-keys -t src \
+		"printf 'LINE_ALPHA\\nLINE_BRAVO\\nLINE_CHARLIE\\n'" Enter
+	sleep 0.5
+	run timeout 5 script -qec \
+		"$BRIDGE --ssh '' --tmux 'tmux -S $SOCK' --session src --window 0" /dev/null </dev/null
+	[[ $output == *LINE_ALPHA* ]]
+	[[ $output == *LINE_CHARLIE* ]]
+}
