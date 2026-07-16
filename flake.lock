@@ -374,25 +374,8 @@
         "git-hooks-nix": "git-hooks-nix_2",
         "nixpkgs": "nixpkgs",
         "prdash": "prdash",
-        "tmux-fork": "tmux-fork",
-        "tmux-remux": "tmux-remux"
-      }
-    },
-    "tmux-fork": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1783537678,
-        "narHash": "sha256-nOoLanifc6vtp5g23zvC0qawRE0qvIYlGOCXmcqMIlk=",
-        "owner": "noamsto",
-        "repo": "tmux",
-        "rev": "7a63e901b0c5431bccc187bbe858aa3b8e41ed07",
-        "type": "github"
-      },
-      "original": {
-        "owner": "noamsto",
-        "ref": "fix/popup-overlay-flicker",
-        "repo": "tmux",
-        "type": "github"
+        "tmux-remux": "tmux-remux",
+        "tmux-upstream": "tmux-upstream"
       }
     },
     "tmux-remux": {
@@ -414,6 +397,23 @@
       "original": {
         "owner": "noamsto",
         "repo": "tmux-remux",
+        "type": "github"
+      }
+    },
+    "tmux-upstream": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784111929,
+        "narHash": "sha256-TKAOZLO9dtE4Ib9CcrtMK0mnuKm5n9sNoyUZ9US6b+Q=",
+        "owner": "tmux",
+        "repo": "tmux",
+        "rev": "5350da0be3c34f5ea8dff2bd37b90a03cb03e4ab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tmux",
+        "repo": "tmux",
+        "rev": "5350da0be3c34f5ea8dff2bd37b90a03cb03e4ab",
         "type": "github"
       }
     },
