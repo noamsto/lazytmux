@@ -1,6 +1,10 @@
 package controlmode
 
-import "strings"
+import (
+	"bufio"
+	"io"
+	"strings"
+)
 
 // Unescape decodes tmux control-mode %output data: bytes below 0x20 and the
 // backslash are written as three-digit octal (\NNN); all else is literal.
@@ -68,4 +72,37 @@ func ParseLine(raw string) Line {
 	default:
 		return Line{Kind: Other}
 	}
+}
+
+type Reader struct{ sc *bufio.Scanner }
+
+func NewReader(r io.Reader) *Reader {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	return &Reader{sc: sc}
+}
+
+func (rd *Reader) Next() (Line, bool) {
+	for rd.sc.Scan() {
+		l := ParseLine(rd.sc.Text())
+		if l.Kind != Begin {
+			return l, true
+		}
+		// Accumulate the reply body until %end/%error (matching id in Args[0]).
+		id := ""
+		if len(l.Args) > 0 {
+			id = l.Args[0]
+		}
+		var body []string
+		for rd.sc.Scan() {
+			raw := rd.sc.Text()
+			t := ParseLine(raw)
+			if t.Kind == End || t.Kind == Error {
+				return Line{Kind: t.Kind, Args: []string{id}, Data: []byte(strings.Join(body, "\n"))}, true
+			}
+			body = append(body, raw)
+		}
+		return Line{Kind: End, Args: []string{id}, Data: []byte(strings.Join(body, "\n"))}, true
+	}
+	return Line{}, false
 }
