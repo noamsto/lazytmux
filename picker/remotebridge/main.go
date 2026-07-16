@@ -27,10 +27,21 @@ func main() {
 	window := flag.Int("window", 0, "remote window index")
 	remoteTmux := flag.String("tmux", "tmux", "absolute remote tmux path")
 	tmpdir := flag.String("tmpdir", "", "remote TMUX_TMPDIR")
+	sshCmd := flag.String("ssh", "ssh", "control transport command (empty = run tmux locally)")
 	flag.Parse()
 
-	ctl := exec.Command("ssh", "-T", "-e", "none", *host, "--",
-		"env", "TMUX_TMPDIR="+*tmpdir, *remoteTmux, "-C", "attach-session", "-t", *session)
+	// remoteTmux may carry args (e.g. "tmux -S <sock>" for tests), so split
+	// it into argv rather than passing it as a single token.
+	tmuxArgv := strings.Fields(*remoteTmux)
+	var ctl *exec.Cmd
+	if *sshCmd == "" {
+		ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
+			"-C", "attach-session", "-t", *session)...)
+	} else {
+		args := append([]string{"-T", "-e", "none", *host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}, tmuxArgv...)
+		args = append(args, "-C", "attach-session", "-t", *session)
+		ctl = exec.Command(*sshCmd, args...)
+	}
 	stdin, err := ctl.StdinPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: %v\r\n", err)
@@ -151,18 +162,24 @@ func main() {
 }
 
 // readActivePane consumes reply-block Lines until the list-panes reply
-// arrives, then picks the "1 %id" row (pane_active == 1).
+// arrives, then picks the "1 %id" row (pane_active == 1). The very first
+// End block on the wire is always the implicit, empty reply to the
+// "attach-session" command control mode ran on startup — skip it (and any
+// other empty block) rather than treating it as our answer.
 func readActivePane(reader *controlmode.Reader) string {
 	for {
 		l, ok := reader.Next()
-		if !ok || l.Kind == controlmode.End || l.Kind == controlmode.Error {
-			for _, row := range strings.Split(string(l.Data), "\n") {
-				fields := strings.Fields(row)
-				if len(fields) == 2 && fields[0] == "1" {
-					return fields[1]
-				}
-			}
+		if !ok || l.Kind == controlmode.Error {
 			return ""
+		}
+		if l.Kind != controlmode.End {
+			continue
+		}
+		for _, row := range strings.Split(string(l.Data), "\n") {
+			fields := strings.Fields(row)
+			if len(fields) == 2 && fields[0] == "1" {
+				return fields[1]
+			}
 		}
 	}
 }
