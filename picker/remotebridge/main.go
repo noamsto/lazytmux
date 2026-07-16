@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +18,8 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 	"github.com/noamsto/lazytmux/picker/remotebridge/render"
 )
+
+var paneIDRe = regexp.MustCompile(`^%[0-9]+$`)
 
 func main() {
 	host := flag.String("host", "", "ssh host")
@@ -40,11 +44,16 @@ func main() {
 	cmds := bufio.NewWriter(stdin)
 	// send is called from the main setup path plus the input and resize
 	// goroutines once the loops start; serialize so command lines never
-	// interleave on the wire.
+	// interleave on the wire, and so a send racing teardown's stdin.Close
+	// sees "closed" instead of writing to a closed pipe.
 	var sendMu sync.Mutex
+	closed := false
 	send := func(s string) {
 		sendMu.Lock()
 		defer sendMu.Unlock()
+		if closed {
+			return
+		}
 		fmt.Fprintf(cmds, "%s\n", s)
 		cmds.Flush()
 	}
@@ -56,8 +65,12 @@ func main() {
 	reader := controlmode.NewReader(stdout)
 
 	// resolve active pane in target window
-	send(fmt.Sprintf("list-panes -t %s:%d -F '#{pane_active} #{pane_id}'", *session, *window))
+	send(fmt.Sprintf("list-panes -t %s:%d -F '#{pane_active} #{pane_id}'", tmuxQuote(*session), *window))
 	pane := readActivePane(reader)
+	if !paneIDRe.MatchString(pane) {
+		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: no active pane for %s:%d\r\n", *session, *window)
+		os.Exit(1)
+	}
 
 	// size + seed
 	if w, h, err := render.Size(0); err == nil {
@@ -67,18 +80,22 @@ func main() {
 	cx, cy, alt, appck := readCursor(reader)
 	send(fmt.Sprintf("capture-pane -e -p -t %s", pane))
 	captured := readCapture(reader)
+	// Raw mode (below) clears OPOST, so the kernel stops mapping bare "\n"
+	// to "\r\n"; without this the seeded snapshot staircases until the
+	// first repaint. capture-pane output uses bare "\n" line separators.
+	captured = bytes.ReplaceAll(captured, []byte("\n"), []byte("\r\n"))
 	os.Stdout.Write(render.Seed(captured, cx, cy, alt, appck))
 
-	restore, err := render.MakeRaw(0)
-	if err == nil {
-		defer restore()
-	}
+	restore, _ := render.MakeRaw(0)
 
 	teardown := func() {
 		if restore != nil {
 			restore()
 		}
+		sendMu.Lock()
+		closed = true
 		stdin.Close()
+		sendMu.Unlock()
 	}
 
 	// input goroutine
@@ -177,6 +194,15 @@ func readCapture(reader *controlmode.Reader) []byte {
 			return l.Data
 		}
 	}
+}
+
+// tmuxQuote single-quotes s for a tmux control-mode command line, escaping
+// any embedded single quote the tmux-safe way. Needed for the session name
+// in the initial list-panes target, since session names may contain spaces;
+// every other command below targets the resolved pane id (%N), which never
+// contains spaces and needs no quoting.
+func tmuxQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // quoteArgs joins a send-keys arg slice into one control-mode command line.
