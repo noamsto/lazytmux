@@ -12,7 +12,8 @@ if [[ ! $win =~ ^[0-9]+$ ]]; then
 fi
 
 remote_tmpdir="${LZTMUX_REMOTE_TMPDIR:-/run/user/$(ssh "$host" id -u)}"
-remote_tmux="$(ssh "$host" "command -v tmux")"
+# single-quoted: $(id -un) expands on the remote side (NixOS profile fallback)
+remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux')"
 
 if [[ -z $sess ]]; then
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
