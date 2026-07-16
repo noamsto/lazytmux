@@ -4,9 +4,9 @@
 set -euo pipefail
 host="$1"
 sess="${2:-}"
-win="${3:-0}"
+win="${3:-}"
 
-if [[ ! $win =~ ^[0-9]+$ ]]; then
+if [[ -n $win && ! $win =~ ^[0-9]+$ ]]; then
 	echo "lztmux-remote-open: window index must be numeric, got: $win" >&2
 	exit 1
 fi
@@ -18,6 +18,13 @@ remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/pe
 if [[ -z $sess ]]; then
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	sess="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1")"
+fi
+
+if [[ -z $win ]]; then
+	# base-index is non-zero under lazytmux (windows start at 1), so target the
+	# session's active window rather than assuming index 0.
+	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t '$sess' -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
 fi
 
 # Pass the (remote-derived, untrusted) params through tmux's environment
