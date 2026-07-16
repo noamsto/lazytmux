@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -43,16 +45,17 @@ var volatileFields = []string{
 }
 
 // fetchVolatile fills the volatile fields via a single display-message
-// roundtrip to the session's active pane and reports whether prefix is active.
-// A failed call leaves the fields empty, degrading to a still-painted (never
-// blank) line. Fields are joined by US (0x1f), a byte no tmux value contains.
-func (a *args) fetchVolatile() bool {
+// roundtrip to the session's active pane. It reports whether prefix is active
+// and whether the fetch succeeded; a failed fetch leaves the fields empty (the
+// caller re-paints the cached last-good line instead of that degraded frame).
+// Fields are joined by US (0x1f), a byte no tmux value contains.
+func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	format := strings.Join(volatileFields, "\x1f")
 	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", a.session, "-F", format).Output()
 	if err != nil {
-		return false
+		return false, false
 	}
 	f := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
 	for len(f) < len(volatileFields) {
@@ -63,7 +66,46 @@ func (a *args) fetchVolatile() bool {
 	a.prNumber, a.prBranch, a.prState, a.prCheck, a.prMergeable, a.prTitle = f[8], f[9], f[10], f[11], f[12], f[13]
 	a.paneIcon, a.paneCmd, a.claudeFg = f[14], f[15], f[16]
 	a.crewName, a.crewColor = f[17], f[18]
-	return f[0] == "1"
+	return f[0] == "1", true
+}
+
+// statuslineCacheDir holds the per-session last-good rendered line so a failed
+// fetchVolatile re-paints the previous frame rather than a degraded one.
+const statuslineCacheDir = "/tmp/lazytmux-statusline"
+
+// cacheFileName maps a session name to a filesystem-safe file name; distinct
+// names stay distinct (any non-safe byte becomes its 2-hex escape).
+func cacheFileName(session string) string {
+	var b strings.Builder
+	for i := 0; i < len(session); i++ {
+		c := session[i]
+		if c == '-' || c == '_' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, ".%02x", c)
+	}
+	return b.String()
+}
+
+func readLastGood(dir, session string) (string, bool) {
+	out, err := os.ReadFile(filepath.Join(dir, cacheFileName(session)))
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func writeLastGood(dir, session, line string) {
+	if os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	path := filepath.Join(dir, cacheFileName(session))
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if os.WriteFile(tmp, []byte(line), 0o644) != nil {
+		return
+	}
+	os.Rename(tmp, path)
 }
 
 type args struct {
@@ -236,11 +278,26 @@ func main() {
 	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
 	flag.Parse()
 
-	prefixActive := a.fetchVolatile()
+	prefixActive, ok := a.fetchVolatile()
 
 	claudeDir := os.Getenv("CLAUDE_STATUS_DIR")
 	if claudeDir == "" {
 		claudeDir = "/tmp/claude-status"
 	}
-	os.Stdout.WriteString(renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix()))
+
+	// On a failed fetch the volatile fields are empty; re-paint the cached
+	// last-good line so a transient timeout (common under load) doesn't flash a
+	// degraded frame. Cold start has no cache and falls through to render.
+	if !ok {
+		if line, hit := readLastGood(statuslineCacheDir, a.session); hit {
+			os.Stdout.WriteString(line)
+			return
+		}
+	}
+
+	line := renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix())
+	if ok {
+		writeLastGood(statuslineCacheDir, a.session, line)
+	}
+	os.Stdout.WriteString(line)
 }

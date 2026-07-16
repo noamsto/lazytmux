@@ -139,6 +139,31 @@ func TestPRBadgeClosedWinsOverStaleCheck(t *testing.T) {
 	}
 }
 
+func TestLastGoodRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := readLastGood(dir, "work"); ok {
+		t.Fatal("cold cache should miss")
+	}
+	line := "#[align=left]painted line"
+	writeLastGood(dir, "work", line)
+	got, ok := readLastGood(dir, "work")
+	if !ok || got != line {
+		t.Fatalf("round-trip = %q,%v, want %q,true", got, ok, line)
+	}
+}
+
+func TestLastGoodSessionIsolated(t *testing.T) {
+	dir := t.TempDir()
+	writeLastGood(dir, "a/b", "line-ab")
+	writeLastGood(dir, "c d", "line-cd")
+	if got, _ := readLastGood(dir, "a/b"); got != "line-ab" {
+		t.Fatalf("session with slash = %q", got)
+	}
+	if got, _ := readLastGood(dir, "c d"); got != "line-cd" {
+		t.Fatalf("session with space = %q", got)
+	}
+}
+
 func TestRenderLineFull(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(dir+"/panes", 0o755)
