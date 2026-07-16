@@ -1067,6 +1067,10 @@ in {
             Unit.Description = "lztmux remote-session promotion listener";
             Install.WantedBy = ["default.target"];
             Service = {
+              # Point the listener's tmux at the user's real socket. Without it
+              # bare tmux uses /tmp/tmux-$UID, but lazytmux servers live under
+              # %t (=$XDG_RUNTIME_DIR), so every promote would hit a dead socket.
+              Environment = ["TMUX_TMPDIR=%t"];
               ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.local/state/lztmux";
               ExecStart = "${pkgs.socat}/bin/socat UNIX-LISTEN:%h/.local/state/lztmux/listener.sock,fork,mode=0600,unlink-early EXEC:${tmuxConfig.script.lztmux-listener}/bin/lztmux-listener";
               Restart = "on-failure";
