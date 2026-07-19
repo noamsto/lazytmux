@@ -188,7 +188,6 @@ func TestRenderWindowItemsAlignment(t *testing.T) {
 		{session: "s", index: 2, name: "b", labelID: "L ENG-2", labelRest: " second", crewName: "rust", crewColor: "colour210"},
 	}
 	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
-	// Collect the two window-row plain strings (skip the session header).
 	var rows []string
 	for _, it := range items {
 		if !it.isHeader {
@@ -218,7 +217,6 @@ func TestRenderWindowItemsLayout(t *testing.T) {
 	}
 	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
 
-	// items[0] is the session header; the two window rows follow.
 	var plains []string
 	for _, it := range items {
 		plains = append(plains, it.plain)
