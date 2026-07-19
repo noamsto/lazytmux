@@ -3,14 +3,14 @@ package render
 import (
 	"io"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
+	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
 // Run drives one renderer over conn: sends Hello(paneID), then paints Seed/Output
 // to out and forwards in -> Input frames, until conn EOF. rawSetup is injected so
 // tests can skip real tty setup; production passes render.MakeRaw(fd).
 func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, rawSetup func() (func() error, error)) error {
-	if err := daemon.WriteFrame(conn, daemon.FrameHello, []byte(paneID)); err != nil {
+	if err := wire.WriteFrame(conn, wire.FrameHello, []byte(paneID)); err != nil {
 		return err
 	}
 	restore, err := rawSetup()
@@ -27,7 +27,7 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 		for {
 			n, err := in.Read(buf)
 			if n > 0 {
-				if werr := daemon.WriteFrame(conn, daemon.FrameInput, buf[:n]); werr != nil {
+				if werr := wire.WriteFrame(conn, wire.FrameInput, buf[:n]); werr != nil {
 					return
 				}
 			}
@@ -39,7 +39,7 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 
 	// daemon frames -> paint
 	for {
-		f, err := daemon.ReadFrame(conn)
+		f, err := wire.ReadFrame(conn)
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -47,11 +47,11 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 			return err
 		}
 		switch f.Type {
-		case daemon.FrameSeed, daemon.FrameOutput:
+		case wire.FrameSeed, wire.FrameOutput:
 			if _, werr := out.Write(f.Payload); werr != nil {
 				return werr
 			}
-		case daemon.FrameResize:
+		case wire.FrameResize:
 			// M2.1: renderer records nothing; size is daemon-authoritative. No-op.
 		}
 	}

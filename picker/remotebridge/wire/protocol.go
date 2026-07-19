@@ -1,4 +1,8 @@
-package daemon
+// Package wire is the leaf package for the daemon<->renderer framed
+// protocol. It exists separately from daemon so that render (which paints
+// frames) and daemon (which now also produces seed bytes via render.Seed)
+// can both depend on it without an import cycle.
+package wire
 
 import (
 	"encoding/binary"

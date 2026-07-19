@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
+	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
 func TestRendererPaintsAndForwards(t *testing.T) {
@@ -20,17 +20,17 @@ func TestRendererPaintsAndForwards(t *testing.T) {
 	go func() { done <- Run(client, "%3", in, &out, noRaw) }()
 
 	// Expect Hello first.
-	f, err := daemon.ReadFrame(server)
-	if err != nil || f.Type != daemon.FrameHello || string(f.Payload) != "%3" {
+	f, err := wire.ReadFrame(server)
+	if err != nil || f.Type != wire.FrameHello || string(f.Payload) != "%3" {
 		t.Fatalf("hello = %v %q err %v", f.Type, f.Payload, err)
 	}
 	// Send a seed + one output frame, then close.
-	daemon.WriteFrame(server, daemon.FrameSeed, []byte("SEED"))
-	daemon.WriteFrame(server, daemon.FrameOutput, []byte("OUT"))
+	wire.WriteFrame(server, wire.FrameSeed, []byte("SEED"))
+	wire.WriteFrame(server, wire.FrameOutput, []byte("OUT"))
 
 	// Expect the forwarded stdin as an Input frame.
-	fi, err := daemon.ReadFrame(server)
-	if err != nil || fi.Type != daemon.FrameInput || string(fi.Payload) != "ls\r" {
+	fi, err := wire.ReadFrame(server)
+	if err != nil || fi.Type != wire.FrameInput || string(fi.Payload) != "ls\r" {
 		t.Fatalf("input = %v %q err %v", fi.Type, fi.Payload, err)
 	}
 	server.Close()
