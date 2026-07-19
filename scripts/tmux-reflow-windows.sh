@@ -174,14 +174,11 @@ while IFS=$'\t' read -r win_idx proc; do
 done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
 unset win_seen
 
-# --- Build icon strings with fixed-width padding (stable across icon changes) ---
+# Fixed icon-column width for the slot math below. The icon *content*
+# (@window_icon_padded) is owned solely by tmux-update-icons — don't write it
+# here too: this script can't source lib-claude, so it would drop the colored
+# claude glyph on every --force reflow, flickering it out until the next tick.
 max_icon_width=$((MAX_ICONS * 3 + 2))
-declare -A win_icon_str
-for idx in "${indices[@]}"; do
-	build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
-	pad_to_width "$REPLY" "$REPLY_DW" "$max_icon_width"
-	win_icon_str[$idx]="$REPLY"
-done
 
 # --- Layout: pick label detail (long/short) + column width, then pack ---
 # Slot = idx_width + ": "(2) + name + pr + " "(1) + icon column.
@@ -379,7 +376,6 @@ declare -a tmux_cmds=()
 for idx in "${indices[@]}"; do
 	target="${SESSION}:${idx}"
 	tmux \
-		set -w -t "$target" @window_icon_padded "${win_icon_str[$idx]}" ';' \
 		set -w -t "$target" @window_label_short "${win_short[$idx]}" ';' \
 		set -w -t "$target" @window_label_id "${win_id[$idx]}" ';' \
 		set -w -t "$target" @window_label_rest_short "${win_rest_short[$idx]}" ';' \
