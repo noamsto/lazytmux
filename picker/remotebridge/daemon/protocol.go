@@ -35,15 +35,26 @@ func WriteFrame(w io.Writer, t FrameType, payload []byte) error {
 	return err
 }
 
+// maxFrameSize bounds the wire-supplied payload length so a corrupt or
+// malicious header can't trigger a multi-GiB allocation. Far above any real
+// seed/output frame.
+const maxFrameSize = 16 << 20 // 16 MiB
+
 func ReadFrame(r io.Reader) (Frame, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return Frame{}, err // io.EOF passes through on clean boundary
 	}
 	n := binary.BigEndian.Uint32(hdr[1:])
+	if n > maxFrameSize {
+		return Frame{}, fmt.Errorf("frame length %d exceeds max %d", n, maxFrameSize)
+	}
 	p := make([]byte, n)
 	if n > 0 {
 		if _, err := io.ReadFull(r, p); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			return Frame{}, err
 		}
 	}

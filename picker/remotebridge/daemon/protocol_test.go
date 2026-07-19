@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"io"
 	"testing"
 )
@@ -33,6 +35,33 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 	if _, err := ReadFrame(&buf); err != io.EOF {
 		t.Errorf("expected io.EOF after last frame, got %v", err)
+	}
+}
+
+func TestReadFrameTruncatedPayload(t *testing.T) {
+	var hdr [5]byte
+	hdr[0] = byte(FrameSeed)
+	binary.BigEndian.PutUint32(hdr[1:], 5) // header promises 5 payload bytes
+	buf := append(hdr[:], []byte("ab")...) // connection dies after 2 of them
+
+	if _, err := ReadFrame(bytes.NewReader(buf)); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadFrame(truncated payload) = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
+func TestReadFrameOversizedLength(t *testing.T) {
+	var hdr [5]byte
+	hdr[0] = byte(FrameSeed)
+	binary.BigEndian.PutUint32(hdr[1:], maxFrameSize+1)
+
+	if _, err := ReadFrame(bytes.NewReader(hdr[:])); err == nil {
+		t.Fatal("ReadFrame(oversized length) = nil error, want error")
+	}
+}
+
+func TestReadFrameCleanCloseAtBoundary(t *testing.T) {
+	if _, err := ReadFrame(bytes.NewReader(nil)); !errors.Is(err, io.EOF) {
+		t.Fatalf("ReadFrame(empty reader) = %v, want io.EOF", err)
 	}
 }
 
