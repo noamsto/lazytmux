@@ -352,11 +352,7 @@ func (m tuiModel) View() tea.View {
 		var body string
 		if m.showPreview {
 			sep := m.renderSeparator()
-			if m.portrait() {
-				body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
-			} else {
-				body = lipgloss.JoinHorizontal(lipgloss.Top, listPane, sep, m.preview.View())
-			}
+			body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
 		} else {
 			body = listPane
 		}
@@ -411,15 +407,7 @@ func (m tuiModel) renderList() string {
 func (m tuiModel) renderSeparator() string {
 	sepColor := lipgloss.NewStyle().
 		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0"))
-	if m.portrait() {
-		return sepColor.Render(strings.Repeat("─", m.innerWidth()))
-	}
-	h := m.listHeight()
-	lines := make([]string, h)
-	for i := range lines {
-		lines[i] = "│"
-	}
-	return sepColor.Render(strings.Join(lines, "\n"))
+	return sepColor.Render(strings.Repeat("─", m.innerWidth()))
 }
 
 func (m tuiModel) renderSearch() string {
@@ -482,11 +470,6 @@ func (m tuiModel) renderHints() string {
 
 // --- Layout ---
 
-// portrait returns true when preview should be below the list (narrow terminal).
-func (m tuiModel) portrait() bool {
-	return m.width < 2*m.height
-}
-
 // bodyHeight is the total height available for list + preview (excludes search/hints/borders).
 func (m tuiModel) bodyHeight() int {
 	h := m.height - 5 // search (3 with border) + bottom border (1) + hints (1)
@@ -498,10 +481,10 @@ func (m tuiModel) bodyHeight() int {
 
 func (m tuiModel) listHeight() int {
 	bh := m.bodyHeight()
-	if !m.showPreview || !m.portrait() {
+	if !m.showPreview {
 		return bh
 	}
-	// Portrait: list gets top 50%, preview gets bottom 50% (minus 1 for separator)
+	// List gets the top ~50%, preview the bottom (minus 1 for the separator).
 	return bh * 50 / 100
 }
 
@@ -510,30 +493,15 @@ func (m tuiModel) innerWidth() int {
 }
 
 func (m tuiModel) listWidth() int {
-	iw := m.innerWidth()
-	if !m.showPreview || m.portrait() {
-		return iw
-	}
-	pct := 60
-	if m.windowMode {
-		pct = 45
-	}
-	w := iw * pct / 100
-	if w < 30 {
-		return 30
-	}
-	return w
+	return m.innerWidth()
 }
 
 func (m tuiModel) previewWidth() int {
-	if m.portrait() {
-		return m.innerWidth()
-	}
-	return m.innerWidth() - m.listWidth() - 1 // -1 for separator
+	return m.innerWidth()
 }
 
 func (m tuiModel) previewHeight() int {
-	if !m.portrait() {
+	if !m.showPreview {
 		return m.bodyHeight()
 	}
 	return m.bodyHeight() - m.listHeight() - 1 // -1 for separator
@@ -642,9 +610,6 @@ func (m tuiModel) listIndexAt(x, y int) (int, bool) {
 	if vy < 0 || vy >= h {
 		return 0, false
 	}
-	if !m.portrait() && m.showPreview && x >= m.listWidth() {
-		return 0, false // click landed in the separator/preview column
-	}
 	idx := m.scrollStart(h) + vy
 	if idx < 0 || idx >= len(m.visible) || !m.isSelectable(m.visible[idx]) {
 		return 0, false
@@ -652,16 +617,13 @@ func (m tuiModel) listIndexAt(x, y int) (int, bool) {
 	return idx, true
 }
 
-// inPreview reports whether screen coords fall in the preview pane (right of
-// the list in landscape, below it in portrait).
+// inPreview reports whether screen coords fall in the preview pane, which always
+// sits below the list (past the separator row).
 func (m tuiModel) inPreview(x, y int) bool {
 	if !m.showPreview || !m.ready {
 		return false
 	}
-	if m.portrait() {
-		return y >= m.listRowTop()+m.listHeight()+1 // past the separator row
-	}
-	return x >= m.listWidth()
+	return y >= m.listRowTop()+m.listHeight()+1 // past the separator row
 }
 
 // --- Filter ---

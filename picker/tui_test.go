@@ -97,8 +97,8 @@ func TestPadToWidth(t *testing.T) {
 }
 
 func TestListIndexAt(t *testing.T) {
-	// Landscape (width >= 2*height): list on the left of listWidth, cursor at 0
-	// so scrollStart is 0 and row y maps to index y-listRowTop.
+	// Preview always sits below the list, so a click anywhere on a list row's
+	// x maps to that row — there is no side preview column to reject.
 	m := tuiModel{
 		width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
 		visible: []listItem{
@@ -122,7 +122,7 @@ func TestListIndexAt(t *testing.T) {
 		{"header row not selectable", 5, 4, 0, false},
 		{"row after header", 5, 5, 3, true},
 		{"above list in search", 5, 1, 0, false},
-		{"preview column", 70, 2, 0, false},
+		{"right side is still the list now", 70, 2, 0, true},
 		{"below the list", 5, 90, 0, false},
 	}
 	for _, c := range cases {
@@ -136,26 +136,22 @@ func TestListIndexAt(t *testing.T) {
 }
 
 func TestInPreview(t *testing.T) {
-	land := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
-	if !land.inPreview(70, 2) {
-		t.Error("landscape: right of listWidth should be preview")
+	// Preview is the region below the list + separator, at any terminal size.
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
+	below := m.listRowTop() + m.listHeight() + 1
+	if !m.inPreview(5, below) {
+		t.Errorf("y=%d should be preview", below)
 	}
-	if land.inPreview(5, 2) {
-		t.Error("landscape: left column should be the list")
+	if m.inPreview(70, below) {
+		// x is irrelevant to preview hit-testing now; only y matters, but a row
+		// inside the list must never read as preview.
 	}
-	off := land
+	if m.inPreview(5, m.listRowTop()) {
+		t.Error("top list row should not be preview")
+	}
+	off := m
 	off.showPreview = false
-	if off.inPreview(70, 2) {
+	if off.inPreview(5, below) {
 		t.Error("preview hidden -> never in preview")
-	}
-
-	// Portrait (width < 2*height): preview sits below the list + separator.
-	port := tuiModel{width: 40, height: 40, ready: true, showPreview: true, theme: "dark"}
-	below := port.listRowTop() + port.listHeight() + 1
-	if !port.inPreview(5, below) {
-		t.Errorf("portrait: y=%d should be preview", below)
-	}
-	if port.inPreview(5, port.listRowTop()) {
-		t.Error("portrait: top list row should not be preview")
 	}
 }
