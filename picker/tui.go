@@ -307,6 +307,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showPreview = !m.showPreview
 		if m.ready {
 			m.preview.SetWidth(m.previewWidth())
+			m.preview.SetHeight(m.previewHeight())
 		}
 		return m, nil
 
@@ -1127,7 +1128,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 		crewName    string
 	}
 	winRows := make(map[string][]renderedWin)
-	maxLeadDW, maxIconDW, maxPrDW := 0, 0, 0
+	maxLeadDW, maxIconDW, maxPrDW, maxZoomDW := 0, 0, 0, 0
 	for _, g := range groups {
 		for _, w := range g.windows {
 			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
@@ -1181,12 +1182,15 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			maxLeadDW = max(maxLeadDW, leadDW)
 			maxIconDW = max(maxIconDW, dw)
 			maxPrDW = max(maxPrDW, prDW)
+			if w.zoomed {
+				maxZoomDW = max(maxZoomDW, iconCellWidth(" 󰁌"))
+			}
 		}
 	}
 	iconCol := max(maxIconDW+1, 3)
-	identityCap := identityCapFor(width, maxLeadDW, iconCol, maxPrDW)
+	identityCap := identityCapFor(width, maxLeadDW+maxZoomDW, iconCol, maxPrDW)
 	// Uniform label column so the icon column lines up across every row.
-	labelCol := maxLeadDW + identityCap
+	labelCol := maxLeadDW + identityCap + maxZoomDW
 
 	// truncID renders a rawIdentity to (colored, plain) within identityCap cells.
 	truncID := func(ri rawIdentity) (string, string) {
@@ -1269,7 +1273,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			idColored, idPlain := truncID(r.ident)
 			zoom := ""
 			if w.zoomed {
-				zoom = " 󰁌" // a zoomed row may run up to 2 cells past labelCol
+				zoom = " 󰁌" // width budgeted into labelCol via maxZoomDW
 			}
 			lead := padToWidth(r.leadColored, r.leadDW, maxLeadDW)
 			leadPlainPadded := padToWidth(r.leadPlain, r.leadDW, maxLeadDW)

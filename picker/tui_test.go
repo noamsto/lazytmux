@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestAnsiFgTmux(t *testing.T) {
@@ -267,5 +270,59 @@ func TestRenderWindowItemsLongIDClamped(t *testing.T) {
 	}
 	if !strings.Contains(row, "…") {
 		t.Errorf("expected an ellipsis from truncation; got %q", row)
+	}
+}
+
+func TestPreviewToggleResizesViewport(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
+		visible: []listItem{{target: "a", display: "a"}}}
+	// Simulate a resize while preview is HIDDEN: viewport gets the full-body height.
+	m.showPreview = false
+	m.preview = viewport.New(viewport.WithWidth(m.previewWidth()), viewport.WithHeight(m.previewHeight()))
+	hiddenH := m.preview.Height() // == bodyHeight() (full)
+	// Toggling preview back ON must shrink the viewport to previewHeight().
+	m2, _ := m.handleKey(tea.KeyPressMsg{Code: '/', Mod: tea.ModCtrl})
+	mm := m2.(tuiModel)
+	if !mm.showPreview {
+		t.Fatal("ctrl+/ should have toggled preview on")
+	}
+	if mm.preview.Height() != mm.previewHeight() {
+		t.Errorf("viewport height = %d, want previewHeight() = %d (was %d while hidden)",
+			mm.preview.Height(), mm.previewHeight(), hiddenH)
+	}
+}
+
+func TestRenderWindowItemsZoomAligned(t *testing.T) {
+	// A zoomed row must not push its icon/PR column past a non-zoomed row's.
+	// The id is long enough to overflow identityCap and get truncated flush to
+	// it (zero slack in the label column), so an unbudgeted zoom glyph would
+	// have nowhere to go but past labelCol.
+	longID := "L ENG-000000000000000000000000000000000000000000000000000000"
+	windows := []windowData{
+		{session: "s", index: 1, name: "a", labelID: longID, labelRest: " one",
+			prPlain: " #10", prState: "open", prCheck: "success"},
+		{session: "s", index: 2, name: "b", labelID: longID, labelRest: " two", zoomed: true,
+			prPlain: " #20", prState: "open", prCheck: "success"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 100)
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(rows))
+	}
+	// Both PR badges must survive (zoomed row's badge not clipped).
+	if !strings.Contains(rows[1], "#20") {
+		t.Errorf("zoomed row PR badge clipped: %q", rows[1])
+	}
+	// The zoom glyph is present on the zoomed row and the icon column still aligns:
+	// the PR badge ("#") must start at the same cell column in both rows.
+	col0 := visibleWidth(rows[0][:strings.Index(rows[0], "#10")])
+	col1 := visibleWidth(rows[1][:strings.Index(rows[1], "#20")])
+	if col0 != col1 {
+		t.Errorf("PR column misaligned: row0 # at cell %d, row1 # at cell %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
 	}
 }
