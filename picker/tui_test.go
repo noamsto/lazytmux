@@ -247,3 +247,24 @@ func TestRenderWindowItemsLayout(t *testing.T) {
 		t.Errorf("long title should be truncated at the default cap; got:\n%s", joined)
 	}
 }
+
+func TestRenderWindowItemsLongIDClamped(t *testing.T) {
+	// Narrow width clamps identityCap to the minimum (12); a ticket id longer
+	// than that must be truncated, not left to overflow the aligned column.
+	windows := []windowData{
+		{session: "s", index: 1, name: "x", labelID: "L PROJECT-123456", labelRest: " some title"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 20)
+	var row string
+	for _, it := range items {
+		if !it.isHeader {
+			row = it.plain
+		}
+	}
+	if strings.Contains(row, "PROJECT-123456") {
+		t.Errorf("long ticket id should be truncated at the min cap; got %q", row)
+	}
+	if !strings.Contains(row, "…") {
+		t.Errorf("expected an ellipsis from truncation; got %q", row)
+	}
+}

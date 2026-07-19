@@ -1184,15 +1184,18 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	truncID := func(ri rawIdentity) (string, string) {
 		switch ri.kind {
 		case 1: // issue: id accent + dim title
-			idW := iconCellWidth(ri.id)
+			id := ri.id
+			idW := iconCellWidth(id)
 			rest := ri.rest
 			if idW >= identityCap {
+				id = truncateCells(id, identityCap)
 				rest = ""
+				idW = iconCellWidth(id)
 			} else if idW+iconCellWidth(rest) > identityCap {
 				rest = truncateCells(rest, identityCap-idW)
 			}
-			plain := ri.id + rest
-			colored := cMauve + ri.id + reset
+			plain := id + rest
+			colored := cMauve + id + reset
 			if rest != "" {
 				colored += cDim + rest + reset
 			}
