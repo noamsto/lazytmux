@@ -81,15 +81,15 @@ func (p *layoutParser) cell() (*node, error) {
 		p.pos++ // consume ','
 		n.id = "%" + p.numRun()
 	case '{':
-		return p.split(n, '{', '}')
+		return p.split(n, '}')
 	case '[':
-		return p.split(n, '[', ']')
+		return p.split(n, ']')
 	}
 	return n, nil
 }
 
-func (p *layoutParser) split(n *node, open, close byte) (*node, error) {
-	p.pos++ // consume open
+func (p *layoutParser) split(n *node, end byte) (*node, error) {
+	p.pos++ // consume the already-matched opening delimiter
 	for {
 		c, err := p.cell()
 		if err != nil {
@@ -102,7 +102,7 @@ func (p *layoutParser) split(n *node, open, close byte) (*node, error) {
 		switch p.s[p.pos] {
 		case ',':
 			p.pos++
-		case close:
+		case end:
 			p.pos++
 			return n, nil
 		default:
