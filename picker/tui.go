@@ -148,6 +148,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
+		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
 		if !m.ready {
@@ -160,6 +161,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.preview.SetWidth(m.previewWidth())
 			m.preview.SetHeight(m.previewHeight())
+		}
+		// Window labels are truncated to the terminal width; when it changes,
+		// rebuild so the adaptive identity cap tracks the real size. Guarded on
+		// change so a fixed-size popup forks the rebuild ~once.
+		if m.windowMode && widthChanged {
+			return m, tea.Batch(m.loadPreviewCmd(), m.refreshDataCmd())
 		}
 		return m, m.loadPreviewCmd()
 
@@ -762,11 +769,12 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 	wm := m.windowMode
 	opts := m.tmuxOpts
 	theme := m.theme
+	lw := m.listWidth() // capture the value; the closure runs off-thread
 	return func() tea.Msg {
 		panes := collectClaudePanes()
 		var items []listItem
 		if wm {
-			items = buildWindowItems(opts, panes, theme, 0)
+			items = buildWindowItems(opts, panes, theme, lw)
 		} else {
 			items = buildSessionItems(opts, panes, theme)
 		}
