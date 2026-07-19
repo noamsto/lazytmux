@@ -64,6 +64,9 @@ func TestParseLayout(t *testing.T) {
 			if got.Panes[0] != tt.wantP0 {
 				t.Errorf("pane[0] = %+v, want %+v", got.Panes[0], tt.wantP0)
 			}
+			if got.Raw != tt.in {
+				t.Errorf("Raw = %q, want %q", got.Raw, tt.in)
+			}
 		})
 	}
 }

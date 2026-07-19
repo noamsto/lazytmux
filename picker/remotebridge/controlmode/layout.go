@@ -14,6 +14,7 @@ type PaneCell struct {
 type Layout struct {
 	W, H  int
 	Panes []PaneCell
+	Raw   string // the original layout string, incl. checksum prefix
 }
 
 // ParseLayout parses a tmux layout string (window_layout / %layout-change payload).
@@ -35,6 +36,7 @@ func ParseLayout(s string) (Layout, error) {
 	}
 	var out Layout
 	out.W, out.H = root.w, root.h
+	out.Raw = s
 	collectLeaves(root, &out.Panes)
 	if len(out.Panes) == 0 {
 		return Layout{}, fmt.Errorf("layout: no panes in %q", s)
