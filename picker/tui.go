@@ -1012,8 +1012,9 @@ const (
 	defaultIdentityCap = 32
 	minIdentityCap     = 12
 	maxIdentityCap     = 48
-	// layoutGaps: "tree marker " (4) + gap before icons (1) + gap before PR (1).
-	layoutGaps = 6
+	// layoutGaps: tree(2)+marker(1) glyph cells + 3 inter-field gaps + 1 gap
+	// before the PR badge = 7.
+	layoutGaps = 7
 )
 
 // identityCapFor sizes the inline-identity column from the terminal width, so
@@ -1023,14 +1024,14 @@ func identityCapFor(width, leadDW, iconDW, prDW int) int {
 	if width <= 0 {
 		return defaultIdentityCap
 	}
-	cap := width - leadDW - iconDW - prDW - layoutGaps
-	if cap < minIdentityCap {
+	identCap := width - leadDW - iconDW - prDW - layoutGaps
+	if identCap < minIdentityCap {
 		return minIdentityCap
 	}
-	if cap > maxIdentityCap {
+	if identCap > maxIdentityCap {
 		return maxIdentityCap
 	}
-	return cap
+	return identCap
 }
 
 // renderWindowItems is the pure rendering half of buildWindowItems, split out so
@@ -1183,9 +1184,12 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	truncID := func(ri rawIdentity) (string, string) {
 		switch ri.kind {
 		case 1: // issue: id accent + dim title
+			idW := iconCellWidth(ri.id)
 			rest := ri.rest
-			if iconCellWidth(ri.id+rest) > identityCap {
-				rest = truncateCells(rest, max(identityCap-iconCellWidth(ri.id), 1))
+			if idW >= identityCap {
+				rest = ""
+			} else if idW+iconCellWidth(rest) > identityCap {
+				rest = truncateCells(rest, identityCap-idW)
 			}
 			plain := ri.id + rest
 			colored := cMauve + ri.id + reset
@@ -1256,8 +1260,10 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			if w.zoomed {
 				zoom = " 󰁌" // a zoomed row may run up to 2 cells past labelCol
 			}
-			labelColored := r.leadColored + idColored + zoom
-			labelPlain := r.leadPlain + idPlain + zoom
+			lead := padToWidth(r.leadColored, r.leadDW, maxLeadDW)
+			leadPlainPadded := padToWidth(r.leadPlain, r.leadDW, maxLeadDW)
+			labelColored := lead + idColored + zoom
+			labelPlain := leadPlainPadded + idPlain + zoom
 			labelColored = padToWidth(labelColored, iconCellWidth(labelPlain), labelCol)
 			labelPlain = padToWidth(labelPlain, iconCellWidth(labelPlain), labelCol)
 

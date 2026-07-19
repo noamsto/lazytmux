@@ -166,15 +166,40 @@ func TestIdentityCapFor(t *testing.T) {
 	}{
 		{"unknown width -> default", 0, 10, 6, 4, 32},
 		{"negative width -> default", -1, 10, 6, 4, 32},
-		{"wide clamps to max", 200, 10, 6, 4, 48},  // 200-10-6-4-6=174 -> 48
-		{"narrow clamps to min", 20, 10, 6, 4, 12}, // 20-10-6-4-6=-6 -> 12
-		{"mid computes exactly", 60, 10, 6, 4, 34}, // 60-10-6-4-6=34, in range
+		{"wide clamps to max", 200, 10, 6, 4, 48},  // 200-10-6-4-7=173 -> 48
+		{"narrow clamps to min", 20, 10, 6, 4, 12}, // 20-10-6-4-7=-7 -> 12
+		{"mid computes exactly", 60, 10, 6, 4, 33}, // 60-10-6-4-7=33, in range
 	}
 	for _, c := range cases {
 		if got := identityCapFor(c.width, c.lead, c.icon, c.pr); got != c.want {
 			t.Errorf("%s: identityCapFor(%d,%d,%d,%d) = %d, want %d",
 				c.name, c.width, c.lead, c.icon, c.pr, got, c.want)
 		}
+	}
+}
+
+func TestRenderWindowItemsAlignment(t *testing.T) {
+	windows := []windowData{
+		{session: "s", index: 1, name: "a", labelID: "L ENG-1", labelRest: " first"},
+		{session: "s", index: 2, name: "b", labelID: "L ENG-2", labelRest: " second", crewName: "rust", crewColor: "colour210"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	// Collect the two window-row plain strings (skip the session header).
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 window rows, got %d", len(rows))
+	}
+	// The ticket id must start at the SAME cell column in both rows despite the
+	// crew tag widening one row's lead — that is what per-row lead padding buys.
+	col0 := strings.Index(rows[0], "ENG-1")
+	col1 := strings.Index(rows[1], "ENG-2")
+	if col0 <= 0 || col0 != col1 {
+		t.Errorf("identity columns misaligned: row0 ENG at %d, row1 ENG at %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
 	}
 }
 
@@ -200,9 +225,18 @@ func TestRenderWindowItemsLayout(t *testing.T) {
 	if !strings.Contains(joined, "2: rust") {
 		t.Errorf("crew should follow the index (`2: rust`); got:\n%s", joined)
 	}
-	// The untagged row has no crew and no reserved crew gap before the name.
-	if !strings.Contains(joined, "1: mono") {
-		t.Errorf("untagged row should read `1: mono` with no crew gap; got:\n%s", joined)
+	// The untagged row's identity aligns with the crew-tagged row's identity —
+	// per-row lead padding absorbs the crew-tag width difference. Compared via
+	// display (not plain), since plain's active-marker trimming is a separate,
+	// unrelated column-width quirk. Cell column (not byte offset) since row2's
+	// active marker is a multi-byte glyph.
+	d1, d2 := stripANSI(items[1].display), stripANSI(items[2].display)
+	o1, o2 := strings.Index(d1, "mono"), strings.Index(d2, "L ENG-7290")
+	if o1 < 0 || o2 < 0 {
+		t.Fatalf("identity not found: %q / %q", d1, d2)
+	}
+	if col1, col2 := visibleWidth(d1[:o1]), visibleWidth(d2[:o2]); col1 != col2 {
+		t.Errorf("untagged row identity should align with the crew-tagged row; row1 col %d, row2 col %d\nrow1=%q\nrow2=%q", col1, col2, d1, d2)
 	}
 	// The ticket id is inline in the row (as the name), not a trailing column.
 	if !strings.Contains(joined, "ENG-7290") {
