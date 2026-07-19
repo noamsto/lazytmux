@@ -443,73 +443,100 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 	}
 }
 
+// maxReconcilePasses bounds reconcileLayout's trailing-reread loop (below).
+const maxReconcilePasses = 5
+
 // reconcileLayout re-reads the remote window's layout and, if the pane set
 // changed, applies the two minimal M2.1 cases: a pure tail-append (a remote
 // split added panes) or a pure tail-removal (remote pane(s) closed). Any
 // other change (reordering, mid-list insert/remove) is a full diff engine —
 // deferred to M2.2 — so it's logged and left as-is for this cycle. Returns
 // the pane-order slice callers should track from here on.
+//
+// Loops on a trailing re-read after applying: every command round-trip here
+// (readLayout included) discards async notifications arriving while it waits
+// for its own reply (see readReply), so a second remote layout change landing
+// back-to-back with the first — e.g. a resize right after the split that
+// triggered this call — can have its own %layout-change silently swallowed
+// while this function is mid-flight. That leaves the mirror on stale
+// geometry with no further notification ever arriving to correct it, since
+// nothing else changes remote-side. Re-reading once more right after
+// applying catches this: the round-trips above give the remote plenty of
+// time to settle, so a still-different layout means something changed
+// underneath us and needs its own pass.
 func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, conns map[string]net.Conn, oldRemote []string) []string {
+	remote := oldRemote
 	L, err := readLayout(reader, send, remoteTarget(cfg))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 		return oldRemote
 	}
-	newRemote := RemotePaneOrder(L)
 
-	switch {
-	case reflect.DeepEqual(newRemote, oldRemote):
-		// Geometry-only change: pane set is identical.
-	case isPrefixOf(oldRemote, newRemote):
-		// Relies on split-window's new pane landing at pane_index==i (bare
-		// split, no -b/target-pane games): spawnRenderer(cfg, i, ...) targets
-		// the local pane by that position right after the split with no
-		// readback confirming it. Task 9 must exercise a mid-session remote
-		// split to validate this holds for real tmux.
-		for i := len(oldRemote); i < len(newRemote); i++ {
-			if err := cfg.LocalTmux("split-window", "-h", "-t", cfg.LocalWin); err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: layout-change split: %v\n", err)
-				return oldRemote
-			}
-			if err := spawnRenderer(cfg, i, newRemote[i]); err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: layout-change spawn renderer: %v\n", err)
-				return oldRemote
-			}
-		}
-		added, err := collectHellos(connCh, len(newRemote)-len(oldRemote), helloTimeout)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-			return oldRemote
-		}
-		for id, c := range added {
-			conns[id] = c
-			if seedRenderer(reader, send, router, c, id) {
-				go pumpInput(c, id, send)
-			} else {
-				delete(conns, id)
-			}
-		}
-	case isPrefixOf(newRemote, oldRemote):
-		for i := len(oldRemote) - 1; i >= len(newRemote); i-- {
-			removed := oldRemote[i]
-			router.Unregister(removed)
-			if c := conns[removed]; c != nil {
-				c.Close()
-				delete(conns, removed)
-			}
-			if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", cfg.LocalWin, i)); err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: layout-change kill-pane: %v\n", err)
-			}
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "daemon: layout-change: unsupported pane reshuffle %v -> %v, skipping reconcile\n", oldRemote, newRemote)
-		return oldRemote
-	}
+	for pass := 0; pass < maxReconcilePasses; pass++ {
+		newRemote := RemotePaneOrder(L)
 
-	if err := cfg.LocalTmux("select-layout", "-t", cfg.LocalWin, L.Raw); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+		switch {
+		case reflect.DeepEqual(newRemote, remote):
+			// Geometry-only change: pane set is identical.
+		case isPrefixOf(remote, newRemote):
+			// Relies on split-window's new pane landing at pane_index==i (bare
+			// split, no -b/target-pane games): spawnRenderer(cfg, i, ...) targets
+			// the local pane by that position right after the split with no
+			// readback confirming it. Task 9 must exercise a mid-session remote
+			// split to validate this holds for real tmux.
+			for i := len(remote); i < len(newRemote); i++ {
+				if err := cfg.LocalTmux("split-window", "-h", "-t", cfg.LocalWin); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change split: %v\n", err)
+					return remote
+				}
+				if err := spawnRenderer(cfg, i, newRemote[i]); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change spawn renderer: %v\n", err)
+					return remote
+				}
+			}
+			added, err := collectHellos(connCh, len(newRemote)-len(remote), helloTimeout)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
+				return remote
+			}
+			for id, c := range added {
+				conns[id] = c
+				if seedRenderer(reader, send, router, c, id) {
+					go pumpInput(c, id, send)
+				} else {
+					delete(conns, id)
+				}
+			}
+		case isPrefixOf(newRemote, remote):
+			for i := len(remote) - 1; i >= len(newRemote); i-- {
+				removed := remote[i]
+				router.Unregister(removed)
+				if c := conns[removed]; c != nil {
+					c.Close()
+					delete(conns, removed)
+				}
+				if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", cfg.LocalWin, i)); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change kill-pane: %v\n", err)
+				}
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "daemon: layout-change: unsupported pane reshuffle %v -> %v, skipping reconcile\n", remote, newRemote)
+			return remote
+		}
+
+		if err := cfg.LocalTmux("select-layout", "-t", cfg.LocalWin, L.Raw); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+		}
+		remote = newRemote
+
+		fresh, err := readLayout(reader, send, remoteTarget(cfg))
+		if err != nil || fresh.Raw == L.Raw {
+			return remote
+		}
+		L = fresh
 	}
-	return newRemote
+	fmt.Fprintf(os.Stderr, "daemon: layout-change: didn't converge after %d passes, stopping at %v\n", maxReconcilePasses, remote)
+	return remote
 }
 
 // isPrefixOf reports whether a is a prefix of b (used to detect pure

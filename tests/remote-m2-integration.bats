@@ -119,12 +119,19 @@ sorted_dims() {
 		sleep 0.1
 	done
 
+	# An even split (tmux's default) can't distinguish a correct reconcile
+	# (re-applying select-layout with the remote's L.Raw) from a broken one
+	# that only fixes up the pane count — both land at the same geometry.
+	# Resize uneven, mirroring case 1, so the assertion is load-bearing.
 	$SRC split-window -h -t rem
+	$SRC resize-pane -t rem.0 -x 30
 
-	# Wait for the reconciled 2-pane mirror.
+	# Wait for the reconciled 2-pane mirror at matching (uneven) dims.
 	for _ in $(seq 1 40); do
 		n="$($DST list-panes -t host-sess:1 -F '#{pane_id}' 2>/dev/null | wc -l)"
-		[ "$n" -eq 2 ] && break
+		if [ "$n" -eq 2 ] && [ "$(sorted_dims "$DST" host-sess:1)" = "$(sorted_dims "$SRC" rem)" ]; then
+			break
+		fi
 		sleep 0.1
 	done
 
@@ -133,5 +140,6 @@ sorted_dims() {
 
 	src_dims="$(sorted_dims "$SRC" rem)"
 	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+	[ -n "$src_dims" ]
 	[ "$src_dims" = "$dst_dims" ]
 }
