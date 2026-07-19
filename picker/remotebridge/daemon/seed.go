@@ -19,7 +19,11 @@ func PaneSeed(reader *controlmode.Reader, send func(string), paneID string) ([]b
 
 	send(fmt.Sprintf("capture-pane -e -p -t %s", paneID))
 	captured := readCapture(reader)
-	if captured == nil {
+	// len, not == nil: a pane that closed between list-panes and this
+	// capture-pane gets an %error reply, whose Data is empty-but-non-nil —
+	// == nil alone would miss it and seed the renderer with a bogus blank
+	// screen (cross-task delta: Task 8 owns this race).
+	if len(captured) == 0 {
 		return nil, fmt.Errorf("capture-pane returned no data for %s", paneID)
 	}
 	captured = replaceLF(captured)
