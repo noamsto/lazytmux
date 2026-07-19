@@ -31,6 +31,14 @@ func main() {
 	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
+	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
+	// "local" are separate local tmux servers on their own -L sockets, so the
+	// bats integration test never touches the network. --session/--window
+	// still name the "remote" target (a real session:window on --src-socket);
+	// only the transport differs.
+	testLocal := flag.Bool("test-local", false, "test only: mirror --session:--window from a local tmux -L --src-socket instead of ssh")
+	srcSocket := flag.String("src-socket", "", "test-local: tmux -L socket name standing in for the remote server")
+	dstSocket := flag.String("dst-socket", "", "test-local: tmux -L socket name standing in for the local server")
 	flag.Parse()
 
 	if *localSess == "" {
@@ -41,20 +49,27 @@ func main() {
 		*sock = fmt.Sprintf("%s/lztmux-daemon-%d.sock", os.TempDir(), os.Getpid())
 	}
 
-	// remoteTmux/localTmux may carry args (e.g. "tmux -L sock" for tests), so
-	// split into argv rather than passing as a single token.
-	tmuxArgv := strings.Fields(*remoteTmux)
 	var ctl *exec.Cmd
-	if *sshCmd == "" {
-		ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
-			"-C", "attach-session", "-t", *session)...)
+	var localTmuxArgv []string
+	if *testLocal {
+		ctl = exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
+		localTmuxArgv = []string{"tmux", "-L", *dstSocket}
 	} else {
-		// ssh space-joins the post-host argv into one string run by the
-		// remote login shell, so shell-quote the session name (may contain
-		// spaces) to keep it a single target token.
-		args := append([]string{"-T", "-e", "none", *host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}, tmuxArgv...)
-		args = append(args, "-C", "attach-session", "-t", shellQuote(*session))
-		ctl = exec.Command(*sshCmd, args...)
+		// remoteTmux/localTmux may carry args (e.g. "tmux -L sock" for
+		// tests), so split into argv rather than passing as a single token.
+		tmuxArgv := strings.Fields(*remoteTmux)
+		if *sshCmd == "" {
+			ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
+				"-C", "attach-session", "-t", *session)...)
+		} else {
+			// ssh space-joins the post-host argv into one string run by the
+			// remote login shell, so shell-quote the session name (may
+			// contain spaces) to keep it a single target token.
+			args := append([]string{"-T", "-e", "none", *host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}, tmuxArgv...)
+			args = append(args, "-C", "attach-session", "-t", shellQuote(*session))
+			ctl = exec.Command(*sshCmd, args...)
+		}
+		localTmuxArgv = strings.Fields(*localTmux)
 	}
 	stdin, err := ctl.StdinPipe()
 	if err != nil {
@@ -68,7 +83,6 @@ func main() {
 		fatal(err)
 	}
 
-	localTmuxArgv := strings.Fields(*localTmux)
 	runLocalTmux := func(args ...string) error {
 		cmd := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...), args...)...)
 		cmd.Stderr = os.Stderr
