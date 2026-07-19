@@ -318,6 +318,24 @@
               bats tests/remote-bridge-integration.bats
               touch $out
             '';
+
+          remote-m2-integration-tests =
+            pkgs.runCommand "remote-m2-integration-tests" {
+              # Same private, config-less two-server pattern: an isolated
+              # "remote" tmux -L server plus an isolated "local" tmux -L
+              # server, wired together by the M2.1 daemon's --test-local seam
+              # (no ssh). Both binaries are prebuilt via the vendored
+              # buildGoModule (pickerAgentDetect) so this check never invokes
+              # `go build` — a non-FOD sandbox has no network.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux];
+              DAEMON = "${pickerAgentDetect}/bin/lztmux-remote-bridge-daemon";
+              RENDERER = "${pickerAgentDetect}/bin/lztmux-remote-bridge-renderer";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR
+              bats tests/remote-m2-integration.bats
+              touch $out
+            '';
         };
 
         packages = {
