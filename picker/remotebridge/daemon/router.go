@@ -20,8 +20,14 @@ func (r *Router) Register(paneID string, sink io.Writer) {
 
 func (r *Router) Unregister(paneID string) {
 	r.mu.Lock()
+	sink := r.sinks[paneID]
 	delete(r.sinks, paneID)
 	r.mu.Unlock()
+	// Sinks that own a pump goroutine (outputSink) need a Close to stop it;
+	// plain io.Writer fakes in tests don't implement it.
+	if c, ok := sink.(interface{ Close() }); ok {
+		c.Close()
+	}
 }
 
 func (r *Router) Route(paneID string, data []byte) {

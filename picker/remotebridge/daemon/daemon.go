@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
@@ -23,20 +24,29 @@ import (
 // ssh/tmux/socket in production is a field here, so Task 9's bats test can
 // point it at a second local tmux instead.
 type Config struct {
-	Ctl         io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
-	SockPath    string                     // unix socket renderers dial
-	LocalSess   string                     // "<host>-<sess>"
-	LocalWin    string                     // "<host>-<sess>:1"
-	RemoteWin   string                     // "<sess>:<win>" on the remote
-	RendererBin string                     // absolute store path to cmd/renderer
-	LocalTmux   func(args ...string) error // runs local tmux (injected; prod = exec)
-	WinSize     func() (int, int)          // local window content size (injected)
+	Ctl           io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
+	SockPath      string                     // unix socket renderers dial
+	LocalSess     string                     // "<host>-<sess>"
+	LocalWin      string                     // "<host>-<sess>:1"
+	RemoteSession string                     // remote session name (may contain spaces)
+	RemoteWindow  string                     // remote window index, e.g. "1"
+	RendererBin   string                     // absolute store path to cmd/renderer
+	LocalTmux     func(args ...string) error // runs local tmux (injected; prod = exec)
+	WinSize       func() (int, int)          // local window content size (injected)
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
 // frame rather than blocking the control-stream loop; M2.2 will mark the
 // sink dirty and reseed it instead of silently dropping.
 const outputSinkBuf = 4096
+
+// helloTimeout bounds how long collectHellos waits for renderers to dial
+// back. A spawned renderer that never connects (bad RendererBin, exec
+// failure, crash before it dials) doesn't surface as a LocalTmux error —
+// respawn-pane itself succeeds — so without a deadline the wait blocks Run
+// forever (startup never proceeds; reconcile blocks the main loop, so the
+// control stream stops draining).
+const helloTimeout = 10 * time.Second
 
 // helloConn pairs an accepted renderer connection with the remote pane id it
 // announced via FrameHello.
@@ -75,16 +85,17 @@ func Run(cfg Config) error {
 	readReply(reader)
 
 	// Step 4: validate the target window exists.
-	remoteIDs, err := listPanes(reader, send, cfg.RemoteWin)
+	target := remoteTarget(cfg)
+	remoteIDs, err := listPanes(reader, send, target)
 	if err != nil {
 		return err
 	}
 	if len(remoteIDs) == 0 {
-		return fmt.Errorf("daemon: remote window %s has no panes", cfg.RemoteWin)
+		return fmt.Errorf("daemon: remote window %s has no panes", target)
 	}
 
 	// Step 5: fetch the layout to plan the local mirror.
-	L, err := readLayout(reader, send, cfg.RemoteWin)
+	L, err := readLayout(reader, send, target)
 	if err != nil {
 		return err
 	}
@@ -143,7 +154,7 @@ func Run(cfg Config) error {
 	// Collect exactly len(remotePanes) Hellos (any order) before seeding —
 	// step 9 seeds sequentially over the single control stream, so all
 	// renderers must be connected (and hence writable) first.
-	byRemote, err := collectHellos(connCh, len(remotePanes))
+	byRemote, err := collectHellos(connCh, len(remotePanes), helloTimeout)
 	if err != nil {
 		teardown()
 		return err
@@ -157,6 +168,13 @@ func Run(cfg Config) error {
 	// only afterwards do we start the output-pump goroutine that becomes the
 	// conn's other writer — so the two writers are never concurrent and no
 	// per-conn mutex is needed (see cross-task delta #2).
+	//
+	// Since panes are seeded sequentially over the single control stream,
+	// %output for a pane that hasn't been seeded yet arrives while a later
+	// pane's seed round-trip is in flight; readReply (invoked via PaneSeed)
+	// skips %output while waiting for its own command's reply, so that
+	// output is dropped rather than routed. Sanctioned for M2.1: a busy pane
+	// may briefly show a stale region until its next output.
 	for _, remotePane := range remotePanes {
 		conn := conns[remotePane]
 		if conn == nil {
@@ -220,6 +238,21 @@ func runLoop(reader *controlmode.Reader, router *Router) bool {
 			return true
 		}
 	}
+}
+
+// remoteTarget builds the tmux target token "<session>:<window>" for the
+// configured remote window, quoting the session name so a name containing
+// spaces (e.g. "my proj") stays one token on the control-mode command line
+// instead of being misparsed as extra arguments (mirrors M1's tmuxQuote in
+// remotebridge/main.go).
+func remoteTarget(cfg Config) string {
+	return fmt.Sprintf("%s:%s", tmuxQuote(cfg.RemoteSession), cfg.RemoteWindow)
+}
+
+// tmuxQuote single-quotes s for a tmux control-mode command line, escaping
+// any embedded single quote the tmux-safe way.
+func tmuxQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // listPanes issues list-panes against target and returns the pane ids, only
@@ -290,17 +323,33 @@ func acceptRenderers(l net.Listener, out chan<- helloConn) {
 }
 
 // collectHellos reads exactly n renderer connections off connCh, keyed by
-// the remote pane id each announced.
-func collectHellos(connCh <-chan helloConn, n int) (map[string]net.Conn, error) {
+// the remote pane id each announced. Bounded by timeout so a renderer that
+// never dials back can't wedge the caller forever (see helloTimeout); on
+// timeout any connections already collected are closed here (nothing else
+// owns them yet) and an error is returned.
+func collectHellos(connCh <-chan helloConn, n int, timeout time.Duration) (map[string]net.Conn, error) {
 	out := map[string]net.Conn{}
+	deadline := time.After(timeout)
 	for i := 0; i < n; i++ {
-		hc, ok := <-connCh
-		if !ok {
-			return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", i, n)
+		select {
+		case hc, ok := <-connCh:
+			if !ok {
+				closeConns(out)
+				return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", i, n)
+			}
+			out[hc.paneID] = hc.conn
+		case <-deadline:
+			closeConns(out)
+			return nil, fmt.Errorf("daemon: timed out after %s waiting for renderers (%d/%d connected)", timeout, i, n)
 		}
-		out[hc.paneID] = hc.conn
 	}
 	return out, nil
+}
+
+func closeConns(conns map[string]net.Conn) {
+	for _, c := range conns {
+		c.Close()
+	}
 }
 
 // seedRenderer produces the initial screen for remotePane, writes it to conn
@@ -331,7 +380,9 @@ func seedRenderer(reader *controlmode.Reader, send func(string), router *Router,
 // loop. A full buffer drops the frame; M2.2 will mark the sink dirty and
 // reseed it instead.
 type outputSink struct {
-	ch chan []byte
+	mu     sync.Mutex
+	ch     chan []byte
+	closed bool
 }
 
 func newOutputSink(conn net.Conn) *outputSink {
@@ -347,6 +398,11 @@ func newOutputSink(conn net.Conn) *outputSink {
 }
 
 func (s *outputSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return len(p), nil
+	}
 	select {
 	case s.ch <- append([]byte(nil), p...):
 	default:
@@ -354,6 +410,20 @@ func (s *outputSink) Write(p []byte) (int, error) {
 		// capture-pane instead of silently losing this chunk.
 	}
 	return len(p), nil
+}
+
+// Close stops the sink's pump goroutine so it doesn't leak once its pane is
+// torn down (reconcile-removal, teardown); the channel is otherwise never
+// closed and an idle sink would linger until process exit. Safe to call more
+// than once, and safe to race with a concurrent Write.
+func (s *outputSink) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.ch)
 }
 
 // pumpInput forwards conn's FrameInput frames to the remote pane as
@@ -380,7 +450,7 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 // deferred to M2.2 — so it's logged and left as-is for this cycle. Returns
 // the pane-order slice callers should track from here on.
 func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, conns map[string]net.Conn, oldRemote []string) []string {
-	L, err := readLayout(reader, send, cfg.RemoteWin)
+	L, err := readLayout(reader, send, remoteTarget(cfg))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 		return oldRemote
@@ -391,6 +461,11 @@ func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), 
 	case reflect.DeepEqual(newRemote, oldRemote):
 		// Geometry-only change: pane set is identical.
 	case isPrefixOf(oldRemote, newRemote):
+		// Relies on split-window's new pane landing at pane_index==i (bare
+		// split, no -b/target-pane games): spawnRenderer(cfg, i, ...) targets
+		// the local pane by that position right after the split with no
+		// readback confirming it. Task 9 must exercise a mid-session remote
+		// split to validate this holds for real tmux.
 		for i := len(oldRemote); i < len(newRemote); i++ {
 			if err := cfg.LocalTmux("split-window", "-h", "-t", cfg.LocalWin); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change split: %v\n", err)
@@ -401,7 +476,7 @@ func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), 
 				return oldRemote
 			}
 		}
-		added, err := collectHellos(connCh, len(newRemote)-len(oldRemote))
+		added, err := collectHellos(connCh, len(newRemote)-len(oldRemote), helloTimeout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 			return oldRemote

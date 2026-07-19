@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"bytes"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
@@ -59,5 +61,30 @@ func TestLoopReturnsFalseOnEOF(t *testing.T) {
 	stop := runLoop(reader, router)
 	if stop {
 		t.Fatal("runLoop should return false when the stream ends without an exit/window-close line")
+	}
+}
+
+// TestCollectHellosTimesOutWhenRenderersDontConnect uses a real listener
+// that nobody dials: a spawned renderer that never connects back (bad
+// RendererBin, exec failure, crash) must not wedge collectHellos forever.
+func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer l.Close()
+
+	connCh := make(chan helloConn, 16)
+	go acceptRenderers(l, connCh)
+
+	start := time.Now()
+	_, err = collectHellos(connCh, 1, 100*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("collectHellos: want an error when no renderer connects, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("collectHellos blocked for %s, want it to return near the 100ms deadline", elapsed)
 	}
 }

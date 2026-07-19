@@ -18,13 +18,14 @@ func PaneSeed(reader *controlmode.Reader, send func(string), paneID string) ([]b
 	cx, cy, alt, appck := readCursor(reader)
 
 	send(fmt.Sprintf("capture-pane -e -p -t %s", paneID))
-	captured := readCapture(reader)
-	// len, not == nil: a pane that closed between list-panes and this
-	// capture-pane gets an %error reply, whose Data is empty-but-non-nil —
-	// == nil alone would miss it and seed the renderer with a bogus blank
-	// screen (cross-task delta: Task 8 owns this race).
-	if len(captured) == 0 {
-		return nil, fmt.Errorf("capture-pane returned no data for %s", paneID)
+	captured, isErr := readCapture(reader)
+	// isErr, not len(captured)==0: a genuinely blank pane is a valid
+	// successful capture with empty Data, so an emptiness check alone would
+	// reject a legitimate blank seed. A pane that closed between list-panes
+	// and this capture-pane instead gets a %error reply (non-empty body:
+	// the error text) — isErr keys off Kind, not body length.
+	if isErr {
+		return nil, fmt.Errorf("capture-pane failed for %s", paneID)
 	}
 	captured = replaceLF(captured)
 	return render.Seed(captured, cx, cy, alt, appck), nil
@@ -66,8 +67,15 @@ func readCursor(reader *controlmode.Reader) (cx, cy int, alt, appCursorKeys bool
 }
 
 // readCapture reads the capture-pane reply and returns its body (pane
-// content, already newline-joined by the Reader).
-func readCapture(reader *controlmode.Reader) []byte {
-	l, _ := readReply(reader)
-	return l.Data
+// content, already newline-joined by the Reader) plus whether the reply was
+// an error — either an %error block (e.g. the pane closed between
+// list-panes and this capture-pane) or EOF before any reply arrived. isErr
+// is the only signal PaneSeed uses to reject a seed: a successful reply with
+// an empty body is a valid blank pane, not an error.
+func readCapture(reader *controlmode.Reader) (data []byte, isErr bool) {
+	l, ok := readReply(reader)
+	if !ok {
+		return nil, true
+	}
+	return l.Data, l.Kind == controlmode.Error
 }

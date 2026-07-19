@@ -33,3 +33,41 @@ func TestPaneSeed(t *testing.T) {
 		t.Errorf("seed missing content or cursor CUP: %q", got)
 	}
 }
+
+func TestPaneSeedErrorReply(t *testing.T) {
+	// capture-pane's reply is a %error block (e.g. the pane closed between
+	// list-panes and this capture-pane) — PaneSeed must reject it.
+	stream := strings.Join([]string{
+		"%begin 1 1 1", "5 2 0 0", "%end 1 1 1", // display-message: cx cy alt appck
+		"%begin 2 2 1", "%error 2 2 1", // capture-pane: error, no body
+	}, "\n") + "\n"
+
+	reader := controlmode.NewReader(strings.NewReader(stream))
+	send := func(string) {}
+
+	got, err := PaneSeed(reader, send, "%3")
+	if err == nil {
+		t.Fatalf("PaneSeed: want error on %%error reply, got seed %q", got)
+	}
+}
+
+func TestPaneSeedEmptyCaptureIsValid(t *testing.T) {
+	// capture-pane's reply is a normal %end block with an EMPTY body — a
+	// genuinely blank pane, which must NOT be treated as an error (fatal
+	// for a sole pane if it were).
+	stream := strings.Join([]string{
+		"%begin 1 1 1", "5 2 0 0", "%end 1 1 1", // display-message: cx cy alt appck
+		"%begin 2 2 1", "%end 2 2 1", // capture-pane: success, empty body
+	}, "\n") + "\n"
+
+	reader := controlmode.NewReader(strings.NewReader(stream))
+	send := func(string) {}
+
+	got, err := PaneSeed(reader, send, "%3")
+	if err != nil {
+		t.Fatalf("PaneSeed: want nil error for a blank pane, got %v", err)
+	}
+	if got == nil {
+		t.Errorf("PaneSeed: want a non-nil seed for a blank pane, got nil")
+	}
+}

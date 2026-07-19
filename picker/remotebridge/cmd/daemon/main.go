@@ -77,14 +77,15 @@ func main() {
 	winSize := func() (int, int) { return localWinSize(localTmuxArgv, localWin) }
 
 	cfg := daemon.Config{
-		Ctl:         rwc{stdout, stdin},
-		SockPath:    *sock,
-		LocalSess:   *localSess,
-		LocalWin:    localWin,
-		RemoteWin:   fmt.Sprintf("%s:%d", *session, *window),
-		RendererBin: *rendererBin,
-		LocalTmux:   runLocalTmux,
-		WinSize:     winSize,
+		Ctl:           rwc{stdout, stdin},
+		SockPath:      *sock,
+		LocalSess:     *localSess,
+		LocalWin:      localWin,
+		RemoteSession: *session,
+		RemoteWindow:  strconv.Itoa(*window),
+		RendererBin:   *rendererBin,
+		LocalTmux:     runLocalTmux,
+		WinSize:       winSize,
 	}
 
 	if err := daemon.Run(cfg); err != nil {
