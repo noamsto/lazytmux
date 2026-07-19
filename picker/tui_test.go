@@ -145,9 +145,10 @@ func TestInPreview(t *testing.T) {
 	if !m.inPreview(5, below) {
 		t.Errorf("y=%d should be preview", below)
 	}
-	if m.inPreview(70, below) {
-		// x is irrelevant to preview hit-testing now; only y matters, but a row
-		// inside the list must never read as preview.
+	if !m.inPreview(70, below) {
+		// x is irrelevant to preview hit-testing now; only y matters, so a
+		// preview-region row reads as preview at any x.
+		t.Errorf("x should be irrelevant; y=%d is preview at any x", below)
 	}
 	if m.inPreview(5, m.listRowTop()) {
 		t.Error("top list row should not be preview")
