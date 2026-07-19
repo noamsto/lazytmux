@@ -49,6 +49,21 @@ func TestReadFrameTruncatedPayload(t *testing.T) {
 	}
 }
 
+// io.ReadFull only returns bare io.EOF when zero bytes are read, so this is
+// the one truncation shape that actually exercises ReadFrame's EOF->
+// ErrUnexpectedEOF conversion on the payload read (the 2-of-5 case above
+// already returns io.ErrUnexpectedEOF from io.ReadFull itself).
+func TestReadFrameZeroPayloadBytes(t *testing.T) {
+	var hdr [5]byte
+	hdr[0] = byte(FrameSeed)
+	binary.BigEndian.PutUint32(hdr[1:], 5) // header promises 5 payload bytes
+	buf := hdr[:]                          // connection dies before any of them arrive
+
+	if _, err := ReadFrame(bytes.NewReader(buf)); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadFrame(zero payload bytes) = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
 func TestReadFrameOversizedLength(t *testing.T) {
 	var hdr [5]byte
 	hdr[0] = byte(FrameSeed)
