@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAnsiFgTmux(t *testing.T) {
 	cases := map[string]string{
@@ -153,5 +156,60 @@ func TestInPreview(t *testing.T) {
 	off.showPreview = false
 	if off.inPreview(5, below) {
 		t.Error("preview hidden -> never in preview")
+	}
+}
+
+func TestIdentityCapFor(t *testing.T) {
+	cases := []struct {
+		name                        string
+		width, lead, icon, pr, want int
+	}{
+		{"unknown width -> default", 0, 10, 6, 4, 32},
+		{"negative width -> default", -1, 10, 6, 4, 32},
+		{"wide clamps to max", 200, 10, 6, 4, 48},  // 200-10-6-4-6=174 -> 48
+		{"narrow clamps to min", 20, 10, 6, 4, 12}, // 20-10-6-4-6=-6 -> 12
+		{"mid computes exactly", 60, 10, 6, 4, 34}, // 60-10-6-4-6=34, in range
+	}
+	for _, c := range cases {
+		if got := identityCapFor(c.width, c.lead, c.icon, c.pr); got != c.want {
+			t.Errorf("%s: identityCapFor(%d,%d,%d,%d) = %d, want %d",
+				c.name, c.width, c.lead, c.icon, c.pr, got, c.want)
+		}
+	}
+}
+
+func TestRenderWindowItemsLayout(t *testing.T) {
+	windows := []windowData{
+		// Untagged plain window: no crew, name is basename.
+		{session: "mono", index: 1, name: "mono", active: false},
+		// Issue window with a crew tag: crew after index, ticket inline.
+		{session: "mono", index: 2, name: "rustwin", active: true,
+			labelID: "L ENG-7290", labelRest: " fix and lock it confirmation modal",
+			crewName: "rust", crewColor: "colour210"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+
+	// items[0] is the session header; the two window rows follow.
+	var plains []string
+	for _, it := range items {
+		plains = append(plains, it.plain)
+	}
+	joined := strings.Join(plains, "\n")
+
+	// Crew renders AFTER the index, not before it.
+	if !strings.Contains(joined, "2: rust") {
+		t.Errorf("crew should follow the index (`2: rust`); got:\n%s", joined)
+	}
+	// The untagged row has no crew and no reserved crew gap before the name.
+	if !strings.Contains(joined, "1: mono") {
+		t.Errorf("untagged row should read `1: mono` with no crew gap; got:\n%s", joined)
+	}
+	// The ticket id is inline in the row (as the name), not a trailing column.
+	if !strings.Contains(joined, "ENG-7290") {
+		t.Errorf("ticket id should be inline in the label; got:\n%s", joined)
+	}
+	// Default cap (width 0) truncates the long title; the tail word must be cut.
+	if strings.Contains(joined, "confirmation modal") {
+		t.Errorf("long title should be truncated at the default cap; got:\n%s", joined)
 	}
 }
