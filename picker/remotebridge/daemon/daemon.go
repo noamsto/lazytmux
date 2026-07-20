@@ -1,8 +1,9 @@
-// Package daemon owns the M2.1 mirror: one control-mode connection to a
+// Package daemon owns the M2.2 mirror: one control-mode connection to a
 // remote tmux, converged to a local window's size, with one native local
-// pane per remote pane and one renderer process per pane feeding/draining a
-// unix socket. Run wires all of it together; see the orchestration sequence
-// in docs/superpowers/plans/2026-07-17-remote-bridge-m2.1.md (Task 8).
+// window per remote window (one local pane per remote pane) and one renderer
+// process per pane feeding/draining a unix socket. Run wires all of it
+// together; see the orchestration sequence in
+// docs/superpowers/plans/2026-07-20-remote-bridge-m2.2.md (Task 3).
 package daemon
 
 import (
@@ -21,15 +22,15 @@ import (
 )
 
 // Config is the injectable seam for Run: everything that talks to a real
-// ssh/tmux/socket in production is a field here, so Task 9's bats test can
-// point it at a second local tmux instead.
+// ssh/tmux/socket in production is a field here, so the bats test can point it
+// at a second local tmux instead.
 type Config struct {
 	Ctl           io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
 	SockPath      string                     // unix socket renderers dial
 	LocalSess     string                     // "<host>-<sess>"
-	LocalWin      string                     // "<host>-<sess>:1"
 	RemoteSession string                     // remote session name (may contain spaces)
-	RemoteWindow  string                     // remote window index, e.g. "1"
+	RemoteWindow  string                     // initially-selected remote window INDEX (not a mirror filter)
+	BaseIndex     int                        // local base-index for daemon-created windows (default 1)
 	RendererBin   string                     // absolute store path to cmd/renderer
 	LocalTmux     func(args ...string) error // runs local tmux (injected; prod = exec)
 	WinSize       func() (int, int)          // local window content size (injected)
@@ -55,8 +56,9 @@ type helloConn struct {
 	conn   net.Conn
 }
 
-// Run drives the whole mirror for one remote window until %exit/%window-close
-// or the control connection drops.
+// Run mirrors every window of the bridged remote session, each into its own
+// local window, over the single -CC connection, until %exit or the control
+// connection drops.
 func Run(cfg Config) error {
 	reader := controlmode.NewReader(cfg.Ctl)
 
@@ -64,8 +66,8 @@ func Run(cfg Config) error {
 	closed := false
 	cmds := bufio.NewWriter(cfg.Ctl)
 	// send is called from this setup path and from every renderer's input
-	// pump goroutine (step 6/8) — mutex-guarded so command lines never
-	// interleave on the wire (mirrors M1 main.go's sendMu).
+	// pump goroutine — mutex-guarded so command lines never interleave on the
+	// wire (mirrors M1 main.go's sendMu).
 	send := func(s string) {
 		sendMu.Lock()
 		defer sendMu.Unlock()
@@ -76,49 +78,44 @@ func Run(cfg Config) error {
 		cmds.Flush()
 	}
 
-	// Step 2: drain the implicit attach reply.
+	// Drain the implicit attach reply (startup skip is sanctioned — B3).
 	readReply(reader)
 
-	// Step 3: converge remote size to the local window's content size.
+	// Converge remote size to the local window's content size. One control
+	// client means one size, so this converges ALL remote windows at once.
 	w, h := cfg.WinSize()
 	send(ConvergeCmd(w, h))
 	readReply(reader)
 
-	// Step 4: validate the target window exists.
-	target := remoteTarget(cfg)
-	remoteIDs, err := listPanes(reader, send, target)
-	if err != nil {
-		return err
+	// Enumerate every window of the bridged remote session. Read BOTH index
+	// and id: --window is an *index*, the registry is keyed by *id* (@N).
+	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id}'", tmuxQuote(cfg.RemoteSession)))
+	lw, ok := readReply(reader)
+	if !ok || lw.Kind == controlmode.Error {
+		return fmt.Errorf("daemon: list-windows for %s failed", cfg.RemoteSession)
 	}
-	if len(remoteIDs) == 0 {
-		return fmt.Errorf("daemon: remote window %s has no panes", target)
-	}
-
-	// Step 5: fetch the layout to plan the local mirror.
-	L, err := readLayout(reader, send, target)
-	if err != nil {
-		return err
+	remoteWins := parseWindowList(string(lw.Data))
+	if len(remoteWins) == 0 {
+		return fmt.Errorf("daemon: remote session %s has no windows", cfg.RemoteSession)
 	}
 
 	router := NewRouter()
 
-	// Step 6: listen for renderer connections.
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
 	if err != nil {
 		return fmt.Errorf("daemon: listen %s: %w", cfg.SockPath, err)
 	}
-	connCh := make(chan helloConn, 16)
+	connCh := make(chan helloConn, 64)
 	go acceptRenderers(listener, connCh)
 
-	// conns tracks every currently-wired renderer conn by remote pane id, so
-	// teardown and layout-change reconciliation can close/replace them.
-	conns := map[string]net.Conn{}
-
+	reg := newRegistry(cfg.BaseIndex)
 	teardown := func() {
 		listener.Close()
-		for _, c := range conns {
-			c.Close()
+		for _, mw := range reg.byRemote {
+			for _, c := range mw.conns {
+				c.Close()
+			}
 		}
 		sendMu.Lock()
 		closed = true
@@ -129,92 +126,134 @@ func Run(cfg Config) error {
 		}
 	}
 
-	// Step 7: apply the mirror shape to the local window.
-	for _, c := range PlanWindow(cfg.LocalWin, L) {
-		if err := cfg.LocalTmux(c...); err != nil {
-			teardown()
-			return fmt.Errorf("daemon: apply mirror: %w", err)
-		}
-	}
-
-	remotePanes := RemotePaneOrder(L)
-
-	// Step 8: spawn one renderer per local pane, targeted by position — the
-	// local window has no other source of pane identity available through
-	// Config (LocalTmux runs commands but doesn't capture output), and
-	// PlanWindow's splits are already verified to create panes in
-	// RemotePaneOrder position (see mirror.go).
-	for i, remotePane := range remotePanes {
-		if err := spawnRenderer(cfg, i, remotePane); err != nil {
-			teardown()
-			return fmt.Errorf("daemon: spawn renderer for %s: %w", remotePane, err)
-		}
-	}
-
-	// Collect exactly len(remotePanes) Hellos (any order) before seeding —
-	// step 9 seeds sequentially over the single control stream, so all
-	// renderers must be connected (and hence writable) first.
-	byRemote, err := collectHellos(connCh, len(remotePanes), helloTimeout)
-	if err != nil {
-		teardown()
-		return err
-	}
-	for id, c := range byRemote {
-		conns[id] = c
-	}
-
-	// Step 9: seed each pane, then wire it into the router. Ordering is the
-	// load-bearing bit: the seed frame is written synchronously here, and
-	// only afterwards do we start the output-pump goroutine that becomes the
-	// conn's other writer — so the two writers are never concurrent and no
-	// per-conn mutex is needed (see cross-task delta #2).
-	//
-	// Since panes are seeded sequentially over the single control stream,
-	// %output for a pane that hasn't been seeded yet arrives while a later
-	// pane's seed round-trip is in flight; readReply (invoked via PaneSeed)
-	// skips %output while waiting for its own command's reply, so that
-	// output is dropped rather than routed. Sanctioned for M2.1: a busy pane
-	// may briefly show a stale region until its next output.
-	for _, remotePane := range remotePanes {
-		conn := conns[remotePane]
-		if conn == nil {
-			continue // didn't connect; already logged by collectHellos caller
-		}
-		if !seedRenderer(reader, send, router, conn, remotePane) {
-			if len(remotePanes) == 1 {
+	// Mirror each remote window into its own local window. The first reuses
+	// the launcher's initial window (base-index); the rest are created at an
+	// explicit monotonically-increasing index.
+	for i, rw := range remoteWins {
+		localWin := reg.allocLocalWin(cfg.LocalSess)
+		if i > 0 {
+			if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
 				teardown()
-				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
+				return fmt.Errorf("daemon: new-window %s: %w", localWin, err)
 			}
-			delete(conns, remotePane)
-			continue
 		}
-		go pumpInput(conn, remotePane, send)
+		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+		mw := reg.add(rw.id, localWin)
+		if err := setupWindow(cfg, reader, send, router, connCh, mw); err != nil {
+			teardown()
+			return err
+		}
 	}
 
-	// Steps 10-11: main loop + teardown.
+	// Select the initially-requested window. RemoteWindow is a window INDEX
+	// (not an id), so resolve index -> id -> local window via the enumerated
+	// list; never treat it as id "@<idx>".
+	if initWin, ok := localWinForRemoteIndex(remoteWins, reg, cfg.RemoteWindow); ok {
+		cfg.LocalTmux("select-window", "-t", initWin)
+	}
+
+	// Main loop.
 	for {
 		l, ok := reader.Next()
 		if !ok {
-			break
+			break // control-stream EOF
 		}
-		if l.Kind == controlmode.LayoutChange {
-			remotePanes = reconcileLayout(cfg, reader, send, router, connCh, conns, remotePanes)
-			continue
-		}
-		if handleLine(l, router) {
-			break
+		switch l.Kind {
+		case controlmode.Output:
+			router.Route(l.Pane, l.Data)
+		case controlmode.LayoutChange:
+			if len(l.Args) > 0 {
+				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
+					reconcileLayout(cfg, mw, reader, send, router, connCh)
+				}
+			}
+		case controlmode.Exit:
+			teardown()
+			return nil
+			// %window-add / %window-close / %window-renamed /
+			// %session-window-changed handled in Task 4 (notify-xlate).
 		}
 	}
 	teardown()
 	return nil
 }
 
+// setupWindow runs the per-window plan/spawn/hello/seed pipeline for mw: it
+// reads the remote window's layout, shapes mw.localWin to match, spawns one
+// renderer per pane, waits for their Hellos, then seeds each and wires it into
+// the router. It records the remote pane ids and their conns on mw.
+//
+// It uses the plain skip reply reader (readReply): at enumeration time no
+// window is streaming yet, so B3's routing-aware reader isn't needed
+// (sanctioned startup skip). While windows 2..N are being set up the daemon
+// isn't draining the async stream, so live %output for an already-seeded
+// window during that interval is dropped rather than routed; it self-heals on
+// the pane's next %output once the main loop starts.
+//
+// For a 1-pane remote window this is exactly M1's behavior — no split, one
+// renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
+// layout.
+func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow) error {
+	L, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), readReply)
+	if err != nil {
+		return err
+	}
+
+	// Apply the mirror shape to the local window.
+	for _, c := range PlanWindow(mw.localWin, L) {
+		if err := cfg.LocalTmux(c...); err != nil {
+			return fmt.Errorf("daemon: apply mirror for %s: %w", mw.remoteID, err)
+		}
+	}
+
+	mw.remotePanes = RemotePaneOrder(L)
+
+	// Spawn one renderer per local pane, targeted by position — the local
+	// window has no other source of pane identity available through Config
+	// (LocalTmux runs commands but doesn't capture output), and PlanWindow's
+	// splits create panes in RemotePaneOrder position (see mirror.go).
+	for i, remotePane := range mw.remotePanes {
+		if err := spawnRenderer(cfg, mw.localWin, i, remotePane); err != nil {
+			return fmt.Errorf("daemon: spawn renderer for %s: %w", remotePane, err)
+		}
+	}
+
+	// Collect exactly len(remotePanes) Hellos (any order) before seeding —
+	// seeding is sequential over the single control stream, so all renderers
+	// must be connected (and hence writable) first.
+	byRemote, err := collectHellos(connCh, len(mw.remotePanes), helloTimeout)
+	if err != nil {
+		return err
+	}
+	for id, c := range byRemote {
+		mw.conns[id] = c
+	}
+
+	// Seed each pane, then wire it into the router. The seed frame is written
+	// synchronously here, and only afterwards do we start the output-pump
+	// goroutine that becomes the conn's other writer — so the two writers are
+	// never concurrent and no per-conn mutex is needed.
+	for _, remotePane := range mw.remotePanes {
+		conn := mw.conns[remotePane]
+		if conn == nil {
+			continue // didn't connect; already logged by collectHellos caller
+		}
+		if !seedRenderer(reader, send, router, conn, remotePane, readReply) {
+			if len(mw.remotePanes) == 1 {
+				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
+			}
+			delete(mw.conns, remotePane)
+			continue
+		}
+		go pumpInput(conn, remotePane, send)
+	}
+	return nil
+}
+
 // handleLine processes one control-mode line for the mirror loop: routes
 // %output to its registered renderer and reports whether the session ended
-// (%window-close/%exit). It's the shared core between runLoop (below, for
-// unit testing) and Run's real loop (which layers %layout-change on top,
-// since reconciling a layout change needs the full Config/pane-tracking
-// state that a fake-stream test doesn't have).
+// (%window-close/%exit). Retained for runLoop's unit tests (Task 4 re-homes
+// the stop-semantics here); Run's real loop layers %layout-change on top.
 func handleLine(l controlmode.Line, router *Router) (stop bool) {
 	switch l.Kind {
 	case controlmode.Output:
@@ -225,9 +264,9 @@ func handleLine(l controlmode.Line, router *Router) (stop bool) {
 	return false
 }
 
-// runLoop is the routing/teardown core of Run's main loop, extracted so it's
-// unit-testable without ssh/tmux. Returns true if the stream ended via
-// %window-close/%exit, false if the control connection just dropped (EOF).
+// runLoop is the routing/teardown core of the single-window loop, retained for
+// unit tests. Returns true if the stream ended via %window-close/%exit, false
+// if the control connection just dropped (EOF).
 func runLoop(reader *controlmode.Reader, router *Router) bool {
 	for {
 		l, ok := reader.Next()
@@ -240,13 +279,32 @@ func runLoop(reader *controlmode.Reader, router *Router) bool {
 	}
 }
 
-// remoteTarget builds the tmux target token "<session>:<window>" for the
-// configured remote window, quoting the session name so a name containing
-// spaces (e.g. "my proj") stays one token on the control-mode command line
-// instead of being misparsed as extra arguments (mirrors M1's tmuxQuote in
-// remotebridge/main.go).
-func remoteTarget(cfg Config) string {
-	return fmt.Sprintf("%s:%s", tmuxQuote(cfg.RemoteSession), cfg.RemoteWindow)
+// readReplyRouting is the steady-state (post-startup) reply reader (B3): it
+// returns the next command-reply block (End/Error) but routes any %output it
+// encounters to router first, so a mid-stream round-trip for one pane never
+// drops live %output for another. Startup seeding keeps readReply's plain
+// skip-behavior (no live stream yet).
+func readReplyRouting(reader *controlmode.Reader, router *Router) (controlmode.Line, bool) {
+	for {
+		l, ok := reader.Next()
+		if !ok {
+			return controlmode.Line{}, false
+		}
+		switch l.Kind {
+		case controlmode.End, controlmode.Error:
+			return l, true
+		case controlmode.Output:
+			router.Route(l.Pane, l.Data)
+		}
+	}
+}
+
+// remoteWinTarget builds the tmux target for a remote window by its id (@N),
+// quoting the session name so a name with spaces (e.g. "my proj") stays one
+// token. The id is used verbatim — never TrimPrefix'd to a bare N, which tmux
+// would read as window INDEX N (a different window).
+func remoteWinTarget(cfg Config, remoteID string) string {
+	return fmt.Sprintf("%s:%s", tmuxQuote(cfg.RemoteSession), remoteID)
 }
 
 // tmuxQuote single-quotes s for a tmux control-mode command line, escaping
@@ -255,31 +313,9 @@ func tmuxQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// listPanes issues list-panes against target and returns the pane ids, only
-// to validate the window exists (M2.1 derives actual pane identity from the
-// layout string, not this list — see readLayout/RemotePaneOrder).
-func listPanes(reader *controlmode.Reader, send func(string), target string) ([]string, error) {
-	send(fmt.Sprintf("list-panes -t %s -F '#{pane_id}'", target))
-	l, ok := readReply(reader)
-	if !ok {
-		return nil, fmt.Errorf("daemon: control connection closed listing panes for %s", target)
-	}
-	if l.Kind == controlmode.Error {
-		return nil, fmt.Errorf("daemon: list-panes -t %s: %s", target, l.Data)
-	}
-	var ids []string
-	for _, row := range strings.Split(string(l.Data), "\n") {
-		row = strings.TrimSpace(row)
-		if row != "" {
-			ids = append(ids, row)
-		}
-	}
-	return ids, nil
-}
-
-func readLayout(reader *controlmode.Reader, send func(string), target string) (controlmode.Layout, error) {
+func readLayout(reader *controlmode.Reader, send func(string), target string, reply replyFn) (controlmode.Layout, error) {
 	send(fmt.Sprintf("display-message -p -t %s -F '#{window_layout}'", target))
-	l, ok := readReply(reader)
+	l, ok := reply(reader)
 	if !ok {
 		return controlmode.Layout{}, fmt.Errorf("daemon: control connection closed reading layout for %s", target)
 	}
@@ -289,11 +325,11 @@ func readLayout(reader *controlmode.Reader, send func(string), target string) (c
 	return controlmode.ParseLayout(strings.TrimSpace(string(l.Data)))
 }
 
-// spawnRenderer respawns the local pane at position index (targeted by
+// spawnRenderer respawns localWin's pane at position index (targeted by
 // window.index, since PlanWindow's local panes are created in RemotePaneOrder
 // position) with the renderer binary, wired to dial back with remotePane's id.
-func spawnRenderer(cfg Config, index int, remotePane string) error {
-	target := fmt.Sprintf("%s.%d", cfg.LocalWin, index)
+func spawnRenderer(cfg Config, localWin string, index int, remotePane string) error {
+	target := fmt.Sprintf("%s.%d", localWin, index)
 	return cfg.LocalTmux("respawn-pane", "-k",
 		"-e", "LZTMUX_RENDER_SOCK="+cfg.SockPath,
 		"-e", "LZTMUX_RENDER_PANE="+remotePane,
@@ -354,12 +390,13 @@ func closeConns(conns map[string]net.Conn) {
 
 // seedRenderer produces the initial screen for remotePane, writes it to conn
 // as a FrameSeed, and (only on success) registers conn's output sink with
-// router. Returns false — logging to stderr rather than crashing — if the
-// pane closed between listing and seeding (PaneSeed now errors on an empty
-// capture-pane reply, not just a nil one — see seed.go): the caller decides
-// whether that's fatal (sole pane) or just leaves that pane unwired.
-func seedRenderer(reader *controlmode.Reader, send func(string), router *Router, conn net.Conn, remotePane string) bool {
-	seed, err := PaneSeed(reader, send, remotePane)
+// router. reply is the reader startup passes readReply (skip); steady-state
+// reconcile passes a router-bound routing closure (B3). Returns false —
+// logging to stderr rather than crashing — if the pane closed between listing
+// and seeding: the caller decides whether that's fatal (sole pane) or just
+// leaves that pane unwired.
+func seedRenderer(reader *controlmode.Reader, send func(string), router *Router, conn net.Conn, remotePane string, reply replyFn) bool {
+	seed, err := PaneSeed(reader, send, remotePane, reply)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (skipping renderer)\n", remotePane, err)
 		conn.Close()
@@ -446,30 +483,34 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 // maxReconcilePasses bounds reconcileLayout's trailing-reread loop (below).
 const maxReconcilePasses = 5
 
-// reconcileLayout re-reads the remote window's layout and, if the pane set
+// reconcileLayout re-reads window w's remote layout and, if the pane set
 // changed, applies the two minimal M2.1 cases: a pure tail-append (a remote
 // split added panes) or a pure tail-removal (remote pane(s) closed). Any
 // other change (reordering, mid-list insert/remove) is a full diff engine —
-// deferred to M2.2 — so it's logged and left as-is for this cycle. Returns
-// the pane-order slice callers should track from here on.
+// deferred — so it's logged and left as-is for this cycle. The updated
+// pane-order is stored back on w.remotePanes.
 //
-// Loops on a trailing re-read after applying: every command round-trip here
-// (readLayout included) discards async notifications arriving while it waits
-// for its own reply (see readReply), so a second remote layout change landing
-// back-to-back with the first — e.g. a resize right after the split that
-// triggered this call — can have its own %layout-change silently swallowed
-// while this function is mid-flight. That leaves the mirror on stale
-// geometry with no further notification ever arriving to correct it, since
-// nothing else changes remote-side. Re-reading once more right after
-// applying catches this: the round-trips above give the remote plenty of
-// time to settle, so a still-different layout means something changed
-// underneath us and needs its own pass.
-func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, conns map[string]net.Conn, oldRemote []string) []string {
-	remote := oldRemote
-	L, err := readLayout(reader, send, remoteTarget(cfg))
+// Round-trips here use the routing-aware reply reader (B3): sibling windows
+// are streaming during a live reconcile, so any %output seen while awaiting a
+// reply is routed rather than dropped. The remote window is targeted by its
+// id (@N) directly, never by a bare index.
+//
+// Loops on a trailing re-read after applying: a second remote layout change
+// landing back-to-back with the first can have its own %layout-change
+// swallowed while this function is mid-flight (readReplyRouting still returns
+// on the reply block, not on the async notification). Re-reading once more
+// right after applying catches this: the round-trips above give the remote
+// plenty of time to settle, so a still-different layout means something
+// changed underneath us and needs its own pass.
+func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn) {
+	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
+	target := remoteWinTarget(cfg, w.remoteID)
+
+	remote := w.remotePanes
+	L, err := readLayout(reader, send, target, reply)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-		return oldRemote
+		return
 	}
 
 	for pass := 0; pass < maxReconcilePasses; pass++ {
@@ -480,63 +521,67 @@ func reconcileLayout(cfg Config, reader *controlmode.Reader, send func(string), 
 			// Geometry-only change: pane set is identical.
 		case isPrefixOf(remote, newRemote):
 			// Relies on split-window's new pane landing at pane_index==i (bare
-			// split, no -b/target-pane games): spawnRenderer(cfg, i, ...) targets
-			// the local pane by that position right after the split with no
-			// readback confirming it. Task 9 must exercise a mid-session remote
-			// split to validate this holds for real tmux.
+			// split, no -b/target-pane games): spawnRenderer targets the local
+			// pane by that position right after the split with no readback
+			// confirming it.
 			for i := len(remote); i < len(newRemote); i++ {
-				if err := cfg.LocalTmux("split-window", "-h", "-t", cfg.LocalWin); err != nil {
+				if err := cfg.LocalTmux("split-window", "-h", "-t", w.localWin); err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change split: %v\n", err)
-					return remote
+					w.remotePanes = remote
+					return
 				}
-				if err := spawnRenderer(cfg, i, newRemote[i]); err != nil {
+				if err := spawnRenderer(cfg, w.localWin, i, newRemote[i]); err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change spawn renderer: %v\n", err)
-					return remote
+					w.remotePanes = remote
+					return
 				}
 			}
 			added, err := collectHellos(connCh, len(newRemote)-len(remote), helloTimeout)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-				return remote
+				w.remotePanes = remote
+				return
 			}
 			for id, c := range added {
-				conns[id] = c
-				if seedRenderer(reader, send, router, c, id) {
+				w.conns[id] = c
+				if seedRenderer(reader, send, router, c, id, reply) {
 					go pumpInput(c, id, send)
 				} else {
-					delete(conns, id)
+					delete(w.conns, id)
 				}
 			}
 		case isPrefixOf(newRemote, remote):
 			for i := len(remote) - 1; i >= len(newRemote); i-- {
 				removed := remote[i]
 				router.Unregister(removed)
-				if c := conns[removed]; c != nil {
+				if c := w.conns[removed]; c != nil {
 					c.Close()
-					delete(conns, removed)
+					delete(w.conns, removed)
 				}
-				if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", cfg.LocalWin, i)); err != nil {
+				if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change kill-pane: %v\n", err)
 				}
 			}
 		default:
 			fmt.Fprintf(os.Stderr, "daemon: layout-change: unsupported pane reshuffle %v -> %v, skipping reconcile\n", remote, newRemote)
-			return remote
+			w.remotePanes = remote
+			return
 		}
 
-		if err := cfg.LocalTmux("select-layout", "-t", cfg.LocalWin, L.Raw); err != nil {
+		if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
 		}
 		remote = newRemote
 
-		fresh, err := readLayout(reader, send, remoteTarget(cfg))
+		fresh, err := readLayout(reader, send, target, reply)
 		if err != nil || fresh.Raw == L.Raw {
-			return remote
+			w.remotePanes = remote
+			return
 		}
 		L = fresh
 	}
 	fmt.Fprintf(os.Stderr, "daemon: layout-change: didn't converge after %d passes, stopping at %v\n", maxReconcilePasses, remote)
-	return remote
+	w.remotePanes = remote
 }
 
 // isPrefixOf reports whether a is a prefix of b (used to detect pure

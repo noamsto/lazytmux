@@ -9,16 +9,22 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/render"
 )
 
+// replyFn reads the next command-reply block. Startup passes readReply (plain
+// skip); steady-state passes a router-bound routing closure (B3), so a
+// mid-stream seed round-trip never drops another pane's live %output.
+type replyFn = func(*controlmode.Reader) (controlmode.Line, bool)
+
 // PaneSeed issues display-message/capture-pane for paneID over an established
 // control stream and returns the render.Seed bytes. send writes a command
-// line to the control connection; reader is the shared controlmode.Reader.
-// Reply blocks are consumed in issue order (one reply per command).
-func PaneSeed(reader *controlmode.Reader, send func(string), paneID string) ([]byte, error) {
+// line to the control connection; reader is the shared controlmode.Reader;
+// reply reads each command's reply block. Reply blocks are consumed in issue
+// order (one reply per command).
+func PaneSeed(reader *controlmode.Reader, send func(string), paneID string, reply replyFn) ([]byte, error) {
 	send(fmt.Sprintf("display-message -p -t %s -F '#{cursor_x} #{cursor_y} #{alternate_on} #{keypad_cursor_flag}'", paneID))
-	cx, cy, alt, appck := readCursor(reader)
+	cx, cy, alt, appck := readCursor(reader, reply)
 
 	send(fmt.Sprintf("capture-pane -e -p -t %s", paneID))
-	captured, isErr := readCapture(reader)
+	captured, isErr := readCapture(reader, reply)
 	// isErr, not len(captured)==0: a genuinely blank pane is a valid
 	// successful capture with empty Data, so an emptiness check alone would
 	// reject a legitimate blank seed. A pane that closed between list-panes
@@ -52,8 +58,8 @@ func readReply(reader *controlmode.Reader) (controlmode.Line, bool) {
 
 // readCursor reads the display-message reply and parses
 // "cursor_x cursor_y alternate_on keypad_cursor_flag".
-func readCursor(reader *controlmode.Reader) (cx, cy int, alt, appCursorKeys bool) {
-	l, ok := readReply(reader)
+func readCursor(reader *controlmode.Reader, reply replyFn) (cx, cy int, alt, appCursorKeys bool) {
+	l, ok := reply(reader)
 	if !ok || l.Kind == controlmode.Error {
 		return 0, 0, false, false
 	}
@@ -72,8 +78,8 @@ func readCursor(reader *controlmode.Reader) (cx, cy int, alt, appCursorKeys bool
 // list-panes and this capture-pane) or EOF before any reply arrived. isErr
 // is the only signal PaneSeed uses to reject a seed: a successful reply with
 // an empty body is a valid blank pane, not an error.
-func readCapture(reader *controlmode.Reader) (data []byte, isErr bool) {
-	l, ok := readReply(reader)
+func readCapture(reader *controlmode.Reader, reply replyFn) (data []byte, isErr bool) {
+	l, ok := reply(reader)
 	if !ok {
 		return nil, true
 	}

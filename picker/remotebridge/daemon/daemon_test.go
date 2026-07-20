@@ -64,6 +64,31 @@ func TestLoopReturnsFalseOnEOF(t *testing.T) {
 	}
 }
 
+// TestReadReplyRoutingRoutesSiblingOutput: while awaiting one command's
+// %begin..%end reply, standalone %output for another pane (NOT inside the
+// %begin guard) must be routed, not dropped. Reader.Next absorbs guarded lines
+// into the reply body, so pane-B output is emitted between reply blocks.
+func TestReadReplyRoutingRoutesSiblingOutput(t *testing.T) {
+	stream := strings.Join([]string{
+		"%output %2 live-B",
+		"%begin 1 1 0",
+		"cursor-and-capture-reply",
+		"%end 1 1 0",
+	}, "\n") + "\n"
+	reader := newTestReader(stream)
+	router := NewRouter()
+	var sink capBuf
+	router.Register("%2", &sink)
+
+	l, ok := readReplyRouting(reader, router)
+	if !ok || l.Kind != controlmode.End {
+		t.Fatalf("readReplyRouting returned %+v ok=%v, want End", l, ok)
+	}
+	if sink.String() != "live-B" {
+		t.Errorf("sibling pane-B output %q was dropped, want %q", sink.String(), "live-B")
+	}
+}
+
 // TestCollectHellosTimesOutWhenRenderersDontConnect uses a real listener
 // that nobody dials: a spawned renderer that never connects back (bad
 // RendererBin, exec failure, crash) must not wedge collectHellos forever.
