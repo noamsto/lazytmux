@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+)
 
 func TestAnsiFgTmux(t *testing.T) {
 	cases := map[string]string{
@@ -97,8 +103,8 @@ func TestPadToWidth(t *testing.T) {
 }
 
 func TestListIndexAt(t *testing.T) {
-	// Landscape (width >= 2*height): list on the left of listWidth, cursor at 0
-	// so scrollStart is 0 and row y maps to index y-listRowTop.
+	// Preview always sits below the list, so a click anywhere on a list row's
+	// x maps to that row — there is no side preview column to reject.
 	m := tuiModel{
 		width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
 		visible: []listItem{
@@ -122,7 +128,7 @@ func TestListIndexAt(t *testing.T) {
 		{"header row not selectable", 5, 4, 0, false},
 		{"row after header", 5, 5, 3, true},
 		{"above list in search", 5, 1, 0, false},
-		{"preview column", 70, 2, 0, false},
+		{"right side is still the list now", 70, 2, 0, true},
 		{"below the list", 5, 90, 0, false},
 	}
 	for _, c := range cases {
@@ -136,26 +142,185 @@ func TestListIndexAt(t *testing.T) {
 }
 
 func TestInPreview(t *testing.T) {
-	land := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
-	if !land.inPreview(70, 2) {
-		t.Error("landscape: right of listWidth should be preview")
+	// Preview is the region below the list + separator, at any terminal size.
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
+	below := m.listRowTop() + m.listHeight() + 1
+	if !m.inPreview(5, below) {
+		t.Errorf("y=%d should be preview", below)
 	}
-	if land.inPreview(5, 2) {
-		t.Error("landscape: left column should be the list")
+	if !m.inPreview(70, below) {
+		// x is irrelevant to preview hit-testing now; only y matters, so a
+		// preview-region row reads as preview at any x.
+		t.Errorf("x should be irrelevant; y=%d is preview at any x", below)
 	}
-	off := land
+	if m.inPreview(5, m.listRowTop()) {
+		t.Error("top list row should not be preview")
+	}
+	off := m
 	off.showPreview = false
-	if off.inPreview(70, 2) {
+	if off.inPreview(5, below) {
 		t.Error("preview hidden -> never in preview")
 	}
+}
 
-	// Portrait (width < 2*height): preview sits below the list + separator.
-	port := tuiModel{width: 40, height: 40, ready: true, showPreview: true, theme: "dark"}
-	below := port.listRowTop() + port.listHeight() + 1
-	if !port.inPreview(5, below) {
-		t.Errorf("portrait: y=%d should be preview", below)
+func TestIdentityCapFor(t *testing.T) {
+	cases := []struct {
+		name                        string
+		width, lead, icon, pr, want int
+	}{
+		{"unknown width -> default", 0, 10, 6, 4, 32},
+		{"negative width -> default", -1, 10, 6, 4, 32},
+		{"wide clamps to max", 200, 10, 6, 4, 48},  // 200-10-6-4-7=173 -> 48
+		{"narrow clamps to min", 20, 10, 6, 4, 12}, // 20-10-6-4-7=-7 -> 12
+		{"mid computes exactly", 60, 10, 6, 4, 33}, // 60-10-6-4-7=33, in range
 	}
-	if port.inPreview(5, port.listRowTop()) {
-		t.Error("portrait: top list row should not be preview")
+	for _, c := range cases {
+		if got := identityCapFor(c.width, c.lead, c.icon, c.pr); got != c.want {
+			t.Errorf("%s: identityCapFor(%d,%d,%d,%d) = %d, want %d",
+				c.name, c.width, c.lead, c.icon, c.pr, got, c.want)
+		}
+	}
+}
+
+func TestRenderWindowItemsAlignment(t *testing.T) {
+	windows := []windowData{
+		{session: "s", index: 1, name: "a", labelID: "L ENG-1", labelRest: " first"},
+		{session: "s", index: 2, name: "b", labelID: "L ENG-2", labelRest: " second", crewName: "rust", crewColor: "colour210"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 window rows, got %d", len(rows))
+	}
+	// The ticket id must start at the SAME cell column in both rows despite the
+	// crew tag widening one row's lead — that is what per-row lead padding buys.
+	col0 := strings.Index(rows[0], "ENG-1")
+	col1 := strings.Index(rows[1], "ENG-2")
+	if col0 <= 0 || col0 != col1 {
+		t.Errorf("identity columns misaligned: row0 ENG at %d, row1 ENG at %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
+	}
+}
+
+func TestRenderWindowItemsLayout(t *testing.T) {
+	windows := []windowData{
+		// Untagged plain window: no crew, name is basename.
+		{session: "mono", index: 1, name: "mono", active: false},
+		// Issue window with a crew tag: crew after index, ticket inline.
+		{session: "mono", index: 2, name: "rustwin", active: true,
+			labelID: "L ENG-7290", labelRest: " fix and lock it confirmation modal",
+			crewName: "rust", crewColor: "colour210"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+
+	var plains []string
+	for _, it := range items {
+		plains = append(plains, it.plain)
+	}
+	joined := strings.Join(plains, "\n")
+
+	// Crew renders AFTER the index, not before it.
+	if !strings.Contains(joined, "2: rust") {
+		t.Errorf("crew should follow the index (`2: rust`); got:\n%s", joined)
+	}
+	// The untagged row's identity aligns with the crew-tagged row's identity —
+	// per-row lead padding absorbs the crew-tag width difference. Compared via
+	// display (not plain), since plain's active-marker trimming is a separate,
+	// unrelated column-width quirk. Cell column (not byte offset) since row2's
+	// active marker is a multi-byte glyph.
+	d1, d2 := stripANSI(items[1].display), stripANSI(items[2].display)
+	o1, o2 := strings.Index(d1, "mono"), strings.Index(d2, "L ENG-7290")
+	if o1 < 0 || o2 < 0 {
+		t.Fatalf("identity not found: %q / %q", d1, d2)
+	}
+	if col1, col2 := visibleWidth(d1[:o1]), visibleWidth(d2[:o2]); col1 != col2 {
+		t.Errorf("untagged row identity should align with the crew-tagged row; row1 col %d, row2 col %d\nrow1=%q\nrow2=%q", col1, col2, d1, d2)
+	}
+	// The ticket id is inline in the row (as the name), not a trailing column.
+	if !strings.Contains(joined, "ENG-7290") {
+		t.Errorf("ticket id should be inline in the label; got:\n%s", joined)
+	}
+	// Default cap (width 0) truncates the long title; the tail word must be cut.
+	if strings.Contains(joined, "confirmation modal") {
+		t.Errorf("long title should be truncated at the default cap; got:\n%s", joined)
+	}
+}
+
+func TestRenderWindowItemsLongIDClamped(t *testing.T) {
+	// Narrow width clamps identityCap to the minimum (12); a ticket id longer
+	// than that must be truncated, not left to overflow the aligned column.
+	windows := []windowData{
+		{session: "s", index: 1, name: "x", labelID: "L PROJECT-123456", labelRest: " some title"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 20)
+	var row string
+	for _, it := range items {
+		if !it.isHeader {
+			row = it.plain
+		}
+	}
+	if strings.Contains(row, "PROJECT-123456") {
+		t.Errorf("long ticket id should be truncated at the min cap; got %q", row)
+	}
+	if !strings.Contains(row, "…") {
+		t.Errorf("expected an ellipsis from truncation; got %q", row)
+	}
+}
+
+func TestPreviewToggleResizesViewport(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
+		visible: []listItem{{target: "a", display: "a"}}}
+	// Simulate a resize while preview is HIDDEN: viewport gets the full-body height.
+	m.showPreview = false
+	m.preview = viewport.New(viewport.WithWidth(m.previewWidth()), viewport.WithHeight(m.previewHeight()))
+	hiddenH := m.preview.Height() // == bodyHeight() (full)
+	// Toggling preview back ON must shrink the viewport to previewHeight().
+	m2, _ := m.handleKey(tea.KeyPressMsg{Code: '/', Mod: tea.ModCtrl})
+	mm := m2.(tuiModel)
+	if !mm.showPreview {
+		t.Fatal("ctrl+/ should have toggled preview on")
+	}
+	if mm.preview.Height() != mm.previewHeight() {
+		t.Errorf("viewport height = %d, want previewHeight() = %d (was %d while hidden)",
+			mm.preview.Height(), mm.previewHeight(), hiddenH)
+	}
+}
+
+func TestRenderWindowItemsZoomAligned(t *testing.T) {
+	// A zoomed row must not push its icon/PR column past a non-zoomed row's.
+	// The id is long enough to overflow identityCap and get truncated flush to
+	// it (zero slack in the label column), so an unbudgeted zoom glyph would
+	// have nowhere to go but past labelCol.
+	longID := "L ENG-000000000000000000000000000000000000000000000000000000"
+	windows := []windowData{
+		{session: "s", index: 1, name: "a", labelID: longID, labelRest: " one",
+			prPlain: " #10", prState: "open", prCheck: "success"},
+		{session: "s", index: 2, name: "b", labelID: longID, labelRest: " two", zoomed: true,
+			prPlain: " #20", prState: "open", prCheck: "success"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 100)
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(rows))
+	}
+	// Both PR badges must survive (zoomed row's badge not clipped).
+	if !strings.Contains(rows[1], "#20") {
+		t.Errorf("zoomed row PR badge clipped: %q", rows[1])
+	}
+	// The zoom glyph is present on the zoomed row and the icon column still aligns:
+	// the PR badge ("#") must start at the same cell column in both rows.
+	col0 := visibleWidth(rows[0][:strings.Index(rows[0], "#10")])
+	col1 := visibleWidth(rows[1][:strings.Index(rows[1], "#20")])
+	if col0 != col1 {
+		t.Errorf("PR column misaligned: row0 # at cell %d, row1 # at cell %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
 	}
 }

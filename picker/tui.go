@@ -112,7 +112,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 
 	var items []listItem
 	if windowMode {
-		items = buildWindowItems(opts, panes, theme)
+		items = buildWindowItems(opts, panes, theme, 0)
 	} else {
 		items = buildSessionItems(opts, panes, theme)
 	}
@@ -148,6 +148,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
+		widthChanged := msg.Width != m.width
 		m.width = msg.Width
 		m.height = msg.Height
 		if !m.ready {
@@ -160,6 +161,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.preview.SetWidth(m.previewWidth())
 			m.preview.SetHeight(m.previewHeight())
+		}
+		// Window labels are truncated to the terminal width; when it changes,
+		// rebuild so the adaptive identity cap tracks the real size. Guarded on
+		// change so a fixed-size popup forks the rebuild ~once.
+		if m.windowMode && widthChanged {
+			return m, tea.Batch(m.loadPreviewCmd(), m.refreshDataCmd())
 		}
 		return m, m.loadPreviewCmd()
 
@@ -300,6 +307,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showPreview = !m.showPreview
 		if m.ready {
 			m.preview.SetWidth(m.previewWidth())
+			m.preview.SetHeight(m.previewHeight())
 		}
 		return m, nil
 
@@ -352,11 +360,7 @@ func (m tuiModel) View() tea.View {
 		var body string
 		if m.showPreview {
 			sep := m.renderSeparator()
-			if m.portrait() {
-				body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
-			} else {
-				body = lipgloss.JoinHorizontal(lipgloss.Top, listPane, sep, m.preview.View())
-			}
+			body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
 		} else {
 			body = listPane
 		}
@@ -411,15 +415,7 @@ func (m tuiModel) renderList() string {
 func (m tuiModel) renderSeparator() string {
 	sepColor := lipgloss.NewStyle().
 		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0"))
-	if m.portrait() {
-		return sepColor.Render(strings.Repeat("─", m.innerWidth()))
-	}
-	h := m.listHeight()
-	lines := make([]string, h)
-	for i := range lines {
-		lines[i] = "│"
-	}
-	return sepColor.Render(strings.Join(lines, "\n"))
+	return sepColor.Render(strings.Repeat("─", m.innerWidth()))
 }
 
 func (m tuiModel) renderSearch() string {
@@ -482,11 +478,6 @@ func (m tuiModel) renderHints() string {
 
 // --- Layout ---
 
-// portrait returns true when preview should be below the list (narrow terminal).
-func (m tuiModel) portrait() bool {
-	return m.width < 2*m.height
-}
-
 // bodyHeight is the total height available for list + preview (excludes search/hints/borders).
 func (m tuiModel) bodyHeight() int {
 	h := m.height - 5 // search (3 with border) + bottom border (1) + hints (1)
@@ -498,10 +489,10 @@ func (m tuiModel) bodyHeight() int {
 
 func (m tuiModel) listHeight() int {
 	bh := m.bodyHeight()
-	if !m.showPreview || !m.portrait() {
+	if !m.showPreview {
 		return bh
 	}
-	// Portrait: list gets top 50%, preview gets bottom 50% (minus 1 for separator)
+	// List gets the top ~50%, preview the bottom (minus 1 for the separator).
 	return bh * 50 / 100
 }
 
@@ -510,30 +501,15 @@ func (m tuiModel) innerWidth() int {
 }
 
 func (m tuiModel) listWidth() int {
-	iw := m.innerWidth()
-	if !m.showPreview || m.portrait() {
-		return iw
-	}
-	pct := 60
-	if m.windowMode {
-		pct = 45
-	}
-	w := iw * pct / 100
-	if w < 30 {
-		return 30
-	}
-	return w
+	return m.innerWidth()
 }
 
 func (m tuiModel) previewWidth() int {
-	if m.portrait() {
-		return m.innerWidth()
-	}
-	return m.innerWidth() - m.listWidth() - 1 // -1 for separator
+	return m.innerWidth()
 }
 
 func (m tuiModel) previewHeight() int {
-	if !m.portrait() {
+	if !m.showPreview {
 		return m.bodyHeight()
 	}
 	return m.bodyHeight() - m.listHeight() - 1 // -1 for separator
@@ -642,9 +618,6 @@ func (m tuiModel) listIndexAt(x, y int) (int, bool) {
 	if vy < 0 || vy >= h {
 		return 0, false
 	}
-	if !m.portrait() && m.showPreview && x >= m.listWidth() {
-		return 0, false // click landed in the separator/preview column
-	}
 	idx := m.scrollStart(h) + vy
 	if idx < 0 || idx >= len(m.visible) || !m.isSelectable(m.visible[idx]) {
 		return 0, false
@@ -652,16 +625,13 @@ func (m tuiModel) listIndexAt(x, y int) (int, bool) {
 	return idx, true
 }
 
-// inPreview reports whether screen coords fall in the preview pane (right of
-// the list in landscape, below it in portrait).
+// inPreview reports whether screen coords fall in the preview pane, which always
+// sits below the list (past the separator row).
 func (m tuiModel) inPreview(x, y int) bool {
 	if !m.showPreview || !m.ready {
 		return false
 	}
-	if m.portrait() {
-		return y >= m.listRowTop()+m.listHeight()+1 // past the separator row
-	}
-	return x >= m.listWidth()
+	return y >= m.listRowTop()+m.listHeight()+1 // past the separator row
 }
 
 // --- Filter ---
@@ -800,11 +770,12 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 	wm := m.windowMode
 	opts := m.tmuxOpts
 	theme := m.theme
+	lw := m.listWidth() // capture the value; the closure runs off-thread
 	return func() tea.Msg {
 		panes := collectClaudePanes()
 		var items []listItem
 		if wm {
-			items = buildWindowItems(opts, panes, theme)
+			items = buildWindowItems(opts, panes, theme, lw)
 		} else {
 			items = buildSessionItems(opts, panes, theme)
 		}
@@ -1042,13 +1013,40 @@ func collectZoxideItems(tmuxOpts map[string]string) []listItem {
 	return items
 }
 
-func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) []listItem {
-	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme)
+func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int) []listItem {
+	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme, width)
+}
+
+const (
+	defaultIdentityCap = 32
+	minIdentityCap     = 12
+	maxIdentityCap     = 48
+	// layoutGaps: tree(2)+marker(1) glyph cells + 3 inter-field gaps + 1 gap
+	// before the PR badge = 7.
+	layoutGaps = 7
+)
+
+// identityCapFor sizes the inline-identity column from the terminal width, so
+// wider terminals show longer ticket titles and narrow ones shorten them while
+// the icon and PR columns stay pinned. width<=0 (size unknown) uses the default.
+func identityCapFor(width, leadDW, iconDW, prDW int) int {
+	if width <= 0 {
+		return defaultIdentityCap
+	}
+	identCap := width - leadDW - iconDW - prDW - layoutGaps
+	if identCap < minIdentityCap {
+		return minIdentityCap
+	}
+	if identCap > maxIdentityCap {
+		return maxIdentityCap
+	}
+	return identCap
 }
 
 // renderWindowItems is the pure rendering half of buildWindowItems, split out so
-// the enriched row layout can be unit-tested with synthetic windows.
-func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) []listItem {
+// the enriched row layout can be unit-tested with synthetic windows. width is
+// the list width in cells (0 = unknown → default identity cap).
+func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int) []listItem {
 	claudeByWin := aggregateClaudeByWindow(claudePanes)
 	mergeClaudeWindows(windows, claudeByWin)
 
@@ -1106,34 +1104,31 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 		})
 	}
 
-	// One pre-pass builds every variable-width piece (icons, window label, the
-	// enrich identity, the PR badge) and tracks the column maxima, so the second
-	// pass can pad each column to a shared width and keep them aligned across
-	// every session group.
-	// Keep the identity column tight: preview is open by default, halving the
-	// list width, and the PR badge trailing it is the high-value signal that
-	// must stay on screen.
-	const identityCap = 32
+	// Pass A builds every fixed-width piece and the raw identity parts, and
+	// tracks the column maxima (lead prefix, icons, PR). The identity cap is
+	// then derived from the terminal width, and pass B truncates + aligns.
+	type rawIdentity struct {
+		kind      int    // 0 none/name, 1 issue, 2 branch
+		id, rest  string // issue: id (accent) + rest (dim)
+		text      string // branch/name plain text
+		leadGlyph string // branch icon, already includes trailing space, or ""
+	}
 	type renderedWin struct {
-		win           *windowData
-		name          string // clean window name, for search
-		icons         string
-		iconDW        int
-		winLabel      string
-		winLabelDW    int
-		identity      string // colored
-		identityPlain string
-		identityDW    int
-		idSearch      string // searchable text (no glyphs/color)
-		prBadge       string // colored
-		prPlain       string
-		crewColored   string // agent codename, colored by @crew_color
-		crewName      string // plain codename (search + width)
-		crewDW        int
+		win         *windowData
+		name        string // clean window name, for search
+		icons       string
+		iconDW      int
+		leadPlain   string // "N: " + crew + " "  (uncolored, for width)
+		leadColored string
+		leadDW      int
+		ident       rawIdentity
+		identSearch string
+		prBadge     string
+		prPlain     string
+		crewName    string
 	}
 	winRows := make(map[string][]renderedWin)
-	maxIconDW, maxWinLabelDW, maxIdentityDW, maxCrewDW := 0, 0, 0, 0
-	anyPR := false
+	maxLeadDW, maxIconDW, maxPrDW, maxZoomDW := 0, 0, 0, 0
 	for _, g := range groups {
 		for _, w := range g.windows {
 			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
@@ -1141,75 +1136,90 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
 
 			name := truncateCells(w.name, 40)
-			winLabel := fmt.Sprintf("%d: %s", w.index, name)
-			if w.zoomed {
-				winLabel += " 󰁌"
-			}
-			winLabelDW := iconCellWidth(winLabel)
 
-			// Identity: an issue window shows the stamped "<id> <title>" (id
-			// accent, title dim); otherwise the feature branch (faint),
-			// suppressing default-branch/basename which only echoes the header.
-			var idColored, idPlain, idSearch string
-			if w.labelID != "" {
-				id, rest := w.labelID, w.labelRest
-				if iconCellWidth(id+rest) > identityCap {
-					rest = truncateCells(rest, max(identityCap-iconCellWidth(id), 1))
+			// Lead: "N: " then the crew codename (after the index), only when
+			// tagged — no reserved gap otherwise.
+			leadPlain := fmt.Sprintf("%d: ", w.index)
+			leadColored := leadPlain
+			if w.crewName != "" {
+				leadPlain += w.crewName + " "
+				crew := w.crewName
+				if c := ansiFgTmux(w.crewColor); c != "" {
+					crew = c + w.crewName + reset
 				}
-				idPlain = id + rest
-				idSearch = id + rest
-				idColored = cMauve + id + reset
-				if rest != "" {
-					idColored += cDim + rest + reset
-				}
-			} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
-				br := truncateCells(w.branch, 35)
-				idPlain = br
-				if iBranch != "" {
-					idPlain = iBranch + " " + br
-				}
-				idSearch = br
-				idColored = cFaint + idPlain + reset
+				leadColored += crew + " "
 			}
-			idDW := iconCellWidth(idPlain)
+			leadDW := iconCellWidth(leadPlain)
+
+			// Inline identity (the name): issue id+title → non-default branch →
+			// repo basename. Mirrors the status bar's build_window_label priority.
+			var ri rawIdentity
+			var idSearch string
+			if w.labelID != "" {
+				ri = rawIdentity{kind: 1, id: w.labelID, rest: w.labelRest}
+				idSearch = w.labelID + w.labelRest
+			} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
+				ri = rawIdentity{kind: 2, text: w.branch, leadGlyph: ""}
+				if iBranch != "" {
+					ri.leadGlyph = iBranch + " "
+				}
+				idSearch = w.branch
+			} else {
+				ri = rawIdentity{kind: 0, text: name}
+				idSearch = name
+			}
 
 			prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
 			prPlain := strings.TrimSpace(w.prPlain)
-			if prPlain != "" {
-				anyPR = true
-			}
-
-			// Agent codename badge (fan-out harness stamp), tinted by @crew_color.
-			var crewColored string
-			crewDW := iconCellWidth(w.crewName)
-			if w.crewName != "" {
-				if c := ansiFgTmux(w.crewColor); c != "" {
-					crewColored = c + w.crewName + reset
-				} else {
-					crewColored = w.crewName
-				}
-			}
+			prDW := iconCellWidth(prPlain)
 
 			winRows[g.name] = append(winRows[g.name], renderedWin{
 				win: w, name: name, icons: icons, iconDW: dw,
-				winLabel: winLabel, winLabelDW: winLabelDW,
-				identity: idColored, identityPlain: idPlain, identityDW: idDW,
-				idSearch: idSearch, prBadge: prBadge, prPlain: prPlain,
-				crewColored: crewColored, crewName: w.crewName, crewDW: crewDW,
+				leadPlain: leadPlain, leadColored: leadColored, leadDW: leadDW,
+				ident: ri, identSearch: idSearch,
+				prBadge: prBadge, prPlain: prPlain, crewName: w.crewName,
 			})
+			maxLeadDW = max(maxLeadDW, leadDW)
 			maxIconDW = max(maxIconDW, dw)
-			maxWinLabelDW = max(maxWinLabelDW, winLabelDW)
-			maxIdentityDW = max(maxIdentityDW, idDW)
-			maxCrewDW = max(maxCrewDW, crewDW)
+			maxPrDW = max(maxPrDW, prDW)
+			if w.zoomed {
+				maxZoomDW = max(maxZoomDW, iconCellWidth(" 󰁌"))
+			}
 		}
 	}
 	iconCol := max(maxIconDW+1, 3)
-	emptyIcons := strings.Repeat(" ", iconCol)
-	// Only reserve an identity column when a PR badge needs to trail it; a bare
-	// identity (nothing after) shouldn't pad to trailing whitespace.
-	identityCol := 0
-	if anyPR {
-		identityCol = maxIdentityDW
+	identityCap := identityCapFor(width, maxLeadDW+maxZoomDW, iconCol, maxPrDW)
+	// Uniform label column so the icon column lines up across every row.
+	labelCol := maxLeadDW + identityCap + maxZoomDW
+
+	// truncID renders a rawIdentity to (colored, plain) within identityCap cells.
+	truncID := func(ri rawIdentity) (string, string) {
+		switch ri.kind {
+		case 1: // issue: id accent + dim title
+			id := ri.id
+			idW := iconCellWidth(id)
+			rest := ri.rest
+			if idW >= identityCap {
+				id = truncateCells(id, identityCap)
+				rest = ""
+				idW = iconCellWidth(id)
+			} else if idW+iconCellWidth(rest) > identityCap {
+				rest = truncateCells(rest, identityCap-idW)
+			}
+			plain := id + rest
+			colored := cMauve + id + reset
+			if rest != "" {
+				colored += cDim + rest + reset
+			}
+			return colored, plain
+		case 2: // branch: faint, optional glyph
+			br := truncateCells(ri.text, max(identityCap-iconCellWidth(ri.leadGlyph), 1))
+			plain := ri.leadGlyph + br
+			return cFaint + plain + reset, plain
+		default: // name: plain
+			nm := truncateCells(ri.text, identityCap)
+			return nm, nm
+		}
 	}
 
 	var items []listItem
@@ -1250,7 +1260,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 
 			icons := r.icons
 			if icons == "" {
-				icons = emptyIcons
+				icons = strings.Repeat(" ", iconCol)
 			} else {
 				icons = padToWidth(icons, r.iconDW, iconCol)
 			}
@@ -1260,44 +1270,32 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				tree = "╰─"
 			}
 
-			winLabel := padToWidth(r.winLabel, r.winLabelDW, maxWinLabelDW)
-
-			// Leading agent-codename column, reserved only when some window in the
-			// list is tagged; blank (padded) otherwise so labels stay aligned.
-			crewCell, crewCellPlain := "", ""
-			if maxCrewDW > 0 {
-				crewCell = padToWidth(r.crewColored, r.crewDW, maxCrewDW) + " "
-				crewCellPlain = padToWidth(r.crewName, r.crewDW, maxCrewDW) + " "
+			idColored, idPlain := truncID(r.ident)
+			zoom := ""
+			if w.zoomed {
+				zoom = " 󰁌" // width budgeted into labelCol via maxZoomDW
 			}
+			lead := padToWidth(r.leadColored, r.leadDW, maxLeadDW)
+			leadPlainPadded := padToWidth(r.leadPlain, r.leadDW, maxLeadDW)
+			labelColored := lead + idColored + zoom
+			labelPlain := leadPlainPadded + idPlain + zoom
+			labelColored = padToWidth(labelColored, iconCellWidth(labelPlain), labelCol)
+			labelPlain = padToWidth(labelPlain, iconCellWidth(labelPlain), labelCol)
 
-			display := fmt.Sprintf("%s %s %s%s %s",
-				cDim+tree+reset,
-				activeMarker,
-				crewCell,
-				winLabel,
-				icons,
-			)
-			plain := fmt.Sprintf("%s %s %s%s %s",
-				tree,
-				strings.TrimSpace(stripANSI(activeMarker)),
-				crewCellPlain,
-				winLabel,
-				stripANSI(icons),
-			)
-			if r.identity != "" || r.prBadge != "" {
-				display += "  " + padToWidth(r.identity, r.identityDW, identityCol)
-				plain += "  " + padToWidth(r.identityPlain, r.identityDW, identityCol)
-				if r.prBadge != "" {
-					display += " " + r.prBadge
-					plain += " " + r.prPlain
-				}
+			display := fmt.Sprintf("%s %s %s %s",
+				cDim+tree+reset, activeMarker, labelColored, icons)
+			plain := fmt.Sprintf("%s %s %s %s",
+				tree, strings.TrimSpace(stripANSI(activeMarker)), labelPlain, stripANSI(icons))
+			if r.prBadge != "" {
+				display += " " + r.prBadge
+				plain += " " + r.prPlain
 			}
 			display = strings.TrimRight(display, " ")
 			plain = strings.TrimRight(plain, " ")
 
 			search := g.name + " " + r.name
-			if r.idSearch != "" {
-				search += " " + r.idSearch
+			if r.identSearch != "" {
+				search += " " + r.identSearch
 			}
 			if r.prPlain != "" {
 				search += " " + r.prPlain

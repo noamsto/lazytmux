@@ -40,7 +40,7 @@ func TestRenderWindowItemsEnriched(t *testing.T) {
 			labelID: "L ENG-2", labelRest: " other",
 			prPlain: "  #20", prState: "open", prCheck: "failure", prMergeable: "mergeable"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark")
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
 
 	var rows []listItem
 	for _, it := range items {
