@@ -25,20 +25,21 @@ import (
 // ssh/tmux/socket in production is a field here, so the bats test can point it
 // at a second local tmux instead.
 type Config struct {
-	Ctl           io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
-	SockPath      string                     // unix socket renderers dial
-	LocalSess     string                     // "<host>-<sess>"
-	RemoteSession string                     // remote session name (may contain spaces)
-	RemoteWindow  string                     // initially-selected remote window INDEX (not a mirror filter)
-	BaseIndex     int                        // local base-index for daemon-created windows (default 1)
-	RendererBin   string                     // absolute store path to cmd/renderer
-	LocalTmux     func(args ...string) error // runs local tmux (injected; prod = exec)
-	WinSize       func() (int, int)          // local window content size (injected)
+	Ctl            io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
+	SockPath       string                     // unix socket renderers dial
+	LocalSess      string                     // "<host>-<sess>"
+	RemoteSession  string                     // remote session name (may contain spaces)
+	RemoteWindow   string                     // initially-selected remote window INDEX (not a mirror filter)
+	BaseIndex      int                        // local base-index for daemon-created windows (default 1)
+	PauseAfterSecs int                        // refresh-client -f pause-after=N (0 disables); backpressure insurance answered by a %continue re-seed
+	RendererBin    string                     // absolute store path to cmd/renderer
+	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
+	WinSize        func() (int, int)          // local window content size (injected)
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
-// frame rather than blocking the control-stream loop; M2.2 will mark the
-// sink dirty and reseed it instead of silently dropping.
+// frame rather than blocking the control-stream loop, marking the sink dirty
+// so the next %continue re-seeds instead of silently dropping.
 const outputSinkBuf = 4096
 
 // helloTimeout bounds how long collectHellos waits for renderers to dial
@@ -153,7 +154,19 @@ func Run(cfg Config) error {
 	}
 
 	// Main loop.
+	pauseAfterSet := false
 	for {
+		// Enable pause-after only now that every window is set up and the loop
+		// is draining the async stream — setup does blocking collectHellos/seed
+		// round-trips without draining, so arming it earlier would let a pane
+		// get %pause'd mid-setup with no %continue re-seed to answer it (a
+		// deadlock offline bats can't catch — see the plan's Task 6 Step 6).
+		if !pauseAfterSet {
+			pauseAfterSet = true
+			if cfg.PauseAfterSecs > 0 {
+				send(fmt.Sprintf("refresh-client -f pause-after=%d", cfg.PauseAfterSecs))
+			}
+		}
 		l, ok := reader.Next()
 		if !ok {
 			break // control-stream EOF
@@ -182,6 +195,14 @@ func Run(cfg Config) error {
 					teardown()
 					return nil
 				}
+			}
+		case controlmode.Pause:
+			if len(l.Args) > 0 {
+				handlePause(router, send, l.Args[0])
+			}
+		case controlmode.Continue:
+			if len(l.Args) > 0 {
+				handleContinue(reader, router, send, l.Args[0])
 			}
 		case controlmode.Exit:
 			teardown()
@@ -244,16 +265,15 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 		mw.conns[id] = c
 	}
 
-	// Seed each pane, then wire it into the router. The seed frame is written
-	// synchronously here, and only afterwards do we start the output-pump
-	// goroutine that becomes the conn's other writer — so the two writers are
-	// never concurrent and no per-conn mutex is needed.
-	for _, remotePane := range mw.remotePanes {
+	// Seed each pane and wire it into the router. seedRenderer registers the
+	// sink first, then enqueues the seed (FIFO keeps it ahead of any routed
+	// output), then starts the input pump.
+	for i, remotePane := range mw.remotePanes {
 		conn := mw.conns[remotePane]
 		if conn == nil {
 			continue // didn't connect; already logged by collectHellos caller
 		}
-		if !seedRenderer(reader, send, router, conn, remotePane, reply) {
+		if !seedRenderer(reader, send, router, conn, remotePane, reply, L.Panes[i]) {
 			if len(mw.remotePanes) == 1 {
 				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
 			}
@@ -345,6 +365,32 @@ func readReplyRouting(reader *controlmode.Reader, router *Router) (controlmode.L
 	}
 }
 
+// handlePause answers a %pause %N: mark the pane's sink paused (Write drops +
+// marks dirty) and ask tmux to unblock it with a paired %continue, which the
+// main loop turns into a full-repaint re-seed.
+func handlePause(router *Router, send func(string), paneID string) {
+	if s := router.sink(paneID); s != nil {
+		s.pause()
+		send(fmt.Sprintf("refresh-client -A '%s:continue'", paneID))
+	}
+}
+
+// handleContinue answers a %continue %N: capture a fresh screen (routing-aware,
+// so sibling panes keep streaming during the round-trip — B3) and enqueue it as
+// a FrameSeed BEFORE resuming, so the full repaint lands ahead of any resumed
+// output and closes the %pause gap.
+func handleContinue(reader *controlmode.Reader, router *Router, send func(string), paneID string) {
+	s := router.sink(paneID)
+	if s == nil {
+		return
+	}
+	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
+	if seed, err := PaneSeed(reader, send, paneID, reply); err == nil {
+		s.enqueue(wire.FrameSeed, seed)
+	}
+	s.resume()
+}
+
 // remoteWinTarget builds the tmux target for a remote window by its id (@N),
 // quoting the session name so a name with spaces (e.g. "my proj") stays one
 // token. The id is used verbatim — never TrimPrefix'd to a bare N, which tmux
@@ -434,45 +480,58 @@ func closeConns(conns map[string]net.Conn) {
 	}
 }
 
-// seedRenderer produces the initial screen for remotePane, writes it to conn
-// as a FrameSeed, and (only on success) registers conn's output sink with
-// router. reply is the reader startup passes readReply (skip); steady-state
-// reconcile passes a router-bound routing closure (B3). Returns false —
-// logging to stderr rather than crashing — if the pane closed between listing
-// and seeding: the caller decides whether that's fatal (sole pane) or just
-// leaves that pane unwired.
-func seedRenderer(reader *controlmode.Reader, send func(string), router *Router, conn net.Conn, remotePane string, reply replyFn) bool {
+// seedRenderer produces the initial screen for remotePane and (only on
+// success) registers conn's output sink with router, then enqueues the
+// FrameSeed followed by a FrameResize (dims from the pane's layout cell)
+// through that sink. Register-then-enqueue keeps the seed the sink's first
+// frame (FIFO), so it precedes any routed output — no frame bypasses the sink
+// (frozen wire invariant). reply is the reader startup passes readReply (skip);
+// steady-state reconcile passes a router-bound routing closure (B3). Returns
+// false — logging to stderr rather than crashing — if the pane closed between
+// listing and seeding: the caller decides whether that's fatal (sole pane) or
+// just leaves that pane unwired.
+func seedRenderer(reader *controlmode.Reader, send func(string), router *Router, conn net.Conn, remotePane string, reply replyFn, dims controlmode.PaneCell) bool {
 	seed, err := PaneSeed(reader, send, remotePane, reply)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (skipping renderer)\n", remotePane, err)
 		conn.Close()
 		return false
 	}
-	if err := wire.WriteFrame(conn, wire.FrameSeed, seed); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: write seed to %s: %v (skipping renderer)\n", remotePane, err)
-		conn.Close()
-		return false
-	}
 	sink := newOutputSink(conn)
 	router.Register(remotePane, sink)
+	sink.enqueue(wire.FrameSeed, seed)
+	sink.enqueue(wire.FrameResize, wire.EncodeResize(dims.W, dims.H))
 	return true
 }
 
-// outputSink buffers FrameOutput frames for one renderer so a slow reader
-// can't block Router.Route, which runs on the single main control-stream
-// loop. A full buffer drops the frame; M2.2 will mark the sink dirty and
-// reseed it instead.
+// sinkFrame is a typed daemon->renderer frame queued on an outputSink. Once
+// pause-after flow control lets a mid-stream re-seed happen, the seed is a
+// second writer of the conn alongside the output pump, so every frame type
+// (seed, output, resize) serializes through the one pump goroutine (frozen
+// wire invariant: no frame bypasses the sink).
+type sinkFrame struct {
+	typ     wire.FrameType
+	payload []byte
+}
+
+// outputSink serializes all daemon->renderer frames for one pane through a
+// single pump goroutine so a slow reader can't block Router.Route (which runs
+// on the single main control-stream loop) and the seed/resize/output writers
+// never race. A full buffer or a paused pane drops the frame and marks the
+// sink dirty, so the next %continue re-seeds instead of silently losing state.
 type outputSink struct {
 	mu     sync.Mutex
-	ch     chan []byte
+	ch     chan sinkFrame
 	closed bool
+	paused bool
+	dirty  bool // overflow / pause happened: %continue must re-seed
 }
 
 func newOutputSink(conn net.Conn) *outputSink {
-	s := &outputSink{ch: make(chan []byte, outputSinkBuf)}
+	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
 	go func() {
-		for p := range s.ch {
-			if err := wire.WriteFrame(conn, wire.FrameOutput, p); err != nil {
+		for f := range s.ch {
+			if err := wire.WriteFrame(conn, f.typ, f.payload); err != nil {
 				return
 			}
 		}
@@ -480,20 +539,47 @@ func newOutputSink(conn net.Conn) *outputSink {
 	return s
 }
 
+// Write is the router-facing io.Writer path: it enqueues a FrameOutput. While
+// paused, output is dropped (tmux is discarding it remote-side anyway) and the
+// sink is marked dirty so %continue re-seeds. A full buffer drops and marks
+// dirty too.
 func (s *outputSink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return len(p), nil
 	}
+	if s.paused {
+		s.dirty = true
+		return len(p), nil
+	}
 	select {
-	case s.ch <- append([]byte(nil), p...):
+	case s.ch <- sinkFrame{typ: wire.FrameOutput, payload: append([]byte(nil), p...)}:
 	default:
-		// Buffer full: drop. TODO(M2.2): mark dirty and reseed from
-		// capture-pane instead of silently losing this chunk.
+		s.dirty = true // overflow: %continue-style re-seed instead of silent loss
 	}
 	return len(p), nil
 }
+
+// enqueue serializes a non-output frame (seed, resize) through the same pump so
+// it never races the output writer. It must NOT block: a stalled (not dead)
+// renderer with a full buffer would otherwise wedge the control-stream loop, so
+// it uses the same bounded non-blocking select + drop-to-dirty as Write.
+func (s *outputSink) enqueue(typ wire.FrameType, payload []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- sinkFrame{typ: typ, payload: append([]byte(nil), payload...)}:
+	default:
+		s.dirty = true
+	}
+}
+
+func (s *outputSink) pause()  { s.mu.Lock(); s.paused = true; s.mu.Unlock() }
+func (s *outputSink) resume() { s.mu.Lock(); s.paused = false; s.dirty = false; s.mu.Unlock() }
 
 // Close stops the sink's pump goroutine so it doesn't leak once its pane is
 // torn down (reconcile-removal, teardown); the channel is otherwise never
@@ -588,9 +674,14 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 				w.remotePanes = remote
 				return
 			}
-			for id, c := range added {
+			for i := len(remote); i < len(newRemote); i++ {
+				id := newRemote[i]
+				c := added[id]
+				if c == nil {
+					continue
+				}
 				w.conns[id] = c
-				if seedRenderer(reader, send, router, c, id, reply) {
+				if seedRenderer(reader, send, router, c, id, reply, L.Panes[i]) {
 					go pumpInput(c, id, send)
 				} else {
 					delete(w.conns, id)
@@ -616,6 +707,13 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 
 		if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+		}
+		// select-layout reshapes every surviving pane, so push each its new
+		// dims (layout is daemon-authoritative — renderers only record them).
+		for i, id := range newRemote {
+			if s := router.sink(id); s != nil {
+				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
+			}
 		}
 		remote = newRemote
 

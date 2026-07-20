@@ -33,6 +33,7 @@ func main() {
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
 	baseIndex := flag.Int("base-index", envIntDefault("LZTMUX_DAEMON_BASE_INDEX", 1), "local tmux base-index for daemon-created windows")
+	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
 	// "local" are separate local tmux servers on their own -L sockets, so the
 	// bats integration test never touches the network. --session/--window
@@ -92,15 +93,16 @@ func main() {
 	winSize := func() (int, int) { return localWinSize(localTmuxArgv, *localSess) }
 
 	cfg := daemon.Config{
-		Ctl:           rwc{stdout, stdin},
-		SockPath:      *sock,
-		LocalSess:     *localSess,
-		RemoteSession: *session,
-		RemoteWindow:  strconv.Itoa(*window),
-		BaseIndex:     *baseIndex,
-		RendererBin:   *rendererBin,
-		LocalTmux:     runLocalTmux,
-		WinSize:       winSize,
+		Ctl:            rwc{stdout, stdin},
+		SockPath:       *sock,
+		LocalSess:      *localSess,
+		RemoteSession:  *session,
+		RemoteWindow:   strconv.Itoa(*window),
+		BaseIndex:      *baseIndex,
+		PauseAfterSecs: *pauseAfter,
+		RendererBin:    *rendererBin,
+		LocalTmux:      runLocalTmux,
+		WinSize:        winSize,
 	}
 
 	if err := daemon.Run(cfg); err != nil {

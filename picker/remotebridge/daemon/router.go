@@ -38,3 +38,14 @@ func (r *Router) Route(paneID string, data []byte) {
 		sink.Write(data) // best-effort; sink is non-blocking (see daemon.go)
 	}
 }
+
+// sink returns paneID's registered *outputSink, or nil if none is registered
+// or the registered writer is a test fake. A read accessor — it leaves
+// Register/Unregister/Route unchanged — used by %pause/%continue to gate and
+// re-seed the pane's serialized frame stream.
+func (r *Router) sink(paneID string) *outputSink {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, _ := r.sinks[paneID].(*outputSink)
+	return s
+}

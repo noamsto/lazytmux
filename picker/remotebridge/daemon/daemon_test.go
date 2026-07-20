@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
 // capBuf is a tiny io.Writer that captures what it's given, for asserting
@@ -119,6 +120,89 @@ func TestCloseWindowOutOfRegistryIsNoop(t *testing.T) {
 	}
 	if _, ok := reg.byRemoteID("@1"); !ok {
 		t.Fatal("closeWindow must not remove an unrelated registry entry")
+	}
+}
+
+// TestPauseContinueReseedsBeforeResumingOutput pins I1: a %pause %N marks the
+// sink paused (output dropped), and a %continue %N captures a fresh screen —
+// routing sibling %output while that round-trip is in flight (B3) — and writes
+// it as a FrameSeed BEFORE any resumed output reaches the pane's conn.
+func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
+	// %1 -> a real outputSink over one end of a pipe (so router.sink() finds
+	// it and the test can read its frames off the peer); %2 -> a capBuf, to
+	// assert sibling output isn't dropped during the re-seed round-trip.
+	oneLocal, onePeer := net.Pipe()
+	defer oneLocal.Close()
+	defer onePeer.Close()
+
+	router := NewRouter()
+	router.Register("%1", newOutputSink(oneLocal))
+	var two capBuf
+	router.Register("%2", &two)
+
+	// PaneSeed issues two commands (cursor display-message + capture-pane), so
+	// the %continue round-trip carries two reply blocks; the sibling %output
+	// lands mid-round-trip, exercising the routing-aware reply reader.
+	stream := strings.Join([]string{
+		"%pause %1",
+		"%output %1 dropped-while-paused", // paused: must never reach %1's conn
+		"%continue %1",
+		"%output %2 sibling", // routed by readReplyRouting during the round-trip
+		"%begin 1 1 0",
+		"0 0 0 0",
+		"%end 1 1 0",
+		"%begin 1 2 0",
+		"FRESH-CAPTURE",
+		"%end 1 2 0",
+		"%output %1 after-continue", // must arrive AFTER the seed frame
+		"%exit",
+	}, "\n") + "\n"
+
+	reader := newTestReader(stream)
+	send := func(string) {}
+	for {
+		l, ok := reader.Next()
+		if !ok {
+			break
+		}
+		switch l.Kind {
+		case controlmode.Output:
+			router.Route(l.Pane, l.Data)
+		case controlmode.Pause:
+			handlePause(router, send, l.Args[0])
+		case controlmode.Continue:
+			handleContinue(reader, router, send, l.Args[0])
+		case controlmode.Exit:
+			// stop below
+		}
+		if l.Kind == controlmode.Exit {
+			break
+		}
+	}
+
+	// %1's conn must see FrameSeed(FRESH-CAPTURE) first, then FrameOutput.
+	first, err := wire.ReadFrame(onePeer)
+	if err != nil {
+		t.Fatalf("read seed frame: %v", err)
+	}
+	if first.Type != wire.FrameSeed {
+		t.Fatalf("first frame type = %d, want FrameSeed(%d)", first.Type, wire.FrameSeed)
+	}
+	if !bytes.Contains(first.Payload, []byte("FRESH-CAPTURE")) {
+		t.Errorf("seed frame %q does not contain the fresh capture", first.Payload)
+	}
+	second, err := wire.ReadFrame(onePeer)
+	if err != nil {
+		t.Fatalf("read output frame: %v", err)
+	}
+	if second.Type != wire.FrameOutput {
+		t.Fatalf("second frame type = %d, want FrameOutput(%d)", second.Type, wire.FrameOutput)
+	}
+	if string(second.Payload) != "after-continue" {
+		t.Errorf("output frame = %q, want %q", second.Payload, "after-continue")
+	}
+	if two.String() != "sibling" {
+		t.Errorf("sibling pane %%2 recorded %q, want %q (dropped during re-seed)", two.String(), "sibling")
 	}
 }
 
