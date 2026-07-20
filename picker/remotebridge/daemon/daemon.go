@@ -139,7 +139,7 @@ func Run(cfg Config) error {
 		}
 		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
 		mw := reg.add(rw.id, localWin)
-		if err := setupWindow(cfg, reader, send, router, connCh, mw); err != nil {
+		if err := setupWindow(cfg, reader, send, router, connCh, mw, readReply); err != nil {
 			teardown()
 			return err
 		}
@@ -167,11 +167,25 @@ func Run(cfg Config) error {
 					reconcileLayout(cfg, mw, reader, send, router, connCh)
 				}
 			}
+		case controlmode.WindowRenamed, controlmode.SessionWindowChanged:
+			if argv, ok := translateWindowNotification(l, reg); ok {
+				cfg.LocalTmux(argv...)
+			}
+		case controlmode.WindowAdd:
+			if len(l.Args) > 0 {
+				addWindow(cfg, reader, send, router, connCh, reg, l.Args[0])
+			}
+		case controlmode.WindowClose:
+			if len(l.Args) > 0 {
+				closeWindow(cfg, router, reg, l.Args[0])
+				if reg.empty() {
+					teardown()
+					return nil
+				}
+			}
 		case controlmode.Exit:
 			teardown()
 			return nil
-			// %window-add / %window-close / %window-renamed /
-			// %session-window-changed handled in Task 4 (notify-xlate).
 		}
 	}
 	teardown()
@@ -183,18 +197,19 @@ func Run(cfg Config) error {
 // renderer per pane, waits for their Hellos, then seeds each and wires it into
 // the router. It records the remote pane ids and their conns on mw.
 //
-// It uses the plain skip reply reader (readReply): at enumeration time no
-// window is streaming yet, so B3's routing-aware reader isn't needed
-// (sanctioned startup skip). While windows 2..N are being set up the daemon
-// isn't draining the async stream, so live %output for an already-seeded
-// window during that interval is dropped rather than routed; it self-heals on
-// the pane's next %output once the main loop starts.
+// reply is the caller's reply reader: startup enumeration passes the plain
+// skip reader (readReply) since no window is streaming yet (sanctioned startup
+// skip); a live %window-add passes the routing-aware reader (B3), since
+// sibling windows are streaming while this window's pipeline runs. When the
+// plain reader is used, live %output for an already-seeded window during this
+// interval is dropped rather than routed; it self-heals on the pane's next
+// %output once the main loop starts.
 //
 // For a 1-pane remote window this is exactly M1's behavior — no split, one
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
-func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow) error {
-	L, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), readReply)
+func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow, reply replyFn) error {
+	L, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), reply)
 	if err != nil {
 		return err
 	}
@@ -238,7 +253,7 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 		if conn == nil {
 			continue // didn't connect; already logged by collectHellos caller
 		}
-		if !seedRenderer(reader, send, router, conn, remotePane, readReply) {
+		if !seedRenderer(reader, send, router, conn, remotePane, reply) {
 			if len(mw.remotePanes) == 1 {
 				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
 			}
@@ -250,33 +265,64 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 	return nil
 }
 
-// handleLine processes one control-mode line for the mirror loop: routes
-// %output to its registered renderer and reports whether the session ended
-// (%window-close/%exit). Retained for runLoop's unit tests (Task 4 re-homes
-// the stop-semantics here); Run's real loop layers %layout-change on top.
-func handleLine(l controlmode.Line, router *Router) (stop bool) {
-	switch l.Kind {
-	case controlmode.Output:
-		router.Route(l.Pane, l.Data)
-	case controlmode.WindowClose, controlmode.Exit:
-		return true
+// addWindow B2-confirms a %window-add notification via a routing-aware
+// list-windows re-read — sibling windows are streaming while this round-trip
+// is in flight, so any %output seen must be routed rather than dropped (B3).
+// If remoteID is now in the bridged session and not already mirrored, it runs
+// the same plan/spawn/hello/seed pipeline as startup (routing-aware, since
+// siblings are live). Otherwise (the window belongs elsewhere, or a duplicate
+// notification for an already-registered window) it's a no-op.
+func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reg *registry, remoteID string) {
+	if _, already := reg.byRemoteID(remoteID); already {
+		return
 	}
-	return false
+	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
+
+	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id}'", tmuxQuote(cfg.RemoteSession)))
+	lw, ok := reply(reader)
+	if !ok || lw.Kind == controlmode.Error {
+		fmt.Fprintf(os.Stderr, "daemon: window-add %s: list-windows failed\n", remoteID)
+		return
+	}
+	inSession := false
+	for _, rw := range parseWindowList(string(lw.Data)) {
+		if rw.id == remoteID {
+			inSession = true
+			break
+		}
+	}
+	if !inSession {
+		return
+	}
+
+	localWin := reg.allocLocalWin(cfg.LocalSess)
+	if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: window-add %s: new-window %s: %v\n", remoteID, localWin, err)
+		return
+	}
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+	mw := reg.add(remoteID, localWin)
+	if err := setupWindow(cfg, reader, send, router, connCh, mw, reply); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)
+	}
 }
 
-// runLoop is the routing/teardown core of the single-window loop, retained for
-// unit tests. Returns true if the stream ended via %window-close/%exit, false
-// if the control connection just dropped (EOF).
-func runLoop(reader *controlmode.Reader, router *Router) bool {
-	for {
-		l, ok := reader.Next()
-		if !ok {
-			return false
-		}
-		if handleLine(l, router) {
-			return true
-		}
+// closeWindow tears down remoteID's local mirror: unregisters (and thereby
+// closes) each pane's output sink, closes each renderer conn, and kills the
+// local window. A notification for a window outside the registry is a no-op
+// (B2) — kill-window must never run against a window this daemon doesn't own.
+func closeWindow(cfg Config, router *Router, reg *registry, remoteID string) {
+	mw, ok := reg.remove(remoteID)
+	if !ok {
+		return
 	}
+	for _, id := range mw.remotePanes {
+		router.Unregister(id)
+	}
+	for _, c := range mw.conns {
+		c.Close()
+	}
+	cfg.LocalTmux("kill-window", "-t", mw.localWin)
 }
 
 // readReplyRouting is the steady-state (post-startup) reply reader (B3): it
