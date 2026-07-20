@@ -8,11 +8,11 @@
     # display-panes-as-a-mode). Pin the exact rev (not a moving branch) so builds
     # stay reproducible. The prior fork (noamsto/tmux fix/popup-overlay-flicker)
     # is dropped: its overlay-clipping fix is already upstream (e242da16), and its
-    # two #5336 popup-flicker fixes are invisible on this setup — one is pending
-    # as tmux/tmux#5398, the other was rejected upstream.
+    # two #5336 popup-flicker fixes are now resolved — the overlay redraw fix
+    # landed as tmux/tmux#5398, the other was rejected upstream.
     # Bump: repoint rev, then `nix flake lock --update-input tmux-upstream`.
     tmux-upstream = {
-      url = "github:tmux/tmux/5350da0be3c34f5ea8dff2bd37b90a03cb03e4ab";
+      url = "github:tmux/tmux/afb3e954bfcbe7a2ab9c58584e0e3df9a61e271f";
       flake = false;
     };
     flake-parts.url = "github:hercules-ci/flake-parts";
