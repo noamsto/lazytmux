@@ -252,6 +252,18 @@ in {
         default = false;
         description = "Whether to install worktrunk and configure tmux integration hooks";
       };
+
+      worktreePath = lib.mkOption {
+        type = lib.types.str;
+        default = "{{ repo_path }}-worktrees/{{ branch | sanitize }}";
+        description = ''
+          worktrunk `worktree-path` template for new worktrees. The default is a
+          sibling dir next to the repo (see the config.toml comment for why not
+          nested). Override to relocate worktrees, e.g. a single external root:
+          `''${config.home.homeDirectory}/worktrees/{{ repo_path | basename }}/{{ branch | sanitize }}`.
+          Only affects newly-created worktrees; existing ones keep their path.
+        '';
+      };
     };
 
     remote = {
@@ -836,13 +848,14 @@ in {
       xdg.configFile = {
         "worktrunk/config.toml" = lib.mkIf cfg.worktrunk.enable {
           text = ''
-            # Sibling dir, NOT nested under the repo: a worktree inside the repo
-            # working tree sits under watchman's already-watched root, so a fresh
-            # npm install floods fsevents and watchman drops events — breaking
-            # Metro module resolution in RN/Expo worktrees (see issue #41). A
-            # sibling becomes its own watch root with a clean crawl. Only affects
-            # newly-created worktrees; existing ones keep their path.
-            worktree-path = "{{ repo_path }}-worktrees/{{ branch | sanitize }}"
+            # Default (worktreePath option): sibling dir, NOT nested under the
+            # repo — a worktree inside the repo working tree sits under watchman's
+            # already-watched root, so a fresh npm install floods fsevents and
+            # watchman drops events, breaking Metro module resolution in RN/Expo
+            # worktrees (see issue #41). A sibling becomes its own watch root with
+            # a clean crawl. Any override should stay non-nested for the same
+            # reason. Only affects newly-created worktrees; existing keep their path.
+            worktree-path = "${cfg.worktrunk.worktreePath}"
 
             # The tmux post-switch hook owns navigation (select-window or switch-client),
             # so skip cd'ing the parent shell — otherwise it ends up pwd'd at the
