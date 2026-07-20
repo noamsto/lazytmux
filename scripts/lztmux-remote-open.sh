@@ -4,6 +4,11 @@
 # own local window (live add/close/rename/active-changed). Resolves remote
 # tmux path + TMUX_TMPDIR for the ssh control connection.
 set -euo pipefail
+
+# shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
+# mirroring shellQuote in the daemon — remote-derived names must not break out.
+shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
 host="$1"
 sess="${2:-}"
 win="${3:-}"
@@ -26,11 +31,13 @@ if [[ -z $win ]]; then
 	# base-index is non-zero under lazytmux (windows start at 1), so target the
 	# session's active window rather than assuming index 0.
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t '$sess' -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
+	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t $(shell_quote "$sess") -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
 fi
 
 local_sess="${host}-${sess}"
-sock="${TMUX_TMPDIR:-/tmp}/lztmux-daemon-${local_sess}.sock"
+sock_dir="${TMUX_TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
+sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
+sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 # Absolute store path: pane PATH is stale until server restart, and the daemon
 # respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
 renderer="$(command -v lztmux-remote-bridge-renderer)"
@@ -55,10 +62,10 @@ export LZTMUX_DAEMON_RENDERER="$renderer"
 # window's command — it respawns the local panes into renderers. setsid is
 # Linux-only (not on macOS base), so fall back to plain backgrounding + disown
 # where it's unavailable; either way the daemon is fully detached from this shell.
-if command -v setsid >/dev/null 2>&1; then            # portable-ok: guard, verified fallback below
-	setsid lztmux-remote-bridge-daemon >/dev/null 2>&1 & # portable-ok: guarded above; else branch is the verified macOS fallback
+if command -v setsid >/dev/null 2>&1; then                       # portable-ok: guard, verified fallback below
+	setsid lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" & # portable-ok: guarded above; else branch is the verified macOS fallback
 else
-	lztmux-remote-bridge-daemon >/dev/null 2>&1 &
+	nohup lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" &
 	disown
 fi
 
