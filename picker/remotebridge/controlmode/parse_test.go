@@ -45,3 +45,28 @@ func TestParseLine(t *testing.T) {
 		t.Error("unlinked should be Other")
 	}
 }
+
+func TestParseM22Notifications(t *testing.T) {
+	if l := ParseLine(`%window-add @7`); l.Kind != WindowAdd || len(l.Args) != 1 || l.Args[0] != "@7" {
+		t.Errorf("window-add: %+v", l)
+	}
+	l := ParseLine(`%window-renamed @7 my long name`)
+	if l.Kind != WindowRenamed || l.Args[0] != "@7" || string(l.Data) != "my long name" {
+		t.Errorf("window-renamed (name must stay whole): %+v", l)
+	}
+	if l := ParseLine(`%session-window-changed $2 @7`); l.Kind != SessionWindowChanged || l.Args[0] != "$2" || l.Args[1] != "@7" {
+		t.Errorf("session-window-changed: %+v", l)
+	}
+	if l := ParseLine(`%window-pane-changed @7 %12`); l.Kind != WindowPaneChanged || l.Args[0] != "@7" || l.Args[1] != "%12" {
+		t.Errorf("window-pane-changed: %+v", l)
+	}
+	if l := ParseLine(`%pause %12`); l.Kind != Pause || l.Args[0] != "%12" {
+		t.Errorf("pause: %+v", l)
+	}
+	if l := ParseLine(`%continue %12`); l.Kind != Continue || l.Args[0] != "%12" {
+		t.Errorf("continue: %+v", l)
+	}
+	if ParseLine(`%unlinked-window-add @9`).Kind != Other {
+		t.Error("unlinked-window-add must stay Other")
+	}
+}
