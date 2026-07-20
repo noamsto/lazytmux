@@ -139,6 +139,10 @@ func Run(cfg Config) error {
 			}
 		}
 		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+		// Panes are addressed 0-based (spawnRenderer/reconcileLayout use index
+		// starting at 0); force window-level pane-base-index 0 so that holds
+		// regardless of the host's global pane-base-index (real hosts set 1).
+		cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
 		mw := reg.add(rw.id, localWin)
 		if err := setupWindow(cfg, reader, send, router, connCh, mw, readReply); err != nil {
 			teardown()
@@ -321,6 +325,7 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		return
 	}
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
 	mw := reg.add(remoteID, localWin)
 	if err := setupWindow(cfg, reader, send, router, connCh, mw, reply); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)

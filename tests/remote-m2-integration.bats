@@ -18,13 +18,15 @@ setup() {
 	export TMUX_TMPDIR="/tmp/lztmux-m2-bats-$$"
 	rm -rf "$TMUX_TMPDIR"
 	mkdir -p "$TMUX_TMPDIR"
-	# DST keeps pane-base-index at its default (0): spawnRenderer/kill-pane
-	# target the local pane by 0-based loop index (daemon.go), so a non-zero
-	# pane-base-index on DST would break local pane addressing. But
-	# pane-border-status alone still eats a row per pane regardless of
-	# pane-base-index, so DST needs it to match SRC's dims.
+	# DST sets global pane-base-index 1, matching the real host's render
+	# config (this bit the M2.1 smoke test): spawnRenderer/kill-pane target
+	# the local pane by 0-based loop index (daemon.go), which now relies on
+	# the daemon stamping a window-level pane-base-index 0 override on every
+	# mirror window to stay correct despite the global 1. pane-border-status
+	# alone still eats a row per pane regardless of pane-base-index, so DST
+	# needs it to match SRC's dims.
 	DST_CONF="$BATS_TEST_TMPDIR/dst.conf"
-	printf 'set -g base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit on\n' >"$DST_CONF"
+	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit on\n' >"$DST_CONF"
 	SRC_CONF="$BATS_TEST_TMPDIR/src.conf"
 	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\n' >"$SRC_CONF"
 	SRC="tmux -L m2src -f $SRC_CONF" # stands in for the "remote", full render config
