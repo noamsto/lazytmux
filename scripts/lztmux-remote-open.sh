@@ -5,6 +5,10 @@
 # tmux path + TMUX_TMPDIR for the ssh control connection.
 set -euo pipefail
 
+# @lib_remote@ is substituted at Nix build time; in bats the lib is pre-sourced.
+# shellcheck source=/dev/null
+[[ -f "@lib_remote@" ]] && source "@lib_remote@"
+
 # shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
 # mirroring shellQuote in the daemon — remote-derived names must not break out.
 shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
@@ -41,6 +45,17 @@ sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 # Absolute store path: pane PATH is stale until server restart, and the daemon
 # respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
 renderer="$(command -v lztmux-remote-bridge-renderer)"
+
+# Dedup: if a daemon for this host+session is already running (pidfile present
+# and live), just attach to the existing mirror session — no new SSH connection.
+if remote_daemon_alive "${sock}.pid"; then
+	tmux switch-client -t "=$local_sess"
+	exit 0
+fi
+# Stale cleanup: a prior daemon was killed (SIGTERM/SIGKILL) without running
+# teardown, leaving socket + pidfile behind. Remove both so the new daemon can
+# bind cleanly; the session below is also replaced.
+rm -f "$sock" "${sock}.pid"
 
 # The <host>-<sess> session is an ephemeral mirror (the remote is the source of
 # truth). Discard any pre-existing one — a stale bridge from a prior run, or a

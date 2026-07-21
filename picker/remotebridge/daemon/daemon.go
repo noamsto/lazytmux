@@ -140,6 +140,14 @@ func Run(cfg Config) error {
 	if err := os.Chmod(cfg.SockPath, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: chmod %s: %v\n", cfg.SockPath, err)
 	}
+	// Pidfile beside the socket: the launcher reads it to detect an already-live
+	// bridge for this host:session (reuse instead of stacking a rival daemon)
+	// and to tell a stale socket from one a running daemon still owns. Removed in
+	// teardown so a clean exit leaves neither file behind.
+	pidFile := cfg.SockPath + ".pid"
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: write pidfile %s: %v\n", pidFile, err)
+	}
 	connCh := make(chan helloConn, 64)
 	go acceptRenderers(listener, connCh)
 
@@ -151,6 +159,8 @@ func Run(cfg Config) error {
 	teardown := func() {
 		close(stopWatch)
 		listener.Close()
+		os.Remove(cfg.SockPath)
+		os.Remove(pidFile)
 		for _, mw := range reg.byRemote {
 			// Unregister closes each pane's output sink, stopping its pump
 			// goroutine (mirrors closeWindow); then drop the renderer conns.
