@@ -70,3 +70,20 @@ func TestParseM22Notifications(t *testing.T) {
 		t.Error("unlinked-window-add must stay Other")
 	}
 }
+
+func TestParseExtendedOutput(t *testing.T) {
+	// With flow control armed (refresh-client -f pause-after=N), tmux switches
+	// the output notification to %extended-output %pane <age-ms> : <escaped>.
+	// It must parse to the same Output line as %output (age dropped) or live
+	// output is silently dropped (#183).
+	l := ParseLine(`%extended-output %3 0 : ab\015`)
+	if l.Kind != Output || l.Pane != "%3" || string(l.Data) != "ab\r" {
+		t.Fatalf("extended-output parse wrong: %+v", l)
+	}
+	// Non-zero age, and data that itself contains " : " — split only on the
+	// first separator so the payload stays whole.
+	l2 := ParseLine(`%extended-output %0 42 : a : b`)
+	if l2.Kind != Output || l2.Pane != "%0" || string(l2.Data) != "a : b" {
+		t.Fatalf("extended-output age/colon wrong: %+v", l2)
+	}
+}

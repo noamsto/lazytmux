@@ -297,3 +297,45 @@ sorted_dims() {
 	# And the remote actually shrank to the local width (convergence, not no-op).
 	[ "$($SRC display-message -p -t rem -F '#{window_width}')" -eq 100 ]
 }
+
+# Regression for #183: with the default pause-after, live %output produced
+# AFTER the renderer is wired must still paint into the mirror. The dims-only
+# cases above never read pane CONTENT, so they can't catch a frozen stream:
+# tmux pauses the pane ~1s after attach and the %pause/%continue re-seed must
+# actually resume output. Assert real content lands in the local pane.
+@test "daemon paints live remote output after the renderer is wired (pause-after default)" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dp.sock" \
+		>"$BATS_TEST_TMPDIR/dp.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate: renderer wired (daemon in its main loop, pause-after armed).
+	for _ in $(seq 1 50); do
+		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
+		[[ $cmd == *renderer* ]] && break
+		sleep 0.1
+	done
+
+	# Output produced strictly after wiring — past the initial seed, so only the
+	# live stream (or a %continue re-seed) can paint it.
+	$SRC send-keys -t rem 'echo LIVEPAINT_9F3Q' Enter
+
+	painted=no
+	for _ in $(seq 1 50); do
+		out="$($DST capture-pane -p -t host-sess:1 2>/dev/null)"
+		[[ $out == *LIVEPAINT_9F3Q* ]] && {
+			painted=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$painted" = yes ]
+}
