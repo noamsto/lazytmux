@@ -11,8 +11,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
 )
@@ -84,6 +86,19 @@ func main() {
 	if err := ctl.Start(); err != nil {
 		fatal(err)
 	}
+
+	// On SIGTERM/SIGINT, kill the control transport so daemon.Run's reader hits
+	// EOF and its teardown runs (removes the socket + pidfile, kills the local
+	// mirror session). Without this, a killed daemon leaves that state behind
+	// and blocks the next launch.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		if ctl.Process != nil {
+			ctl.Process.Kill()
+		}
+	}()
 
 	runLocalTmux := func(args ...string) error {
 		cmd := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...), args...)...)

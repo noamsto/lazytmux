@@ -68,18 +68,30 @@ sorted_dims() {
 	# 60/149 split survives untouched.
 	$DST new-session -d -s host-sess -x 210 -y 52
 
-	run timeout 10 "$DAEMON" --test-local \
+	"$DAEMON" --test-local \
 		--src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
-		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d1.sock"
-	[ "$status" -eq 0 ] || [ "$status" -eq 124 ] # 124 = timeout; the daemon stays up
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d1.sock" \
+		>"$BATS_TEST_TMPDIR/d1.log" 2>&1 &
+	daemon_pid=$!
 
+	# Gate: wait until the pane is a renderer so the layout pipeline has settled.
+	for _ in $(seq 1 40); do
+		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
+		[[ $cmd == *renderer* ]] && break
+		sleep 0.1
+	done
+
+	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	src_dims="$(sorted_dims "$SRC" rem)"
 	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+	dst_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
 	[ -n "$src_dims" ]
 	[ "$src_dims" = "$dst_dims" ]
-
-	dst_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
 	[ "$dst_panes" -eq 2 ]
 }
 
@@ -89,17 +101,29 @@ sorted_dims() {
 	$SRC new-session -d -s rem -x 100 -y 30
 	$DST new-session -d -s host-sess -x 100 -y 30
 
-	run timeout 10 "$DAEMON" --test-local \
+	"$DAEMON" --test-local \
 		--src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
-		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d2.sock"
-	[ "$status" -eq 0 ] || [ "$status" -eq 124 ]
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d2.sock" \
+		>"$BATS_TEST_TMPDIR/d2.log" 2>&1 &
+	daemon_pid=$!
 
+	# Gate: wait until the pane is a renderer before capturing state.
+	for _ in $(seq 1 40); do
+		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
+		[[ $cmd == *renderer* ]] && break
+		sleep 0.1
+	done
+
+	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	dst_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
-	[ "$dst_panes" -eq 1 ]
-
 	src_dims="$(sorted_dims "$SRC" rem)"
 	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$dst_panes" -eq 1 ]
 	[ "$src_dims" = "$dst_dims" ]
 }
 
@@ -144,11 +168,13 @@ sorted_dims() {
 		sleep 0.1
 	done
 
+	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
-	src_dims="$(sorted_dims "$SRC" rem)"
-	dst_dims="$(sorted_dims "$DST" host-sess:1)"
 	[ -n "$src_dims" ]
 	[ "$src_dims" = "$dst_dims" ]
 }
@@ -159,14 +185,27 @@ sorted_dims() {
 	$SRC new-window -t rem
 	$DST new-session -d -s host-sess -x 100 -y 30
 
-	run timeout 6 "$DAEMON" --test-local \
+	"$DAEMON" --test-local \
 		--src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
-		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dm.sock"
-	[ "$status" -eq 0 ] || [ "$status" -eq 124 ]
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dm.sock" \
+		>"$BATS_TEST_TMPDIR/dm.log" 2>&1 &
+	daemon_pid=$!
 
+	# Gate: wait until all 3 windows have a renderer pane.
+	for _ in $(seq 1 60); do
+		wins="$($DST list-windows -t host-sess -F '#{window_id}' 2>/dev/null | wc -l)"
+		[ "$wins" -eq 3 ] && break
+		sleep 0.1
+	done
+
+	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	src_wins="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	dst_wins="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
 	[ "$src_wins" -eq 3 ]
 	[ "$dst_wins" -eq 3 ]
 }
@@ -284,16 +323,62 @@ sorted_dims() {
 	$SRC split-window -h -t rem
 	$DST new-session -d -s host-sess -x 100 -y 30
 
-	run timeout 6 "$DAEMON" --test-local \
+	# Run in the background and poll for convergence — a foreground `run timeout`
+	# would fire SIGTERM on timeout, which now triggers teardown (kill-session),
+	# taking the DST server down before the assertions below can read it.
+	"$DAEMON" --test-local \
 		--src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
-		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dc.sock"
-	[ "$status" -eq 0 ] || [ "$status" -eq 124 ]
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dc.sock" \
+		>"$BATS_TEST_TMPDIR/dc.log" 2>&1 &
+	daemon_pid=$!
 
+	# Poll until SRC converges to DST's size (100x30).
+	for _ in $(seq 1 60); do
+		w="$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null || echo 0)"
+		[ "$w" -eq 100 ] && break
+		sleep 0.1
+	done
+
+	# Capture dims before killing (teardown kills DST session on SIGTERM).
 	src_dims="$(sorted_dims "$SRC" rem)"
 	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
 	[ -n "$src_dims" ]
 	[ "$src_dims" = "$dst_dims" ]
 	# And the remote actually shrank to the local width (convergence, not no-op).
-	[ "$($SRC display-message -p -t rem -F '#{window_width}')" -eq 100 ]
+	[ "$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null)" -eq 100 ]
+}
+
+# Regression for #185: a SIGTERM'd daemon must run teardown, not leave its unix
+# socket + pidfile behind (which blocks the next launch from binding) and not
+# orphan the local mirror session. teardown otherwise runs only on %exit/EOF.
+@test "daemon removes socket + pidfile and kills the local session on SIGTERM" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	sock="$BATS_TEST_TMPDIR/dt.sock"
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$sock" >"$BATS_TEST_TMPDIR/dt.log" 2>&1 &
+	daemon_pid=$!
+
+	# Wait until it has bound the socket AND written its pidfile.
+	for _ in $(seq 1 50); do
+		[ -S "$sock" ] && [ -f "$sock.pid" ] && break
+		sleep 0.1
+	done
+	[ -S "$sock" ]
+	[ -f "$sock.pid" ]
+
+	kill -TERM "$daemon_pid"
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ ! -e "$sock" ]
+	[ ! -e "$sock.pid" ]
+	run $DST has-session -t host-sess
+	[ "$status" -ne 0 ]
 }

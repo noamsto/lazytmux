@@ -27,3 +27,15 @@ remote_validate_pane() {
 remote_session_name() {
 	REPLY="$1-$2"
 }
+
+# remote_daemon_alive <pidfile>: return 0 if the file exists and the PID in it
+# owns a live process; return 1 otherwise (file missing, empty, or dead PID).
+# Used by the launcher to reuse an already-running bridge instead of stacking
+# a rival daemon for the same host+session.
+remote_daemon_alive() {
+	local pidfile="$1" pid
+	[[ -f $pidfile ]] || return 1
+	pid="$(<"$pidfile")"
+	[[ -n $pid ]] || return 1
+	kill -0 "$pid" 2>/dev/null
+}

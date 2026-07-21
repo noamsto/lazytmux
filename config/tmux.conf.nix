@@ -324,7 +324,7 @@
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
   # Scripts that source lib-remote get its store path substituted
-  scriptsWithRemote = ["lztmux-listener" "lztmux-remote-shim"];
+  scriptsWithRemote = ["lztmux-listener" "lztmux-remote-shim" "lztmux-remote-open"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings ["@lib_remote@"] ["${lib-remote}"]
