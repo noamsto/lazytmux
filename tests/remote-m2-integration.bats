@@ -217,6 +217,14 @@ sorted_dims() {
 	done
 	[[ $names == *bridged-name* ]]
 
+	# Make window 1 active before killing window 2, so the kill targets a
+	# NON-active window: it emits a clean %window-close with no concurrent
+	# %session-window-changed / %layout-change reconcile. Killing the ACTIVE
+	# window can interleave %window-close with a %layout-change round-trip whose
+	# routing-aware reader swallows the close (a known async-notification
+	# limitation, tracked as an M2.3 follow-up) — that races under CI load.
+	$SRC select-window -t rem:1
+
 	# Kill the added remote window -> its local window goes away (session survives).
 	$SRC kill-window -t "$newwin"
 	for _ in $(seq 1 40); do
