@@ -1074,7 +1074,7 @@ in {
           };
 
           # Listens on a unix socket forwarded in from trusted remote hosts
-          # (see programs.ssh.matchBlocks."lztmux-remote" below); each
+          # (see programs.ssh.settings."lztmux-remote" below); each
           # connection execs lztmux-listener to promote a nested session.
           lztmux-listener = lib.mkIf cfg.remote.enable {
             Unit.Description = "lztmux remote-session promotion listener";
@@ -1173,15 +1173,13 @@ in {
     (lib.mkIf (cfg.remote.enable && cfg.remote.trustedHosts != []) {
       programs.ssh = {
         enable = true;
-        matchBlocks."lztmux-remote" = {
+        settings."lztmux-remote" = {
           host = lib.concatStringsSep " " cfg.remote.trustedHosts;
-          extraOptions = {
-            RemoteForward = "/tmp/lztmux-outer-%r.sock %d/.local/state/lztmux/listener.sock";
-            SendEnv = "TMUX_PANE";
-            SetEnv = "LZTMUX_OUTER=1";
-            StreamLocalBindUnlink = "yes";
-            ExitOnForwardFailure = "no";
-          };
+          RemoteForward = "/tmp/lztmux-outer-%r.sock %d/.local/state/lztmux/listener.sock";
+          SendEnv = "TMUX_PANE";
+          SetEnv = {LZTMUX_OUTER = 1;};
+          StreamLocalBindUnlink = "yes";
+          ExitOnForwardFailure = "no";
         };
       };
     })
