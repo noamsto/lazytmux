@@ -63,6 +63,14 @@ func ParseLine(raw string) Line {
 	case "%output":
 		pane, data, _ := strings.Cut(rest, " ")
 		return Line{Kind: Output, Pane: pane, Data: Unescape(data)}
+	case "%extended-output":
+		// Flow-control form of %output, emitted once pause-after is armed
+		// (refresh-client -f pause-after=N): "%extended-output %pane <age-ms> :
+		// <escaped-data>". Same payload escaping as %output; drop the pane's
+		// pause age and treat it as ordinary output, or live output is lost.
+		pane, r, _ := strings.Cut(rest, " ")
+		_, data, _ := strings.Cut(r, " : ")
+		return Line{Kind: Output, Pane: pane, Data: Unescape(data)}
 	case "%begin":
 		return Line{Kind: Begin, Args: strings.Fields(rest)}
 	case "%end":
