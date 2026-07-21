@@ -20,7 +20,7 @@ func TestPaneSeed(t *testing.T) {
 	var sent []string
 	send := func(s string) { sent = append(sent, s) }
 
-	got, err := PaneSeed(reader, send, "%3")
+	got, err := PaneSeed(reader, send, "%3", readReply)
 	if err != nil {
 		t.Fatalf("PaneSeed: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestPaneSeedErrorReply(t *testing.T) {
 	reader := controlmode.NewReader(strings.NewReader(stream))
 	send := func(string) {}
 
-	got, err := PaneSeed(reader, send, "%3")
+	got, err := PaneSeed(reader, send, "%3", readReply)
 	if err == nil {
 		t.Fatalf("PaneSeed: want error on %%error reply, got seed %q", got)
 	}
@@ -63,7 +63,7 @@ func TestPaneSeedEmptyCaptureIsValid(t *testing.T) {
 	reader := controlmode.NewReader(strings.NewReader(stream))
 	send := func(string) {}
 
-	got, err := PaneSeed(reader, send, "%3")
+	got, err := PaneSeed(reader, send, "%3", readReply)
 	if err != nil {
 		t.Fatalf("PaneSeed: want nil error for a blank pane, got %v", err)
 	}

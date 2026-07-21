@@ -327,7 +327,13 @@
               # (no ssh). Both binaries are prebuilt via the vendored
               # buildGoModule (pickerAgentDetect) so this check never invokes
               # `go build` — a non-FOD sandbox has no network.
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux];
+              #
+              # Uses the pinned next-3.8 tmux (mkTmux), not pkgs.tmux (3.7b):
+              # the M2 bridge is a next-3.8 effort and its control-mode
+              # notification behavior (e.g. %window-close on kill-window) differs
+              # from 3.7b, so the mirror is exercised against the version it —
+              # and production, local + remote — actually runs.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep (mkTmux pkgs)];
               DAEMON = "${pickerAgentDetect}/bin/lztmux-remote-bridge-daemon";
               RENDERER = "${pickerAgentDetect}/bin/lztmux-remote-bridge-renderer";
             } ''

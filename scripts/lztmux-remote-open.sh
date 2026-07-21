@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Create a local <host>-<sess> session with one window running the bridge for
-# the remote window. M1: single window; resolve remote tmux path + TMUX_TMPDIR.
+# Create a local <host>-<sess> session and launch the M2 multi-window bridge
+# daemon detached: it enumerates every remote window and mirrors each into its
+# own local window (live add/close/rename/active-changed). Resolves remote
+# tmux path + TMUX_TMPDIR for the ssh control connection.
 set -euo pipefail
+
+# shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
+# mirroring shellQuote in the daemon — remote-derived names must not break out.
+shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
 host="$1"
 sess="${2:-}"
 win="${3:-}"
@@ -24,19 +31,48 @@ if [[ -z $win ]]; then
 	# base-index is non-zero under lazytmux (windows start at 1), so target the
 	# session's active window rather than assuming index 0.
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t '$sess' -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
+	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t $(shell_quote "$sess") -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
 fi
 
-# Pass the (remote-derived, untrusted) params through tmux's environment
-# instead of interpolating them into the /bin/sh command string tmux runs,
-# so a crafted remote session name can't break out into local shell
-# execution. The bridge reads LZTMUX_BRIDGE_* from its inherited env.
 local_sess="${host}-${sess}"
-tmux new-session -d -s "$local_sess" -n "$sess" \
-	-e "LZTMUX_BRIDGE_HOST=$host" \
-	-e "LZTMUX_BRIDGE_SESSION=$sess" \
-	-e "LZTMUX_BRIDGE_WINDOW=$win" \
-	-e "LZTMUX_BRIDGE_TMUX=$remote_tmux" \
-	-e "LZTMUX_BRIDGE_TMPDIR=$remote_tmpdir" \
-	lztmux-remote-bridge
+sock_dir="${TMUX_TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
+sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
+sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
+# Absolute store path: pane PATH is stale until server restart, and the daemon
+# respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
+renderer="$(command -v lztmux-remote-bridge-renderer)"
+
+# The <host>-<sess> session is an ephemeral mirror (the remote is the source of
+# truth). Discard any pre-existing one — a stale bridge from a prior run, or a
+# ghost resurrected by tmux-remux on restore — so it can't collide with
+# new-session ("duplicate session"); =-prefix is exact-match (numeric names).
+tmux kill-session -t "=$local_sess" 2>/dev/null || true
+
+# Create the local session with a single initial window; the daemon reuses it
+# for the first remote window and creates the rest.
+tmux new-session -d -s "$local_sess" -n "$sess"
+
+# Pass the (remote-derived, untrusted) params through the environment instead
+# of interpolating them into a shell/command string tmux/ssh would re-parse,
+# so a crafted remote session name can't break out into local shell execution.
+export LZTMUX_BRIDGE_HOST="$host"
+export LZTMUX_BRIDGE_SESSION="$sess"
+export LZTMUX_BRIDGE_WINDOW="$win"
+export LZTMUX_BRIDGE_TMUX="$remote_tmux"
+export LZTMUX_BRIDGE_TMPDIR="$remote_tmpdir"
+export LZTMUX_DAEMON_LOCAL_SESS="$local_sess"
+export LZTMUX_DAEMON_SOCK="$sock"
+export LZTMUX_DAEMON_RENDERER="$renderer"
+
+# Launch the daemon DETACHED, outside the panes it manages (I4): it is not the
+# window's command — it respawns the local panes into renderers. setsid is
+# Linux-only (not on macOS base), so fall back to plain backgrounding + disown
+# where it's unavailable; either way the daemon is fully detached from this shell.
+if command -v setsid >/dev/null 2>&1; then                       # portable-ok: guard, verified fallback below
+	setsid lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" & # portable-ok: guarded above; else branch is the verified macOS fallback
+else
+	nohup lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" &
+	disown
+fi
+
 tmux switch-client -t "=$local_sess"

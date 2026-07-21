@@ -39,6 +39,12 @@ const (
 	WindowClose
 	Exit
 	LayoutChange
+	WindowAdd
+	WindowRenamed
+	SessionWindowChanged
+	WindowPaneChanged
+	Pause
+	Continue
 )
 
 type Line struct {
@@ -69,6 +75,21 @@ func ParseLine(raw string) Line {
 		return Line{Kind: Exit, Args: strings.Fields(rest)}
 	case "%layout-change":
 		return Line{Kind: LayoutChange, Args: strings.Fields(rest)}
+	case "%window-add":
+		return Line{Kind: WindowAdd, Args: strings.Fields(rest)}
+	case "%window-renamed":
+		// name may contain spaces: id is the first token, the rest is the
+		// whole name (kept in Data, not Fields-split).
+		id, name, _ := strings.Cut(rest, " ")
+		return Line{Kind: WindowRenamed, Args: []string{id}, Data: []byte(name)}
+	case "%session-window-changed":
+		return Line{Kind: SessionWindowChanged, Args: strings.Fields(rest)}
+	case "%window-pane-changed":
+		return Line{Kind: WindowPaneChanged, Args: strings.Fields(rest)}
+	case "%pause":
+		return Line{Kind: Pause, Args: strings.Fields(rest)}
+	case "%continue":
+		return Line{Kind: Continue, Args: strings.Fields(rest)}
 	default:
 		return Line{Kind: Other}
 	}

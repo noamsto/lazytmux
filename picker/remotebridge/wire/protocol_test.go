@@ -90,3 +90,15 @@ func TestResizeCodec(t *testing.T) {
 		t.Error("DecodeResize(short) expected error")
 	}
 }
+
+func TestEncodeDecodeResizeRoundTrip(t *testing.T) {
+	for _, c := range []struct{ w, h int }{{80, 24}, {210, 52}, {1, 1}} {
+		w, h, err := DecodeResize(EncodeResize(c.w, c.h))
+		if err != nil || w != c.w || h != c.h {
+			t.Errorf("round-trip %dx%d -> %dx%d err %v", c.w, c.h, w, h, err)
+		}
+	}
+	if _, _, err := DecodeResize([]byte{1, 2, 3}); err == nil {
+		t.Error("short payload must error")
+	}
+}

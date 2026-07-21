@@ -18,7 +18,8 @@ func main() {
 	}
 	defer conn.Close()
 	if err := render.Run(conn, pane, os.Stdin, os.Stdout,
-		func() (func() error, error) { return render.MakeRaw(0) }); err != nil {
+		func() (func() error, error) { return render.MakeRaw(0) },
+		func(int, int) {}); err != nil {
 		fmt.Fprintf(os.Stderr, "renderer: %v\r\n", err)
 		os.Exit(1)
 	}

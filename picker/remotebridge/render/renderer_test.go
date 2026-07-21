@@ -17,7 +17,7 @@ func TestRendererPaintsAndForwards(t *testing.T) {
 	noRaw := func() (func() error, error) { return func() error { return nil }, nil }
 
 	done := make(chan error, 1)
-	go func() { done <- Run(client, "%3", in, &out, noRaw) }()
+	go func() { done <- Run(client, "%3", in, &out, noRaw, nil) }()
 
 	// Expect Hello first.
 	f, err := wire.ReadFrame(server)
@@ -44,4 +44,38 @@ func TestRendererPaintsAndForwards(t *testing.T) {
 		t.Errorf("painted %q, want %q", got, "SEEDOUT")
 	}
 	_ = io.EOF
+}
+
+func TestRendererRecordsResize(t *testing.T) {
+	client, server := net.Pipe()
+	var out bytes.Buffer
+	noRaw := func() (func() error, error) { return func() error { return nil }, nil }
+
+	var gotW, gotH int
+	rec := func(w, h int) { gotW, gotH = w, h }
+
+	done := make(chan error, 1)
+	go func() { done <- Run(client, "%3", bytes.NewReader(nil), &out, noRaw, rec) }()
+
+	f, err := wire.ReadFrame(server) // Hello
+	if err != nil || f.Type != wire.FrameHello {
+		t.Fatalf("hello: %v %v", f.Type, err)
+	}
+	wire.WriteFrame(server, wire.FrameResize, wire.EncodeResize(159, 52))
+	wire.WriteFrame(server, wire.FrameSeed, []byte("SEED"))
+	// Give the paint loop a moment, then close.
+	time.Sleep(50 * time.Millisecond)
+	server.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after conn close")
+	}
+	if gotW != 159 || gotH != 52 {
+		t.Errorf("recorded %dx%d, want 159x52", gotW, gotH)
+	}
+	if out.String() != "SEED" {
+		t.Errorf("painted %q, want SEED", out.String())
+	}
 }

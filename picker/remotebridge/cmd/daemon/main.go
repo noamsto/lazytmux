@@ -1,7 +1,8 @@
-// Command daemon is the M2.1 production entrypoint: it opens an ssh -CC
-// control-mode connection to a remote tmux, mirrors one of its windows into a
-// local multi-pane window, and runs until the remote window closes or the
-// connection drops. See picker/remotebridge/daemon for the orchestration.
+// Command daemon is the production entrypoint: it opens an ssh -CC
+// control-mode connection to a remote tmux, mirrors every window of the
+// bridged session into its own local window, and runs until the remote
+// session exits or the connection drops. See picker/remotebridge/daemon for
+// the orchestration.
 package main
 
 import (
@@ -23,7 +24,7 @@ func main() {
 	// /bin/sh command string.
 	host := flag.String("host", os.Getenv("LZTMUX_BRIDGE_HOST"), "ssh host")
 	session := flag.String("session", os.Getenv("LZTMUX_BRIDGE_SESSION"), "remote session")
-	window := flag.Int("window", envInt("LZTMUX_BRIDGE_WINDOW"), "remote window index")
+	window := flag.Int("window", envInt("LZTMUX_BRIDGE_WINDOW"), "initially-selected remote window index (all windows are mirrored)")
 	remoteTmux := flag.String("tmux", envDefault("LZTMUX_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
 	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
 	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
@@ -31,6 +32,8 @@ func main() {
 	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
+	baseIndex := flag.Int("base-index", envIntDefault("LZTMUX_DAEMON_BASE_INDEX", 1), "local tmux base-index for daemon-created windows")
+	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
 	// "local" are separate local tmux servers on their own -L sockets, so the
 	// bats integration test never touches the network. --session/--window
@@ -44,7 +47,6 @@ func main() {
 	if *localSess == "" {
 		*localSess = fmt.Sprintf("%s-%s", *host, *session)
 	}
-	localWin := *localSess + ":1"
 	if *sock == "" {
 		*sock = fmt.Sprintf("%s/lztmux-daemon-%d.sock", os.TempDir(), os.Getpid())
 	}
@@ -88,18 +90,19 @@ func main() {
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	}
-	winSize := func() (int, int) { return localWinSize(localTmuxArgv, localWin) }
+	winSize := func() (int, int) { return localWinSize(localTmuxArgv, *localSess) }
 
 	cfg := daemon.Config{
-		Ctl:           rwc{stdout, stdin},
-		SockPath:      *sock,
-		LocalSess:     *localSess,
-		LocalWin:      localWin,
-		RemoteSession: *session,
-		RemoteWindow:  strconv.Itoa(*window),
-		RendererBin:   *rendererBin,
-		LocalTmux:     runLocalTmux,
-		WinSize:       winSize,
+		Ctl:            rwc{stdout, stdin},
+		SockPath:       *sock,
+		LocalSess:      *localSess,
+		RemoteSession:  *session,
+		RemoteWindow:   strconv.Itoa(*window),
+		BaseIndex:      *baseIndex,
+		PauseAfterSecs: *pauseAfter,
+		RendererBin:    *rendererBin,
+		LocalTmux:      runLocalTmux,
+		WinSize:        winSize,
 	}
 
 	if err := daemon.Run(cfg); err != nil {
@@ -107,12 +110,12 @@ func main() {
 	}
 }
 
-// localWinSize queries the local mirror window's content dims, used to
-// converge the remote window's size to match. Defaults to 80x24 if the
-// window doesn't exist yet or the query fails.
-func localWinSize(localTmuxArgv []string, localWin string) (int, int) {
+// localWinSize queries the local session's active-window content dims, used to
+// converge the remote windows' size to match (one control client, one size).
+// Defaults to 80x24 if the session doesn't exist yet or the query fails.
+func localWinSize(localTmuxArgv []string, localSess string) (int, int) {
 	out, err := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...),
-		"display-message", "-p", "-t", localWin, "-F", "#{window_width} #{window_height}")...).Output()
+		"display-message", "-p", "-t", localSess, "-F", "#{window_width} #{window_height}")...).Output()
 	if err != nil {
 		return 80, 24
 	}
@@ -151,6 +154,15 @@ func envDefault(key, fallback string) string {
 func envInt(key string) int {
 	n, _ := strconv.Atoi(os.Getenv(key))
 	return n
+}
+
+func envIntDefault(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 // shellQuote single-quotes s for a POSIX shell, escaping embedded single
