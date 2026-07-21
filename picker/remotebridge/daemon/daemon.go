@@ -174,7 +174,7 @@ func Run(cfg Config) error {
 		// is draining the async stream — setup does blocking collectHellos/seed
 		// round-trips without draining, so arming it earlier would let a pane
 		// get %pause'd mid-setup with no %continue re-seed to answer it (a
-		// deadlock offline bats can't catch — see the plan's Task 6 Step 6).
+		// deadlock offline bats can't catch).
 		if !pauseAfterSet {
 			pauseAfterSet = true
 			if cfg.PauseAfterSecs > 0 {
