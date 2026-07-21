@@ -230,3 +230,46 @@ func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 		t.Fatalf("collectHellos blocked for %s, want it to return near the 100ms deadline", elapsed)
 	}
 }
+
+// TestWatchResizeReconvergesOnChange drives watchResize deterministically (no
+// time.Sleep): winSize reads from sizeCh so the test controls exactly when the
+// watcher observes each size, and each tick sent on `tick` blocks until the
+// watcher is back at its select — so sending the next tick is a barrier that
+// proves the previous iteration (including any send) has fully completed.
+func TestWatchResizeReconvergesOnChange(t *testing.T) {
+	tick := make(chan time.Time)
+	stop := make(chan struct{})
+	sizeCh := make(chan [2]int)
+	winSize := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
+
+	var sent []string
+	send := func(s string) { sent = append(sent, s) }
+
+	done := make(chan struct{})
+	go func() { watchResize(winSize, 100, 30, send, stop, tick); close(done) }()
+
+	// Tick 1 — unchanged (100x30): no send.
+	tick <- time.Now()
+	sizeCh <- [2]int{100, 30}
+
+	// Tick 2 — changed (120x40): exactly one send. This tick's send blocks the
+	// goroutine from re-selecting, so the next tick can't unblock until it lands.
+	tick <- time.Now()
+	sizeCh <- [2]int{120, 40}
+
+	// Tick 3 — same as the new size (120x40): must NOT resend (tracks new size).
+	tick <- time.Now()
+	sizeCh <- [2]int{120, 40}
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchResize did not return after stop was closed")
+	}
+
+	want := []string{ConvergeCmd(120, 40)}
+	if !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %v, want %v", sent, want)
+	}
+}

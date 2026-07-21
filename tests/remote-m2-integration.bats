@@ -230,6 +230,45 @@ sorted_dims() {
 	wait "$daemon_pid" 2>/dev/null || true
 }
 
+@test "daemon re-converges the remote after a local resize" {
+	# Bring up a 1-window mirror at 100x30 (SRC == DST), then RESIZE the local
+	# window to 120x40. The resize watcher polls the local size and must push
+	# the new dims onto the remote (refresh-client -C), so SRC's window converges
+	# to 120x40 without any control-stream event driving it.
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dz.sock" \
+		>"$BATS_TEST_TMPDIR/dz.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate: wait until the pane is a renderer (daemon reached its main loop and
+	# the watcher goroutine is running) before resizing.
+	for _ in $(seq 1 40); do
+		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
+		[[ $cmd == *renderer* ]] && break
+		sleep 0.1
+	done
+
+	# resize-window sticks on the detached DST session (no attached client to
+	# override it under window-size latest), so the local mirror is now 120x40.
+	$DST resize-window -t host-sess:1 -x 120 -y 40
+
+	# Poll until the watcher (1s interval) pushes the new size to the remote.
+	for _ in $(seq 1 40); do
+		dims="$($SRC display-message -p -t rem -F '#{window_width}x#{window_height}' 2>/dev/null)"
+		[ "$dims" = "120x40" ] && break
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$dims" = "120x40" ]
+}
+
 @test "daemon converges when DST size != SRC size (ConvergeCmd resizes remote)" {
 	# remote starts 120x40; local mirror created at 100x30 — the daemon's
 	# refresh-client -C must push 100x30 onto the remote so pane dims converge.

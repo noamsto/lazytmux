@@ -57,6 +57,34 @@ type helloConn struct {
 	conn   net.Conn
 }
 
+// resizePollInterval is how often the resize watcher re-checks the local
+// client size. A human terminal resize is discrete and infrequent, so a 1s
+// poll is responsive enough and cheap (one WinSize query/sec).
+const resizePollInterval = time.Second
+
+// watchResize re-converges the remote to the local client size whenever it
+// changes. A local terminal/client resize emits no control-stream event, so
+// the daemon must poll: on a change it re-pushes ConvergeCmd (one control
+// client = one size = all remote windows), which resizes the remote and makes
+// it emit %layout-change per window, driving the existing reconcile + re-seed.
+// send is the same mutex-guarded, no-op-when-closed sender the main loop uses;
+// this only injects a fire-and-forget command (its %begin/%end ack is consumed
+// harmlessly by the main loop's top-level reader.Next()).
+func watchResize(winSize func() (int, int), w, h int, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick:
+			nw, nh := winSize()
+			if nw != w || nh != h {
+				w, h = nw, nh
+				send(ConvergeCmd(nw, nh))
+			}
+		}
+	}
+}
+
 // Run mirrors every window of the bridged remote session, each into its own
 // local window, over the single -CC connection, until %exit or the control
 // connection drops.
@@ -116,7 +144,12 @@ func Run(cfg Config) error {
 	go acceptRenderers(listener, connCh)
 
 	reg := newRegistry(cfg.BaseIndex)
+	// stopWatch stops the resize watcher (started just before the main loop).
+	// Declared here so teardown can close it; teardown runs exactly once per
+	// Run return path, so a plain close is safe.
+	stopWatch := make(chan struct{})
 	teardown := func() {
+		close(stopWatch)
 		listener.Close()
 		for _, mw := range reg.byRemote {
 			// Unregister closes each pane's output sink, stopping its pump
@@ -166,6 +199,11 @@ func Run(cfg Config) error {
 	if initWin, ok := localWinForRemoteIndex(remoteWins, reg, cfg.RemoteWindow); ok {
 		cfg.LocalTmux("select-window", "-t", initWin)
 	}
+
+	// Re-converge the remote whenever the local client resizes. A local resize
+	// emits no control-stream event, so poll; teardown closes stopWatch.
+	ticker := time.NewTicker(resizePollInterval)
+	go func() { defer ticker.Stop(); watchResize(cfg.WinSize, w, h, send, stopWatch, ticker.C) }()
 
 	// Main loop.
 	pauseAfterSet := false
@@ -667,7 +705,19 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 
 		switch {
 		case reflect.DeepEqual(newRemote, remote):
-			// Geometry-only change: pane set is identical.
+			// Geometry-only change (typically a client/terminal resize propagated to
+			// the remote): same pane set, new dims. The painters hold no back-buffer to
+			// reflow, so re-seed each pane's current screen for a clean repaint at the
+			// new size; the FrameResize broadcast below records the dims.
+			for _, id := range remote {
+				s := router.sink(id)
+				if s == nil {
+					continue
+				}
+				if seed, err := PaneSeed(reader, send, id, reply); err == nil {
+					s.enqueue(wire.FrameSeed, seed)
+				}
+			}
 		case isPrefixOf(remote, newRemote):
 			// Relies on split-window's new pane landing at pane_index==i (bare
 			// split, no -b/target-pane games): spawnRenderer targets the local
