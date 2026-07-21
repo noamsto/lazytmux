@@ -16,6 +16,10 @@ set -uo pipefail
 target="${1:-}"
 [[ -z $target ]] && exit 0
 
+# Remote-bridge mirror window (#167 @bridge_win opt-out): never tag it as a
+# worktree window — its cwd is the launcher's repo, not the remote content.
+[[ $(tmux show-options -t "$target" -wqv @bridge_win 2>/dev/null) == 1 ]] && exit 0
+
 # Empty when enrich is disabled (Nix build-time substitution).
 issue_stamp="@issue_stamp@"
 

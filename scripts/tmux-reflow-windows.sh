@@ -100,13 +100,15 @@ has_zoom=0
 # @crew_name (agent codename, stamped by an external fan-out harness) is
 # token-safe (no '|'). Its @crew_color pairs with it but is read straight from the
 # window option in the template, so only the name is pulled here (for width).
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@window_task}'
+# @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
+# window_name containing '|' is no worse off here than at the very end.
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai wtask; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays
@@ -114,6 +116,26 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	# the single-line fit test, where the marker is appended to the full label.
 	win_zoom_dw[$idx]=0
 	((zoomed)) && has_zoom=1 && win_zoom_dw[$idx]=2
+
+	# Remote-bridge mirror window (#167 @bridge_win opt-out): the issue/PR/
+	# branch context belongs to the launcher's repo, not the remote window this
+	# mirrors — skip enrichment entirely and label it with its plain tmux name.
+	if [[ $bridge == 1 ]]; then
+		win_short[$idx]="$wname"
+		win_id[$idx]=""
+		win_rest_short[$idx]="$wname"
+		win_pr[$idx]=""
+		measure_display_width "$wname"
+		win_short_dw[$idx]=$REPLY_DW
+		win_id_dw[$idx]=0
+		win_pr_dw[$idx]=0
+		win_crew[$idx]=""
+		win_crew_dw[$idx]=0
+		win_rest_long[$idx]="$wname"
+		win_long_dw[$idx]=$REPLY_DW
+		((total++))
+		continue
+	fi
 
 	# Stamp belongs to the branch it was written for. If the pane has since
 	# cd'd to a different branch, build the label from the current branch

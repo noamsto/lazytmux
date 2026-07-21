@@ -257,17 +257,20 @@ enrich_repo_group() {
 # round-trip per repo, all in flight at once.
 run_full_pass() {
 	local windows
-	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@git_root}|#{@branch}' | awk -F'|' 'NF>=4')
+	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@git_root}|#{@branch}|#{@bridge_win}' | awk -F'|' 'NF>=5')
 
 	# Unique branches (capped — matches the prior head -n 30 bound) and window
 	# lines, grouped by repo. Windows with no resolvable repo checkout are
 	# skipped: gh could only run in the server's cwd (the original wrong-repo
 	# bug), so they keep their last-known options instead.
 	declare -A seen grp_dir grp_branches grp_windows
-	local total=0 line tgt wt gr br d key sk
+	local total=0 line tgt wt gr br bw d key sk
 	for line in "${windows[@]}"; do
-		IFS="|" read -r tgt wt gr br <<<"$line"
+		IFS="|" read -r tgt wt gr br bw <<<"$line"
 		[[ -z $br ]] && continue
+		# Remote-bridge mirror window (#167 @bridge_win opt-out): no PR to poll
+		# for — skip it rather than fetch data for the launcher's repo.
+		[[ $bw == 1 ]] && continue
 		d="${wt:-$gr}"
 		[[ -z $d ]] && continue
 		key="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
@@ -313,6 +316,9 @@ fi
 
 # --- single-target mode (from dispatcher / force refresh) ---
 if [[ -n $target && -n $branch ]]; then
+	# Remote-bridge mirror window (#167 @bridge_win opt-out): no PR to poll for
+	# — its branch belongs to the launcher's repo, not the remote content.
+	[[ $(tmux show-options -t "$target" -wqv @bridge_win 2>/dev/null) == 1 ]] && exit 0
 	mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 	cache="$(fetch_branch_pr "$dir" "$branch")"
 	apply_cache_to_target "$target" "$cache" "$branch"
