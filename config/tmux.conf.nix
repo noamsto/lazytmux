@@ -694,6 +694,7 @@
     set-hook -gu client-resized
     set-hook -gu after-new-session
     set-hook -gu client-session-changed
+    set-hook -gu client-attached
     set-hook -gu pane-exited
 
     # Also clear hooks from older config versions that may linger
@@ -720,6 +721,13 @@
     set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{session_name} #{client_width}"'
     set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
     set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    # A cold attach to an existing session (tmux attach, terminal reconnect, a
+    # 2nd client at a different width) fires client-attached but not
+    # client-session-changed, so the window-list grid would stay sized for the
+    # last reflow's width until a resize/switch nudged it (issue #188). Indexed
+    # [10] so it coexists with the splash/carousel client-attached[50]/[60]
+    # hooks; the bare `set-hook -gu client-attached` above clears it on reload.
+    set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
 
     # Tag every newly-created window as a worktree window from its cwd — at
     # creation, regardless of creator or CLAUDECODE (issue #95). new-session
