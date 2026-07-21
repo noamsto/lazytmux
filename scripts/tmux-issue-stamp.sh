@@ -18,6 +18,10 @@ branch="${3:-}"
 
 [[ -z $target || -z $branch ]] && exit 0
 
+# Remote-bridge mirror window (#167 @bridge_win opt-out): its identity is the
+# remote content it mirrors, not this repo/branch — never stamp it.
+[[ $(tmux show-options -t "$target" -wqv @bridge_win 2>/dev/null) == 1 ]] && exit 0
+
 # The pane just cd'd into the worktree but update-icons' 1s tick hasn't
 # refreshed @branch/@git_root yet — stamp them now so dir-display doesn't
 # briefly render the worktree path relative to the parent repo's root.

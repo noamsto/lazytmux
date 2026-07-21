@@ -84,5 +84,51 @@ if [[ ${UPDATE_GOLDEN:-0} == "1" ]]; then
 	exit 0
 fi
 
-diff <(printf '%s\n' "$got") "$EXPECTED"
-echo "display test passed"
+# Golden diff is checked but not immediately fatal: the @bridge_win check
+# below must still run (and report) even if this one fails, so the two are
+# combined into a single exit status at the bottom.
+golden_ok=1
+diff <(printf '%s\n' "$got") "$EXPECTED" || golden_ok=0
+if ((golden_ok)); then
+	echo "display test passed"
+else
+	echo "golden window-list diff FAILED (see diff above)" >&2
+fi
+
+# --- @bridge_win opt-out (#167): a remote-bridge mirror window must render its
+# plain tmux name only, with issue/branch/PR enrichment suppressed even when
+# stamped. Added after the golden diff above so it doesn't perturb the 5-window
+# fixture. -n pins the name (disables automatic-rename), mirroring how the M2
+# daemon holds the remote window's name via `rename-window`.
+t new-window -t s -n bridge-remote-window
+t set-option -t s:6 -w @bridge_win 1
+t set-option -t s:6 -w @branch "totally/unrelated-branch"
+t set-option -t s:6 -w @issue_provider linear
+t set-option -t s:6 -w @issue_id NOA-999
+t set-option -t s:6 -w @issue_title "should not render"
+t set-option -t s:6 -w @pr_number 999
+t set-option -t s:6 -w @pr_state open
+t set-option -t s:6 -w @pr_check_state success
+
+# Force a reflow now that the opt-out + enrichment fields are set (the
+# after-new-window hook that fired at creation predates them). Resolve the
+# reflow binary via the generated tmux.conf (the wrapper's PATH entries only
+# carry the bin directory, not the full binary path) rather than hardcoding a
+# store hash.
+CONF="$(grep -o -- '-f /nix/store/[a-z0-9]*-tmux[.]conf' "$TMUX_BIN" | head -1 | cut -d' ' -f2)"
+REFLOW_BIN="$(grep -o '/nix/store/[a-z0-9]*-tmux-reflow-windows/bin/tmux-reflow-windows' "$CONF" | head -1)"
+"$REFLOW_BIN" s 200 --force >/dev/null 2>&1 || true
+
+bridge_id="$(t show-options -t s:6 -wqv @window_label_id)"
+bridge_rest="$(t show-options -t s:6 -wqv @window_label_rest_short)"
+bridge_pr="$(t show-options -t s:6 -wqv @window_pr_plain)"
+
+bridge_ok=1
+if [[ -n $bridge_id || -n $bridge_pr || $bridge_rest != "bridge-remote-window" ]]; then
+	echo "bridge window not gated: id=[$bridge_id] rest=[$bridge_rest] pr=[$bridge_pr]" >&2
+	bridge_ok=0
+else
+	echo "bridge window gate passed"
+fi
+
+((golden_ok && bridge_ok))

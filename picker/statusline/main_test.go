@@ -92,6 +92,21 @@ func TestSessionSegmentPrefixColor(t *testing.T) {
 	}
 }
 
+func TestSessionSegmentBridgeWinStopsAtPill(t *testing.T) {
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo",
+		issueID: "ENG-7", issueBranch: "feat/x", issueProvider: "linear",
+		crewName: "coral", crewColor: "colour210",
+		bridgeWin:   "1",
+		iconSession: "S", iconBranch: "B", iconLinear: "L",
+		thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
+	}
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  "
+	if got := sessionSegment(a, false); got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestPRBadgeHidden(t *testing.T) {
 	if got := prBadge(args{prNumber: "", branch: "x", prBranch: "x"}); got != "" {
 		t.Fatalf("empty pr = %q, want empty", got)
@@ -191,5 +206,36 @@ func TestRenderLineFull(t *testing.T) {
 		"#[fg=#9a8]I nvim "
 	if got != want {
 		t.Fatalf("renderLine\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestRenderLineBridgeWinSuppressesDirAndPR mirrors TestRenderLineFull but with
+// @bridge_win set: dir and PR must drop out (they describe the host repo the
+// mirror daemon launched from, not the remote content), while the session
+// pill and pane-command segment survive untouched.
+func TestRenderLineBridgeWinSuppressesDirAndPR(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/panes", 0o755)
+	now := int64(9000)
+
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo", gitRoot: "/repo",
+		bridgeWin:   "1",
+		iconSession: "S", iconBranch: "B", iconDir: "D",
+		thmBg: "#000", thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
+		thmSubtext0: "#9a8", thmOverlay1: "#777", thmGreen: "#0f0",
+		prNumber: "42", prBranch: "feat/x", prState: "open", prCheck: "success",
+		iconSuccess: "OK", prTitle: "PR",
+		paneIcon: "I", paneCmd: ".nvim-wrapped",
+	}
+
+	got := renderLine(a, dir, "dark", false, now)
+	want := "#[align=left,bg=#000]" +
+		"#[fg=#c6a] #[range=left]S work#[norange]  " +
+		"  #[fg=#777]" +
+		" #[align=right]" +
+		"#[fg=#9a8]I nvim "
+	if got != want {
+		t.Fatalf("renderLine bridge\n got %q\nwant %q", got, want)
 	}
 }

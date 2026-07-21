@@ -42,6 +42,7 @@ var volatileFields = []string{
 	"#{@pr_number}", "#{@pr_branch}", "#{@pr_state}", "#{@pr_check_state}", "#{@pr_mergeable}", "#{@pr_title}",
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
+	"#{@bridge_win}",
 }
 
 // fetchVolatile fills the volatile fields via a single display-message
@@ -66,6 +67,7 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.prNumber, a.prBranch, a.prState, a.prCheck, a.prMergeable, a.prTitle = f[8], f[9], f[10], f[11], f[12], f[13]
 	a.paneIcon, a.paneCmd, a.claudeFg = f[14], f[15], f[16]
 	a.crewName, a.crewColor = f[17], f[18]
+	a.bridgeWin = f[19]
 	return f[0] == "1", true
 }
 
@@ -115,13 +117,14 @@ type args struct {
 	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
 	paneIcon, paneCmd, claudeFg                                string
 	crewName, crewColor                                        string
+	bridgeWin                                                  string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
 	thmOverlay0, thmOverlay1, thmPeach, thmGreen           string
 
 	// glyphs (tmux @icon_* options + Nix enrich icon set)
-	iconSession, iconBranch, iconDir                                                        string
+	iconSession, iconBranch, iconDir                                                                    string
 	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconClosed, iconConflict string
 }
 
@@ -174,6 +177,13 @@ func sessionSegment(a args, prefixActive bool) string {
 	// range=left marks the session name as a click target; MouseDown1StatusLeft
 	// opens the session picker.
 	b.WriteString(" #[range=left]" + a.iconSession + " " + a.session + "#[norange]  ")
+
+	// Remote-bridge mirror window (#167 @bridge_win opt-out): the active
+	// window's identity belongs to the remote session, not this host repo —
+	// stop at the session pill.
+	if a.bridgeWin == "1" {
+		return b.String()
+	}
 
 	// Agent-codename badge for the active window (fan-out harness stamp). Tinted
 	// by its @crew_color when set; the issue/branch block below re-sets fg.
@@ -241,10 +251,16 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64) s
 	var b strings.Builder
 	b.WriteString("#[align=left,bg=" + a.thmBg + "]")
 	b.WriteString(sessionSegment(a, prefixActive))
-	b.WriteString("  #[fg=" + a.thmSubtext0 + ",nobold]" + a.iconDir + " " + dirDisplay(a.panePath, a.gitRoot))
+	// Remote-bridge mirror window: dir and PR belong to the host repo the
+	// launcher ran in, not the remote content this window mirrors — suppress.
+	if a.bridgeWin != "1" {
+		b.WriteString("  #[fg=" + a.thmSubtext0 + ",nobold]" + a.iconDir + " " + dirDisplay(a.panePath, a.gitRoot))
+	}
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
-	b.WriteString(prBadge(a))
+	if a.bridgeWin != "1" {
+		b.WriteString(prBadge(a))
+	}
 	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + a.paneIcon + " " + paneCmdDisplay(a.paneCmd) + " ")
 	return b.String()
 }
