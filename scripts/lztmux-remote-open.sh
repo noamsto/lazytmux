@@ -42,6 +42,12 @@ sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 # respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
 renderer="$(command -v lztmux-remote-bridge-renderer)"
 
+# The <host>-<sess> session is an ephemeral mirror (the remote is the source of
+# truth). Discard any pre-existing one — a stale bridge from a prior run, or a
+# ghost resurrected by tmux-remux on restore — so it can't collide with
+# new-session ("duplicate session"); =-prefix is exact-match (numeric names).
+tmux kill-session -t "=$local_sess" 2>/dev/null || true
+
 # Create the local session with a single initial window; the daemon reuses it
 # for the first remote window and creates the rest.
 tmux new-session -d -s "$local_sess" -n "$sess"
