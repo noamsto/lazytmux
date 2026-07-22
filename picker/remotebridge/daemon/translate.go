@@ -18,7 +18,7 @@ func translateWindowNotification(l controlmode.Line, reg *registry) ([]string, b
 		if !ok {
 			return nil, false
 		}
-		return []string{"rename-window", "-t", w.localWin, string(l.Data)}, true
+		return []string{"set-option", "-w", "-t", w.localWin, "@window_bridge_name", sanitizeWindowName(string(l.Data))}, true
 	case controlmode.SessionWindowChanged:
 		if len(l.Args) < 2 {
 			return nil, false

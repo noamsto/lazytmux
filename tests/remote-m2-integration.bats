@@ -246,11 +246,12 @@ sorted_dims() {
 		sleep 0.1
 	done
 
-	# Rename it remotely -> local window name follows.
+	# Rename it remotely -> local @window_bridge_name follows (window_name is
+	# derived by reflow, which this vanilla tmux -L server does not run).
 	newwin="$($SRC list-windows -t rem -F '#{window_id}' | tail -1)"
 	$SRC rename-window -t "$newwin" bridged-name
 	for _ in $(seq 1 40); do
-		names="$($DST list-windows -t host-sess -F '#{window_name}' 2>/dev/null)"
+		names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' 2>/dev/null)"
 		[[ $names == *bridged-name* ]] && break
 		sleep 0.1
 	done
