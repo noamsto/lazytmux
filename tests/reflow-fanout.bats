@@ -152,3 +152,16 @@ run_update_icons() {
 	# Same content + same colw; the zoomed twin's remainder is exactly 2 shorter.
 	[ "$plain" -eq "$((zoomed + 2))" ]
 }
+
+@test "a bridge window labels from @window_bridge_name, not the clobbered window_name" {
+	# Simulate the real-config clobber: window_name is the wrong cwd-derived
+	# name, but the daemon-owned @window_bridge_name holds the remote name.
+	tmux set -wq -t S:0 @bridge_win 1
+	tmux set-window-option -t S:0 automatic-rename off
+	tmux rename-window -t S:0 lazytmux            # the wrong name
+	tmux set -wq -t S:0 @window_bridge_name shell # the remote name
+
+	bash "$REFLOW" S 200 --force >/dev/null 2>&1
+
+	[ "$(tmux show -wv -t S:0 @window_label_short)" = "shell" ]
+}
