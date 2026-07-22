@@ -202,12 +202,17 @@ sorted_dims() {
 	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	src_wins="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	dst_wins="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
+	src_names="$($SRC list-windows -t rem -F '#{window_name}' | sort | tr '\n' ',')"
+	dst_names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' | sort | tr '\n' ',')"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$src_wins" -eq 3 ]
 	[ "$dst_wins" -eq 3 ]
+
+	# Each mirror window carries its remote name in @window_bridge_name.
+	[ "$dst_names" = "$src_names" ]
 }
 
 @test "daemon reflects remote new-window / rename-window / kill-window" {

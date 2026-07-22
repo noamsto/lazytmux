@@ -196,6 +196,10 @@ func Run(cfg Config) error {
 		// starting at 0); force window-level pane-base-index 0 so that holds
 		// regardless of the host's global pane-base-index (real hosts set 1).
 		cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
+		if name := sanitizeWindowName(rw.name); name != "" {
+			cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
+			cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals window_name
+		}
 		mw := reg.add(rw.id, localWin)
 		if err := setupWindow(cfg, reader, send, router, connCh, mw, readReply); err != nil {
 			teardown()
@@ -367,9 +371,11 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		return
 	}
 	inSession := false
+	var addedName string
 	for _, rw := range parseWindowList(string(lw.Data)) {
 		if rw.id == remoteID {
 			inSession = true
+			addedName = rw.name
 			break
 		}
 	}
@@ -384,6 +390,10 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 	}
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
+	if name := sanitizeWindowName(addedName); name != "" {
+		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
+		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
+	}
 	mw := reg.add(remoteID, localWin)
 	if err := setupWindow(cfg, reader, send, router, connCh, mw, reply); err != nil {
 		// Drop the half-created entry + local window so the already-registered
