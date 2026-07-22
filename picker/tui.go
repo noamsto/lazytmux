@@ -114,7 +114,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 	if windowMode {
 		items = buildWindowItems(opts, panes, theme, 0)
 	} else {
-		items = buildSessionItems(opts, panes, theme)
+		items = buildSessionItems(opts, panes, theme, false)
 	}
 
 	m := tuiModel{
@@ -139,7 +139,9 @@ func runTUI(windowMode, claudeOnly bool) error {
 func (m tuiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{tickCmd(), m.loadPreviewCmd()}
 	if !m.windowMode {
-		cmds = append(cmds, m.zoxideCmd())
+		// First paint skips the ps -A fork; kick a full refresh right away so
+		// CPU/Mem replace the placeholder without waiting for the 1s tick.
+		cmds = append(cmds, m.zoxideCmd(), m.refreshDataCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -777,7 +779,7 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 		if wm {
 			items = buildWindowItems(opts, panes, theme, lw)
 		} else {
-			items = buildSessionItems(opts, panes, theme)
+			items = buildSessionItems(opts, panes, theme, true)
 		}
 		// Always send — spinners need to animate even without structural changes.
 		return refreshMsg{items: items}
@@ -830,14 +832,24 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 
 // --- Item builders ---
 
-func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string) []listItem {
+// resourcePlaceholder fills the CPU/Mem columns on the first paint, before the
+// async resource pass (ps -A) returns. Single-byte so the len()-based column
+// padding stays aligned (multibyte glyphs measure wide in bytes, narrow in cells).
+const resourcePlaceholder = "-"
+
+func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, withResources bool) []listItem {
 	sessions := collectSessions()
 	claudeMap := aggregateClaudeBySession(claudePanes)
 	mergeClaude(sessions, claudeMap)
 
-	// Resource collection runs in parallel with rendering prep (uses cached ps data)
-	resCh := make(chan map[string]sessionResources, 1)
-	go func() { resCh <- collectSessionResources(sessions) }()
+	// Resource collection forks `ps -A`, so it stays off the first-paint path:
+	// the initial render passes withResources=false and an immediate async
+	// refresh fills real CPU/Mem a beat later.
+	var resCh chan map[string]sessionResources
+	if withResources {
+		resCh = make(chan map[string]sessionResources, 1)
+		go func() { resCh <- collectSessionResources(sessions) }()
+	}
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmBlue := envOrMap("THM_BLUE", tmuxOpts, "@thm_blue", "#89b4fa")
@@ -885,15 +897,22 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
-	mergeResources(sessions, <-resCh)
+	if withResources {
+		mergeResources(sessions, <-resCh)
+	}
 
 	// Pre-compute CPU and MEM strings separately so the "/" aligns
 	cpuStrs := make([]string, len(rows))
 	memStrs := make([]string, len(rows))
 	maxCPU, maxMem := cpuColWidth(), 0
 	for i, r := range rows {
-		cpuStrs[i] = formatCPU(r.sess.cpuPct)
-		memStrs[i] = formatMem(r.sess.memMB)
+		if withResources {
+			cpuStrs[i] = formatCPU(r.sess.cpuPct)
+			memStrs[i] = formatMem(r.sess.memMB)
+		} else {
+			cpuStrs[i] = resourcePlaceholder
+			memStrs[i] = resourcePlaceholder
+		}
 		if len(cpuStrs[i]) > maxCPU {
 			maxCPU = len(cpuStrs[i])
 		}
