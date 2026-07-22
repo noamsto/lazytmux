@@ -7,13 +7,21 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-darwin
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - uses: DeterminateSystems/flakehub-cache-action@v3
-      - run: nix build .#default
-      - run: nix flake check
+      - uses: cachix/cachix-action@v17
+        with:
+          name: lazytmux
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build .#default --accept-flake-config
+      - run: nix flake check --accept-flake-config
