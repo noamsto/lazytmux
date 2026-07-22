@@ -150,16 +150,25 @@ func TestSessionFilterMapsSkipsScratch(t *testing.T) {
 }
 
 func TestCollapseWorktree(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"/home/n/git/lazytmux/.worktrees/feat-x", "/home/n/git/lazytmux"},
-		{"/home/n/git/lazytmux/.worktrees/feat-x/sub/dir", "/home/n/git/lazytmux"},
-		{"/home/n/git/lazytmux", "/home/n/git/lazytmux"},
-		{"/home/n/notes/.worktrees-backup/x", "/home/n/notes/.worktrees-backup/x"},
-		{"/.worktrees/x", ""}, // degenerate root; empty path is dropped by os.Stat("") in collectZoxide
+	// Nested layout "<repo>/.worktrees/<branch>": the worktree's ".git" file
+	// points into <repo>/.git, so it folds to <repo> via the same walk-up used
+	// for every layout — there is no "/.worktrees/" string shortcut.
+	repo := t.TempDir()
+	wt := mkWorktree(t, repo, filepath.Join(repo, ".worktrees", "feat-x"), "feat-x")
+	if got := collapseWorktree(wt); got != repo {
+		t.Errorf("collapseWorktree(%q) = %q, want %q", wt, got, repo)
 	}
-	for _, c := range cases {
-		if got := collapseWorktree(c.in); got != c.want {
-			t.Errorf("collapseWorktree(%q) = %q, want %q", c.in, got, c.want)
+
+	// Passthrough: with no ".git" to walk up to, the path is returned unchanged.
+	// The shared-root case is the anti-regression — the old string shortcut
+	// folded it to "/home/n/Data/git".
+	for _, in := range []string{
+		"/home/n/git/lazytmux",
+		"/home/n/notes/.worktrees-backup/x",
+		"/home/n/Data/git/.worktrees/org/repo/feat-x",
+	} {
+		if got := collapseWorktree(in); got != in {
+			t.Errorf("collapseWorktree(%q) = %q, want unchanged", in, got)
 		}
 	}
 }
@@ -214,21 +223,33 @@ func TestCollapseWorktreeNonNested(t *testing.T) {
 }
 
 func TestCollapseThenSuggest(t *testing.T) {
-	// Mirror collectZoxide: collapse every path, then suggest.
+	// Mirror collectZoxide: collapse every worktree path, then suggest. delta
+	// has two worktrees (fold to one suggestion); epsilon's folds to a path with
+	// a live session (suppressed). Worktrees live under a shared ".worktrees"
+	// root to exercise the layout the old string shortcut mishandled.
+	base := t.TempDir()
+	root := filepath.Join(base, ".worktrees")
+	delta := filepath.Join(base, "delta")
+	epsilon := filepath.Join(base, "epsilon")
+	for _, d := range []string{delta, epsilon} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	raw := []string{
-		"/home/n/git/delta/.worktrees/feat-a", // -> /home/n/git/delta
-		"/home/n/git/delta/.worktrees/feat-b", // -> same root, deduped away
-		"/home/n/git/epsilon/.worktrees/wip",  // -> /home/n/git/epsilon, suppressed (live session)
+		mkWorktree(t, delta, filepath.Join(root, "delta", "feat-a"), "feat-a"),
+		mkWorktree(t, delta, filepath.Join(root, "delta", "feat-b"), "feat-b"),
+		mkWorktree(t, epsilon, filepath.Join(root, "epsilon", "wip"), "wip"),
 	}
 	var paths []string
 	for _, p := range raw {
 		paths = append(paths, collapseWorktree(p))
 	}
-	sessionPaths := map[string]bool{"/home/n/git/epsilon": true}
+	sessionPaths := map[string]bool{epsilon: true}
 
 	// nil sessionNames is a safe read in Go; this case has no name collisions to suppress
 	got := zoxideSuggestions(paths, sessionPaths, nil, 15)
-	want := []suggestion{{path: "/home/n/git/delta", name: "delta"}}
+	want := []suggestion{{path: delta, name: "delta"}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d suggestions, want %d: %v", len(got), len(want), got)
 	}
@@ -236,6 +257,43 @@ func TestCollapseThenSuggest(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("suggestion[%d] = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// mkWorktree writes a linked-worktree ".git" file at path pointing back into
+// mainRoot's ".git/worktrees/<name>", mirroring what `git worktree add` creates.
+func mkWorktree(t *testing.T, mainRoot, path, name string) string {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitfile := "gitdir: " + mainRoot + "/.git/worktrees/" + name + "\n"
+	if err := os.WriteFile(filepath.Join(path, ".git"), []byte(gitfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCollapseWorktreeCentralRoot(t *testing.T) {
+	// worktrunk's shared external root: <root>/.worktrees/<org>/<repo>/<branch>.
+	// The path contains "/.worktrees/" but the segment before it is the shared
+	// root, NOT the repo — so a "/.worktrees/" string shortcut folds every
+	// worktree under the root to the root's parent. Collapse must walk up to
+	// the worktree's ".git" file instead.
+	main := t.TempDir()
+	wt := mkWorktree(t, main,
+		filepath.Join(t.TempDir(), ".worktrees", "org", "repo", "feat-x"), "feat-x")
+	if got := collapseWorktree(wt); got != main {
+		t.Errorf("collapseWorktree(%q) = %q, want %q (main repo root)", wt, got, main)
+	}
+
+	// A subdir of that worktree collapses too, via the walk-up.
+	sub := filepath.Join(wt, "apps", "mobile")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := collapseWorktree(sub); got != main {
+		t.Errorf("collapseWorktree(%q) = %q, want %q", sub, got, main)
 	}
 }
 

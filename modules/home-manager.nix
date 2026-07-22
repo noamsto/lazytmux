@@ -259,8 +259,9 @@ in {
         description = ''
           worktrunk `worktree-path` template for new worktrees. The default is a
           sibling dir next to the repo (see the config.toml comment for why not
-          nested). Override to relocate worktrees, e.g. a single external root:
-          `''${config.home.homeDirectory}/worktrees/{{ repo_path | basename }}/{{ branch | sanitize }}`.
+          nested). Override to relocate worktrees, e.g. a single external root
+          keyed by parent dir + repo so same-named repos across orgs don't collide:
+          `''${config.home.homeDirectory}/.worktrees/{{ repo_path | dirname | basename }}/{{ repo_path | basename }}/{{ branch | sanitize }}`.
           Only affects newly-created worktrees; existing ones keep their path.
         '';
       };
