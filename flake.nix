@@ -1,6 +1,14 @@
 {
   description = "Opinionated tmux configuration with Claude Code integration";
 
+  # Public binary cache so installs pull the from-source tmux (mkTmux) and the Go
+  # binaries instead of compiling. Populated by CI (cachix-action) for
+  # x86_64-linux + aarch64-darwin.
+  nixConfig = {
+    extra-substituters = ["https://lazytmux.cachix.org"];
+    extra-trusted-public-keys = ["lazytmux.cachix.org-1:8P28D3LZAKqPlkEGKzRRU9gon3rgBv4u8/4VWRn6TCg="];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # The wrapped tmux is pinned to plain upstream at a fixed rev to pick up the
