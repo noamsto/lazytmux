@@ -46,10 +46,14 @@
     # overriding src to a raw git checkout (no pre-generated configure) just
     # works. The version must be a substring of `tmux -V` output ("tmux
     # next-3.8") for the versionCheckHook to pass.
+    # --disable-asan: upstream master defaults ASan on for Darwin, and its
+    # runtime deadlocks during init on macOS 26 (llvm/llvm-project#200447),
+    # hanging every tmux call before main(). No-op on Linux.
     mkTmux = pkgs:
-      pkgs.tmux.overrideAttrs (_old: {
+      pkgs.tmux.overrideAttrs (old: {
         version = "next-3.8";
         src = inputs.tmux-upstream;
+        configureFlags = old.configureFlags ++ ["--disable-asan"];
       });
   in
     flake-parts.lib.mkFlake {inherit inputs;} {
