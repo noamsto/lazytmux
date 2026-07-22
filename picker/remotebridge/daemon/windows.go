@@ -63,9 +63,10 @@ func (r *registry) empty() bool { return len(r.byRemote) == 0 }
 type remoteWindow struct {
 	index string
 	id    string
+	name  string
 }
 
-// parseWindowList turns a `list-windows -F '#{window_index} #{window_id}'` reply
+// parseWindowList turns a `list-windows -F '#{window_index} #{window_id} #{window_name}'` reply
 // body into the ordered remote windows, dropping blank/malformed rows.
 func parseWindowList(body string) []remoteWindow {
 	var wins []remoteWindow
@@ -74,11 +75,12 @@ func parseWindowList(body string) []remoteWindow {
 		if row == "" {
 			continue
 		}
-		idx, id, ok := strings.Cut(row, " ")
+		idx, rest, ok := strings.Cut(row, " ")
 		if !ok {
 			continue
 		}
-		wins = append(wins, remoteWindow{index: idx, id: id})
+		id, name, _ := strings.Cut(rest, " ") // name is optional; "" when absent
+		wins = append(wins, remoteWindow{index: idx, id: id, name: name})
 	}
 	return wins
 }

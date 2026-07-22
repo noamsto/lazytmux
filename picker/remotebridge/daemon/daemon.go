@@ -118,7 +118,7 @@ func Run(cfg Config) error {
 
 	// Enumerate every window of the bridged remote session. Read BOTH index
 	// and id: --window is an *index*, the registry is keyed by *id* (@N).
-	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id}'", tmuxQuote(cfg.RemoteSession)))
+	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id} #{window_name}'", tmuxQuote(cfg.RemoteSession)))
 	lw, ok := readReply(reader)
 	if !ok || lw.Kind == controlmode.Error {
 		return fmt.Errorf("daemon: list-windows for %s failed", cfg.RemoteSession)
@@ -360,7 +360,7 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 	}
 	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
 
-	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id}'", tmuxQuote(cfg.RemoteSession)))
+	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id} #{window_name}'", tmuxQuote(cfg.RemoteSession)))
 	lw, ok := reply(reader)
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: list-windows failed\n", remoteID)
