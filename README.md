@@ -46,6 +46,28 @@ nix profile install github:noamsto/lazytmux
 This installs a `tmux` wrapper that automatically loads the configuration. Your existing
 `~/.tmux.conf` is ignored — the config is baked into the wrapper.
 
+## Binary cache
+
+Prebuilt artifacts are pushed to a [Cachix](https://cachix.org) cache, so you can pull the
+closure instead of building it locally. The flake declares the substituter via `nixConfig`,
+so `nix run`/`nix profile install github:noamsto/lazytmux` uses it automatically once you
+accept the prompt (or run as a trusted user).
+
+To add it globally instead, put this in your Nix config:
+
+```nix
+nix.settings = {
+  substituters = ["https://lazytmux.cachix.org"];
+  trusted-public-keys = ["lazytmux.cachix.org-1:8P28D3LZAKqPlkEGKzRRU9gon3rgBv4u8/4VWRn6TCg="];
+};
+```
+
+Or, with the Cachix CLI:
+
+```bash
+cachix use lazytmux
+```
+
 ## Features
 
 | Feature | Description |
