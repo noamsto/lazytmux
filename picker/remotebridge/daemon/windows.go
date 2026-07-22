@@ -99,3 +99,17 @@ func localWinForRemoteIndex(wins []remoteWindow, reg *registry, remoteIdx string
 	}
 	return "", false
 }
+
+// sanitizeWindowName strips characters that would break the reflow FMT
+// delimiter ('|') or a tmux command line (newlines/control chars) from a
+// remote-derived window name before it is written to @window_bridge_name.
+func sanitizeWindowName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '|' || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}

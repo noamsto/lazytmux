@@ -78,3 +78,18 @@ func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
 		t.Fatal("out-of-range index must not select")
 	}
 }
+
+func TestSanitizeWindowName(t *testing.T) {
+	cases := map[string]string{
+		"shell":      "shell",
+		"my window":  "my window", // spaces preserved
+		"a|b":        "ab",        // FMT delimiter stripped
+		"a\nb\r":     "ab",        // newlines stripped
+		"tab\tend":   "tabend",    // control char stripped
+	}
+	for in, want := range cases {
+		if got := sanitizeWindowName(in); got != want {
+			t.Errorf("sanitizeWindowName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
