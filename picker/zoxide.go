@@ -46,21 +46,20 @@ func normalizePath(p string) string {
 // collapseWorktree maps a git worktree path (or any subdir of one) back to its
 // main repo root, so a worktree and its repo collapse to one zoxide suggestion.
 //
-// Fast path: worktrunk's old "<repo>/.worktrees/<branch>" nesting — the segment
-// before "/.worktrees/" is the root (covers subdirs too), with no fs access.
+// Works for any layout — nested "<repo>/.worktrees/<branch>", sibling
+// "<repo>-worktrees/<branch>", or a shared external root
+// "<root>/.worktrees/<org>/<repo>/<branch>" — by walking up to the nearest
+// ".git". A linked worktree's ".git" is a FILE "gitdir: <main>/.git/worktrees/<name>",
+// so its root is the segment before "/.git/worktrees/". A normal checkout's
+// ".git" is a DIR — left uncollapsed, so a main-repo subdir is still offered
+// as-is. Lstat-only per level (no forks); fine for the human-triggered picker.
 //
-// General case (any layout — incl. the sibling "<repo>-worktrees/<branch>"
-// default, and subdirs of either): walk up to the nearest ".git". A linked
-// worktree's ".git" is a FILE "gitdir: <main>/.git/worktrees/<name>", so its
-// root is the segment before "/.git/worktrees/". A normal checkout's ".git" is
-// a DIR — left uncollapsed, so a main-repo subdir is still offered as-is.
-// Lstat-only per level (no forks); fine for the human-triggered picker.
+// A string shortcut on "/.worktrees/" is tempting but wrong: it can't tell a
+// repo-nested ".worktrees" from a shared root that merely contains one, so
+// under a shared root it folds every worktree to the root's parent.
 //
 // Paths under no git dir are returned unchanged.
 func collapseWorktree(p string) string {
-	if i := strings.Index(p, "/.worktrees/"); i != -1 {
-		return p[:i]
-	}
 	for dir := p; ; {
 		gitpath := filepath.Join(dir, ".git")
 		if fi, err := os.Lstat(gitpath); err == nil {
