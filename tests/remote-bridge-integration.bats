@@ -26,6 +26,10 @@ teardown() { tmux -S "$SOCK" kill-server 2>/dev/null || true; }
 # skips. Pre-fix this rendered the misconsumed cursor reply instead of the
 # capture, and used refresh-client syntax that errors on next-3.8.
 @test "bridge seeds multi-line content over a real tty (refresh-client path)" {
+	# util-linux `script` isn't shipped on darwin; BSD script lacks -qec. This
+	# pty path is Linux-only — skip where the right script(1) is absent.
+	script --version 2>/dev/null | grep -q util-linux ||
+		skip "util-linux script(1) unavailable"
 	tmux -S "$SOCK" send-keys -t src \
 		"printf 'LINE_ALPHA\\nLINE_BRAVO\\nLINE_CHARLIE\\n'" Enter
 	sleep 0.5
