@@ -38,8 +38,14 @@ func TestRegistryLookup(t *testing.T) {
 
 func TestParseWindowList(t *testing.T) {
 	// index and id are distinct namespaces: window at index 3 has id @5.
-	got := parseWindowList("1 @1\n2 @2\n3 @5\n")
-	want := []remoteWindow{{"1", "@1"}, {"2", "@2"}, {"3", "@5"}}
+	// A name may contain spaces; a `|` is preserved here (sanitized at write time).
+	got := parseWindowList("1 @1 shell\n2 @2 my window\n3 @5 a|b\n4 @7\n")
+	want := []remoteWindow{
+		{"1", "@1", "shell"},
+		{"2", "@2", "my window"},
+		{"3", "@5", "a|b"},
+		{"4", "@7", ""}, // no name field -> empty
+	}
 	if len(got) != len(want) {
 		t.Fatalf("parseWindowList = %v, want %v", got, want)
 	}
@@ -58,7 +64,7 @@ func TestParseWindowList(t *testing.T) {
 // select the local window mirroring @7 — never "@2" (which here is a different
 // window at index 1).
 func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
-	wins := []remoteWindow{{"1", "@2"}, {"2", "@7"}} // index 1 -> @2, index 2 -> @7
+	wins := []remoteWindow{{"1", "@2", ""}, {"2", "@7", ""}} // index 1 -> @2, index 2 -> @7
 	reg := newRegistry(1)
 	reg.add("@2", "h-s:1")
 	reg.add("@7", "h-s:2")
@@ -70,5 +76,20 @@ func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
 	}
 	if _, ok := localWinForRemoteIndex(wins, reg, "9"); ok {
 		t.Fatal("out-of-range index must not select")
+	}
+}
+
+func TestSanitizeWindowName(t *testing.T) {
+	cases := map[string]string{
+		"shell":     "shell",
+		"my window": "my window", // spaces preserved
+		"a|b":       "ab",        // FMT delimiter stripped
+		"a\nb\r":    "ab",        // newlines stripped
+		"tab\tend":  "tabend",    // control char stripped
+	}
+	for in, want := range cases {
+		if got := sanitizeWindowName(in); got != want {
+			t.Errorf("sanitizeWindowName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

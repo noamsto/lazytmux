@@ -202,12 +202,17 @@ sorted_dims() {
 	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	src_wins="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	dst_wins="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
+	src_names="$($SRC list-windows -t rem -F '#{window_name}' | sort | tr '\n' ',')"
+	dst_names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' | sort | tr '\n' ',')"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$src_wins" -eq 3 ]
 	[ "$dst_wins" -eq 3 ]
+
+	# Each mirror window carries its remote name in @window_bridge_name.
+	[ "$dst_names" = "$src_names" ]
 }
 
 @test "daemon reflects remote new-window / rename-window / kill-window" {
@@ -246,11 +251,12 @@ sorted_dims() {
 		sleep 0.1
 	done
 
-	# Rename it remotely -> local window name follows.
+	# Rename it remotely -> local @window_bridge_name follows (window_name is
+	# derived by reflow, which this vanilla tmux -L server does not run).
 	newwin="$($SRC list-windows -t rem -F '#{window_id}' | tail -1)"
 	$SRC rename-window -t "$newwin" bridged-name
 	for _ in $(seq 1 40); do
-		names="$($DST list-windows -t host-sess -F '#{window_name}' 2>/dev/null)"
+		names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' 2>/dev/null)"
 		[[ $names == *bridged-name* ]] && break
 		sleep 0.1
 	done

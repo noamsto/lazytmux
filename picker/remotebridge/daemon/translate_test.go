@@ -19,7 +19,10 @@ func TestTranslateWindowNotification(t *testing.T) {
 		ok   bool
 	}{
 		{"rename in registry", controlmode.Line{Kind: controlmode.WindowRenamed, Args: []string{"@2"}, Data: []byte("my name")},
-			[]string{"rename-window", "-t", "h-s:2", "my name"}, true},
+			[]string{"set-option", "-w", "-t", "h-s:2", "@window_bridge_name", "my name"}, true},
+		// a '|' in the remote name is stripped before it reaches the reflow FMT.
+		{"rename with pipe is sanitized", controlmode.Line{Kind: controlmode.WindowRenamed, Args: []string{"@2"}, Data: []byte("a|b")},
+			[]string{"set-option", "-w", "-t", "h-s:2", "@window_bridge_name", "ab"}, true},
 		{"active-changed in registry", controlmode.Line{Kind: controlmode.SessionWindowChanged, Args: []string{"$1", "@1"}},
 			[]string{"select-window", "-t", "h-s:1"}, true},
 		{"rename out of registry (B2)", controlmode.Line{Kind: controlmode.WindowRenamed, Args: []string{"@9"}, Data: []byte("x")},

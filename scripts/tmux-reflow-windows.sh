@@ -94,21 +94,24 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-# @window_task is last: free-form text may contain '|', and read drops any extra
-# delimiters into the final field, so it can't shift the columns before it.
-# @window_ai_name is sanitized (kebab, no '|') so it sits safely before it.
+# read drops any extra delimiters into the final field, so nothing after a
+# field can shift the columns before it. @window_task is free-form text that
+# may contain '|' and is NOT sanitized, so it must be last to stay protected.
+# @window_bridge_name is always daemon-sanitized (never contains '|'), so it's
+# safe placed just before @window_task.
+# @window_ai_name is sanitized (kebab, no '|') so it sits safely before that.
 # @crew_name (agent codename, stamped by an external fan-out harness) is
 # token-safe (no '|'). Its @crew_color pairs with it but is read straight from the
 # window option in the template, so only the name is pulled here (for width).
 # @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
 # window_name containing '|' is no worse off here than at the very end.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_task}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname wtask; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname bname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays
@@ -117,21 +120,25 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	win_zoom_dw[$idx]=0
 	((zoomed)) && has_zoom=1 && win_zoom_dw[$idx]=2
 
-	# Remote-bridge mirror window (#167 @bridge_win opt-out): the issue/PR/
-	# branch context belongs to the launcher's repo, not the remote window this
-	# mirrors — skip enrichment entirely and label it with its plain tmux name.
+	# Remote-bridge mirror window (#167 @bridge_win opt-out): label it with the
+	# daemon-owned remote name (@window_bridge_name), NOT #{window_name} — the
+	# latter is clobbered by automatic-rename on the real config (#196). Fall
+	# back to window_name before the daemon's first write. The issue/PR/branch
+	# context belongs to the launcher's repo, not the remote window this
+	# mirrors — skip enrichment entirely.
 	if [[ $bridge == 1 ]]; then
-		win_short[$idx]="$wname"
+		bwname="${bname:-$wname}"
+		win_short[$idx]="$bwname"
 		win_id[$idx]=""
-		win_rest_short[$idx]="$wname"
+		win_rest_short[$idx]="$bwname"
 		win_pr[$idx]=""
-		measure_display_width "$wname"
+		measure_display_width "$bwname"
 		win_short_dw[$idx]=$REPLY_DW
 		win_id_dw[$idx]=0
 		win_pr_dw[$idx]=0
 		win_crew[$idx]=""
 		win_crew_dw[$idx]=0
-		win_rest_long[$idx]="$wname"
+		win_rest_long[$idx]="$bwname"
 		win_long_dw[$idx]=$REPLY_DW
 		((total++))
 		continue
