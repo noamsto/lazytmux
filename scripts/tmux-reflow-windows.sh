@@ -94,22 +94,24 @@ declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
-# @window_task's free-form text may contain '|', and read drops any extra
-# delimiters into the final field, so nothing after it can shift the columns
-# before it — @window_bridge_name (sanitized, no '|') is safe there.
-# @window_ai_name is sanitized (kebab, no '|') so it sits safely before it.
+# read drops any extra delimiters into the final field, so nothing after a
+# field can shift the columns before it. @window_task is free-form text that
+# may contain '|' and is NOT sanitized, so it must be last to stay protected.
+# @window_bridge_name is always daemon-sanitized (never contains '|'), so it's
+# safe placed just before @window_task.
+# @window_ai_name is sanitized (kebab, no '|') so it sits safely before that.
 # @crew_name (agent codename, stamped by an external fan-out harness) is
 # token-safe (no '|'). Its @crew_color pairs with it but is read straight from the
 # window option in the template, so only the name is pulled here (for width).
 # @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
 # window_name containing '|' is no worse off here than at the very end.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_task}|#{@window_bridge_name}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname wtask bname; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname bname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays

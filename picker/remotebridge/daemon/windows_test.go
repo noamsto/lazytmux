@@ -81,11 +81,11 @@ func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
 
 func TestSanitizeWindowName(t *testing.T) {
 	cases := map[string]string{
-		"shell":      "shell",
-		"my window":  "my window", // spaces preserved
-		"a|b":        "ab",        // FMT delimiter stripped
-		"a\nb\r":     "ab",        // newlines stripped
-		"tab\tend":   "tabend",    // control char stripped
+		"shell":     "shell",
+		"my window": "my window", // spaces preserved
+		"a|b":       "ab",        // FMT delimiter stripped
+		"a\nb\r":    "ab",        // newlines stripped
+		"tab\tend":  "tabend",    // control char stripped
 	}
 	for in, want := range cases {
 		if got := sanitizeWindowName(in); got != want {
