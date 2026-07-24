@@ -253,6 +253,40 @@
               touch $out
             '';
 
+          issue-stamp-tests =
+            pkgs.runCommand "issue-stamp-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/issue-stamp.bats
+              touch $out
+            '';
+
+          enrich-command-tests =
+            pkgs.runCommand "enrich-command-tests" {
+              # git: the test derives worktree/branch from a real repo it builds
+              # in $HOME (like reconcile-tests).
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.git];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/enrich-command.bats
+              touch $out
+            '';
+
+          update-icons-enrich-trigger-tests =
+            pkgs.runCommand "update-icons-enrich-trigger-tests" {
+              # tmux: drives a private, config-less server (like reflow-fanout-tests);
+              # git: builds a real repo in $HOME to exercise a real branch transition.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.git pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/update-icons-enrich-trigger.bats
+              touch $out
+            '';
+
           agent-detect-arm-tests =
             pkgs.runCommand "agent-detect-arm-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
