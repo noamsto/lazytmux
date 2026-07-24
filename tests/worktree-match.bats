@@ -238,6 +238,10 @@ row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 
 @test "R15: a corroborated tag is left alone" {
 	FAKE_ROWS="$(row s1 1 @1 "$W" "" 1 "$W")" run bash "$MATCH" "$W" s1 9
+	# Assert the match too: without it this passes vacuously when the matcher
+	# never runs at all, which is exactly the state it is meant to detect.
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(printf 's1\t1\t@1')" ]
 	[ ! -f "$STATE/setlog" ]
 }
 
@@ -251,6 +255,10 @@ row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 
 @test "R15: a tag is not cleared on evidence of an unreadable pane path" {
 	FAKE_ROWS="$(row s1 1 @1 "$W" "" 1 "")" run bash "$MATCH" "$W" s1 9
+	# R2a: unreadable cwd defers to the hint, so this is also a rank-4 match.
+	# Asserting it keeps the test from passing vacuously (see above).
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(printf 's1\t1\t@1')" ]
 	[ ! -f "$STATE/setlog" ]
 }
 
