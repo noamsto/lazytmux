@@ -20,7 +20,7 @@
     # landed as tmux/tmux#5398, the other was rejected upstream.
     # Bump: repoint rev, then `nix flake lock --update-input tmux-upstream`.
     tmux-upstream = {
-      url = "github:tmux/tmux/afb3e954bfcbe7a2ab9c58584e0e3df9a61e271f";
+      url = "github:tmux/tmux/29bf7fe2f70559d574c84c068d90d173891907d0";
       flake = false;
     };
     flake-parts.url = "github:hercules-ci/flake-parts";
@@ -46,14 +46,23 @@
     # overriding src to a raw git checkout (no pre-generated configure) just
     # works. The version must be a substring of `tmux -V` output ("tmux
     # next-3.8") for the versionCheckHook to pass.
-    # --disable-asan: upstream master defaults ASan on for Darwin, and its
-    # runtime deadlocks during init on macOS 26 (llvm/llvm-project#200447),
-    # hanging every tmux call before main(). No-op on Linux.
+    # --disable-asan: ASan's runtime deadlocks during init on macOS 26
+    # (llvm/llvm-project#200447), hanging every tmux call before main(). Upstream
+    # now defaults ASan off on Darwin, so this is belt-and-suspenders — it keeps
+    # the flag correct regardless of upstream's default. No-op on Linux.
+    # --enable-jemalloc (darwin only): with ASan off, configure now *requires* an
+    # explicit --enable/--disable-jemalloc on macOS, because its calloc(3) can
+    # fail to zero allocations for complex codepoints (emoji/nerd-font glyphs we
+    # render). jemalloc avoids that, so opt in and add the lib to buildInputs.
     mkTmux = pkgs:
       pkgs.tmux.overrideAttrs (old: {
         version = "next-3.8";
         src = inputs.tmux-upstream;
-        configureFlags = old.configureFlags ++ ["--disable-asan"];
+        configureFlags =
+          old.configureFlags
+          ++ ["--disable-asan"]
+          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin ["--enable-jemalloc"];
+        buildInputs = old.buildInputs ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [pkgs.jemalloc];
       });
   in
     flake-parts.lib.mkFlake {inherit inputs;} {
