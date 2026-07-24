@@ -16,6 +16,10 @@ AGENT_COMMANDS="claude codex"
 # ${AGENT_DETECT_BIN:-...} lets tests inject a real path via env; Nix build
 # substitution still wins in the shipped script (no env var set at runtime).
 AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
+# Empty when enrich is disabled (Nix build-time substitution, same as
+# tmux-reconcile-window's issue-stamp wiring); ${ISSUE_STAMP_BIN:-...} likewise
+# lets tests inject a real path via env.
+ISSUE_STAMP_BIN="${ISSUE_STAMP_BIN:-@issue_stamp@}"
 
 # Arms `agent-detect` on agent panes that don't already have a live pipe.
 # Using #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe
@@ -253,11 +257,27 @@ main() {
 			# whole icon updater — it degrades to the cached branch for that tick.
 			branch=$(timeout 2 git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
 			if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
-				tmux_cmds+="set -qw -t '$target' @branch '$branch'"$'\n'
+				# Direct argv (not the tmux_cmds/`tmux source -` batch below): a git
+				# branch name can legally contain a single quote, which a batched
+				# single-quoted token has no escape for — `tmux source -` would
+				# reparse it and let an adversarial branch name inject arbitrary
+				# tmux commands. Only forks on a genuine transition (rare), so this
+				# doesn't touch the steady-state hot path.
+				tmux set-option -t "$target" -w @branch "$branch"
 				# Re-derive git root when branch changes (different repo or worktree)
 				git_root=$(timeout 2 git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
-				tmux_cmds+="set -qw -t '$target' @git_root '$git_root'"$'\n'
+				tmux set-option -t "$target" -w @git_root "$git_root"
 				branch_changed=1
+				# Auto re-stamp (#137): a genuine transition (previous branch non-empty,
+				# so this isn't the initial seed already covered by post-switch/
+				# reconcile-window) means a `git checkout -b` happened in-place — the
+				# new branch's issue/PR never got a chance to stamp. Re-fire so
+				# @issue_* catches up; serialized through tmux-issue-stamp's own
+				# per-window lock, so this never races post-switch or `enrich`.
+				if [[ -n $ISSUE_STAMP_BIN && $ISSUE_STAMP_BIN != @* && -n ${win_cur_branch[$idx]:-} && -n $branch ]]; then
+					"$ISSUE_STAMP_BIN" "$target" "$git_root" "$branch" >/dev/null 2>&1 &
+					disown
+				fi
 			fi
 		fi
 

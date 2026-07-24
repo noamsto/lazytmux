@@ -286,8 +286,17 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@"])
-      (iconSubstTo ++ ["${script.tmux-reflow-windows}/bin/tmux-reflow-windows" picker-agent-detect-bin])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@issue_stamp@"])
+      (iconSubstTo
+        ++ [
+          "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+          picker-agent-detect-bin
+          (
+            if enrichEnable
+            then "${script.tmux-issue-stamp}/bin/tmux-issue-stamp"
+            else ""
+          )
+        ])
       (builtins.readFile ../scripts/${name}.sh));
 
   # Scripts that need enrich library + provider/icon/config substitution
