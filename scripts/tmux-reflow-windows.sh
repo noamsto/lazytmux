@@ -14,6 +14,8 @@ source @lib_icons@
 source @lib_enrich@
 # shellcheck source=/dev/null
 source @lib_log@
+# shellcheck source=/dev/null
+source @lib_reflow@
 
 # Accept --force (cache bypass, used by enrich scripts after writing vars) and
 # --debounce (coalesce a resize burst, see below).
@@ -267,70 +269,17 @@ done
 total_long=$((total_long + (total - 1) * SEP_WIDTH))
 total_short=$((total_short + (total - 1) * SEP_WIDTH))
 
-# lines_for_colw CW: rows needed to pack uniform CW-wide columns.
-# Sets REPLY=rows, REPLY_PER=columns per row.
-lines_for_colw() {
-	local cw=$1 slot per
-	slot=$((cw + overhead))
-	per=$(((available + SEP_WIDTH) / (slot + SEP_WIDTH)))
-	((per < 1)) && per=1
-	REPLY_PER=$per
-	REPLY=$(((total + per - 1) / per))
-}
-
-# Detail ladder: long on one row → long within MAX rows → long truncated within
-# MAX rows → short (compact id) on one row → short within MAX rows → short
-# truncated to fit. Keeping the branch clipped beats dropping it for a bare id;
-# a compact line still beats illegible slivers, so it is the deeper rung.
-labels_mode=long
-colw=$colw_long
-trunc=0
-needs_multiline=1
-if ((total_long + zoom_extra <= available)); then
-	labels_mode=long
-	colw=$colw_long
-	needs_multiline=0
-else
-	lines_for_colw "$colw_long"
-	if ((REPLY <= MAX_WIN_LINES)); then
-		labels_mode=long
-		colw=$colw_long
-		# colw_long caps the rest at MAX_REST_WIDTH; truncate the over-long names
-		# down to it so they fit the column instead of overflowing past the icons.
-		((any_capped)) && trunc=1
-	else
-		# Rung 2.5: long labels truncated into MAX rows. Pack the fewest columns
-		# that fit every window in MAX_WIN_LINES and clip the branch/title to the
-		# resulting width — the id (never-truncated prefix) and PR (its own
-		# reserved column) survive. Taken only while a column clears
-		# LONG_TRUNC_FLOOR; below that the grid is slivers, so fall through to
-		# the short ladder.
-		long_cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
-		long_trunc_colw=$(((available - (long_cols - 1) * SEP_WIDTH) / long_cols - overhead))
-		((long_trunc_colw > colw_long)) && long_trunc_colw=$colw_long
-		if ((long_trunc_colw >= LONG_TRUNC_FLOOR)); then
-			labels_mode=long
-			colw=$long_trunc_colw
-			trunc=1
-		elif ((total_short + zoom_extra <= available)); then
-			labels_mode=short
-			colw=$colw_short
-			needs_multiline=0
-		else
-			labels_mode=short
-			colw=$colw_short
-			lines_for_colw "$colw_short"
-			if ((REPLY > MAX_WIN_LINES)); then
-				# even compact ids overflow the rows → truncate to fit
-				trunc=1
-				cols=$(((total + MAX_WIN_LINES - 1) / MAX_WIN_LINES))
-				colw=$(((available - (cols - 1) * SEP_WIDTH) / cols - overhead))
-				((colw < 6)) && colw=6
-				((colw > colw_short)) && colw=$colw_short
-			fi
-		fi
-	fi
-fi
+# Detail ladder (which label detail + column width + row count to use) is
+# pure integer arithmetic over the aggregates above -- extracted to
+# lib-reflow.sh so it's unit-testable without tmux (tests/reflow.bats).
+reflow_pick_layout "$colw_long" "$colw_short" "$total_long" "$total_short" "$any_capped" \
+	"$total" "$available" "$zoom_extra" "$overhead" "$SEP_WIDTH" \
+	"$MAX_WIN_LINES" "$LONG_TRUNC_FLOOR"
+labels_mode=$REPLY_LABELS_MODE
+colw=$REPLY_COLW
+trunc=$REPLY_TRUNC
+needs_multiline=$REPLY_NEEDS_MULTILINE
+per=$REPLY_PER
 
 # Resolved display segments per window. The name column is rendered as
 # bold(@window_label_id) + @window_label_disp, so the rest segment alone is
@@ -370,12 +319,11 @@ for idx in "${indices[@]}"; do
 done
 
 # Split points (uniform columns): break after every REPLY_PER windows.
+# per is already set by reflow_pick_layout above (columns per row for colw).
 current_line=0
 split1=999
 split2=999
 if ((needs_multiline)); then
-	lines_for_colw "$colw"
-	per=$REPLY_PER
 	if ((total > per)); then
 		split1=${indices[$((per - 1))]}
 		current_line=1

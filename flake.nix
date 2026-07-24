@@ -156,6 +156,16 @@
               touch $out
             '';
 
+          reflow-tests =
+            pkgs.runCommand "reflow-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/reflow.bats
+              touch $out
+            '';
+
           icons-tests =
             pkgs.runCommand "icons-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils];
