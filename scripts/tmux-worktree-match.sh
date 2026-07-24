@@ -53,7 +53,7 @@ plan=$(printf '%s\n' "$rows" | awk -F'\t' -v w="$w" -v wp="$w_phys" -v cs="$cs" 
 			rank[key] = 99
 			sess[key] = $1; widx[key] = $2; wid[key] = $3
 			# Raw spelling only, deliberately (R2/R15 define the tag test as
-			# @worktree == W). A window tagged with the physical spelling by
+			# @worktree == W). A window tagged with the physical spelling from git by
 			# reconcile cwd mode just scores rank 2 via validates() instead of
 			# rank 0, and is never spuriously cleared — degrades, never lies.
 			tagged[key] = ($4 == w)
