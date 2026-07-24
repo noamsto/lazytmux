@@ -41,6 +41,12 @@ setup_lib_log() {
 	source scripts/lib-log.sh
 }
 
+setup_lib_reflow() {
+	# lib-reflow.sh has no Nix placeholders; source directly.
+	# shellcheck source=/dev/null
+	source scripts/lib-reflow.sh
+}
+
 # Builds a runnable claude-status with the @lib_claude@ placeholder resolved.
 # Sets CLAUDE_STATUS_SCRIPT to the path.
 make_claude_status() {
