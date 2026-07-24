@@ -48,6 +48,7 @@ setup() {
 teardown() {
 	$SRC kill-server 2>/dev/null || true
 	$DST kill-server 2>/dev/null || true
+	tmux -L m2obs kill-server 2>/dev/null || true # pty host for the attached-client test
 	rm -rf "$TMUX_TMPDIR"
 }
 
@@ -357,6 +358,62 @@ sorted_dims() {
 	[ "$src_dims" = "$dst_dims" ]
 	# And the remote actually shrank to the local width (convergence, not no-op).
 	[ "$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null)" -eq 100 ]
+}
+
+# Regression for #201: a human client attached to the same remote session used
+# to win the size negotiation outright — under window-size latest,
+# clients_calculate_size skips every client but w->latest, so the bridge's
+# whole-client "refresh-client -C WxH" was ignored and the mirror painted a
+# screen of the human's size into a pane of ours (garbled, overlapping text).
+# The per-window form is a clamp applied after that calculation, so it holds
+# regardless of who is latest.
+@test "daemon clamps the remote even with a bigger human client attached" {
+	# OBS is a third tmux server used purely as a pty host: its pane runs a
+	# real `attach` to SRC, which is the only way to give SRC an attached
+	# client (of a known size) inside bats.
+	OBS="tmux -L m2obs"
+	$OBS kill-server 2>/dev/null || true
+
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	# The "human": 160 wide, and the last client to touch the window, so
+	# w->latest is theirs and not the bridge's.
+	$OBS new-session -d -s obs -x 160 -y 50 "$SRC attach -t rem"
+	for _ in $(seq 1 40); do
+		n="$($SRC list-clients -t rem 2>/dev/null | wc -l | tr -d ' ')"
+		[ "$n" -ge 1 ] && break
+		sleep 0.1
+	done
+	[ "$n" -ge 1 ] # the pty client really attached; otherwise this proves nothing
+	human_w="$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null)"
+	[ "$human_w" -eq 160 ] # and it owns the window size before the bridge starts
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dh.sock" \
+		>"$BATS_TEST_TMPDIR/dh.log" 2>&1 &
+	daemon_pid=$!
+
+	for _ in $(seq 1 60); do
+		w="$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null || echo 0)"
+		[ "$w" -eq 100 ] && break
+		sleep 0.1
+	done
+
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	$OBS kill-server 2>/dev/null || true
+
+	# Clamped to the mirror's width despite the wider client owning latest...
+	[ "$w" -eq 100 ]
+	# ...and the local mirror was fitted to the remote, so the pane the
+	# renderer paints into is exactly the screen it receives.
+	[ -n "$src_dims" ]
+	[ "$src_dims" = "$dst_dims" ]
 }
 
 # Regression for #185: a SIGTERM'd daemon must run teardown, not leave its unix

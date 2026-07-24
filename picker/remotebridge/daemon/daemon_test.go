@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,13 @@ func TestCloseWindowTearsDownOnlyItsWindow(t *testing.T) {
 	var gotArgs []string
 	cfg := Config{LocalTmux: func(args ...string) error { gotArgs = args; return nil }}
 
-	closeWindow(cfg, router, reg, "@1")
+	cv := newConverger()
+	cv.need("@1", 100, 30)
+	closeWindow(cfg, router, reg, cv, "@1")
+
+	if !cv.need("@1", 100, 30) {
+		t.Fatal("closeWindow must forget the closed window's asserted size")
+	}
 
 	if !sink1.closed || !sink2.closed {
 		t.Fatal("closeWindow must unregister (and close) every pane's sink")
@@ -113,7 +120,7 @@ func TestCloseWindowOutOfRegistryIsNoop(t *testing.T) {
 	called := false
 	cfg := Config{LocalTmux: func(args ...string) error { called = true; return nil }}
 
-	closeWindow(cfg, router, reg, "@9")
+	closeWindow(cfg, router, reg, newConverger(), "@9")
 
 	if called {
 		t.Fatal("closeWindow must no-op for an out-of-registry window (B2)")
@@ -232,7 +239,7 @@ func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 }
 
 // TestWatchResizeReconvergesOnChange drives watchResize deterministically (no
-// time.Sleep): winSize reads from sizeCh so the test controls exactly when the
+// time.Sleep): area reads from sizeCh so the test controls exactly when the
 // watcher observes each size, and each tick sent on `tick` blocks until the
 // watcher is back at its select — so sending the next tick is a barrier that
 // proves the previous iteration (including any send) has fully completed.
@@ -240,20 +247,29 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	tick := make(chan time.Time)
 	stop := make(chan struct{})
 	sizeCh := make(chan [2]int)
-	winSize := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
+	area := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
+
+	reg := newRegistry(1)
+	reg.add("@1", "host-sess:1")
+	reg.add("@2", "host-sess:2")
+	cv := newConverger()
+	// The setup path already asserted the startup size for both windows.
+	cv.need("@1", 100, 30)
+	cv.need("@2", 100, 30)
 
 	var sent []string
 	send := func(s string) { sent = append(sent, s) }
 
 	done := make(chan struct{})
-	go func() { watchResize(winSize, 100, 30, send, stop, tick); close(done) }()
+	go func() { watchResize(area, reg, cv, send, stop, tick); close(done) }()
 
 	// Tick 1 — unchanged (100x30): no send.
 	tick <- time.Now()
 	sizeCh <- [2]int{100, 30}
 
-	// Tick 2 — changed (120x40): exactly one send. This tick's send blocks the
-	// goroutine from re-selecting, so the next tick can't unblock until it lands.
+	// Tick 2 — changed (120x40): one send per mirrored window. This tick's
+	// sends block the goroutine from re-selecting, so the next tick can't
+	// unblock until they land.
 	tick <- time.Now()
 	sizeCh <- [2]int{120, 40}
 
@@ -268,7 +284,10 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 		t.Fatal("watchResize did not return after stop was closed")
 	}
 
-	want := []string{ConvergeCmd(120, 40)}
+	// remoteIDs snapshots a map, so the per-window sends land in either order.
+	sort.Strings(sent)
+	want := []string{ConvergeCmd("@1", 120, 40), ConvergeCmd("@2", 120, 40)}
+	sort.Strings(want)
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)
 	}

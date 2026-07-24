@@ -11,6 +11,7 @@ func TestPlanWindow(t *testing.T) {
 	L, _ := controlmode.ParseLayout("4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}")
 	got := PlanWindow("host-sess:1", L)
 	want := [][]string{
+		{"resize-window", "-t", "host-sess:1", "-x", "190", "-y", "45"},
 		{"split-window", "-h", "-t", "host-sess:1"},
 		{"select-layout", "-t", "host-sess:1", "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"},
 	}
@@ -22,8 +23,9 @@ func TestPlanWindow(t *testing.T) {
 func TestPlanWindowSinglePane(t *testing.T) {
 	L, _ := controlmode.ParseLayout("bd67,190x45,0,0,3")
 	got := PlanWindow("host-sess:1", L)
-	// One pane: no splits; still pin the layout for size determinism.
+	// One pane: no splits; still fit + pin the layout for size determinism.
 	want := [][]string{
+		{"resize-window", "-t", "host-sess:1", "-x", "190", "-y", "45"},
 		{"select-layout", "-t", "host-sess:1", "bd67,190x45,0,0,3"},
 	}
 	if !reflect.DeepEqual(got, want) {

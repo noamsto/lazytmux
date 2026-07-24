@@ -62,7 +62,7 @@ func TestCloseWindowUnregistersOnlyItsPanes(t *testing.T) {
 	router.Register("%9", &s9)
 	cfg := Config{LocalTmux: func(...string) error { return nil }}
 
-	closeWindow(cfg, router, reg, "@1")
+	closeWindow(cfg, router, reg, newConverger(), "@1")
 
 	router.Route("%1", []byte("x"))
 	router.Route("%2", []byte("y"))
