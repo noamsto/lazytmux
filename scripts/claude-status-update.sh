@@ -276,6 +276,46 @@ if [[ $state == "name" ]]; then
 	exit 0
 fi
 
+# Issue/PR re-stamp (#137): run right after creating an issue/PR mid-session
+# (a session started on main, or a worktree made before the issue existed) so
+# @issue_* catches up without waiting for the next branch transition. Silent
+# no-op outside a lazytmux tmux — there is no window to stamp. Delegates the
+# actual write to tmux-issue-stamp (on PATH via the tmux wrapper), which
+# serializes through its own per-window lock alongside post-switch and the
+# auto branch-transition trigger.
+if [[ $state == "enrich" ]]; then
+	explicit_id=""
+	if [[ ${1:-} != --* ]]; then
+		explicit_id="${1:-}"
+		shift || true
+	fi
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--pane)
+			pane_id="$2"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+	if [[ -n $explicit_id && ! $explicit_id =~ ^[A-Za-z0-9_-]+$ ]]; then
+		echo "Error: Invalid issue id '$explicit_id' (allowed: A-Z a-z 0-9 _ -)" >&2
+		exit 1
+	fi
+	[[ -z ${TMUX:-} || -z $pane_id ]] && exit 0
+	command -v tmux-issue-stamp >/dev/null 2>&1 || exit 0
+	target="%${pane_id#%}"
+	cwd="$(tmux display-message -t "$target" -p '#{pane_current_path}' 2>/dev/null)" || exit 0
+	[[ -z $cwd ]] && exit 0
+	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+	worktree="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+	branch="$(git -C "$cwd" branch --show-current 2>/dev/null)" || branch=""
+	[[ -z $branch ]] && exit 0
+	tmux-issue-stamp "$target" "$worktree" "$branch" "$explicit_id" >/dev/null 2>&1 &
+	disown
+	exit 0
+fi
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--pane)

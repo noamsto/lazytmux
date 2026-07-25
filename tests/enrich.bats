@@ -156,6 +156,48 @@ setup() {
 	[ "$REPLY" = "linear github" ]
 }
 
+@test "parse_explicit_issue_id: GH-<number> is github, uppercase prefix" {
+	parse_explicit_issue_id "GH-42"
+	[ "$REPLY_PROVIDER" = "github" ]
+	[ "$REPLY_LOCAL" = "42" ]
+}
+
+@test "parse_explicit_issue_id: gh-<number> lowercase prefix is still github" {
+	parse_explicit_issue_id "gh-42"
+	[ "$REPLY_PROVIDER" = "github" ]
+	[ "$REPLY_LOCAL" = "42" ]
+}
+
+@test "parse_explicit_issue_id: bare team key is linear, upper-cased" {
+	parse_explicit_issue_id "eng-1957"
+	[ "$REPLY_PROVIDER" = "linear" ]
+	[ "$REPLY_LOCAL" = "ENG-1957" ]
+}
+
+@test "parse_explicit_issue_id: already-uppercase linear key is unchanged" {
+	parse_explicit_issue_id "ENG-1957"
+	[ "$REPLY_PROVIDER" = "linear" ]
+	[ "$REPLY_LOCAL" = "ENG-1957" ]
+}
+
+@test "parse_explicit_issue_id: GH- with no digits is malformed, REPLY_LOCAL empty" {
+	parse_explicit_issue_id "GH---web"
+	[ "$REPLY_PROVIDER" = "github" ]
+	[ -z "$REPLY_LOCAL" ]
+}
+
+@test "parse_explicit_issue_id: a leading-dash value is not forwarded as a linear key" {
+	parse_explicit_issue_id "-URL"
+	[ "$REPLY_PROVIDER" = "linear" ]
+	[ -z "$REPLY_LOCAL" ]
+}
+
+@test "parse_explicit_issue_id: a non-numeric github suffix is malformed, REPLY_LOCAL empty" {
+	parse_explicit_issue_id "GH-1a2b"
+	[ "$REPLY_PROVIDER" = "github" ]
+	[ -z "$REPLY_LOCAL" ]
+}
+
 @test "build_window_label: enriched short = provider id" {
 	build_window_label short linear ENG-1957 "refactor services" "" "" "" feat/eng-1957 /x
 	[ "$REPLY" = "L ENG-1957" ]

@@ -7,6 +7,9 @@
 # shellcheck disable=SC2034  # used by scripts that source this library
 
 ENRICH_CACHE_DIR="/tmp/lazytmux-pr" # PR-state cache dir; consumed by the PR enrichment poller
+# Per-window stamp lock (#137 conflict safety). Overridable so tests don't share
+# a real machine's /tmp dir across concurrent bats runs.
+ENRICH_STAMP_LOCK_DIR="${LAZYTMUX_ENRICH_LOCK_DIR:-/tmp/lazytmux-enrich-lock}"
 
 # Enrich glyphs (substituted at Nix build time from enrichIconSetRaw). Text-only;
 # the status template applies color and appends process/claude icons separately.
@@ -146,6 +149,44 @@ pr_cache_decision() {
 # programs.lazytmux.enrich.providers. Sets REPLY to a space-separated list.
 provider_priority_list() {
 	REPLY="@providers@"
+}
+
+# parse_explicit_issue_id ID
+# Splits an explicit issue id — the same GH-<number> / bare-key convention the
+# issue-tracking skill already uses for `issue add <ID>` — into a provider and
+# its provider-local id, for tmux-issue-stamp's explicit-id mode (bypasses
+# branch-regex derivation when the id is already known, e.g. right after
+# `gh issue create`). GH-<number> (case-insensitive prefix) is GitHub;
+# anything else is treated as a Linear key and upper-cased.
+# REPLY_LOCAL is validated (numeric for github, LETTERS-DIGITS for linear) and
+# left empty on a malformed id (e.g. "GH-" with no digits, or "-URL") — a
+# provider script would otherwise pass an unvalidated value straight to
+# `gh`/`linear` as a positional arg, where a leading "-" risks being read as a
+# flag. The caller must treat an empty REPLY_LOCAL as "no id", not silently
+# fall back to branch derivation (that would violate explicit-id mode's
+# contract of never deriving from the branch).
+# Sets REPLY_PROVIDER (github|linear) and REPLY_LOCAL (bare number for github,
+# uppercased key for linear; empty if malformed).
+parse_explicit_issue_id() {
+	local raw="$1"
+	REPLY_LOCAL=""
+	case "$raw" in
+	[Gg][Hh]-*)
+		REPLY_PROVIDER="github"
+		local num="${raw#*-}"
+		[[ $num =~ ^[0-9]+$ ]] && REPLY_LOCAL="$num"
+		;;
+	*)
+		REPLY_PROVIDER="linear"
+		local key="${raw^^}"
+		[[ $key =~ ^[A-Z]+-[0-9]+$ ]] && REPLY_LOCAL="$key"
+		;;
+	esac
+	# A failed match above must not leak as this function's own exit status —
+	# callers run under `set -e`-style scripts and don't wrap this call in `run`
+	# or `||`; a malformed id is a normal, handled outcome (REPLY_LOCAL empty),
+	# not a function failure.
+	return 0
 }
 
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
