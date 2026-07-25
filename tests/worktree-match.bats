@@ -41,7 +41,9 @@ setup() {
 }
 
 # sess widx wid tag bridge active path
-row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+# "|" mirrors the real -F format: tmux rewrites non-printable bytes (a tab) to
+# "_" when the locale is not UTF-8, so the matcher cannot use tab as a delimiter.
+row() { printf '%s|%s|%s|%s|%s|%s|%s\n' "$@"; }
 
 @test "R1: tag alone never matches — tagged window whose panes are elsewhere" {
 	FAKE_ROWS="$(row s1 1 @1 "$W" "" 1 "$V")" run bash "$MATCH" "$W" s1 9

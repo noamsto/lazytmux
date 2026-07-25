@@ -35,17 +35,13 @@ teardown() {
 	return 0
 }
 
-@test "window options are reported on every pane row of list-panes -a" {
-	# $'...' is load-bearing: tmux emits \t literally, it does not expand it.
-	run "${TM[@]}" list-panes -a -F $'#{session_name}\t#{window_index}\t#{window_id}\t#{@worktree}\t#{@bridge_win}\t#{pane_active}\t#{pane_current_path}'
-	[ "$status" -eq 0 ]
+FMT='#{session_name}|#{window_index}|#{window_id}|#{@worktree}|#{@bridge_win}|#{pane_active}|#{pane_current_path}'
 
-	# awk, not `IFS=$'\t' read`: tab is an IFS *whitespace* character, so a run
-	# of tabs collapses and an empty field would silently shift every later
-	# column left — turning a missing option into a confusing parse error.
+# Shared assertion: $1 is the raw `list-panes -a` output.
+assert_rows() {
 	# Dump the raw bytes on failure so a future flake is diagnosable.
-	printf '%s\n' "$output" | cat -A >&2
-	printf '%s\n' "$output" | awk -F'\t' '
+	printf '%s\n' "$1" | cat -A >&2
+	printf '%s\n' "$1" | awk -F'|' '
 		NF != 7 { print "row " NR " has " NF " fields, want 7"; bad = 1; next }
 		$3 == "" { print "row " NR ": empty window_id"; bad = 1 }
 		$4 != "/tmp/wt-a" { print "row " NR ": @worktree=[" $4 "], want /tmp/wt-a"; bad = 1 }
@@ -56,4 +52,27 @@ teardown() {
 			exit bad
 		}
 	'
+}
+
+@test "window options are reported on every pane row of list-panes -a" {
+	run "${TM[@]}" list-panes -a -F "$FMT"
+	[ "$status" -eq 0 ]
+	assert_rows "$output"
+}
+
+@test "the field delimiter survives a non-UTF-8 locale" {
+	# tmux rewrites non-printable bytes in command output to "_" when the locale
+	# is not UTF-8, so a tab-delimited format silently collapses to one field
+	# under LC_ALL=C and the matcher would match nothing at all — every
+	# `wt switch` would spawn a new window. "|" is printable and survives.
+	run env LC_ALL=C LANG=C "${TM[@]}" list-panes -a -F "$FMT"
+	[ "$status" -eq 0 ]
+	assert_rows "$output"
+
+	# Pin the underlying tmux behavior this guards against, so the reason the
+	# delimiter is "|" stays visible if anyone is tempted to "tidy" it to a tab:
+	# under this locale a tab does NOT come back as a tab.
+	run env LC_ALL=C LANG=C "${TM[@]}" list-panes -a -F $'a\tb'
+	[ "$status" -eq 0 ]
+	[[ $output != *$'\t'* ]]
 }

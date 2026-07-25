@@ -28,14 +28,16 @@ w_phys=$(cd -P -- "$w" 2>/dev/null && pwd -P)
 
 # One query for the whole decision. list-windows would report only the active
 # pane's path and so could not see a worktree living in a background pane.
-# $'...' is load-bearing: tmux does not expand \t in a format, it emits the two
-# characters. The same string is spelled '\t' in the post-switch hook and is
-# correct there only because TOML's """ lexer converts it before the shell sees
-# it. Every other tmux -F in scripts/ uses a literal tab for this reason.
-rows=$(tmux list-panes -a -F $'#{session_name}\t#{window_index}\t#{window_id}\t#{@worktree}\t#{@bridge_win}\t#{pane_active}\t#{pane_current_path}' 2>/dev/null) || exit 0
+#
+# "|", not a tab: tmux sanitizes non-printable bytes out of command output when
+# the locale is not UTF-8, so under LC_ALL=C (or POSIX) every tab comes back as
+# "_" and nothing would ever parse — the matcher would silently match nothing
+# and every `wt switch` would spawn a fresh window. "|" is printable and
+# survives every locale (tmux-pr-enrich uses it for the same reason).
+rows=$(tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_id}|#{@worktree}|#{@bridge_win}|#{pane_active}|#{pane_current_path}' 2>/dev/null) || exit 0
 [[ -z $rows ]] && exit 0
 
-plan=$(printf '%s\n' "$rows" | awk -F'\t' -v w="$w" -v wp="$w_phys" -v cs="$cs" -v cw="$cw" '
+plan=$(printf '%s\n' "$rows" | awk -F'|' -v w="$w" -v wp="$w_phys" -v cs="$cs" -v cw="$cw" '
 	function under(p, base) {
 		if (base == "" || p == "") return 0
 		if (p == base) return 1
@@ -44,6 +46,10 @@ plan=$(printf '%s\n' "$rows" | awk -F'\t' -v w="$w" -v wp="$w_phys" -v cs="$cs" 
 	}
 	function validates(p) { return under(p, w) || under(p, wp) }
 	{
+		# A "|" inside a path (vanishingly rare) would split a row into the wrong
+		# fields. Fail closed: skip it, so at worst we decline to match and the
+		# caller creates a window — never rank wrongly, never clear a wrong tag.
+		if (NF != 7) next
 		# Bridge mirror windows sit in the launcher repo, not remote content:
 		# never a candidate, never cleared.
 		if ($5 == "1") next
