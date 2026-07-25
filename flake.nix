@@ -309,17 +309,14 @@
 
           worktree-match-integration-tests =
             pkgs.runCommand "worktree-match-integration-tests" {
-              # Uses the pinned next-3.8 tmux (mkTmux) rather than pkgs.tmux so the
-              # assertion is made against the tmux production actually ships. No
-              # version-specific divergence is known here — both report window
-              # options on pane rows — it is defense in depth, and the derivation
-              # is already built for remote-m2-integration-tests, so it is free.
+              # mkTmux, not pkgs.tmux: assert against the tmux that actually ships.
+              # No version divergence is known here (both report window options on
+              # pane rows); the derivation is already built for the m2 check anyway.
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk (mkTmux pkgs)];
-              # A UTF-8 ambient locale, so the suite's default case mirrors a normal
-              # user environment. It is NOT what makes the matcher work: tmux
-              # rewrites non-printable bytes to "_" without UTF-8, which is exactly
-              # why the -F format is "|"-delimited rather than tab-delimited. The
-              # hostile case is pinned by the LC_ALL=C test inside the suite, which
+              # A UTF-8 ambient locale so the default case mirrors a normal user
+              # environment — not what makes the matcher work. tmux rewrites
+              # non-printable bytes to "_" without UTF-8, which is why the -F format
+              # is "|"-delimited; the suite's own LC_ALL=C test pins that case and
               # overrides these per-invocation.
               LANG = "C.UTF-8";
               LC_ALL = "C.UTF-8";

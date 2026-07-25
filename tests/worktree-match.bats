@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # Tests tmux-worktree-match against a fake tmux: `list-panes` prints the
-# fixture rows, `set-option` is recorded so the R15 tag-clearing can be
-# asserted in both directions. Every case here is a row of SPEC.md's test
-# table; the requirement id is in the test name.
+# fixture rows, `set-option` is recorded so tag-clearing can be asserted in both
+# directions. The R<n> prefixes are the numbered requirements from issue #199's
+# design; each test also names the behavior in words, so they read standalone.
 
 setup() {
 	STATE="$BATS_TEST_TMPDIR/state"
