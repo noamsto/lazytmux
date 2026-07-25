@@ -57,6 +57,7 @@ setup() {
 		-e "s|@lib_icons@|$licons|g" \
 		-e "s|@lib_enrich@|$lenrich|g" \
 		-e "s|@lib_log@|$PWD/scripts/lib-log.sh|g" \
+		-e "s|@lib_reflow@|$PWD/scripts/lib-reflow.sh|g" \
 		-e 's|@MAX_ICONS@|5|g' \
 		scripts/tmux-reflow-windows.sh >"$REFLOW"
 

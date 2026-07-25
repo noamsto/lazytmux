@@ -146,6 +146,9 @@
   # lib-log has no build-time placeholders of its own; a plain writeShellScript.
   lib-log = pkgs.writeShellScript "lib-log" (builtins.readFile ../scripts/lib-log.sh);
 
+  # lib-reflow has no build-time placeholders of its own either.
+  lib-reflow = pkgs.writeShellScript "lib-reflow" (builtins.readFile ../scripts/lib-reflow.sh);
+
   # Shell label builder needs raw glyphs (single '#'). The tmux-format path uses
   # the '##'-escaped enrichIconSet (which MUST keep '##' — do not change it). Only
   # user-override icons are '##'-escaped by the module, so un-escape just those and
@@ -271,8 +274,8 @@
   # Scripts that need icon map + library + claude-status path substitution
   scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
 
-  iconSubstFrom = ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@"];
-  iconSubstTo = ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}"];
+  iconSubstFrom = ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@" "@lib_reflow@"];
+  iconSubstTo = ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}" "${lib-reflow}"];
 
   mkScriptFull = name:
     pkgs.writeShellScriptBin name
