@@ -255,6 +255,7 @@
     "tmux-kill-pane-guard"
     "tmux-smart-nav"
     "tmux-reconcile-window"
+    "tmux-worktree-match"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
     "tmux-issue-stamp"
