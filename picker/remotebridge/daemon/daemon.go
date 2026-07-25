@@ -34,7 +34,7 @@ type Config struct {
 	PauseAfterSecs int                        // refresh-client -f pause-after=N (0 disables); backpressure insurance answered by a %continue re-seed
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
-	WinSize        func() (int, int)          // local window content size (injected)
+	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
@@ -58,28 +58,30 @@ type helloConn struct {
 }
 
 // resizePollInterval is how often the resize watcher re-checks the local
-// client size. A human terminal resize is discrete and infrequent, so a 1s
-// poll is responsive enough and cheap (one WinSize query/sec).
+// client area. A human terminal resize is discrete and infrequent, so a 1s
+// poll is responsive enough and cheap (one LocalArea query/sec).
 const resizePollInterval = time.Second
 
-// watchResize re-converges the remote to the local client size whenever it
-// changes. A local terminal/client resize emits no control-stream event, so
-// the daemon must poll: on a change it re-pushes ConvergeCmd (one control
-// client = one size = all remote windows), which resizes the remote and makes
-// it emit %layout-change per window, driving the existing reconcile + re-seed.
-// send is the same mutex-guarded, no-op-when-closed sender the main loop uses;
-// this only injects a fire-and-forget command (its %begin/%end ack is consumed
-// harmlessly by the main loop's top-level reader.Next()).
-func watchResize(winSize func() (int, int), w, h int, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
+// watchResize re-asserts every mirrored window's cap whenever the local client
+// area changes. A local terminal/client resize emits no control-stream event,
+// so the daemon must poll: on a change it re-pushes ConvergeCmd per mirrored
+// window, which resizes the remote and makes it emit %layout-change per
+// window, driving the existing reconcile + re-seed (and the re-fit of the
+// local window to the remote's new size). send is the same mutex-guarded,
+// no-op-when-closed sender the main loop uses; this only injects
+// fire-and-forget commands (their %begin/%end acks are consumed harmlessly by
+// the main loop's top-level reader.Next()).
+func watchResize(area func() (int, int), reg *registry, cv *converger, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
 	for {
 		select {
 		case <-stop:
 			return
 		case <-tick:
-			nw, nh := winSize()
-			if nw != w || nh != h {
-				w, h = nw, nh
-				send(ConvergeCmd(nw, nh))
+			w, h := area()
+			for _, remoteID := range reg.remoteIDs() {
+				if cv.need(remoteID, w, h) {
+					send(ConvergeCmd(remoteID, w, h))
+				}
 			}
 		}
 	}
@@ -108,12 +110,6 @@ func Run(cfg Config) error {
 	}
 
 	// Drain the implicit attach reply (startup skip is sanctioned — B3).
-	readReply(reader)
-
-	// Converge remote size to the local window's content size. One control
-	// client means one size, so this converges ALL remote windows at once.
-	w, h := cfg.WinSize()
-	send(ConvergeCmd(w, h))
 	readReply(reader)
 
 	// Enumerate every window of the bridged remote session. Read BOTH index
@@ -152,6 +148,7 @@ func Run(cfg Config) error {
 	go acceptRenderers(listener, connCh)
 
 	reg := newRegistry(cfg.BaseIndex)
+	cv := newConverger()
 	// stopWatch stops the resize watcher (started just before the main loop).
 	// Declared here so teardown can close it; teardown runs exactly once per
 	// Run return path, so a plain close is safe.
@@ -161,7 +158,7 @@ func Run(cfg Config) error {
 		listener.Close()
 		os.Remove(cfg.SockPath)
 		os.Remove(pidFile)
-		for _, mw := range reg.byRemote {
+		for _, mw := range reg.all() {
 			// Unregister closes each pane's output sink, stopping its pump
 			// goroutine (mirrors closeWindow); then drop the renderer conns.
 			for _, id := range mw.remotePanes {
@@ -201,7 +198,7 @@ func Run(cfg Config) error {
 			cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals window_name
 		}
 		mw := reg.add(rw.id, localWin)
-		if err := setupWindow(cfg, reader, send, router, connCh, mw, readReply); err != nil {
+		if err := setupWindow(cfg, reader, send, router, connCh, mw, cv, readReply); err != nil {
 			teardown()
 			return err
 		}
@@ -217,7 +214,7 @@ func Run(cfg Config) error {
 	// Re-converge the remote whenever the local client resizes. A local resize
 	// emits no control-stream event, so poll; teardown closes stopWatch.
 	ticker := time.NewTicker(resizePollInterval)
-	go func() { defer ticker.Stop(); watchResize(cfg.WinSize, w, h, send, stopWatch, ticker.C) }()
+	go func() { defer ticker.Stop(); watchResize(cfg.LocalArea, reg, cv, send, stopWatch, ticker.C) }()
 
 	// Main loop.
 	pauseAfterSet := false
@@ -252,11 +249,11 @@ func Run(cfg Config) error {
 			}
 		case controlmode.WindowAdd:
 			if len(l.Args) > 0 {
-				addWindow(cfg, reader, send, router, connCh, reg, l.Args[0])
+				addWindow(cfg, reader, send, router, connCh, reg, cv, l.Args[0])
 			}
 		case controlmode.WindowClose:
 			if len(l.Args) > 0 {
-				closeWindow(cfg, router, reg, l.Args[0])
+				closeWindow(cfg, router, reg, cv, l.Args[0])
 				if reg.empty() {
 					teardown()
 					return nil
@@ -295,7 +292,14 @@ func Run(cfg Config) error {
 // For a 1-pane remote window this is exactly M1's behavior — no split, one
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
-func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow, reply replyFn) error {
+func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow, cv *converger, reply replyFn) error {
+	// Cap the remote window at what the local clients can show before reading
+	// its layout, so the layout that gets mirrored is the converged one.
+	if w, h := cfg.LocalArea(); cv.need(mw.remoteID, w, h) {
+		send(ConvergeCmd(mw.remoteID, w, h))
+		reply(reader) // consume refresh-client's own (empty) reply
+	}
+
 	L, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), reply)
 	if err != nil {
 		return err
@@ -358,7 +362,7 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 // the same plan/spawn/hello/seed pipeline as startup (routing-aware, since
 // siblings are live). Otherwise (the window belongs elsewhere, or a duplicate
 // notification for an already-registered window) it's a no-op.
-func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reg *registry, remoteID string) {
+func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reg *registry, cv *converger, remoteID string) {
 	if _, already := reg.byRemoteID(remoteID); already {
 		return
 	}
@@ -395,11 +399,12 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
 	}
 	mw := reg.add(remoteID, localWin)
-	if err := setupWindow(cfg, reader, send, router, connCh, mw, reply); err != nil {
+	if err := setupWindow(cfg, reader, send, router, connCh, mw, cv, reply); err != nil {
 		// Drop the half-created entry + local window so the already-registered
 		// guard doesn't block a later %window-add retry for this id.
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)
 		reg.remove(remoteID)
+		cv.forget(remoteID)
 		cfg.LocalTmux("kill-window", "-t", localWin)
 	}
 }
@@ -408,11 +413,12 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 // closes) each pane's output sink, closes each renderer conn, and kills the
 // local window. A notification for a window outside the registry is a no-op
 // (B2) — kill-window must never run against a window this daemon doesn't own.
-func closeWindow(cfg Config, router *Router, reg *registry, remoteID string) {
+func closeWindow(cfg Config, router *Router, reg *registry, cv *converger, remoteID string) {
 	mw, ok := reg.remove(remoteID)
 	if !ok {
 		return
 	}
+	cv.forget(remoteID)
 	for _, id := range mw.remotePanes {
 		router.Unregister(id)
 	}
@@ -792,6 +798,13 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 			return
 		}
 
+		// Re-fit before select-layout: a geometry-only change is usually the
+		// remote resizing under us (the other client resized, or our own cap
+		// landed), and an unfitted window would rescale the layout to the
+		// local client's size instead of taking the remote's.
+		if err := cfg.LocalTmux(FitWindowCmd(w.localWin, L)...); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: layout-change resize-window: %v\n", err)
+		}
 		if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
 		}

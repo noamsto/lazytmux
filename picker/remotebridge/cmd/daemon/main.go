@@ -105,7 +105,7 @@ func main() {
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	}
-	winSize := func() (int, int) { return localWinSize(localTmuxArgv, *localSess) }
+	area := func() (int, int) { return localArea(localTmuxArgv, *localSess) }
 
 	cfg := daemon.Config{
 		Ctl:            rwc{stdout, stdin},
@@ -117,7 +117,7 @@ func main() {
 		PauseAfterSecs: *pauseAfter,
 		RendererBin:    *rendererBin,
 		LocalTmux:      runLocalTmux,
-		WinSize:        winSize,
+		LocalArea:      area,
 	}
 
 	if err := daemon.Run(cfg); err != nil {
@@ -125,25 +125,94 @@ func main() {
 	}
 }
 
-// localWinSize queries the local session's active-window content dims, used to
-// converge the remote windows' size to match (one control client, one size).
-// Defaults to 80x24 if the session doesn't exist yet or the query fails.
-func localWinSize(localTmuxArgv []string, localSess string) (int, int) {
+// localArea reports the content area the local mirror session can display,
+// used as the cap asserted on every mirrored remote window.
+// Defaults to 80x24 if neither query yields a size.
+func localArea(localTmuxArgv []string, localSess string) (int, int) {
+	if w, h := clientArea(localTmuxArgv, localSess); w > 0 && h > 0 {
+		return w, h
+	}
+	// No attached client: the launcher creates the mirror session before
+	// switching a client to it, and it can be left detached afterwards. Fall
+	// back to the session's own window dims, which is what tmux hands a client
+	// when one does attach.
+	if w, h := sessionWinSize(localTmuxArgv, localSess); w > 0 && h > 0 {
+		return w, h
+	}
+	return 80, 24
+}
+
+// clientArea is the smallest attached client's content area: its size minus
+// its status lines. It reads the clients rather than #{window_width} because
+// the daemon pins each mirror window to its remote's size (window-size
+// manual), so a mirror window's own dims no longer track the terminal it is
+// shown in. Returns 0,0 when no client is attached.
+func clientArea(localTmuxArgv []string, localSess string) (int, int) {
+	out, err := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...),
+		"list-clients", "-t", localSess, "-F", "#{client_width} #{client_height} #{status}")...).Output()
+	if err != nil {
+		return 0, 0
+	}
+	w, h := 0, 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		cw, errW := strconv.Atoi(fields[0])
+		ch, errH := strconv.Atoi(fields[1])
+		if errW != nil || errH != nil {
+			continue
+		}
+		ch -= statusLines(fields[2])
+		if cw < 1 || ch < 1 {
+			continue
+		}
+		if w == 0 || cw < w {
+			w = cw
+		}
+		if h == 0 || ch < h {
+			h = ch
+		}
+	}
+	return w, h
+}
+
+// sessionWinSize is the detached fallback: the local session's active-window
+// content dims. Returns 0,0 if the session doesn't exist yet or the query
+// fails.
+func sessionWinSize(localTmuxArgv []string, localSess string) (int, int) {
 	out, err := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...),
 		"display-message", "-p", "-t", localSess, "-F", "#{window_width} #{window_height}")...).Output()
 	if err != nil {
-		return 80, 24
+		return 0, 0
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 2 {
-		return 80, 24
+		return 0, 0
 	}
 	w, errW := strconv.Atoi(fields[0])
 	h, errH := strconv.Atoi(fields[1])
 	if errW != nil || errH != nil {
-		return 80, 24
+		return 0, 0
 	}
 	return w, h
+}
+
+// statusLines converts tmux's `status` option value — off, on, or 2-5 — into
+// the number of rows the status bar takes off a client's height.
+func statusLines(v string) int {
+	switch v {
+	case "off":
+		return 0
+	case "on":
+		return 1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 1
+	}
+	return n
 }
 
 // rwc adapts an ssh/tmux subprocess's separate stdout/stdin pipes into the

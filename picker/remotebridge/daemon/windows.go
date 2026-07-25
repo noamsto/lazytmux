@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 )
 
 // mirrorWindow is one remote window's local mirror: the remote window id it
@@ -21,7 +22,11 @@ type mirrorWindow struct {
 // created window's index, so the daemon assigns indices rather than reading
 // them back; the counter never decrements, so a closed window's index is never
 // reused and a stale @N->index mapping can't collide.
+//
+// The main loop mutates it while the resize watcher reads the mirrored ids
+// each tick, so every access takes mu.
 type registry struct {
+	mu       sync.Mutex
 	byRemote map[string]*mirrorWindow
 	nextIdx  int
 }
@@ -31,23 +36,31 @@ func newRegistry(baseIdx int) *registry {
 }
 
 func (r *registry) allocLocalWin(sess string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	win := fmt.Sprintf("%s:%d", sess, r.nextIdx)
 	r.nextIdx++
 	return win
 }
 
 func (r *registry) add(remoteID, localWin string) *mirrorWindow {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	w := &mirrorWindow{remoteID: remoteID, localWin: localWin, conns: map[string]net.Conn{}}
 	r.byRemote[remoteID] = w
 	return w
 }
 
 func (r *registry) byRemoteID(remoteID string) (*mirrorWindow, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	w, ok := r.byRemote[remoteID]
 	return w, ok
 }
 
 func (r *registry) remove(remoteID string) (*mirrorWindow, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	w, ok := r.byRemote[remoteID]
 	if ok {
 		delete(r.byRemote, remoteID)
@@ -55,7 +68,34 @@ func (r *registry) remove(remoteID string) (*mirrorWindow, bool) {
 	return w, ok
 }
 
-func (r *registry) empty() bool { return len(r.byRemote) == 0 }
+func (r *registry) empty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byRemote) == 0
+}
+
+// remoteIDs snapshots the mirrored window ids for the resize watcher, which
+// runs off the main loop's goroutine.
+func (r *registry) remoteIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]string, 0, len(r.byRemote))
+	for id := range r.byRemote {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// all snapshots the mirror windows themselves, for teardown.
+func (r *registry) all() []*mirrorWindow {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*mirrorWindow, 0, len(r.byRemote))
+	for _, w := range r.byRemote {
+		out = append(out, w)
+	}
+	return out
+}
 
 // remoteWindow pairs a remote window's index (#{window_index}) with its id
 // (#{window_id}, @N). --window / Config.RemoteWindow is an *index*; the registry
