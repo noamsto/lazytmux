@@ -309,14 +309,18 @@
 
           worktree-match-integration-tests =
             pkgs.runCommand "worktree-match-integration-tests" {
-              # Uses the pinned next-3.8 tmux (mkTmux), not pkgs.tmux: the whole
-              # point is whether the shipped tmux reports window options on pane
-              # rows, so it must be the version production runs.
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnugrep (mkTmux pkgs)];
-              # Without a UTF-8 locale tmux substitutes "_" for the literal tab in
-              # the -F format (same reason reflow-fanout-tests sets this): the
-              # sandbox's stripped env defaults to C/POSIX, which would silently
-              # break the very \t split this test pins.
+              # Uses the pinned next-3.8 tmux (mkTmux) rather than pkgs.tmux so the
+              # assertion is made against the tmux production actually ships. No
+              # version-specific divergence is known here — both report window
+              # options on pane rows — it is defense in depth, and the derivation
+              # is already built for remote-m2-integration-tests, so it is free.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk (mkTmux pkgs)];
+              # A UTF-8 ambient locale, so the suite's default case mirrors a normal
+              # user environment. It is NOT what makes the matcher work: tmux
+              # rewrites non-printable bytes to "_" without UTF-8, which is exactly
+              # why the -F format is "|"-delimited rather than tab-delimited. The
+              # hostile case is pinned by the LC_ALL=C test inside the suite, which
+              # overrides these per-invocation.
               LANG = "C.UTF-8";
               LC_ALL = "C.UTF-8";
             } ''

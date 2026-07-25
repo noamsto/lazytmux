@@ -37,7 +37,16 @@ w_phys=$(cd -P -- "$w" 2>/dev/null && pwd -P)
 rows=$(tmux list-panes -a -F '#{session_name}|#{window_index}|#{window_id}|#{@worktree}|#{@bridge_win}|#{pane_active}|#{pane_current_path}' 2>/dev/null) || exit 0
 [[ -z $rows ]] && exit 0
 
-plan=$(printf '%s\n' "$rows" | awk -F'|' -v w="$w" -v wp="$w_phys" -v cs="$cs" -v cw="$cw" '
+# Values come in through the environment, not -v: POSIX has awk escape-process a
+# -v value like a string literal, so a path holding a literal \t (or \\, \n …)
+# would arrive mangled while $4/$7 — awk's own field split — stay raw, silently
+# breaking the comparison. Git bans backslash in ref names, but an ancestor
+# directory can still hold one. ENVIRON is POSIX and unprocessed.
+plan=$(printf '%s\n' "$rows" | w="$w" wp="$w_phys" cs="$cs" cw="$cw" awk -F'|' '
+	BEGIN {
+		w = ENVIRON["w"]; wp = ENVIRON["wp"]
+		cs = ENVIRON["cs"]; cw = ENVIRON["cw"]
+	}
 	function under(p, base) {
 		if (base == "" || p == "") return 0
 		if (p == base) return 1

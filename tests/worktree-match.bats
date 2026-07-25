@@ -291,6 +291,25 @@ row() { printf '%s|%s|%s|%s|%s|%s|%s\n' "$@"; }
 	[ "$(grep -c list-panes "$STATE/calls")" -eq 1 ]
 }
 
+@test "a row split by a | inside a path is dropped, not parsed wrongly" {
+	# The delimiter guard: a path containing "|" yields the wrong field count.
+	# Fail closed — no match, and above all no clearing of a tag we cannot judge.
+	FAKE_ROWS="$(row s1 1 @1 "$W" "" 1 "$V/we|ird")" run bash "$MATCH" "$W" s1 9
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+	[ ! -f "$STATE/setlog" ]
+}
+
+@test "a backslash in the worktree path is compared literally" {
+	# awk -v would escape-process the value (so a literal \t in the path would
+	# arrive as a tab and never match its own pane row); ENVIRON does not.
+	BS="$BATS_TEST_TMPDIR/bs\\thump"
+	mkdir -p "$BS"
+	FAKE_ROWS="$(row s1 1 @1 "$BS" "" 1 "$BS")" run bash "$MATCH" "$BS" s1 9
+	[ "$output" = "$(printf 's1\t1\t@1')" ]
+	[ ! -f "$STATE/setlog" ]
+}
+
 @test "R16: clearing writes nothing but -u @worktree" {
 	rows="$(
 		row s1 1 @1 "$W" "" 1 "$V"
