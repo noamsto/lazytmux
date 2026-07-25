@@ -874,26 +874,12 @@ in {
             # focus moved). $TMUX_PANE is set for every pane once $TMUX is.
             CUR_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}')
             CUR_WIN=$(tmux display-message -t "$TMUX_PANE" -p '#{window_index}')
-            # Primary: match by @worktree tag across ALL sessions (set when we create
-            # the window). Output is "<session>\t<window>".
-            MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{@worktree}' \
-              | awk -F'\t' -v wt="{{ worktree_path }}" '$3 == wt { print $1 "\t" $2; exit }')
-            # Fallback: match by pane_current_path — prefix match, so a pane
-            # cd'd into a subdirectory still counts (but not into a nested
-            # .worktrees/ checkout, which belongs to a different branch).
-            # @worktree tags are lost on tmux-remux restore, so this path
-            # also re-tags them (self-heal). Prefer the current window: when
-            # we're already sitting in the worktree, re-tag in place instead
-            # of navigating away.
-            if [ -z "$MATCH" ]; then
-              MATCH=$(tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{pane_current_path}' \
-                | awk -F'\t' -v wt="{{ worktree_path }}" -v cs="$CUR_SESSION" -v cw="$CUR_WIN" '
-                    $3 == wt || (index($3, wt "/") == 1 && index($3, wt "/.worktrees/") != 1) {
-                      if ($1 == cs && $2 == cw) { m = $1 "\t" $2; exit }
-                      if (!m) m = $1 "\t" $2
-                    }
-                    END { if (m) print m }')
-            fi
+            # Primary + fallback in one query: the matcher ranks windows by the
+            # @worktree tag *corroborated by a pane's cwd*, so a tag that outlived
+            # the cd that earned it can no longer win (#199); it also unsets any
+            # tag it proves false. Output is "<session>\t<window>\t<window_id>",
+            # empty when nothing matches.
+            MATCH=$(${tmuxConfig.script.tmux-worktree-match}/bin/tmux-worktree-match "{{ worktree_path }}" "$CUR_SESSION" "$CUR_WIN")
             if [ -n "$MATCH" ]; then
               SESS=$(printf '%s' "$MATCH" | cut -f1)
               WIN=$(printf '%s' "$MATCH" | cut -f2)
@@ -902,29 +888,10 @@ in {
               else
                 tmux switch-client -t "$SESS:$WIN"
               fi
-              # A tag can outlive the cd that earned it: the take-over branch
-              # below stamps @worktree synchronously but moves the pane via
-              # send-keys, which can silently fail to land. The pane is then
-              # stranded outside the worktree while still carrying the tag, and
-              # because this matcher trusts the tag every later switch resolves
-              # here and select-window's to a no-op. Re-issue the cd when the
-              # matched single-pane shell isn't actually sitting at the worktree.
-              M_PATH=$(tmux display-message -t "$SESS:$WIN" -p '#{pane_current_path}')
-              case "$M_PATH" in
-                "{{ worktree_path }}" | "{{ worktree_path }}"/*) ;;
-                *)
-                  M_CMD=$(tmux display-message -t "$SESS:$WIN" -p '#{pane_current_command}')
-                  M_PANES=$(tmux display-message -t "$SESS:$WIN" -p '#{window_panes}')
-                  case "$M_CMD" in
-                    wt | fish | bash | zsh | sh)
-                      [ "$M_PANES" = "1" ] && tmux send-keys -t "$SESS:$WIN" "cd '{{ worktree_path }}'" Enter
-                      ;;
-                  esac
-                  ;;
-              esac
               # Tagging (incl. auto-tag of matched-by-path windows, so the next
               # call hits the primary signal) is done by the reconcile tail below.
-              STAMP_TARGET="$SESS:$WIN"
+              # The matcher's #{window_id} sidesteps numeric-session ambiguity.
+              STAMP_TARGET=$(printf '%s' "$MATCH" | cut -f3)
             else
               # Take over the current window when it's a single pane whose
               # worktree is already shown by another window in THIS session —
