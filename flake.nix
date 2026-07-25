@@ -297,6 +297,35 @@
               touch $out
             '';
 
+          worktree-match-tests =
+            pkgs.runCommand "worktree-match-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk pkgs.gnugrep];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/worktree-match.bats
+              touch $out
+            '';
+
+          worktree-match-integration-tests =
+            pkgs.runCommand "worktree-match-integration-tests" {
+              # Uses the pinned next-3.8 tmux (mkTmux), not pkgs.tmux: the whole
+              # point is whether the shipped tmux reports window options on pane
+              # rows, so it must be the version production runs.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnugrep (mkTmux pkgs)];
+              # Without a UTF-8 locale tmux substitutes "_" for the literal tab in
+              # the -F format (same reason reflow-fanout-tests sets this): the
+              # sandbox's stripped env defaults to C/POSIX, which would silently
+              # break the very \t split this test pins.
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR
+              bats tests/worktree-match-integration.bats
+              touch $out
+            '';
+
           agent-detect-arm-tests =
             pkgs.runCommand "agent-detect-arm-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
