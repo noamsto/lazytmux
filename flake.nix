@@ -297,6 +297,35 @@
               touch $out
             '';
 
+          worktree-match-tests =
+            pkgs.runCommand "worktree-match-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk pkgs.gnugrep];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/worktree-match.bats
+              touch $out
+            '';
+
+          worktree-match-integration-tests =
+            pkgs.runCommand "worktree-match-integration-tests" {
+              # mkTmux, not pkgs.tmux: assert against the tmux that actually ships.
+              # No version divergence is known here (both report window options on
+              # pane rows); the derivation is already built for the m2 check anyway.
+              # Deliberately no LANG/LC_ALL: the sandbox's stripped locale is the
+              # hostile case. tmux rewrites non-printable bytes to "_" without
+              # UTF-8, which is why the -F format is "|"-delimited rather than
+              # tab-delimited — pinning a UTF-8 locale here would hide a
+              # regression back to a tab everywhere except the one test that
+              # overrides the locale itself.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk (mkTmux pkgs)];
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR
+              bats tests/worktree-match-integration.bats
+              touch $out
+            '';
+
           agent-detect-arm-tests =
             pkgs.runCommand "agent-detect-arm-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

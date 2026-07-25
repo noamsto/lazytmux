@@ -11,6 +11,7 @@
 #   tmux-reconcile-window <target> <worktree> <branch>  # explicit (post-switch nav)
 # <target> is any tmux target; the creation hooks pass #{window_id} (globally
 # unique), which sidesteps both numeric-session ambiguity and $-reexpansion.
+# Explicit mode trusts its caller to name a worktree a pane is in, or moving to.
 set -uo pipefail
 
 target="${1:-}"
