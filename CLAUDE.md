@@ -105,6 +105,12 @@ layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
 - Storage: `$XDG_DATA_HOME/tmux-remux/state.db` + scrollbacks dir.
 - `restoreMode` defaults to `"off"` (manual `prefix + R` only). Set to `"auto"`
   to apply the smart filter on tmux server start.
+- Restored windows already get `@worktree`/`@branch`/`@issue_*` from the
+  ordinary `after-new-window`/`after-new-session` creation hooks — tmux-remux's
+  restore/undo/pick all create windows via `new-window -c`/`new-session -c`
+  with the historical cwd, so the hook's cwd read never races an async `cd`
+  (#100). This depends on tmux-remux continuing to pass `-c` at creation; if a
+  future tmux-remux bump stops doing that, this would need revisiting.
 
 ### PR + Issue Enrichment
 
