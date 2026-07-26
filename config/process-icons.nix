@@ -8,7 +8,7 @@
   # Custom / project-specific
   claude = "🧠";
   codex = "🤖";
-  "cursor-agent" = "👆";
+  "cursor-agent" = "🧊";
   opencode = "🧠";
   amp = "⚡";
   nh = "❄";
