@@ -91,6 +91,18 @@
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
+      # Issue #100 asked for a reconcile-all sweep here, on the premise that a
+      # restored window has no @worktree until the user navigates into it. That
+      # premise doesn't hold for the currently pinned tmux-remux: restore/undo/
+      # pick all build their plan via the same restore.Apply (internal/restore/
+      # apply.go), which passes -c <historical cwd> directly to new-session/
+      # new-window/split-window — so the after-new-window[10]/after-new-session[10]
+      # creation hooks (config/tmux.conf.nix) already tag every restored window
+      # correctly, synchronously, with no async cd to race. Verified empirically
+      # (isolated tmux server, real tmux-remux save/restore, tag present
+      # immediately), not just by reading source. No sweep added. If a future
+      # tmux-remux bump ever stops passing -c at creation, this would need
+      # revisiting (see CLAUDE.md's Persist section).
       ${lib.optionalString (cfg.persist.restoreMode == "auto") ''
         run-shell -b '${tmuxStateBin} restore --auto'
       ''}
