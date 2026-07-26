@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+bats_require_minimum_version 1.5.0
+
 # A fake `tmux` driven by env vars. It logs `display-popup` invocations to
 # $POPUP_LOG so the test can assert whether the splash would have opened.
 setup() {
@@ -13,6 +15,12 @@ setup() {
 		last_arg() { eval "echo \"\${$#}\""; }
 		case "$1" in
 		show-option) echo "${FAKE_SHOWN:-}";;
+		show-environment)
+			case "${FAKE_SSH:-unset}" in
+			set) echo "SSH_CONNECTION=1.2.3.4 1111 5.6.7.8 22";;
+			unset) echo "-SSH_CONNECTION";;
+			error) exit 1;;
+			esac;;
 		display-message)
 			fmt="$(last_arg "$@")"
 			case "$fmt" in
@@ -22,13 +30,21 @@ setup() {
 			'#{pane_current_command}') echo "${FAKE_CMD:-fish}";;
 			esac;;
 		set-option) ;;
-		display-popup) echo "called" >>"$POPUP_LOG";;
+		display-popup) echo "$*" >>"$POPUP_LOG";;
 		esac
 	EOF
 	chmod +x "$STUBDIR/tmux"
 	PATH="$STUBDIR:$PATH"
 	GATE="$STUBDIR/gate.sh"
-	sed 's#@tmux_splash@#/bin/true#' scripts/tmux-splash-maybe.sh >"$GATE"
+	mkgate full
+}
+
+# mkgate <remote-mode>: (re)generate $GATE with the given @splash_remote@
+# baked in. Runs from the test body (not setup()), since a per-test env var
+# prefix on `run` can't reach a substitution already done in setup().
+mkgate() {
+	sed -e 's#@tmux_splash@#/bin/true#' -e "s#@splash_remote@#$1#" \
+		scripts/tmux-splash-maybe.sh >"$GATE"
 	chmod +x "$GATE"
 }
 
@@ -56,4 +72,61 @@ teardown() { rm -rf "$STUBDIR"; }
 	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=nvim run bash "$GATE" s
 	[ "$status" -eq 0 ]
 	[ ! -s "$POPUP_LOG" ]
+}
+
+@test "remote attach with mode=skip does not open the popup" {
+	mkgate skip
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=set \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ ! -s "$POPUP_LOG" ]
+}
+
+@test "remote attach with mode=static opens the popup with --static" {
+	mkgate static
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=set \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ -s "$POPUP_LOG" ]
+	grep -q -- '--static' "$POPUP_LOG"
+}
+
+@test "remote attach with mode=full opens the popup without --static" {
+	mkgate full
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=set \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ -s "$POPUP_LOG" ]
+	run ! grep -q -- '--static' "$POPUP_LOG"
+}
+
+@test "local (removal-marker) attach with mode=skip still opens the normal popup" {
+	mkgate skip
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=unset \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ -s "$POPUP_LOG" ]
+	run ! grep -q -- '--static' "$POPUP_LOG"
+}
+
+@test "show-environment lookup error with mode=skip is treated as local, opens the normal popup" {
+	mkgate skip
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=error \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ -s "$POPUP_LOG" ]
+	run ! grep -q -- '--static' "$POPUP_LOG"
+}
+
+@test "skip mode does not set @splash_shown, so a later local attach still gets the splash" {
+	mkgate skip
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=set \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ ! -s "$POPUP_LOG" ]
+
+	FAKE_SHOWN="" FAKE_WINDOWS=1 FAKE_PANES=1 FAKE_CMD=fish FAKE_SSH=unset \
+		run bash "$GATE" s
+	[ "$status" -eq 0 ]
+	[ -s "$POPUP_LOG" ]
 }

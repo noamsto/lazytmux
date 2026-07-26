@@ -21,6 +21,7 @@ type model struct {
 	tips          []tip
 	prefix        string
 	timeoutSec    int
+	static        bool
 	gradient      []string
 	frame         int
 	width, height int
@@ -28,20 +29,27 @@ type model struct {
 	small         artGrid   // single static frame for small viewports
 }
 
-func newModel(theme string, tips []tip, prefix string, timeoutSec int) model {
+func newModel(theme string, tips []tip, prefix string, timeoutSec int, static bool) model {
 	anchors, ok := gradientAnchors[theme]
 	if !ok {
 		anchors = gradientAnchors["dark"]
 	}
-	return model{
+	m := model{
 		theme:      theme,
 		tips:       tips,
 		prefix:     prefix,
 		timeoutSec: timeoutSec,
+		static:     static,
 		gradient:   buildGradient(anchors, 48),
 		deck:       loadDeck(),
 		small:      parseArt(catSmall),
 	}
+	if static {
+		// Past the dissolve-in threshold so colorizeArt renders the small
+		// frame fully resolved from the first paint, with no reveal noise.
+		m.frame = introFrames
+	}
+	return m
 }
 
 // deckStep is ticks per deck frame: 2 * 50ms = 100ms ≈ the source loop rate
@@ -66,6 +74,14 @@ func timeoutCmd(sec int) tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.static {
+		// No periodic redraw loop at all — the frame is frozen, so there is
+		// nothing for a tick to change.
+		if m.timeoutSec <= 0 {
+			return nil
+		}
+		return timeoutCmd(m.timeoutSec)
+	}
 	if m.timeoutSec <= 0 {
 		return frameCmd() // no auto-dismiss (on-demand launch)
 	}
@@ -181,12 +197,27 @@ func (m model) tipCell(t tip, keyOf func(tip) string, keyStyle, lblStyle lipglos
 	return lipgloss.JoinHorizontal(lipgloss.Top, key, "  ", label)
 }
 
+// selectedFrame is the artGrid render() will colorize this tick: the small
+// single-frame fallback in static mode (the bandwidth-light remote path),
+// otherwise the animated deck frame if it fits the popup, falling back to
+// the small frame.
+func (m model) selectedFrame() (artGrid, bool) {
+	if m.static {
+		return m.small, true
+	}
+	if cur := m.currentFrame(); fits(cur, m.width, m.height) {
+		return cur, true
+	}
+	if fits(m.small, m.width, m.height) {
+		return m.small, true
+	}
+	return artGrid{}, false
+}
+
 func (m model) render() string {
 	var blocks []string
-	if cur := m.currentFrame(); fits(cur, m.width, m.height) {
-		blocks = append(blocks, m.colorizeArt(cur))
-	} else if fits(m.small, m.width, m.height) {
-		blocks = append(blocks, m.colorizeArt(m.small))
+	if frame, ok := m.selectedFrame(); ok {
+		blocks = append(blocks, m.colorizeArt(frame))
 	}
 	wordmark := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("l a z y t m u x")
 	blocks = append(blocks, wordmark, "")
