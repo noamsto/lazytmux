@@ -1,0 +1,12 @@
+  Cursor Agent
+  v2026.07.23-e383d2b
+  Tip: Type ? in the prompt bar to show in-app hints.
+
+  Run ls -la in this directory, then say the word DONE_PROBE.
+
+ ⠘⠤ Working
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  → Add a follow-up                                     ctrl+c to stop
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  Cursor Grok 4.5 High
+  /tmp/scratch/cursorprobe
