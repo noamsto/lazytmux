@@ -36,6 +36,12 @@
   splashEnable ? true,
   splashTips ? [],
   splashTimeout ? 10,
+  # Behavior when the attaching client came in over ssh: "full" (default,
+  # unchanged animated splash), "static" (single already-resolved frame, no
+  # redraw loop — picker-splash-bin --static), or "skip" (no splash for that
+  # attach; a later local attach on the same server still gets it, since
+  # @splash_shown is left unset in that case).
+  splashRemote ? "full",
   # AI window naming (threaded from the home-manager module). When enabled, a
   # UserPromptSubmit hook nudges the pane's Claude to name fallback windows (no
   # tracked issue, on the default branch) for itself via `claude-status-update
@@ -193,7 +199,7 @@
 
   mkScriptSplash = name:
     pkgs.writeShellScriptBin name (
-      builtins.replaceStrings ["@tmux_splash@"] [picker-splash-bin]
+      builtins.replaceStrings ["@tmux_splash@" "@splash_remote@"] [picker-splash-bin splashRemote]
       (builtins.readFile ../scripts/${name}.sh)
     );
 

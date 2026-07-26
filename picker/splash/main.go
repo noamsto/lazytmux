@@ -14,7 +14,10 @@ func main() {
 	if slices.Contains(os.Args[1:], "--no-timeout") {
 		timeout = 0
 	}
-	m := newModel(detectTheme(), splashTips, splashPrefix, timeout)
+	// --static: single already-resolved frame, no periodic redraw (for
+	// bandwidth-light remote/SSH attaches).
+	static := slices.Contains(os.Args[1:], "--static")
+	m := newModel(detectTheme(), splashTips, splashPrefix, timeout, static)
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		os.Exit(1)
 	}

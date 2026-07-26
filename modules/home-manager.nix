@@ -129,6 +129,7 @@
     splashEnable = cfg.splash.enable;
     splashTips = cfg.splash.tips;
     splashTimeout = cfg.splash.timeout;
+    splashRemote = cfg.splash.remote;
     aiNamingEnable = cfg.aiNaming.enable;
     # Only stamp @remux_relaunch when tmux-remux is actually installed to read it.
     resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
@@ -451,6 +452,22 @@ in {
           }
         ];
         description = "Keybind cheatsheet shown in the welcome buffer. Empty = mascot only.";
+      };
+      remote = lib.mkOption {
+        type = lib.types.enum ["skip" "static" "full"];
+        default = "full";
+        description = ''
+          Behavior for the passive welcome-buffer splash when the attaching
+          tmux client came in over ssh: "full" shows the normal animated
+          splash (default, unchanged behavior); "static" shows a single
+          already-resolved frame with no periodic redraw (cheaper over a
+          slow link); "skip" shows nothing for that attach (a later local
+          attach on the same tmux server still gets the splash it never
+          got). Detected via SSH_CONNECTION in the session's environment
+          table (tmux's default `update-environment`), not this process's
+          own env. Does not affect the on-demand `prefix + C-Space` splash,
+          which always shows the full animated version.
+        '';
       };
     };
 
