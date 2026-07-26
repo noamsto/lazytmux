@@ -248,6 +248,17 @@
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
+  # Commands the pipe-pane sweep in tmux-update-icons watches for, derived from
+  # the same manifest dir agent-detect embeds via go:embed. The sweep filters on
+  # this list before agent-detect runs, so a hand-maintained copy that missed a
+  # manifest silently left it unscraped, with both sides looking correct alone.
+  agentCommands = let
+    dir = ../picker/agentdetect/manifest/manifests;
+    manifests = lib.filter (lib.hasSuffix ".toml") (builtins.attrNames (builtins.readDir dir));
+    commandsOf = f: (builtins.fromTOML (builtins.readFile (dir + "/${f}"))).match_commands;
+  in
+    lib.concatStringsSep " " (lib.unique (lib.concatMap commandsOf manifests));
+
   scriptNames = [
     "claude-status"
     "claude-status-update"
@@ -296,11 +307,12 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@issue_stamp@"])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@AGENT_COMMANDS@" "@issue_stamp@"])
       (iconSubstTo
         ++ [
           "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
           picker-agent-detect-bin
+          agentCommands
           (
             if enrichEnable
             then "${script.tmux-issue-stamp}/bin/tmux-issue-stamp"

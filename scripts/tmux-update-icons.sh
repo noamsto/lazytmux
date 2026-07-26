@@ -10,9 +10,10 @@ source @lib_icons@
 # shellcheck source=/dev/null
 source @lib_claude@
 
-# Known agent commands (must match the shipped manifests). TODO: derive from
-# `agent-detect --commands` once more agents land.
-AGENT_COMMANDS="claude codex"
+# Derived at build time from the shipped manifests' match_commands (agentCommands
+# in config/tmux.conf.nix), so a manifest can't ship without being swept.
+# ${AGENT_COMMANDS:-...} lets tests inject a list, same as AGENT_DETECT_BIN below.
+AGENT_COMMANDS="${AGENT_COMMANDS:-@AGENT_COMMANDS@}"
 # ${AGENT_DETECT_BIN:-...} lets tests inject a real path via env; Nix build
 # substitution still wins in the shipped script (no env var set at runtime).
 AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
