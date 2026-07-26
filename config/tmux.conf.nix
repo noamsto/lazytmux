@@ -753,6 +753,18 @@
     set-hook -g after-new-window[10]  'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
     set-hook -g after-new-session[10] 'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
 
+    # Post-#199 (issue #100): after-split-window / pane-focus-in reconcile hooks
+    # were considered here and deliberately NOT added. Since #199
+    # (tmux-worktree-match.sh), every `wt switch` already treats a stale
+    # @worktree tag as untrusted: it unsets a tag no pane corroborates and
+    # retags whichever window the switch actually lands on. The residual gap —
+    # a window's worktree changes via a raw split/focus/cd and is never
+    # `wt switch`ed into again — is real but narrow (wt switch is this repo's
+    # primary navigation path), while pane-focus-in fires on every pane focus
+    # change, the hottest per-interaction path in this config, and
+    # tmux-reconcile-window forks ~7 subprocesses even in its idempotent
+    # branch. Not worth it.
+
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
     set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id}"'
 
