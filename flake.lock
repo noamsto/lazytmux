@@ -9,11 +9,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1784625412,
-        "narHash": "sha256-cP3NukCNPFqbTI5dOJ+2FjQ9oUDKgWvV6v/xYQ65dpI=",
+        "lastModified": 1784809170,
+        "narHash": "sha256-l1f+yVSCHzLpTeC7F48li+F2Du41cS4YuN0gUzlZV8M=",
         "owner": "noamsto",
         "repo": "aeye",
-        "rev": "05de8813f61f3327b1df531b0de2e6332515154d",
+        "rev": "301326314d8bef09d6d002654574bf6303b4e68c",
         "type": "github"
       },
       "original": {
@@ -167,11 +167,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783008725,
-        "narHash": "sha256-jGiy6+sxjNWXSjp25uoJuNfyH9zBK1PEDY0lVoL4ibQ=",
+        "lastModified": 1784288435,
+        "narHash": "sha256-ReRHaLgr/uVqdD8afFSn+myXIfpHeOhP0yYe0TJqAA8=",
         "owner": "cachix",
         "repo": "git-hooks.nix",
-        "rev": "bca82caa46d5ec0f5d422c61fb1e30bc51313cbe",
+        "rev": "43b3c1ab9d40fb1dbb008f451988a91e375825e9",
         "type": "github"
       },
       "original": {
@@ -354,11 +354,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1784544295,
-        "narHash": "sha256-nW5c2IpPfSSJlb4BcKv68B2+rusB7rOIE9G502WtW2g=",
+        "lastModified": 1784744171,
+        "narHash": "sha256-b4va21fP4zja5kXrIVLH9PFxPpAuzdXi7BaiiO3I1IM=",
         "owner": "noamsto",
         "repo": "prdash",
-        "rev": "8290d6250accf1ef4413abe9eb523a7137cea71a",
+        "rev": "ebb118273248e6fc288076ec29ac9237091f9df9",
         "type": "github"
       },
       "original": {
