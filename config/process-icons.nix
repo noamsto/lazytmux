@@ -9,7 +9,7 @@
   claude = "🧠";
   codex = "🤖";
   "cursor-agent" = "🧊";
-  opencode = "🧠";
+  opencode = "🧩";
   amp = "⚡";
   nh = "❄";
   "process-compose" = "⚙";
