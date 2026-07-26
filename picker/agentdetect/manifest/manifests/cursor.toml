@@ -1,0 +1,33 @@
+id = "cursor"
+match_commands = ["cursor-agent"]
+
+[[rules]]
+# Anchored on the braille spinner, not "ctrl+c to stop": cursor keeps that bar in
+# the input line for any active turn, including while it waits on an approval
+# decision and on reject-feedback text, so keying on it would report busy for two
+# states where the human is the one being waited on. last_lines:8 — the spinner
+# sits 6 non-empty lines above the cwd footer, leaving headroom for a wrapped path.
+state = "processing"
+priority = 100
+region = "last_lines:8"
+regex = '[\x{2800}-\x{28FF}]+ working'
+
+[[rules]]
+# Both user-turn prompts: the approval list ("→ Proceed (y)") and the
+# reject-feedback prompt cursor drops into after n/esc ("Tell the agent what to do
+# instead"). Neither renders a spinner, so processing above can't shadow them.
+state = "waiting"
+priority = 80
+region = "last_lines:8"
+regex = 'proceed \(y\)|what to do instead'
+
+[[rules]]
+# Lowest priority because the "→" input arrow is always present — the approval
+# prompt renders its own "→ Proceed (y)" and would otherwise read as idle. The
+# placeholder text is unusable as a marker: it differs between a fresh session
+# ("Plan, search, build anything") and a used one ("Add a follow-up"), and
+# vanishes once the user types.
+state = "idle"
+priority = 10
+region = "last_lines:6"
+contains = ["→"]

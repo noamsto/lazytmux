@@ -1,0 +1,17 @@
+  Create a file at /home/noams/probe-outside-workspace.txt containing the word hello
+
+  Creating that file now.
+
+    Editing probe-outside-workspace.txt
+
+────────────────────────────────────────────────────────────────────────
+ /home/noams/probe-outside-workspace.txt
+ ──────────────────────────────────────────────────────────────────────
+  hello
+
+ Write to this file?
+ in /home/noams/probe-outside-workspace.txt
+  → Proceed (y)
+    Reject & propose changes (esc or n or p)
+    Add Write(/home/...) to allowlist? (tab)
+    Run Everything (shift+tab)

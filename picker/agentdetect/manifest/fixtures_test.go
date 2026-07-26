@@ -1,7 +1,8 @@
-// Fixtures under testdata/ mirror real Claude/Codex TUI output — the idle/working
-// layouts (Claude's ❯ prompt box + trailing status lines, Codex's › prompt and
-// "Working (Ns • esc to interrupt)" line) were verified against live panes during
-// the task-12 smoke, then trimmed to representative form here.
+// Fixtures under testdata/ mirror real Claude/Codex/Cursor TUI output — the
+// idle/working layouts (Claude's ❯ prompt box + trailing status lines, Codex's ›
+// prompt and "Working (Ns • esc to interrupt)" line, Cursor's block-bar input and
+// braille "Working" line) were verified against live panes, then trimmed to
+// representative form here.
 package manifest
 
 import (
@@ -33,6 +34,10 @@ func TestFixtures(t *testing.T) {
 		{"claude_permission.txt", "claude", "waiting"},
 		{"codex_working.txt", "codex", "processing"},
 		{"codex_idle.txt", "codex", "idle"},
+		{"cursor_working.txt", "cursor-agent", "processing"},
+		{"cursor_idle.txt", "cursor-agent", "idle"},
+		{"cursor_permission.txt", "cursor-agent", "waiting"},
+		{"cursor_reject_feedback.txt", "cursor-agent", "waiting"},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
