@@ -521,14 +521,16 @@ in {
         default = false;
         description = ''
           Drive the tmux status line from Codex's native hooks (processing /
-          waiting / done / compacting / idle), giving Codex panes the same state
-          palette as Claude instead of the two states the screen-scraper
-          (agent-detect) can infer. When on, home-manager activation
+          waiting / done / compacting / idle) instead of the two states the
+          screen-scraper (agent-detect) can infer. Not full parity with Claude:
+          error, denied and interrupted have no codex hook event to hang off, so
+          they stay unreachable this way (#158). When on, home-manager activation
           idempotently appends `[[hooks.*]]` blocks to `~/.codex/config.toml`
-          (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Notification,
-          Stop, PreCompact) that call `claude-status-update <state>`, keyed off
-          the pane's $TMUX_PANE — no hook payload is parsed. Requires
-          claudeIntegration.enable (asserted): the hooks reference
+          (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
+          PermissionRequest, Stop, PreCompact, PostCompact) that call
+          `claude-status-update <state>`, keyed off the pane's $TMUX_PANE — no
+          hook payload is parsed. Requires claudeIntegration.enable (asserted):
+          the hooks reference
           claude-status-update by its rebuild-stable profile path so codex's hook
           trust survives lazytmux bumps.
 
@@ -791,10 +793,24 @@ in {
           # Idempotently append codex status-line hook blocks to config.toml.
           # Mirrors provisionCodexResumeHook (marker-guarded append, same one-time
           # /hooks trust caveat — see that block and the codexStatus.enable doc).
-          # One [[hooks.<event>]] entry per state, mirroring hooks.json; codex
-          # resolves the pane from $TMUX_PANE so the commands carry no payload.
-          # The prompt/transcript-parsing enrichments (task label, naming,
-          # interrupt) are deferred until codex's payload shape is confirmed (#158).
+          # One [[hooks.<event>]] entry per state; codex resolves the pane from
+          # $TMUX_PANE so the commands carry no payload. NOT a copy of hooks.json:
+          # codex ships 10 hook events and Claude Code's Notification/StopFailure/
+          # PermissionDenied/SessionEnd are not among them, so `waiting` comes from
+          # PermissionRequest here and error/denied/interrupted have no hook source
+          # at all (#158 tracks reaching those by other means). An event name codex
+          # doesn't know is accepted silently by config parsing and simply never
+          # fires, so every entry below is checked against codex's own embedded
+          # per-event schemas; SessionStart, UserPromptSubmit, PreToolUse,
+          # PermissionRequest and Stop were additionally watched firing on a live
+          # pane.
+          #
+          # Every command redirects stdout: codex parses hook stdout, and anything
+          # non-JSON marks the hook failed with a visible TUI error ("hook returned
+          # invalid stop hook JSON output"), while UserPromptSubmit stdout is
+          # injected into the model's context. claude-status-update is silent on the
+          # state path today; the redirect keeps a future stray echo from surfacing
+          # in every codex turn.
           provisionCodexStatusHooks = lib.mkIf cfg.codexStatus.enable (
             lib.hm.dag.entryAfter ["writeBoundary"] (
               let
@@ -811,54 +827,61 @@ in {
 
                   [[hooks.SessionStart.hooks]]
                   type = "command"
-                  command = "${csu} cleanup"
+                  command = "${csu} cleanup >/dev/null"
                   timeout = 30
 
                   [[hooks.SessionStart.hooks]]
                   type = "command"
-                  command = "${csu} idle"
+                  command = "${csu} idle >/dev/null"
                   timeout = 30
 
                   [[hooks.UserPromptSubmit]]
 
                   [[hooks.UserPromptSubmit.hooks]]
                   type = "command"
-                  command = "${csu} processing --force"
+                  command = "${csu} processing --force >/dev/null"
                   timeout = 30
 
                   [[hooks.PreToolUse]]
 
                   [[hooks.PreToolUse.hooks]]
                   type = "command"
-                  command = "${csu} processing"
+                  command = "${csu} processing >/dev/null"
                   timeout = 30
 
                   [[hooks.PostToolUse]]
 
                   [[hooks.PostToolUse.hooks]]
                   type = "command"
-                  command = "${csu} processing"
+                  command = "${csu} processing >/dev/null"
                   timeout = 30
 
-                  [[hooks.Notification]]
+                  [[hooks.PermissionRequest]]
 
-                  [[hooks.Notification.hooks]]
+                  [[hooks.PermissionRequest.hooks]]
                   type = "command"
-                  command = "${csu} waiting"
+                  command = "${csu} waiting >/dev/null"
                   timeout = 30
 
                   [[hooks.Stop]]
 
                   [[hooks.Stop.hooks]]
                   type = "command"
-                  command = "${csu} done"
+                  command = "${csu} done >/dev/null"
                   timeout = 30
 
                   [[hooks.PreCompact]]
 
                   [[hooks.PreCompact.hooks]]
                   type = "command"
-                  command = "${csu} compacting"
+                  command = "${csu} compacting >/dev/null"
+                  timeout = 30
+
+                  [[hooks.PostCompact]]
+
+                  [[hooks.PostCompact.hooks]]
+                  type = "command"
+                  command = "${csu} processing >/dev/null"
                   timeout = 30
                 '';
               in ''
@@ -868,6 +891,13 @@ in {
                 touch "$CONFIG"
                 if ! grep -qF "$MARKER" "$CONFIG"; then
                   printf '\n%s' ${lib.escapeShellArg hookBlock} >>"$CONFIG"
+                elif grep -qF '[[hooks.Notification]]' "$CONFIG"; then
+                  # Append-once by design (codex hashes the config for hook trust,
+                  # so rewriting it would re-prompt), so a block written before the
+                  # Notification→PermissionRequest fix can't be corrected in place.
+                  # Removing it stays the user's call — lazytmux does not own this file.
+                  echo "lazytmux: ~/.codex/config.toml has a stale lazytmux hook block ([[hooks.Notification]] is not a codex event, so 'waiting' never fires)." >&2
+                  echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch to get the corrected one." >&2
                 fi
               ''
             )
