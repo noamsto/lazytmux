@@ -111,8 +111,7 @@
     merged = "󰘭"; # nerd: nf-md-source-merge (U+F062D)
     closed = "󰅖"; # nerd: nf-md-close-circle-outline (U+F0156) — closed/superseded PR
     conflict = "󰀦"; # nerd: nf-md-alert (U+F0026) — swap for preferred conflict glyph
-    # The only non-Material glyph: MD has no draft-PR icon. Prepended to the
-    # check-state glyph, never replacing it (draft PRs still run checks).
+    # The only non-Material glyph in this set: MD has no draft-PR icon.
     draft = ""; # nerd: nf-cod-git_pull_request_draft (U+EBDB) — swap for preferred draft glyph
   };
   enrichIconSet = enrichIconDefaults // enrichIcons;

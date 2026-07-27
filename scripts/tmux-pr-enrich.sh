@@ -99,8 +99,7 @@ write_pr_options() {
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
 	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
-	# "1" when the PR is a draft, else empty — a marker prepended to the badge
-	# glyph, never a state of its own (draft PRs still run checks).
+	# "1"/empty — an additive badge marker, not a state of its own.
 	tmux set-option -t "$1" -w @pr_draft "${9:-}"
 	# Tags the branch this PR data describes so displays can hide it once the
 	# pane cd's to a different branch (no wt switch re-stamps @pr_*). Mirrors
