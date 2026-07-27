@@ -27,6 +27,7 @@ func main() {
 	flag.StringVar(&c.icMerged, "icon-merged", "", "")
 	flag.StringVar(&c.icClosed, "icon-closed", "", "")
 	flag.StringVar(&c.icConflict, "icon-conflict", "", "")
+	flag.StringVar(&c.icDraft, "icon-draft", "", "")
 	flag.Parse()
 
 	w := readWindowState(c.target)

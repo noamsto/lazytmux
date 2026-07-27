@@ -107,13 +107,13 @@ has_zoom=0
 # window option in the template, so only the name is pulled here (for width).
 # @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
 # window_name containing '|' is no worse off here than at the very end.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge ibranch crew wai bridge wname bname wtask; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge prdraft ibranch crew wai bridge wname bname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays
@@ -151,10 +151,10 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	# instead — the stamp stays on the window and reappears on cd back.
 	if [[ -n $iid && $ibranch != "$branch" ]]; then
 		iprov="" iid="" ititle=""
-		prnum="" prstate="" prcheck="" prmerge=""
+		prnum="" prstate="" prcheck="" prmerge="" prdraft=""
 	fi
 
-	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai"
+	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
 	win_short[$idx]="$REPLY"
 	win_id[$idx]="$REPLY_ID"
 	win_rest_short[$idx]="$REPLY_REST"
@@ -184,7 +184,7 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 
 	# Long mode only changes the remainder (title / full branch); the id and PR
 	# segments are mode-independent.
-	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai"
+	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
 	win_rest_long[$idx]="$REPLY_REST"
 	measure_display_width "$REPLY"
 	win_long_dw[$idx]=$REPLY_DW

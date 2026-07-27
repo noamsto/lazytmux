@@ -21,6 +21,7 @@ ENRICH_ICON_FAILURE="@enrich_icon_failure@"
 ENRICH_ICON_MERGED="@enrich_icon_merged@"
 ENRICH_ICON_CLOSED="@enrich_icon_closed@"
 ENRICH_ICON_CONFLICT="@enrich_icon_conflict@"
+ENRICH_ICON_DRAFT="@enrich_icon_draft@"
 
 # branch_to_linear_key BRANCH
 # Extracts a Linear issue key (TEAM-123) from a branch name.
@@ -190,7 +191,8 @@ parse_explicit_issue_id() {
 }
 
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
-#                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE] [TASK] [AI_NAME]
+#                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE] [TASK] \
+#                    [AI_NAME] [PR_DRAFT]
 # MODE is "short" or "long". Composes the text-only window label (no color, no
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
@@ -214,7 +216,7 @@ parse_explicit_issue_id() {
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
-	local pr_mergeable="${10:-}" task="${11:-}" ai_name="${12:-}"
+	local pr_mergeable="${10:-}" task="${11:-}" ai_name="${12:-}" pr_draft="${13:-}"
 	local provider_icon pr_glyph=""
 	REPLY=""
 	REPLY_ID=""
@@ -280,6 +282,13 @@ build_window_label() {
 			pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
 			*) pr_glyph="$ENRICH_ICON_SUCCESS" ;;
 			esac
+		fi
+		# Draft is orthogonal to check state — a draft PR still runs CI — so it
+		# prepends its own glyph instead of winning the state glyph. gh clears
+		# isDraft on merge, and on a closed PR the closed glyph already says
+		# "dead", so terminal states carry no draft marker.
+		if [[ $pr_draft == 1 && $pr_state != "merged" && $pr_state != "closed" ]]; then
+			pr_glyph="${ENRICH_ICON_DRAFT} ${pr_glyph}"
 		fi
 		REPLY_PR=" ${pr_glyph} #${pr_number}"
 	fi

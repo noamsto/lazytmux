@@ -16,6 +16,7 @@ type cfg struct {
 	target, prEnrichBin string
 	fg, mauve, red, green, peach, blue, overlay0, subtext0 string
 	icLinear, icGitHub, icPending, icSuccess, icFailure, icMerged, icClosed, icConflict string
+	icDraft                                                                            string
 }
 
 type model struct {
@@ -113,7 +114,11 @@ func (m model) prBlock() string {
 		return m.sty(c.peach).Render("⧗ #" + w.prNumber + " refreshing…")
 	}
 	cr, gr := enrichstate.Classify(w.prState, w.prCheck, w.prMergeable)
-	badge := m.sty(m.colorFor(cr)).Render(m.glyphFor(gr) + " #" + w.prNumber)
+	glyph := m.glyphFor(gr)
+	if enrichstate.Draft(w.prState, w.prDraft) {
+		glyph = c.icDraft + " " + glyph
+	}
+	badge := m.sty(m.colorFor(cr)).Render(glyph + " #" + w.prNumber)
 	title := m.sty(c.fg).Render(truncate(w.prTitle, m.titleWidth()))
 	return lipgloss.JoinVertical(lipgloss.Left, badge, title)
 }

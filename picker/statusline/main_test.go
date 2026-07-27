@@ -154,6 +154,28 @@ func TestPRBadgeClosedWinsOverStaleCheck(t *testing.T) {
 	}
 }
 
+func TestPRBadgeDraftPrependsGlyph(t *testing.T) {
+	a := args{
+		prNumber: "42", branch: "x", prBranch: "x", prState: "open", prCheck: "pending",
+		prDraft: "1", thmPeach: "#fa0", iconPending: "PD", iconDraft: "DR", prTitle: "T",
+	}
+	want := "#[fg=#fa0]DR PD #42 T  "
+	if got := prBadge(a); got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestPRBadgeMergedDropsDraftMarker(t *testing.T) {
+	a := args{
+		prNumber: "42", branch: "x", prBranch: "x", prState: "merged", prCheck: "success",
+		prDraft: "1", thmMauve: "#c6f", iconMerged: "MG", iconDraft: "DR", prTitle: "T",
+	}
+	want := "#[fg=#c6f]MG #42 T  "
+	if got := prBadge(a); got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestLastGoodRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if _, ok := readLastGood(dir, "work"); ok {

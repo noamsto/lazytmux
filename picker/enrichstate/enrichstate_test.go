@@ -27,3 +27,24 @@ func TestClassify(t *testing.T) {
 		})
 	}
 }
+
+func TestDraft(t *testing.T) {
+	cases := []struct {
+		name         string
+		state, draft string
+		want         bool
+	}{
+		{"open draft is marked", "open", "1", true},
+		{"open non-draft is not", "open", "", false},
+		{"merged draft drops the marker", "merged", "1", false},
+		{"closed draft drops the marker", "closed", "1", false},
+		{"unset draft option is not", "open", "0", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Draft(c.state, c.draft); got != c.want {
+				t.Errorf("Draft(%q,%q) = %v, want %v", c.state, c.draft, got, c.want)
+			}
+		})
+	}
+}

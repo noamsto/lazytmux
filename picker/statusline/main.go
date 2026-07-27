@@ -39,7 +39,7 @@ var volatileFields = []string{
 	"#{client_prefix}",
 	"#{@issue_id}", "#{@issue_branch}", "#{@issue_provider}", "#{@issue_title}",
 	"#{@branch}", "#{pane_current_path}", "#{@git_root}",
-	"#{@pr_number}", "#{@pr_branch}", "#{@pr_state}", "#{@pr_check_state}", "#{@pr_mergeable}", "#{@pr_title}",
+	"#{@pr_number}", "#{@pr_branch}", "#{@pr_state}", "#{@pr_check_state}", "#{@pr_mergeable}", "#{@pr_title}", "#{@pr_draft}",
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
 	"#{@bridge_win}",
@@ -65,9 +65,10 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.issueID, a.issueBranch, a.issueProvider, a.issueTitle = f[1], f[2], f[3], f[4]
 	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]
 	a.prNumber, a.prBranch, a.prState, a.prCheck, a.prMergeable, a.prTitle = f[8], f[9], f[10], f[11], f[12], f[13]
-	a.paneIcon, a.paneCmd, a.claudeFg = f[14], f[15], f[16]
-	a.crewName, a.crewColor = f[17], f[18]
-	a.bridgeWin = f[19]
+	a.prDraft = f[14]
+	a.paneIcon, a.paneCmd, a.claudeFg = f[15], f[16], f[17]
+	a.crewName, a.crewColor = f[18], f[19]
+	a.bridgeWin = f[20]
 	return f[0] == "1", true
 }
 
@@ -115,6 +116,7 @@ type args struct {
 	issueID, issueBranch, issueProvider, issueTitle            string
 	branch, panePath, gitRoot                                  string
 	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
+	prDraft                                                    string
 	paneIcon, paneCmd, claudeFg                                string
 	crewName, crewColor                                        string
 	bridgeWin                                                  string
@@ -126,6 +128,7 @@ type args struct {
 	// glyphs (tmux @icon_* options + Nix enrich icon set)
 	iconSession, iconBranch, iconDir                                                                    string
 	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconClosed, iconConflict string
+	iconDraft                                                                                           string
 }
 
 // branchDisplay mirrors tmux-branch-display.sh: prefer the cached @branch,
@@ -235,6 +238,10 @@ func prBadge(a args) string {
 		enrichstate.GlyphSuccess:  a.iconSuccess,
 	}[gr]
 
+	if enrichstate.Draft(a.prState, a.prDraft) {
+		glyph = a.iconDraft + " " + glyph
+	}
+
 	return "#[fg=" + color + "]" + glyph + " #" + a.prNumber + " " + a.prTitle + "  "
 }
 
@@ -292,6 +299,7 @@ func main() {
 	flag.StringVar(&a.iconMerged, "icon-merged", "", "")
 	flag.StringVar(&a.iconClosed, "icon-closed", "", "")
 	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
+	flag.StringVar(&a.iconDraft, "icon-draft", "", "")
 	flag.Parse()
 
 	prefixActive, ok := a.fetchVolatile()

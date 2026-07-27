@@ -13,6 +13,7 @@ setup_lib_enrich() {
 		-e 's/@enrich_icon_merged@/M/g' \
 		-e 's/@enrich_icon_closed@/X/g' \
 		-e 's/@enrich_icon_conflict@/C/g' \
+		-e 's/@enrich_icon_draft@/D/g' \
 		scripts/lib-enrich.sh >"$tmp"
 	# shellcheck source=/dev/null
 	source "$tmp"

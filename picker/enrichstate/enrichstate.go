@@ -61,3 +61,10 @@ func Classify(state, check, mergeable string) (ColorRole, GlyphRole) {
 	}
 	return color, glyph
 }
+
+// Draft reports whether the badge should carry the draft marker ahead of the
+// state glyph. Draft is orthogonal to check state, so it never wins a role from
+// Classify; terminal states carry no marker. Mirrors build_window_label's rule.
+func Draft(state, draft string) bool {
+	return draft == "1" && state != "merged" && state != "closed"
+}

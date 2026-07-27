@@ -6,7 +6,7 @@
 #                           TTL); D is a checkout dir giving gh its repo context
 #   --mock-* ...            write mock @pr_* options directly (no gh), for tests
 # Always exits 0. Writes @pr_number @pr_title @pr_state @pr_check_state @pr_url
-# @pr_mergeable @pr_branch.
+# @pr_mergeable @pr_draft @pr_branch.
 #
 # gh resolves the repo from its cwd, and this poller's own cwd is the tmux
 # server's (usually not a repo at all) — so every gh call must run inside a
@@ -32,7 +32,7 @@ TTL_TERMINAL=3600
 # --- arg parse ---
 mode="tick"
 target="" branch="" dir="" force=0
-mock_number="" mock_state="" mock_check="" mock_title="" mock_url="" mock_mergeable=""
+mock_number="" mock_state="" mock_check="" mock_title="" mock_url="" mock_mergeable="" mock_draft=""
 while (($#)); do
 	case "$1" in
 	--tick) mode="tick" ;;
@@ -75,6 +75,10 @@ while (($#)); do
 		mock_mergeable="$2"
 		shift
 		;;
+	--mock-draft)
+		mock_draft="$2"
+		shift
+		;;
 	*) ;;
 	esac
 	shift
@@ -82,25 +86,27 @@ done
 
 # --- helper definitions (defined before any code path calls them) ---
 
-# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH
+# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH [DRAFT]
 write_pr_options() {
 	# Only the glyph-driving options (@pr_number/@pr_state/@pr_check_state/
-	# @pr_mergeable) are captured before writing so we can skip the
+	# @pr_mergeable/@pr_draft) are captured before writing so we can skip the
 	# (cache-bypassing) reflow when unchanged.
 	local prev
-	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}')
+	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}')
 	tmux set-option -t "$1" -w @pr_number "$2"
 	tmux set-option -t "$1" -w @pr_title "$3"
 	tmux set-option -t "$1" -w @pr_state "$4"
 	tmux set-option -t "$1" -w @pr_check_state "$5"
 	tmux set-option -t "$1" -w @pr_url "$6"
 	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
+	# "1"/empty — an additive badge marker, not a state of its own.
+	tmux set-option -t "$1" -w @pr_draft "${9:-}"
 	# Tags the branch this PR data describes so displays can hide it once the
 	# pane cd's to a different branch (no wt switch re-stamps @pr_*). Mirrors
 	# @issue_branch.
 	tmux set-option -t "$1" -w @pr_branch "${8:-}"
-	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}"
-	if [[ $prev != "$2|$4|$5|${7:-}" ]]; then
+	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}" draft "${9:-}"
+	if [[ $prev != "$2|$4|$5|${7:-}|${9:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	fi
 }
@@ -156,10 +162,10 @@ fetch_branch_pr() {
 		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
 		local json
 		json="$(gh pr list --head "$b" --state open --limit 1 \
-			--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
+			--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
 		if [[ $json == "[]" || -z $json ]]; then
 			json="$(gh pr list --head "$b" --state all --limit 1 \
-				--json number,title,url,state,statusCheckRollup,mergeable 2>/dev/null)" || exit 0
+				--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
 		fi
 		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
 	)
@@ -183,11 +189,12 @@ apply_cache_to_target() {
 	# preserves empty fields — a tab/space delimiter would collapse them); the
 	# rollup stays compact JSON for collapse_check_rollup. PR titles are
 	# single-line, so newline-delimiting is safe.
-	local number title url state rollup mergeable
+	local number title url state rollup mergeable draft
 	{
 		IFS= read -r number
 		IFS= read -r state
 		IFS= read -r mergeable
+		IFS= read -r draft
 		IFS= read -r url
 		IFS= read -r rollup
 		IFS= read -r title
@@ -195,6 +202,7 @@ apply_cache_to_target() {
 		(.[0].number // "" | tostring),
 		(.[0].state // "" | ascii_downcase),
 		(.[0].mergeable // "" | ascii_downcase),
+		(if .[0].isDraft then "1" else "" end),
 		(.[0].url // ""),
 		((.[0].statusCheckRollup // []) | @json),
 		(.[0].title // "")
@@ -202,7 +210,7 @@ apply_cache_to_target() {
 	collapse_check_rollup "$rollup"
 	local check="$REPLY"
 	sanitize_title "$title"
-	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br"
+	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br" "$draft"
 }
 
 # enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
@@ -224,7 +232,7 @@ enrich_repo_group() {
 	local all_json head obj
 	if command -v gh >/dev/null 2>&1 &&
 		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
-			--json number,title,url,state,statusCheckRollup,mergeable,headRefName 2>/dev/null)" &&
+			--json number,title,url,state,statusCheckRollup,mergeable,isDraft,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
 		while IFS=$'\t' read -r head obj; do
 			[[ -n $head ]] && open_pr[$head]="$obj"
@@ -303,7 +311,7 @@ run_full_pass() {
 if [[ $mode == "mock" ]]; then
 	[[ -z $target ]] && exit 0
 	sanitize_title "$mock_title"
-	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable" "$branch"
+	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable" "$branch" "$mock_draft"
 	exit 0
 fi
 

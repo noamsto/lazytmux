@@ -269,6 +269,30 @@ setup() {
 	[ "$REPLY_PR" = " P #9" ]
 }
 
+@test "build_window_label: draft PR prepends the draft glyph, keeping check state" {
+	build_window_label short linear ENG-1 "t" 9 open success br /x mergeable "" "" 1
+	[ "$REPLY_PR" = " D S #9" ]
+	build_window_label short linear ENG-1 "t" 9 open pending br /x mergeable "" "" 1
+	[ "$REPLY_PR" = " D P #9" ]
+}
+
+@test "build_window_label: draft marker sits alongside the conflict glyph" {
+	build_window_label short linear ENG-1 "t" 9 open failure br /x conflicting "" "" 1
+	[ "$REPLY_PR" = " D C #9" ]
+}
+
+@test "build_window_label: terminal states carry no draft marker" {
+	build_window_label short linear ENG-1 "t" 9 merged success br /x mergeable "" "" 1
+	[ "$REPLY_PR" = " M #9" ]
+	build_window_label short linear ENG-1 "t" 9 closed success br /x mergeable "" "" 1
+	[ "$REPLY_PR" = " X #9" ]
+}
+
+@test "build_window_label: non-draft PR is unchanged" {
+	build_window_label short linear ENG-1 "t" 9 open success br /x mergeable "" "" ""
+	[ "$REPLY_PR" = " S #9" ]
+}
+
 @test "build_window_label: pr_number=none is treated as no PR" {
 	build_window_label short linear ENG-1 "t" none "" "" br /x
 	[ "$REPLY" = "L ENG-1" ]
