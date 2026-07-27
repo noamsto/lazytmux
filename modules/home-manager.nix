@@ -395,8 +395,9 @@ in {
         example = lib.literalExpression ''{ linear = "<glyph>"; github = "<glyph>"; }'';
         description = ''
           Override enrichment icon glyphs (keys: linear, github, pending,
-          success, failure, merged, closed, conflict). Unset keys fall back to
-          nerd-font defaults. Values must not contain '#' (tmux format escape).
+          success, failure, merged, closed, conflict, draft). Unset keys fall
+          back to nerd-font defaults. Values must not contain '#' (tmux format
+          escape).
         '';
       };
     };

@@ -10,6 +10,7 @@ import (
 type winState struct {
 	issueProvider, issueID, issueTitle, issueURL           string
 	prNumber, prTitle, prState, prCheck, prURL, prMergeable string
+	prDraft                                                string
 	branch, worktree, gitRoot                              string
 	task, claudeAgo, paneIcon                              string
 }
@@ -57,6 +58,8 @@ func parseWindowOptions(out string, w *winState) {
 			w.prURL = val
 		case "@pr_mergeable":
 			w.prMergeable = val
+		case "@pr_draft":
+			w.prDraft = val
 		case "@branch":
 			w.branch = val
 		case "@worktree":

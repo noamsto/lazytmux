@@ -18,6 +18,7 @@ func testCfg() cfg {
 		overlay0: "#6c7086", subtext0: "#a6adc8",
 		icLinear: "L", icGitHub: "G", icPending: "P", icSuccess: "S",
 		icFailure: "F", icMerged: "M", icClosed: "C", icConflict: "X",
+		icDraft: "D",
 	}
 }
 
@@ -51,6 +52,15 @@ func TestCardMergedGlyph(t *testing.T) {
 	out := render(m)
 	if !strings.Contains(out, "M #103") { // merged glyph wins over pending check
 		t.Errorf("expected merged glyph 'M #103'\n%s", out)
+	}
+}
+
+func TestCardDraftGlyph(t *testing.T) {
+	m := model{cfg: testCfg(), width: 60, height: 18, win: winState{
+		prNumber: "103", prState: "open", prCheck: "success", prDraft: "1", branch: "b"}}
+	out := render(m)
+	if !strings.Contains(out, "D S #103") { // draft marker ahead of the check glyph
+		t.Errorf("expected draft badge 'D S #103'\n%s", out)
 	}
 }
 

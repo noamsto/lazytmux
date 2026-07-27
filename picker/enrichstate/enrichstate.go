@@ -61,3 +61,12 @@ func Classify(state, check, mergeable string) (ColorRole, GlyphRole) {
 	}
 	return color, glyph
 }
+
+// Draft reports whether the badge should carry the draft marker ahead of the
+// state glyph. Draft is orthogonal to check state — a draft PR still runs CI —
+// so it never wins a role from Classify. gh clears isDraft on merge, and on a
+// closed PR the closed glyph already says "dead", so terminal states carry no
+// marker. Mirrors build_window_label's rule.
+func Draft(state, draft string) bool {
+	return draft == "1" && state != "merged" && state != "closed"
+}
