@@ -202,6 +202,12 @@
     exit 1
   '';
 in {
+  imports = [
+    (lib.mkRenamedOptionModule
+      ["programs" "lazytmux" "claudeIntegration" "enable"]
+      ["programs" "lazytmux" "agentIntegration" "enable"])
+  ];
+
   options.programs.lazytmux = {
     enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";
 
@@ -529,7 +535,7 @@ in {
           (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
           PermissionRequest, Stop, PreCompact, PostCompact) that call
           `claude-status-update <state>`, keyed off the pane's $TMUX_PANE — no
-          hook payload is parsed. Requires claudeIntegration.enable (asserted):
+          hook payload is parsed. Requires agentIntegration.enable (asserted):
           the hooks reference
           claude-status-update by its rebuild-stable profile path so codex's hook
           trust survives lazytmux bumps.
@@ -542,16 +548,15 @@ in {
       };
     };
 
-    claudeIntegration = {
+    agentIntegration = {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = ''
           Expose claude-status-update and claude-status on PATH via
-          home.packages. Needed when Claude Code hooks (or any tool that
-          calls them by bare name) run in a shell that doesn't inherit the
-          tmux wrapper's PATH — e.g. a fish login shell, which resets PATH,
-          or a direnv-loaded devshell.
+          home.packages. Needed when agent hooks (Claude Code, Codex, OpenCode)
+          call them by bare name in a shell that doesn't inherit the tmux
+          wrapper's PATH — e.g. a fish login shell, or a direnv-loaded devshell.
         '';
       };
     };
@@ -685,12 +690,12 @@ in {
             Add it to your packages or set terminal.emulator = null and configure manually.
           '';
         }
-        ++ lib.optional (cfg.codexStatus.enable && !cfg.claudeIntegration.enable) {
+        ++ lib.optional (cfg.codexStatus.enable && !cfg.agentIntegration.enable) {
           assertion = false;
           message = ''
-            programs.lazytmux.codexStatus.enable requires claudeIntegration.enable:
+            programs.lazytmux.codexStatus.enable requires agentIntegration.enable:
             the codex hooks call claude-status-update by its rebuild-stable profile
-            path, which claudeIntegration installs. Without it the binary isn't on
+            path, which agentIntegration installs. Without it the binary isn't on
             the profile and codex would re-prompt for hook trust on every bump.
           '';
         };
@@ -700,7 +705,7 @@ in {
           [tmuxConfig.tmux-wrapped]
           ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
           ++ lib.optionals (cfg.persist.enable && cfg.persist.package != null) [cfg.persist.package]
-          ++ lib.optionals cfg.claudeIntegration.enable [
+          ++ lib.optionals cfg.agentIntegration.enable [
             tmuxConfig.script.claude-status-update
             tmuxConfig.script.claude-status
           ]
@@ -818,7 +823,7 @@ in {
                 # trust as a content hash over the config, so a store path that
                 # changes every lazytmux rebuild would force a fresh `/hooks` trust
                 # each bump. The profile path is rebuild-stable. Requires
-                # claudeIntegration.enable (asserted below) to put the binary there.
+                # agentIntegration.enable (asserted below) to put the binary there.
                 csu = "${config.home.profileDirectory}/bin/claude-status-update";
                 hookBlock = ''
                   # lazytmux-managed: codex status-line hooks
