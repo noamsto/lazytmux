@@ -534,12 +534,12 @@ in {
           they stay unreachable this way (#158). When on, home-manager activation
           idempotently appends `[[hooks.*]]` blocks to `~/.codex/config.toml`
           (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
-          PermissionRequest, Stop, PreCompact, PostCompact) that call
-          `claude-status-update <state>`, keyed off the pane's $TMUX_PANE — no
-          hook payload is parsed. Requires agentIntegration.enable (asserted):
-          the hooks reference
-          claude-status-update by its rebuild-stable profile path so codex's hook
-          trust survives lazytmux bumps.
+          Notification, Stop, PreCompact, SubagentStop) that call the
+          agent-agnostic lazytmux plugin `status.sh <state>` wrapper, keyed off
+          the pane's $TMUX_PANE — no codex hook payload is parsed. Requires
+          agentIntegration.enable (asserted): the wrapper needs
+          claude-status-update available from the rebuild-stable profile PATH so
+          codex's hook trust survives lazytmux bumps.
 
           Defaults to false, like `persist.resumeCodex` and for the same reasons:
           it mutates an EXTERNAL tool's config file, and codex requires a
@@ -695,9 +695,9 @@ in {
           assertion = false;
           message = ''
             programs.lazytmux.codexStatus.enable requires agentIntegration.enable:
-            the codex hooks call claude-status-update by its rebuild-stable profile
-            path, which agentIntegration installs. Without it the binary isn't on
-            the profile and codex would re-prompt for hook trust on every bump.
+            the codex hooks call the lazytmux plugin status.sh wrapper with the
+            rebuild-stable profile bin directory on PATH. agentIntegration installs
+            claude-status-update there; without it the wrapper intentionally no-ops.
           '';
         };
 
@@ -801,15 +801,9 @@ in {
           # /hooks trust caveat — see that block and the codexStatus.enable doc).
           # One [[hooks.<event>]] entry per state; codex resolves the pane from
           # $TMUX_PANE so the commands carry no payload. NOT a copy of hooks.json:
-          # codex ships 10 hook events and Claude Code's Notification/StopFailure/
-          # PermissionDenied/SessionEnd are not among them, so `waiting` comes from
-          # PermissionRequest here and error/denied/interrupted have no hook source
-          # at all (#158 tracks reaching those by other means). An event name codex
-          # doesn't know is accepted silently by config parsing and simply never
-          # fires, so every entry below is checked against codex's own embedded
-          # per-event schemas; SessionStart, UserPromptSubmit, PreToolUse,
-          # PermissionRequest and Stop were additionally watched firing on a live
-          # pane.
+          # this first #158 slice deliberately stays inside codex 0.144.1's
+          # verified event vocabulary and avoids task-label, interrupt, and
+          # Notification matcher parsing until live codex payloads are captured.
           #
           # Every command redirects stdout: codex parses hook stdout, and anything
           # non-JSON marks the hook failed with a visible TUI error ("hook returned
@@ -821,11 +815,12 @@ in {
             lib.hm.dag.entryAfter ["writeBoundary"] (
               let
                 # Stable profile path, NOT a /nix/store path: codex records hook
-                # trust as a content hash over the config, so a store path that
-                # changes every lazytmux rebuild would force a fresh `/hooks` trust
-                # each bump. The profile path is rebuild-stable. Requires
-                # agentIntegration.enable (asserted below) to put the binary there.
-                csu = "${config.home.profileDirectory}/bin/claude-status-update";
+                # trust as a content hash over the config. Keep the volatile
+                # claude-status-update dependency behind the rebuild-stable profile
+                # PATH; the status.sh store path only changes when the plugin
+                # wrapper itself changes.
+                status = "${../claude-plugin}/scripts/status.sh";
+                hookCommand = state: "PATH=${config.home.profileDirectory}/bin:$PATH ${status} ${state} >/dev/null";
                 hookBlock = ''
                   # lazytmux-managed: codex status-line hooks
                   [[hooks.SessionStart]]
@@ -833,61 +828,56 @@ in {
 
                   [[hooks.SessionStart.hooks]]
                   type = "command"
-                  command = "${csu} cleanup >/dev/null"
-                  timeout = 30
-
-                  [[hooks.SessionStart.hooks]]
-                  type = "command"
-                  command = "${csu} idle >/dev/null"
+                  command = "${hookCommand "idle"}"
                   timeout = 30
 
                   [[hooks.UserPromptSubmit]]
 
                   [[hooks.UserPromptSubmit.hooks]]
                   type = "command"
-                  command = "${csu} processing --force >/dev/null"
+                  command = "${hookCommand "processing"}"
                   timeout = 30
 
                   [[hooks.PreToolUse]]
 
                   [[hooks.PreToolUse.hooks]]
                   type = "command"
-                  command = "${csu} processing >/dev/null"
+                  command = "${hookCommand "processing"}"
                   timeout = 30
 
                   [[hooks.PostToolUse]]
 
                   [[hooks.PostToolUse.hooks]]
                   type = "command"
-                  command = "${csu} processing >/dev/null"
+                  command = "${hookCommand "processing"}"
                   timeout = 30
 
-                  [[hooks.PermissionRequest]]
+                  [[hooks.Notification]]
 
-                  [[hooks.PermissionRequest.hooks]]
+                  [[hooks.Notification.hooks]]
                   type = "command"
-                  command = "${csu} waiting >/dev/null"
+                  command = "${hookCommand "waiting"}"
                   timeout = 30
 
                   [[hooks.Stop]]
 
                   [[hooks.Stop.hooks]]
                   type = "command"
-                  command = "${csu} done >/dev/null"
+                  command = "${hookCommand "done"}"
                   timeout = 30
 
                   [[hooks.PreCompact]]
 
                   [[hooks.PreCompact.hooks]]
                   type = "command"
-                  command = "${csu} compacting >/dev/null"
+                  command = "${hookCommand "compacting"}"
                   timeout = 30
 
-                  [[hooks.PostCompact]]
+                  [[hooks.SubagentStop]]
 
-                  [[hooks.PostCompact.hooks]]
+                  [[hooks.SubagentStop.hooks]]
                   type = "command"
-                  command = "${csu} processing >/dev/null"
+                  command = "${hookCommand "processing"}"
                   timeout = 30
                 '';
               in ''
@@ -897,13 +887,6 @@ in {
                 touch "$CONFIG"
                 if ! grep -qF "$MARKER" "$CONFIG"; then
                   printf '\n%s' ${lib.escapeShellArg hookBlock} >>"$CONFIG"
-                elif grep -qF '[[hooks.Notification]]' "$CONFIG"; then
-                  # Append-once by design (codex hashes the config for hook trust,
-                  # so rewriting it would re-prompt), so a block written before the
-                  # Notification→PermissionRequest fix can't be corrected in place.
-                  # Removing it stays the user's call — lazytmux does not own this file.
-                  echo "lazytmux: ~/.codex/config.toml has a stale lazytmux hook block ([[hooks.Notification]] is not a codex event, so 'waiting' never fires)." >&2
-                  echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch to get the corrected one." >&2
                 fi
               ''
             )
