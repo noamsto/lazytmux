@@ -312,7 +312,8 @@ if [[ $state == "enrich" ]]; then
 	branch="$(git -C "$cwd" branch --show-current 2>/dev/null)" || branch=""
 	[[ -z $branch ]] && exit 0
 	tmux-issue-stamp "$target" "$worktree" "$branch" "$explicit_id" >/dev/null 2>&1 &
-	disown
+	# Instant stamps can finish before disown; under set -e that exits non-zero (#207).
+	disown 2>/dev/null || true
 	exit 0
 fi
 
