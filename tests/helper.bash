@@ -68,3 +68,45 @@ setup_claude_status_functions() {
 	source "$tmp"
 	rm -f "$tmp"
 }
+
+# Sources lib-notify.sh. Export LZTMUX_NOTIFY_DIR BEFORE calling: the dir
+# constants derive at source time. notify_prune needs acquire_lock/file_mtime,
+# so call setup_lib_log first when a test exercises it.
+setup_lib_notify() {
+	# lib-notify.sh has no Nix placeholders; source directly.
+	# shellcheck source=/dev/null
+	source scripts/lib-notify.sh
+}
+
+# Builds a runnable lztmux-notify with @lib_log@/@lib_notify@ resolved — the raw
+# script cannot run, its `source @lib_log@` would fail. Sets NOTIFY_ROUTER.
+make_notify_router() {
+	NOTIFY_ROUTER="$BATS_TEST_TMPDIR/lztmux-notify.sh"
+	sed -e "s|@lib_notify@|$PWD/scripts/lib-notify.sh|" \
+		-e "s|@lib_log@|$PWD/scripts/lib-log.sh|" \
+		scripts/lztmux-notify.sh >"$NOTIFY_ROUTER"
+}
+
+# Builds a runnable lztmux-notify-center with @lib_notify@ resolved.
+# Sets NOTIFY_CENTER.
+make_notify_center() {
+	NOTIFY_CENTER="$BATS_TEST_TMPDIR/lztmux-notify-center.sh"
+	sed "s|@lib_notify@|$PWD/scripts/lib-notify.sh|" \
+		scripts/lztmux-notify-center.sh >"$NOTIFY_CENTER"
+}
+
+# Builds a runnable tmux-pr-enrich. Every placeholder the script contains must be
+# stubbed: @lib_enrich@ and @lib_log@ are sourced, @pr_refresh_seconds@ is used
+# in arithmetic (an unsubstituted value is a syntax error), and @reflow@ is
+# EXECUTED from write_pr_options on exactly the change path the notify tests
+# exercise (left unstubbed, the test execs the literal string). @notify@ is
+# deliberately left raw — LZTMUX_NOTIFY_BIN overrides it at run time, and its
+# raw form is what "notifications disabled" looks like. Sets PR_ENRICH_SCRIPT.
+make_pr_enrich() {
+	PR_ENRICH_SCRIPT="$BATS_TEST_TMPDIR/tmux-pr-enrich.sh"
+	sed -e "s|@lib_enrich@|$PWD/scripts/lib-enrich.sh|" \
+		-e "s|@lib_log@|$PWD/scripts/lib-log.sh|" \
+		-e 's|@pr_refresh_seconds@|30|' \
+		-e 's|@reflow@|true|' \
+		scripts/tmux-pr-enrich.sh >"$PR_ENRICH_SCRIPT"
+}

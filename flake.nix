@@ -210,6 +210,113 @@
               touch $out
             '';
 
+          notify-router-tests =
+            pkgs.runCommand "notify-router-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+              # notify_sanitize's cap counts characters, and the message line
+              # carries UTF-8 glyphs — both need a UTF-8 locale.
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/notify-router.bats
+              touch $out
+            '';
+
+          notify-producers-tests =
+            pkgs.runCommand "notify-producers-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/notify-producers.bats
+              touch $out
+            '';
+
+          notify-center-tests =
+            pkgs.runCommand "notify-center-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/notify-center.bats
+              touch $out
+            '';
+
+          # The bell/activity WIRING, asserted on the generated conf rather than
+          # by inspection: hooks present at the free [20] index, both commands
+          # pinned to a store path (a bare name resolves against the tmux
+          # server's frozen PATH and would make prefix+r an incomplete deploy),
+          # both passing #{window_id} (never #{session_id} — run-shell's sh -c
+          # re-expands a leading $), matching -gu clears for reload idempotence,
+          # and the n bind running a store-path center.
+          #
+          # Two things here are the ONLY automated coverage of their failure mode
+          # and must not be softened:
+          #   * hook ORDER — a bare `set-hook -gu alert-bell` clears every index,
+          #     so a setter above it is erased on every load. Presence greps pass
+          #     either way; only the line-number comparison catches it.
+          #   * @notify@ SUBSTITUTION — both bats suites override the seam via
+          #     LZTMUX_NOTIFY_BIN, so a placeholder-name drift would build clean,
+          #     test green, and never notify in production. The store paths are
+          #     bound straight out of tmuxConfig, so nothing is globbed or guessed.
+          notify-conf-assertions =
+            pkgs.runCommand "notify-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+              CSU = "${tmuxConfig.script.claude-status-update}/bin/claude-status-update";
+              PRE = "${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich";
+            } ''
+              grep -q 'set-hook -g alert-bell\[20\]' "$CONF"
+              grep -q 'set-hook -g alert-activity\[20\]' "$CONF"
+              grep -q 'set-hook -gu alert-bell' "$CONF"
+              grep -q 'set-hook -gu alert-activity' "$CONF"
+              grep -E 'alert-bell\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{window_id\}' "$CONF"
+              grep -E 'alert-activity\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{window_id\}' "$CONF"
+              grep -E 'bind-key n display-popup -E .*/nix/store/[^ ]*/bin/lztmux-notify-center' "$CONF"
+
+              # ORDER, not just presence: the clear must precede the setter, or
+              # every config load (fresh server AND prefix+r) erases the hook.
+              bell_clear=$(grep -n 'set-hook -gu alert-bell' "$CONF" | head -1 | cut -d: -f1)
+              bell_set=$(grep -n 'alert-bell\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              [ "$bell_clear" -lt "$bell_set" ]
+              act_clear=$(grep -n 'set-hook -gu alert-activity' "$CONF" | head -1 | cut -d: -f1)
+              act_set=$(grep -n 'alert-activity\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              [ "$act_clear" -lt "$act_set" ]
+
+              # The producer seam actually resolved to the router's store path.
+              grep -qE '/nix/store/[^ ]*/bin/lztmux-notify' "$CSU"
+              grep -qE '/nix/store/[^ ]*/bin/lztmux-notify' "$PRE"
+              ! grep -q '@notify@' "$CSU"
+              ! grep -q '@notify@' "$PRE"
+
+              # monitor-activity stays off by design (a working Claude pane would
+              # be a continuous activity event), and monitor-bell is already on.
+              ! grep -q 'set -g monitor-activity on' "$CONF"
+              ! grep -q 'set -g monitor-bell' "$CONF"
+              touch $out
+            '';
+
+          notify-bell-integration-tests =
+            pkgs.runCommand "notify-bell-integration-tests" {
+              # mkTmux, not pkgs.tmux: the hook behavior this pins must be the
+              # tmux that actually ships.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils (mkTmux pkgs)];
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR
+              bats tests/notify-bell-integration.bats
+              touch $out
+            '';
+
           log-tests =
             pkgs.runCommand "log-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.util-linux];

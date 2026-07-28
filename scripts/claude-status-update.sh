@@ -27,7 +27,20 @@ if [[ -f "@lib_log@" ]]; then
 else
 	log_enabled() { return 1; }
 	log_event() { :; }
+	# A WORKING detach, not a `:` stub like its neighbours: the notification call
+	# below runs through it, and this script is `set -euo pipefail`, so an
+	# undefined detach would abort before the pane state write. A no-op stub
+	# would be worse than a crash — it would swallow the call and leave the
+	# producer's own tests green against a capture fake never invoked. Body
+	# copied from lib-log.sh.
+	detach() { (nohup "$@" >/dev/null 2>&1 &) }
 fi
+
+# Notification seam. A value still starting with '@' means the placeholder was
+# never substituted — the raw script under bats, or a build with notifications
+# disabled — and is the single "notifications off" mechanism. Never empty: an
+# empty value would run `detach "" emit …`.
+NOTIFY_BIN="${LZTMUX_NOTIFY_BIN:-@notify@}"
 
 # Function to clean up stale pane entries
 # Removes entries only for panes that no longer exist in tmux. A live pane is
@@ -463,25 +476,30 @@ done | error | waiting | denied)
 	;;
 esac
 
+# Prior state now drives two consumers — the debug transition log and the
+# notification gate below — so the read is unconditional. Still fork-free: the
+# same `while IFS='=' read` loop, no grep, no $(…). An ABSENT file reads back as
+# the literal sentinel `none`, which counts as a transition on purpose: a fresh
+# session's first `waiting` is a genuine event (unlike a first PR stamp, which
+# is only the poller learning what already existed).
+prior_state="none"
+if [[ -f "$PANES_DIR/$pane_file" ]]; then
+	while IFS='=' read -r _k _v; do
+		[[ $_k == state ]] && {
+			prior_state="$_v"
+			break
+		}
+	done <"$PANES_DIR/$pane_file"
+fi
+
 # Log only real transitions (from != to). Pre/PostToolUse both fire "processing"
-# on every tool call, so logging every write would flood. Prior-state read +
-# tmux id lookups happen only when debug is armed.
-if log_enabled; then
-	prior_state="none"
-	if [[ -f "$PANES_DIR/$pane_file" ]]; then
-		while IFS='=' read -r _k _v; do
-			[[ $_k == state ]] && {
-				prior_state="$_v"
-				break
-			}
-		done <"$PANES_DIR/$pane_file"
-	fi
-	if [[ $prior_state != "$state" ]]; then
-		win_id=$(tmux display-message -t "$pane_id" -p '#{window_id}' 2>/dev/null || true)
-		win_idx=$(tmux display-message -t "$pane_id" -p '#{window_index}' 2>/dev/null || true)
-		log_event claude event transition from "$prior_state" to "$state" \
-			pane "$pane_id" win_id "$win_id" win "$win_idx" sess "$session_name"
-	fi
+# on every tool call, so logging every write would flood. The tmux id lookups
+# still happen only when debug is armed.
+if log_enabled && [[ $prior_state != "$state" ]]; then
+	win_id=$(tmux display-message -t "$pane_id" -p '#{window_id}' 2>/dev/null || true)
+	win_idx=$(tmux display-message -t "$pane_id" -p '#{window_index}' 2>/dev/null || true)
+	log_event claude event transition from "$prior_state" to "$state" \
+		pane "$pane_id" win_id "$win_id" win "$win_idx" sess "$session_name"
 fi
 
 # Transcript path powers interrupt detection (read_pane_state tails it). Every
@@ -515,6 +533,28 @@ state=$state
 timestamp=$ts
 session=$session_name${unseen_line}${transcript_line}
 EOF
+
+# Notify on a real transition into an attention state, and only there. The gate
+# is `prior != new`, not `new ∈ {waiting,error,denied}`, so the repeated
+# `waiting` writes a stalled dialog produces never re-notify. `done` is
+# deliberately excluded: it is the highest-frequency terminal state (every turn
+# ends in one), the window glyph and the unseen flag already cover it, and
+# notifying on it would train the user to ignore notifications. Fires AFTER the
+# write, so a notification can never describe a state that failed to persist.
+# The router resolves the pane to its window itself, so this adds zero tmux
+# calls; detach makes it fire-and-forget.
+if [[ $prior_state != "$state" && $NOTIFY_BIN != @* ]]; then
+	notify_level=""
+	case "$state" in
+	waiting) notify_level="info" ;;
+	denied) notify_level="warn" ;;
+	error) notify_level="error" ;;
+	esac
+	if [[ -n $notify_level ]]; then
+		detach "$NOTIFY_BIN" emit --source claude --level "$notify_level" \
+			--pane "$pane_id" --title "claude: $state" --body "$prior_state → $state"
+	fi
+fi
 
 # Force immediate tmux status bar refresh (if in tmux)
 if [[ -n ${TMUX:-} ]]; then

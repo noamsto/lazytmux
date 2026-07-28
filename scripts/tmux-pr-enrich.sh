@@ -29,6 +29,12 @@ TTL_NONE=15
 # eventually; --force (prefix+i r) checks immediately.
 TTL_TERMINAL=3600
 
+# Notification seam. A value still starting with '@' means the placeholder was
+# never substituted (raw script under bats, or notifications disabled at build
+# time) — the single "off" mechanism. Assignment only; no fork, so the --tick
+# gate stays exactly as cheap as it is today.
+NOTIFY_BIN="${LZTMUX_NOTIFY_BIN:-@notify@}"
+
 # --- arg parse ---
 mode="tick"
 target="" branch="" dir="" force=0
@@ -86,6 +92,49 @@ done
 
 # --- helper definitions (defined before any code path calls them) ---
 
+# notify_pr_change TARGET PREV NUMBER TITLE STATE CHECK
+# One notification per genuinely new PR/CI event. PREV is write_pr_options'
+# pre-write snapshot, number|state|check|mergeable|draft. Only two things fire:
+# a @pr_state flip TO merged, and a @pr_check_state flip TO failure or success.
+# `pending`, `closed`, `conflicting` and draft flips never do.
+#
+# An EMPTY prior field is discovery, not an event — the first stamp is just the
+# poller learning what already existed, and a brand-new worktree must not fire a
+# burst. Note the sentinel's shape: the "no PR" write puts the literal `none` in
+# @pr_number while @pr_state and @pr_check_state are written EMPTY, so the gate
+# tests those two for emptiness rather than looking for `none` in them.
+#
+# merged wins over a same-write check flip (one notification, not two), matching
+# the merged-before-check precedence the badge renderers already use.
+#
+# Adds no tmux call: every value is already an argument in hand.
+notify_pr_change() {
+	[[ $NOTIFY_BIN == @* ]] && return 0
+	local tgt="$1" prev="$2" number="$3" title="$4" state="$5" check="$6"
+	local p_state p_check
+	IFS='|' read -r _ p_state p_check _ _ <<<"$prev"
+	local level="" head=""
+	if [[ $state == merged && -n $p_state && $p_state != merged ]]; then
+		level="info" head="PR merged"
+	elif [[ -n $p_check && $check != "$p_check" ]]; then
+		case "$check" in
+		failure)
+			level="error" head="checks failed"
+			;;
+		success)
+			level="info" head="checks passed"
+			;;
+		esac
+	fi
+	[[ -n $level ]] || return 0
+	# --window takes the $SESSION_ID:@WINDOW_ID target run_full_pass already
+	# builds; the router resolves it and normalizes the stored field to @N. Safe
+	# as argv — nothing re-expands the leading $ the way a run-shell would.
+	detach "$NOTIFY_BIN" emit --source pr --level "$level" \
+		--window "$tgt" --title "$head" --body "#$number $title"
+	return 0
+}
+
 # write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH [DRAFT]
 write_pr_options() {
 	# Only the glyph-driving options (@pr_number/@pr_state/@pr_check_state/
@@ -109,6 +158,7 @@ write_pr_options() {
 	if [[ $prev != "$2|$4|$5|${7:-}|${9:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	fi
+	notify_pr_change "$1" "$prev" "$2" "$3" "$4" "$5"
 }
 
 # branch_cache_key DIR BRANCH — sets REPLY to the cache key (sha1). Scoped by
