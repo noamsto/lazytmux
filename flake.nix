@@ -210,13 +210,15 @@
               touch $out
             '';
 
+          # Deliberately no LANG/LC_ALL. Nothing in these suites asserts a
+          # character count or a display width — the multibyte values are only
+          # ever compared as bytes — and C.UTF-8 does not exist on darwin, where
+          # bash's setlocale warning lands on stderr. bats folds stderr into
+          # $output, so pinning a locale here buys nothing and breaks the
+          # center's line-count assertions on macOS.
           notify-router-tests =
             pkgs.runCommand "notify-router-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
-              # notify_sanitize's cap counts characters, and the message line
-              # carries UTF-8 glyphs — both need a UTF-8 locale.
-              LANG = "C.UTF-8";
-              LC_ALL = "C.UTF-8";
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
@@ -227,8 +229,6 @@
           notify-producers-tests =
             pkgs.runCommand "notify-producers-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
-              LANG = "C.UTF-8";
-              LC_ALL = "C.UTF-8";
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
@@ -239,8 +239,6 @@
           notify-center-tests =
             pkgs.runCommand "notify-center-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
-              LANG = "C.UTF-8";
-              LC_ALL = "C.UTF-8";
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
@@ -307,8 +305,6 @@
               # mkTmux, not pkgs.tmux: the hook behavior this pins must be the
               # tmux that actually ships.
               nativeBuildInputs = [pkgs.bats pkgs.coreutils (mkTmux pkgs)];
-              LANG = "C.UTF-8";
-              LC_ALL = "C.UTF-8";
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests

@@ -2,6 +2,13 @@
 # History center (#164). Seeds event files, runs the materialized center with
 # </dev/null so its dismiss-keypress read returns at once, asserts on stdout.
 # No tmux at all — the center never calls it.
+#
+# --separate-stderr because these are the only assertions here that count lines
+# or compare $output whole: bats otherwise folds stderr into $output, so any
+# warning bash writes (e.g. setlocale on a system without C.UTF-8) would inflate
+# every count and fail a correct center.
+
+bats_require_minimum_version 1.5.0 # run --separate-stderr
 
 load helper
 
@@ -37,7 +44,7 @@ snapshot() {
 	seed "1700000000-100-1" "$((NOW - 7200))" pr info @1 s1 oldest
 	seed "1900000000-100-3" "$((NOW - 30))" claude error @3 s1 newest 'processing → error'
 	seed "1800000000-100-2" "$((NOW - 300))" bell warn @2 s1 middle
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 3 ]
 	[[ ${lines[0]} == *newest* ]]
@@ -47,7 +54,7 @@ snapshot() {
 
 @test "center: one line per event, with age, locator, and body when present" {
 	seed "1900000000-100-3" "$((NOW - 30))" claude error @3 mysess 'boom' 'processing → error'
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 1 ]
 	[[ ${lines[0]} == *"30s"* ]]
@@ -58,7 +65,7 @@ snapshot() {
 
 @test "center: a line with no body is still well formed" {
 	seed "1900000000-100-3" "$((NOW - 90))" bell warn @3 mysess 'bell'
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 1 ]
 	[[ ${lines[0]} == *"1m"* ]]
@@ -72,7 +79,7 @@ snapshot() {
 	for i in $(seq 10 34); do
 		seed "19000000${i}-100-$i" "$NOW" pr info "@$i" s1 "t$i"
 	done
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "${#lines[@]}" -eq 19 ]
 	[ "${lines[18]}" = "… +7 older" ]
@@ -80,13 +87,13 @@ snapshot() {
 
 @test "center: an empty events dir shows the empty state and exits 0" {
 	mkdir -p "$LZTMUX_NOTIFY_DIR/events"
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "$output" = "no notifications" ]
 }
 
 @test "center: a missing events dir shows the empty state and exits 0" {
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "$output" = "no notifications" ]
 }
@@ -98,7 +105,7 @@ snapshot() {
 	seed "1900000001-100-4" "$NOW" pr info @4 s1 merged
 	printf '1500000000\n' >"$LZTMUX_NOTIFY_DIR/.server_start"
 	before="$(snapshot)"
-	run bash "$NOTIFY_CENTER" </dev/null
+	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	after="$(snapshot)"
 	[ "$before" = "$after" ]
