@@ -15,13 +15,23 @@ set -euo pipefail
 
 TMUX_BIN="${TMUX_BIN:-./result/bin/tmux}"
 SOCKET="enrichtest-$$"
+SHIM_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED="$SCRIPT_DIR/fixtures/window-list.expected"
 
-cleanup() { "$TMUX_BIN" -L "$SOCKET" kill-server 2>/dev/null || true; }
+cleanup() {
+	"$TMUX_BIN" -L "$SOCKET" kill-server 2>/dev/null || true
+	rm -rf "$SHIM_DIR"
+}
 trap cleanup EXIT
 
 t() { "$TMUX_BIN" -L "$SOCKET" "$@"; }
+
+cat >"$SHIM_DIR/tmux" <<EOF
+#!$(command -v bash)
+exec "$TMUX_BIN" -L "$SOCKET" "\$@"
+EOF
+chmod +x "$SHIM_DIR/tmux"
 
 t new-session -d -s s # state: no provider (branch fallback)
 t set-option -t s:1 -w @branch "feat/plain-branch"
@@ -117,7 +127,7 @@ t set-option -t s:6 -w @pr_check_state success
 # store hash.
 CONF="$(grep -o -- '-f /nix/store/[a-z0-9]*-tmux[.]conf' "$TMUX_BIN" | head -1 | cut -d' ' -f2)"
 REFLOW_BIN="$(grep -o '/nix/store/[a-z0-9]*-tmux-reflow-windows/bin/tmux-reflow-windows' "$CONF" | head -1)"
-"$REFLOW_BIN" s 200 --force >/dev/null 2>&1 || true
+PATH="$SHIM_DIR:$PATH" "$REFLOW_BIN" s 200 --force >/dev/null 2>&1 || true
 
 bridge_id="$(t show-options -t s:6 -wqv @window_label_id)"
 bridge_rest="$(t show-options -t s:6 -wqv @window_label_rest_short)"
@@ -135,6 +145,10 @@ fi
 # than replacing it. Also added after the golden diff so the 5-window fixture
 # stays the reference for the non-draft states.
 t new-window -t s
+t set-option -t s:7 -w @issue_provider ""
+t set-option -t s:7 -w @issue_id ""
+t set-option -t s:7 -w @issue_title ""
+t set-option -t s:7 -w @issue_branch ""
 t set-option -t s:7 -w @branch "feat/draft-pr"
 t set-option -t s:7 -w @pr_number 250
 t set-option -t s:7 -w @pr_state open
@@ -142,11 +156,23 @@ t set-option -t s:7 -w @pr_check_state success
 t set-option -t s:7 -w @pr_draft 1
 
 t new-window -t s # same PR state, not a draft — the control
+t set-option -t s:8 -w @issue_provider ""
+t set-option -t s:8 -w @issue_id ""
+t set-option -t s:8 -w @issue_title ""
+t set-option -t s:8 -w @issue_branch ""
 t set-option -t s:8 -w @branch "feat/ready-pr"
 t set-option -t s:8 -w @pr_number 251
 t set-option -t s:8 -w @pr_state open
 t set-option -t s:8 -w @pr_check_state success
-"$REFLOW_BIN" s 200 --force >/dev/null 2>&1 || true
+
+# In an issue-named worktree, the async reconcile/enrich hook can stamp inherited
+# issue metadata onto these synthetic windows after creation. Keep branch state
+# consistent so reflow does not discard the PR fields as stale metadata.
+t set-option -t s:7 -w @branch "feat/draft-pr"
+t set-option -t s:8 -w @branch "feat/ready-pr"
+t set-option -t s:7 -w @issue_branch "feat/draft-pr"
+t set-option -t s:8 -w @issue_branch "feat/ready-pr"
+PATH="$SHIM_DIR:$PATH" "$REFLOW_BIN" s 200 --force >/dev/null 2>&1 || true
 
 # Compare glyph runs with the PR numbers stripped: the draft badge must be the
 # ready one with something prepended, never a different state glyph.

@@ -373,6 +373,22 @@
               touch $out
             '';
 
+          tmux-next38-readiness-tests =
+            pkgs.runCommand "tmux-next38-readiness-tests" {
+              # mkTmux via the wrapped default package: exercise the same
+              # generated config, plugin store paths, and PATH wrapper users run.
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.gawk pkgs.gnugrep pkgs.gnused];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/tmux-next38-readiness.bats
+              touch $out
+            '';
+
           remote-tests =
             pkgs.runCommand "remote-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep];
