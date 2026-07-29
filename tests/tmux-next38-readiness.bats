@@ -87,6 +87,15 @@ strip_styles() {
 	sed 's/#[[][^]]*[]]//g'
 }
 
+wait_for_client() {
+	local i
+	for i in {1..30}; do
+		[[ "$(t list-clients -t s 2>/dev/null | wc -l)" -gt 0 ]] && return 0
+		sleep 0.1
+	done
+	return 1
+}
+
 @test "wrapper runs pinned next-3.8 tmux and catppuccin renders theme variables" {
 	run t -V
 	[ "$status" -eq 0 ]
@@ -107,7 +116,11 @@ strip_styles() {
 
 	make_tmux_shim
 	reflow="$(store_path '/nix/store/[[:alnum:]]*-tmux-reflow-windows/bin/tmux-reflow-windows')"
+	coproc REFLOW_CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
+	wait_for_client
 	PATH="$SHIM_DIR:$PATH" "$reflow" s 36 --force
+	printf 'detach-client\n' >&"${REFLOW_CTL[1]}" || true
+	kill "$REFLOW_CTL_PID" 2>/dev/null || true
 	wait_for_option @reflow_key "10:36"
 
 	[ "$(t show-options -t s -qv status)" -ge 3 ]
@@ -151,10 +164,7 @@ strip_styles() {
 	marker="$BATS_TEST_TMPDIR/popup-ran"
 	coproc CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
 
-	for _ in {1..30}; do
-		[[ "$(t list-clients -t s 2>/dev/null | wc -l)" -gt 0 ]] && break
-		sleep 0.1
-	done
+	wait_for_client
 
 	printf 'display-popup -E "printf popup-ok > %q"\n' "$marker" >&"${CTL[1]}"
 	for _ in {1..30}; do
