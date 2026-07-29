@@ -143,6 +143,7 @@
     splashTimeout = cfg.splash.timeout;
     splashRemote = cfg.splash.remote;
     aiNamingEnable = cfg.aiNaming.enable;
+    notifyEnable = cfg.notifications.enable;
     # Only stamp @remux_relaunch when tmux-remux is actually installed to read it.
     resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
   };
@@ -404,6 +405,21 @@ in {
           success, failure, merged, closed, conflict, draft). Unset keys fall
           back to nerd-font defaults. Values must not contain '#' (tmux format
           escape).
+        '';
+      };
+    };
+
+    notifications = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Notifications for asynchronous events: a Claude pane transitioning to
+          waiting/error/denied, a PR merging or its CI flipping, and window
+          bells. The event's own window being the current one gets a styled
+          message line; anything else lands in the history buffer on
+          `prefix + n` (which shadows tmux's built-in next-window — this config
+          already binds M-L / M-H for that).
         '';
       };
     };

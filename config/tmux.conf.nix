@@ -20,6 +20,10 @@
   enrichProviders ? ["linear" "github"],
   enrichPrRefreshSeconds ? 30,
   enrichIcons ? {},
+  # Notifications for background events (threaded from the home-manager module).
+  # When false the hooks and the prefix+n bind are omitted and @notify@ is left
+  # unsubstituted, which is how the producers see "disabled" — one mechanism.
+  notifyEnable ? true,
   # Comma-separated glob/basename patterns the session picker drops from its
   # zoxide suggestions (e.g. "*/.ssh,/tmp/*"). Empty => suggest everything.
   zoxideExclude ? "",
@@ -157,6 +161,9 @@
   # lib-reflow has no build-time placeholders of its own either.
   lib-reflow = pkgs.writeShellScript "lib-reflow" (builtins.readFile ../scripts/lib-reflow.sh);
 
+  # lib-notify has no build-time placeholders of its own; a plain writeShellScript.
+  lib-notify = pkgs.writeShellScript "lib-notify" (builtins.readFile ../scripts/lib-notify.sh);
+
   # Shell label builder needs raw glyphs (single '#'). The tmux-format path uses
   # the '##'-escaped enrichIconSet (which MUST keep '##' — do not change it). Only
   # user-override icons are '##'-escaped by the module, so un-escape just those and
@@ -232,7 +239,7 @@
 
   mkScriptWithLog = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
-    patched = builtins.replaceStrings ["@lib_log@"] ["${lib-log}"] raw;
+    patched = builtins.replaceStrings ["@lib_log@" "@notify@"] ["${lib-log}" notifyBin] raw;
   in
     pkgs.writeShellScriptBin name patched;
 
@@ -291,6 +298,8 @@
     "lztmux-listener"
     "lztmux-remote-shim"
     "lztmux-remote-open"
+    "lztmux-notify"
+    "lztmux-notify-center"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -340,6 +349,7 @@
         "@pr_enrich@"
         "@reflow@"
         "@lib_log@"
+        "@notify@"
       ]
       [
         "${lib-enrich}"
@@ -349,6 +359,7 @@
         "${enrich-pr-bin}/bin/tmux-pr-enrich"
         "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
         "${lib-log}"
+        notifyBin
       ]
       raw;
   in
@@ -365,6 +376,23 @@
       builtins.replaceStrings ["@lib_remote@"] ["${lib-remote}"]
       (builtins.readFile ../scripts/${name}.sh)
     );
+
+  # The notification router + history center. Both source lib-notify; the router
+  # also sources lib-log (acquire_lock / file_mtime, reached via notify_prune).
+  scriptsWithNotify = ["lztmux-notify" "lztmux-notify-center"];
+  mkScriptNotify = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings ["@lib_notify@" "@lib_log@"] ["${lib-notify}" "${lib-log}"]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
+  # The router's store path for the producers. With notifications off the
+  # placeholder is left untouched: the producers' leading-'@' test then skips the
+  # call, so disabling is one mechanism rather than two.
+  notifyBin =
+    if notifyEnable
+    then "${script.lztmux-notify}/bin/lztmux-notify"
+    else "@notify@";
 
   # The cwd-derived window reconciler. Always built (tagging drives navigation
   # even with enrich off); the @issue_stamp@ kick is empty when enrich is off.
@@ -414,6 +442,8 @@
     then mkScriptWithLog name
     else if builtins.elem name scriptsWithRemote
     then mkRemoteScript name
+    else if builtins.elem name scriptsWithNotify
+    then mkScriptNotify name
     else mkScript name);
 
   scripts = lib.attrValues script;
@@ -631,6 +661,15 @@
         --icon-draft '${enrichIconSetRaw.draft}'"
     ''}
 
+    ${lib.optionalString notifyEnable ''
+      # prefix + n: notification history. This deliberately shadows tmux's
+      # built-in next-window — the config already provides M-L / M-H (no prefix)
+      # for next/previous window and M-J / M-K for row-to-row movement, so
+      # next-window on the prefix table is dead weight. With notifications off,
+      # n reverts to next-window.
+      bind-key n display-popup -E -w 80% -h 60% '${script.lztmux-notify-center}/bin/lztmux-notify-center'
+    ''}
+
     # Floating popups
     bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
     bind-key "b" display-popup -E -w 90% -h 90% btop
@@ -739,6 +778,13 @@
     set-hook -gu after-resize-pane
     set-hook -gu after-kill-pane
     set-hook -gu pane-focus-in
+
+    # Notification producers (#164): bare -gu clears every index, so prefix+r
+    # stays idempotent — and a rebuild with notifications OFF cannot leave a hook
+    # pointing at a dead store path. The alert-*[20] setters MUST sit below this
+    # block; above it they would be cleared on every load.
+    set-hook -gu alert-bell
+    set-hook -gu alert-activity
 
     # Hooks to reflow windows across status lines.
     # after-new-window / window-unlinked are the burst-prone ones (dispatcher
@@ -858,6 +904,28 @@
       # index-0 bindings on the same events (a bare set-hook would clobber them).
       set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
       set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+    ''}
+
+    ${lib.optionalString notifyEnable ''
+      # === Notification producers (#164) ===
+      # Placed here, below the set-hook -gu clear block: a bare -gu clears every
+      # index, so these setters must come after it or each config load erases
+      # them. Index [20] is free (this file uses [10], [50], [60], [98], [99]),
+      # so nothing is clobbered; -b keeps the router off the server's command
+      # queue. The command is the STORE PATH, never a bare name: a bare name
+      # resolves against the tmux server's frozen PATH and would stay stale until
+      # a full restart, making prefix+r an incomplete deploy.
+      # #{window_id} and NOT #{session_id}: session_id is "$N" and run-shell's
+      # sh -c re-expands a leading $. Titles are single words on purpose — a
+      # quoted title would need three layers of escaping (Nix, tmux's config
+      # lexer, sh -c) for no gain.
+      # monitor-bell already defaults to on and this config never changes it, so
+      # the bell producer works the moment the hook is wired. monitor-activity
+      # stays at its default off — turning it on would make every unfocused
+      # window with output (i.e. every working Claude pane) an event — so the
+      # activity hook ships wired but dormant.
+      set-hook -g alert-bell[20]     'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source bell --level warn --window #{window_id} --title bell"'
+      set-hook -g alert-activity[20] 'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source activity --level info --window #{window_id} --title activity"'
     ''}
 
     ${carouselHooks}
