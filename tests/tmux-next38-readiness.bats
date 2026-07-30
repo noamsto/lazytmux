@@ -47,6 +47,12 @@ wait_for_option() {
 	for i in {1..50}; do
 		got="$(t show-options -t s -qv "$option" 2>/dev/null || true)"
 		[[ $got == "$want" ]] && return 0
+		# @reflow_key "N:" means the width probe was empty — fail loud (#235).
+		if [[ $option == @reflow_key && $got =~ ^[0-9]+:$ ]]; then
+			printf 'empty width in %s=%s (want %s); width probe was empty\n' \
+				"$option" "$got" "$want" >&2
+			return 1
+		fi
 		sleep 0.1
 	done
 	printf 'timed out waiting for %s=%s, last=%s\n' "$option" "$want" "$got" >&2
@@ -119,9 +125,11 @@ wait_for_client() {
 	coproc REFLOW_CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
 	wait_for_client
 	PATH="$SHIM_DIR:$PATH" "$reflow" s 36 --force
+	# Keep the control client attached until the key is observed — detach first
+	# used to race backgrounded empty-width reflows over the good stamp (#235).
+	wait_for_option @reflow_key "10:36"
 	printf 'detach-client\n' >&"${REFLOW_CTL[1]}" || true
 	kill "$REFLOW_CTL_PID" 2>/dev/null || true
-	wait_for_option @reflow_key "10:36"
 
 	[ "$(t show-options -t s -qv status)" -ge 3 ]
 	[ "$(t show-options -t s -qv @window_split)" != "999" ]
