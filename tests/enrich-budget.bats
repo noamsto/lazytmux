@@ -1,10 +1,9 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2016 # the $-prefixed tmux session id is literal, not an expansion
-# API-budget shape of a full enrichment pass. These tests assert on the gh calls
-# a pass makes, not on the tmux options it writes: the poller runs against a
-# 5000/hr GraphQL bucket shared with every other tool on the machine, and the
-# per-branch fallback firing twice per pass per PR-less branch was enough to
-# exhaust it on its own.
+# API-budget shape of a full enrichment pass. Unusually, these assert on the gh
+# calls a pass makes rather than the tmux options it writes: the poller shares a
+# 5000/hr GraphQL bucket with every other tool on the machine, so how often it
+# asks is the behaviour worth pinning.
 #
 # Fakes: gh logs its argv and answers from env; tmux answers list-windows from
 # $FAKE_WINDOWS and swallows set-option.

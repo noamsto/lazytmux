@@ -188,15 +188,10 @@ fetch_branch_pr() {
 }
 
 # fetch_terminal_pr DIR BRANCH KEY  → echoes cache JSON path. For a branch the
-# repo batch has already proven has no OPEN PR: merged, closed, and never-had-one
-# are all terminal, so the answer holds for TTL_TERMINAL rather than TTL_NONE,
-# and one --state all call settles it (the batch ruled open out already).
-#
-# This is where the poller's API budget used to go: a branch with no PR answers
-# "[]", TTL_NONE expires it before the next pass, and the full lookup spends two
-# serial gh calls to learn the same nothing — every pass, for exactly the
-# branches with the least to say. A PR opened later needs no lookup at all: it
-# appears in the next pass's batch by headRefName.
+# repo batch has already proven has no OPEN PR: merged, closed and never-had-one
+# are all terminal, so one --state all call settles it and the answer holds for
+# TTL_TERMINAL even when it is "[]". Nothing is lost by that long TTL — a PR
+# opened later appears in the next pass's batch by headRefName, no lookup needed.
 fetch_terminal_pr() {
 	fetch_pr_cached "$1" "$2" "$3" all "$TTL_TERMINAL"
 }
@@ -299,8 +294,7 @@ apply_cache_to_target() {
 # value is a single-element array matching the per-branch cache format), so the
 # common case — each worktree has an open PR — costs a single API round-trip per
 # repo. A successful batch is authoritative for open PRs: heads missing from it
-# have none, which is a terminal answer (fetch_terminal_pr), so they cost at most
-# one call an hour rather than two every pass.
+# have none, which is a terminal answer (fetch_terminal_pr).
 enrich_repo_group() {
 	local d="$1" repo_id="$2"
 	local branches=() wlines=()

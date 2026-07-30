@@ -7,8 +7,7 @@
 # shellcheck disable=SC2034  # used by scripts that source this library
 
 # PR-state cache dir; consumed by the PR enrichment poller. Overridable for the
-# same reason as the stamp lock below: a test must not read or write the real
-# machine's cache.
+# same reason as the stamp lock below — a test must not touch the real cache.
 ENRICH_CACHE_DIR="${LAZYTMUX_ENRICH_CACHE_DIR:-/tmp/lazytmux-pr}"
 # Per-window stamp lock (#137 conflict safety). Overridable so tests don't share
 # a real machine's /tmp dir across concurrent bats runs.

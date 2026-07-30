@@ -394,10 +394,9 @@ in {
         type = lib.types.ints.between 10 300;
         default = 120;
         description = ''
-          Background PR enrichment cadence in seconds (clamped 10–300). Every pass
-          spends GitHub API budget per repo, so a short cadence across many
-          worktree windows adds up fast — 30s alone was enough to exhaust a
-          5000/hr GraphQL bucket.
+          Background PR enrichment cadence in seconds (clamped 10–300). Each pass
+          spends GitHub API budget per repo, so short cadences across many
+          worktree windows can exhaust the hourly quota on their own.
         '';
       };
 
