@@ -41,6 +41,14 @@ case "$SESSION" in
 scratch-*) exit 0 ;;
 esac
 
+# Empty/non-numeric width: no attached or size-neutral client expanded
+# #{client_width} to nothing. Stamping "N:" poisons the cache and lets a
+# later real reflow look like a no-op hit (issue #235).
+if [[ ! $WIDTH =~ ^[1-9][0-9]*$ ]]; then
+	log_enabled && log_event reflow event skip_empty_width width "$WIDTH" sess "$SESSION"
+	exit 0
+fi
+
 # Debounce a resize burst: client-resized fires once per drag step, and every
 # distinct width misses the cache below → a full O(N) recompute each time. The
 # hook backgrounds this (-b), so the sleep is off the server's command queue.

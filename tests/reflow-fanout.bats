@@ -126,6 +126,24 @@ run_update_icons() {
 	[ "$(tmux show -v @reflow_key)" = "3:200" ]
 }
 
+@test "empty or non-numeric WIDTH exits without poisoning @reflow_key" {
+	# Prior good key must survive a reflow that has nothing to measure (no
+	# attached client → #{client_width} empty) or an explicit junk width.
+	tmux set -q @reflow_key "3:200"
+
+	run bash "$REFLOW" S --force
+	[ "$status" -eq 0 ]
+	[ "$(tmux show -v @reflow_key)" = "3:200" ]
+
+	run bash "$REFLOW" S "0" --force
+	[ "$status" -eq 0 ]
+	[ "$(tmux show -v @reflow_key)" = "3:200" ]
+
+	run bash "$REFLOW" S "bogus" --force
+	[ "$status" -eq 0 ]
+	[ "$(tmux show -v @reflow_key)" = "3:200" ]
+}
+
 @test "zoom marker is carved from the label so the grid slot stays uniform" {
 	# The inline " 󰁌" marker (LABEL_Z) is 2 cells; a zoomed window must reserve
 	# them from its own label budget, or its grid slot renders 2 cells wide and
