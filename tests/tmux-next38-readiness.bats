@@ -199,3 +199,118 @@ wait_for_client() {
 	[[ -f $XDG_CACHE_HOME/lazytmux/gh-dash-config.yml ]]
 	grep -q 'theme:' "$XDG_CACHE_HOME/lazytmux/gh-dash-config.yml"
 }
+
+# === Remote bridge structural-input gate (M2.3) ===
+#
+# The bridge daemon's own integration tests run on vanilla `tmux -L` servers with
+# no lazytmux keybindings, so they cannot see the gate at all. These cases run
+# against the WRAPPED tmux — the real generated config — which is the only place
+# in CI where the gate and the rebound defaults exist.
+
+# The gate is a pure format, so its truth table is checkable without pressing a
+# key: it must be true only where the daemon stamped BOTH carriers. #{&&:...}
+# yields "1"/"0", and if-shell -F treats "0" (like "") as false.
+@test "bridge gate is true only for a tagged window with a stamped pane" {
+	gate='#{&&:#{@bridge_win},#{@bridge_pane}}'
+
+	# A normal window: neither carrier set.
+	[ "$(t display-message -p -t s:1 -F "$gate")" = 0 ]
+
+	t new-window -d -t s: -n bridgey
+	t set-option -w -t s:bridgey @bridge_win 1
+	# Window tagged but the pane not stamped — a pane the daemon does not own must
+	# still fall through to the local action.
+	[ "$(t display-message -p -t s:bridgey -F "$gate")" = 0 ]
+
+	pane="$(t list-panes -t s:bridgey -F '#{pane_id}' | head -1)"
+	t set-option -p -t "$pane" @bridge_pane '%42'
+	[ "$(t display-message -p -t s:bridgey -F "$gate")" = 1 ]
+
+	# Still false in the untagged window, i.e. the pane option did not leak.
+	[ "$(t display-message -p -t s:1 -F "$gate")" = 0 ]
+}
+
+# M2.3 made the config own three keys tmux used to own (`,`, `{`, `}`). Their
+# non-bridge behavior must stay byte-identical to next-3.8's default, so assert
+# the else-branch command and the -N note against the pinned upstream text. This
+# turns a hand transcription into a claim that fails loudly on the next tmux bump.
+@test "keys the bridge gate newly owns keep their upstream default and note" {
+	run t list-keys -T prefix ,
+	[ "$status" -eq 0 ]
+	# else-branch is tmux's default rename prompt, seeded from #W. Compared in the
+	# form list-keys itself prints (tmux normalises the `--` away), which is also
+	# the form a future tmux bump would change.
+	[[ $output == *'{ command-prompt -I "#W" { rename-window "%%" } }'* ]]
+
+	run t list-keys -T prefix '{'
+	[ "$status" -eq 0 ]
+	[[ $output == *'swap-pane -U'* ]]
+
+	run t list-keys -T prefix '}'
+	[ "$status" -eq 0 ]
+	[[ $output == *'swap-pane -D'* ]]
+
+	# The -N notes feed which-key, and rebinding a default drops the note unless
+	# it is re-supplied.
+	run t list-keys -N -T prefix
+	[ "$status" -eq 0 ]
+	[[ $output == *'Rename current window'* ]]
+	[[ $output == *'Swap the active pane with the pane above'* ]]
+	[[ $output == *'Swap the active pane with the pane below'* ]]
+}
+
+# Every gated key must still carry its original local behavior in the else
+# branch: a regression here is a regression for every non-bridge window.
+@test "gated keys keep their local behavior in the else branch" {
+	run t list-keys -T prefix '|'
+	[[ $output == *'split-window -h'* ]]
+	[[ $output == *'pane_current_path'* ]]
+
+	run t list-keys -T prefix _
+	[[ $output == *'split-window -v'* ]]
+
+	# c keeps the scratchpad guard.
+	run t list-keys -T prefix c
+	[[ $output == *'scratch-'* ]]
+	[[ $output == *'new-window -c'* ]]
+
+	# x keeps the claude-status kill guard.
+	run t list-keys -T prefix x
+	[[ $output == *'tmux-kill-pane-guard'* ]]
+	[[ $output == *'confirm-before'* ]]
+
+	# & keeps its confirmation.
+	run t list-keys -T prefix '&'
+	[[ $output == *'kill-window'* ]]
+	[[ $output == *'confirm-before'* ]]
+
+	# The four resize binds keep -r (repeatable) and their local resize-pane.
+	local key
+	for key in M-Up M-Down M-Left M-Right; do
+		run t list-keys -T prefix "$key"
+		[ "$status" -eq 0 ]
+		[[ $output == *' -r '* ]]
+		[[ $output == *'resize-pane -'* ]]
+	done
+}
+
+# The focus hook must be registered, and `prefix + r` must stay idempotent: the
+# bare `set-hook -gu after-select-pane` clear has to exist, or a reload would
+# stack hooks pointing at dead store paths.
+@test "after-select-pane focus hook is set and reload-idempotent" {
+	run t show-hooks -g
+	[ "$status" -eq 0 ]
+	[[ $output == *'after-select-pane[20]'* ]]
+	[[ $output == *'lztmux-remote-bridge-ctl'* ]]
+
+	# prefix + r re-sources the generated config, so re-sourcing must not stack a
+	# second hook. Source the wrapper's own config rather than a user symlink,
+	# which does not exist in the sandbox.
+	before="$(t show-hooks -g | grep -c 'after-select-pane')"
+	t source-file "$(store_conf)"
+	after="$(t show-hooks -g | grep -c 'after-select-pane')"
+	[ "$before" -eq "$after" ]
+
+	# The clear that makes that true has to be in the config, not incidental.
+	grep -q 'set-hook -gu after-select-pane' "$(store_conf)"
+}

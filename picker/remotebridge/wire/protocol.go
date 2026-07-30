@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type FrameType byte
@@ -18,7 +19,42 @@ const (
 	FrameOutput FrameType = 3 // daemon->renderer: payload = live pane bytes
 	FrameResize FrameType = 4 // daemon->renderer: payload = 8 bytes (w,h uint32 BE)
 	FrameInput  FrameType = 5 // renderer->daemon: payload = stdin bytes
+	FrameCtl    FrameType = 6 // ctl->daemon: payload = NUL-separated argv (version, verb, args)
+	FrameCtlAck FrameType = 7 // daemon->ctl: empty payload = accepted, else the error text
 )
+
+// CtlProtocolVersion is argv[0] of every FrameCtl. The daemon is launched from
+// the caller's PATH and is long-lived, while ctl's path is baked into the tmux
+// config and swaps on `prefix + r` — so a config reload or a lazytmux bump can
+// point a new ctl at an already-running old daemon. Bump this whenever the verb
+// table's wire meaning changes, so the mismatch is a message rather than a
+// silently-ignored gesture.
+const CtlProtocolVersion = "1"
+
+// EncodeArgv packs argv as NUL-separated fields. NUL-separated rather than
+// space-joined so a window name containing spaces or quotes survives without a
+// second layer of quoting.
+func EncodeArgv(argv []string) []byte {
+	var b []byte
+	for i, a := range argv {
+		if i > 0 {
+			b = append(b, 0)
+		}
+		b = append(b, a...)
+	}
+	return b
+}
+
+// DecodeArgv unpacks an EncodeArgv payload. An empty payload decodes to no
+// fields rather than one empty field, so a malformed frame is distinguishable
+// from a frame carrying one empty argument.
+func DecodeArgv(p []byte) []string {
+	if len(p) == 0 {
+		return nil
+	}
+	parts := strings.Split(string(p), "\x00")
+	return parts
+}
 
 type Frame struct {
 	Type    FrameType

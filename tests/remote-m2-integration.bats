@@ -40,6 +40,10 @@ setup() {
 		RENDERER="$BATS_TEST_TMPDIR/renderer"
 		(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$RENDERER" ./remotebridge/cmd/renderer)
 	fi
+	if [[ -z ${CTL:-} ]]; then
+		CTL="$BATS_TEST_TMPDIR/ctl"
+		(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$CTL" ./remotebridge/cmd/ctl)
+	fi
 
 	$SRC kill-server 2>/dev/null || true
 	$DST kill-server 2>/dev/null || true
@@ -549,4 +553,460 @@ sorted_dims() {
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$painted" = yes ]
+}
+
+# pane_map prints TARGET's panes in pane_index order, one id per line: the
+# remote's own #{pane_id} for SRC, the mirror's #{@bridge_pane} carrier for DST.
+# Comparing the two ORDERED lists asserts the mirror's core invariant — local
+# pane i renders remote pane i — and sidesteps the base-index difference between
+# the servers (SRC/DST run pane-base-index 1; the daemon forces 0 on every mirror
+# window), since list-panes emits in index order either way.
+pane_map() {
+	$1 list-panes -t "$2" -F "$3"
+}
+
+# bridge_up starts a daemon mirroring SRC session "rem" into DST "host-sess" and
+# blocks until the mirror is actually live. Sets `daemon_pid` and `sock`.
+#
+# It deliberately does NOT gate on pane_current_command containing "renderer":
+# tmux reports renderer process names differently on Darwin, so that gate never
+# matches there (the same reason PR #233 switched its own gate to an observable
+# paint). The pre-existing cases in this file only *poll* that condition and fall
+# through, so they survive it; a case that asserts it fails on Darwin only.
+#
+# Two portable observables instead:
+#   1. every mirror pane carries @bridge_pane, which the daemon stamps itself;
+#   2. output typed on the remote actually paints into the mirror, which is what
+#      proves the daemon reached its main read loop and the router is wired — the
+#      precondition every case here needs before it touches the remote.
+bridge_up() {
+	local want_panes="$1" tag="$2"
+	local marker="BRIDGEUP_${tag}_$$"
+	sock="$BATS_TEST_TMPDIR/$tag.sock"
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$sock" \
+		>"$BATS_TEST_TMPDIR/$tag.log" 2>&1 &
+	daemon_pid=$!
+
+	local stamped=0
+	for _ in $(seq 1 100); do
+		stamped="$($DST list-panes -t host-sess:1 -F '#{@bridge_pane}' 2>/dev/null | grep -c '^%' || true)"
+		[ "$stamped" -eq "$want_panes" ] && break
+		sleep 0.1
+	done
+	if [ "$stamped" -ne "$want_panes" ]; then
+		bridge_up_failed "$tag" "only $stamped/$want_panes mirror panes carry @bridge_pane"
+		return 1
+	fi
+
+	# Re-send the marker each round: output produced while setup's own reply reader
+	# is still running is dropped rather than routed, so a single send can be lost.
+	local _outer _inner
+	for _outer in $(seq 1 20); do
+		$SRC send-keys -t rem "printf '$marker\\n'" Enter
+		for _inner in $(seq 1 10); do
+			if mirror_contains "$want_panes" "$marker"; then
+				return 0
+			fi
+			sleep 0.1
+		done
+	done
+	bridge_up_failed "$tag" "mirror never painted the startup marker"
+	return 1
+}
+
+# mirror_contains reports whether any of the first $1 mirror panes shows $2.
+# capture-pane takes one pane, and the remote's active pane (hence the pane the
+# marker lands in) is not necessarily index 0 — split-window makes the new pane
+# active — so check them all.
+mirror_contains() {
+	local panes="$1" needle="$2" i
+	for ((i = 0; i < panes; i++)); do
+		if $DST capture-pane -p -t "host-sess:1.$i" 2>/dev/null | grep -q "$needle"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# bridge_up_failed prints why the gate gave up plus the daemon's own log, so a
+# CI failure here is diagnosable without a re-run.
+bridge_up_failed() {
+	printf 'bridge_up(%s): %s\n--- daemon log ---\n' "$1" "$2" >&3
+	tail -40 "$BATS_TEST_TMPDIR/$1.log" >&3 2>/dev/null || true
+}
+
+# Regression for the pre-existing reconcile hole M2.3 had to close: layout
+# traversal order means a split of a NON-LAST pane is a mid-list INSERT
+# (measured: %0 %1 %2 split at %0 -> %0 %3 %1 %2), which the old three-case
+# reconcile (identical / tail-append / tail-removal) classified as an
+# "unsupported pane reshuffle" and skipped — leaving the mirror silently stale.
+@test "daemon reconciles a mid-list remote split (non-last pane)" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	bridge_up 3 dmi
+
+	# Split the FIRST remote pane: a mid-list insert, not a tail-append.
+	first="$($SRC list-panes -t rem -F '#{pane_id}' | head -1)"
+	$SRC split-window -v -t "$first"
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# 4 panes, in the remote's order, each wired to the right remote pane.
+	[ "$(printf '%s\n' "$src_map" | wc -l)" -eq 4 ]
+	[ "$src_map" = "$dst_map" ]
+	[ "$src_dims" = "$dst_dims" ]
+}
+
+# The mirror-image hole: killing a non-last pane is a mid-list REMOVAL.
+@test "daemon reconciles a mid-list remote kill (non-last pane)" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	bridge_up 3 dmk
+
+	# Kill the MIDDLE remote pane.
+	mid="$($SRC list-panes -t rem -F '#{pane_id}' | sed -n 2p)"
+	$SRC kill-pane -t "$mid"
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$(printf '%s\n' "$src_map" | wc -l)" -eq 2 ]
+	[ "$src_map" = "$dst_map" ]
+	# the killed pane is gone from the mirror's carriers
+	survivor_hit="$(printf '%s\n' "$dst_map" | grep -cx "$mid" || true)"
+	[ "$survivor_hit" -eq 0 ]
+}
+
+# A remote swap-pane permutes the pane set without changing its membership —
+# neither a tail-append nor a tail-removal, so the old reconcile skipped it and
+# each pane kept painting at its old cell. Asserts IDENTITY (which local pane
+# carries which remote pane) and CONTENT (the marker moved with its pane), not
+# just geometry: dims alone cannot tell a correct permutation from a no-op.
+@test "daemon reconciles a remote swap-pane, content following the pane" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	bridge_up 2 dsw
+
+	# Mark the FIRST remote pane, and wait for the marker to reach the mirror.
+	first="$($SRC list-panes -t rem -F '#{pane_id}' | head -1)"
+	$SRC send-keys -t "$first" 'echo SWAPMARK_7K2' Enter
+	for _ in $(seq 1 60); do
+		out="$($DST capture-pane -p -t host-sess:1.0 2>/dev/null)"
+		[[ $out == *SWAPMARK_7K2* ]] && break
+		sleep 0.15
+	done
+	[[ $out == *SWAPMARK_7K2* ]]
+
+	# Swap it with the other pane on the remote.
+	$SRC swap-pane -t "$first" -D
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && [ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+	# the marked pane is now second on both sides; its content must be there too
+	moved="$($DST capture-pane -p -t host-sess:1.1 2>/dev/null)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# the permutation really happened on the remote...
+	[ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ]
+	# ...the mirror's carrier order follows it...
+	[ "$src_map" = "$dst_map" ]
+	# ...and the content rode along with its pane.
+	[[ $moved == *SWAPMARK_7K2* ]]
+}
+
+# === M2.3: structural input (ctl -> daemon -> remote -> mirror) ===
+#
+# These drive the ctl binary directly against the daemon's socket, which is the
+# right seam here: the bats servers run vanilla configs with no lazytmux
+# keybindings, so there is nothing for a gate to intercept. The tmux-config half
+# of M2.3 (the if-shell gates on @bridge_win/@bridge_pane) is therefore NOT
+# covered by these tests — see tests/tmux-next38-readiness.bats for the parts of
+# it that CI can see, and the PR body for what only a two-machine run can.
+
+# remote_pane_of prints the remote pane id the mirror's local pane $1 renders,
+# i.e. the @bridge_pane carrier a real keybind would pass to ctl.
+remote_pane_of() {
+	$DST display-message -p -t "host-sess:1.$1" -F '#{@bridge_pane}'
+}
+
+@test "ctl split-h splits the REMOTE pane and the mirror follows" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c1
+
+	# The daemon stamps the socket on the mirror session, so a keybind can find it.
+	[ "$($DST show-options -v -t host-sess @bridge_sock)" = "$sock" ]
+	# ...and tags the window, which is what gates the bindings.
+	[ "$($DST show-options -w -v -t host-sess:1 @bridge_win)" = "1" ]
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+
+	run "$CTL" --sock "$sock" split-h "$pane"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		src_n="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+		dst_n="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+		[ "$src_n" -eq 2 ] && [ "$dst_n" -eq 2 ] && break
+		sleep 0.15
+	done
+
+	src_n="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# The split happened on the REMOTE, not just locally.
+	[ "$src_n" -eq 2 ]
+	# ...and the mirror wired the new pane to it, at matching dims.
+	[ "$src_map" = "$dst_map" ]
+	[ "$src_dims" = "$dst_dims" ]
+}
+
+@test "ctl resize resizes the REMOTE pane and the mirror converges" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -v -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c2
+
+	pane="$(remote_pane_of 0)"
+	before="$($SRC display-message -p -t "$pane" -F '#{pane_height}')"
+
+	run "$CTL" --sock "$sock" resize "$pane" U 5
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		after="$($SRC display-message -p -t "$pane" -F '#{pane_height}')"
+		[ "$after" != "$before" ] && [ "$(sorted_dims "$DST" host-sess:1)" = "$(sorted_dims "$SRC" rem)" ] && break
+		sleep 0.15
+	done
+
+	after="$($SRC display-message -p -t "$pane" -F '#{pane_height}')"
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$after" != "$before" ] # the remote really resized
+	[ "$src_dims" = "$dst_dims" ]
+}
+
+@test "ctl swap permutes the REMOTE panes and the mirror's wiring follows" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c3
+
+	first="$(remote_pane_of 0)"
+
+	run "$CTL" --sock "$sock" swap "$first" D
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ] && [ "$src_map" = "$dst_map" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ]
+	[ "$src_map" = "$dst_map" ]
+}
+
+@test "ctl kill-pane kills the REMOTE pane and the mirror loses it" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c4
+
+	victim="$(remote_pane_of 1)"
+
+	run "$CTL" --sock "$sock" kill-pane "$victim"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		src_n="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+		dst_n="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+		[ "$src_n" -eq 1 ] && [ "$dst_n" -eq 1 ] && break
+		sleep 0.15
+	done
+
+	src_n="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_n" -eq 1 ]
+	[ "$src_map" = "$dst_map" ]
+}
+
+@test "ctl new-window creates a REMOTE window and the mirror gains one" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c5
+
+	pane="$(remote_pane_of 0)"
+
+	run "$CTL" --sock "$sock" new-window "$pane"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		src_w="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
+		dst_w="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
+		[ "$src_w" -eq 2 ] && [ "$dst_w" -eq 2 ] && break
+		sleep 0.15
+	done
+
+	src_w="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
+	dst_w="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_w" -eq 2 ]
+	[ "$dst_w" -eq 2 ]
+}
+
+@test "ctl rename renames the REMOTE window and @window_bridge_name follows" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c6
+
+	pane="$(remote_pane_of 0)"
+
+	run "$CTL" --sock "$sock" rename "$pane" "ctl renamed"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		src_name="$($SRC display-message -p -t rem:1 -F '#{window_name}')"
+		dst_name="$($DST show-options -w -v -t host-sess:1 @window_bridge_name 2>/dev/null || true)"
+		[ "$src_name" = "ctl renamed" ] && [ "$dst_name" = "ctl renamed" ] && break
+		sleep 0.15
+	done
+
+	src_name="$($SRC display-message -p -t rem:1 -F '#{window_name}')"
+	dst_name="$($DST show-options -w -v -t host-sess:1 @window_bridge_name 2>/dev/null || true)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_name" = "ctl renamed" ]
+	[ "$dst_name" = "ctl renamed" ]
+}
+
+@test "ctl focus moves the REMOTE active pane without oscillating" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c7
+
+	target="$(remote_pane_of 1)"
+	$SRC select-pane -t "$(remote_pane_of 0)"
+
+	run "$CTL" --sock "$sock" focus "$target" 1
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		active="$($SRC display-message -p -t rem -F '#{pane_id}')"
+		[ "$active" = "$target" ] && break
+		sleep 0.15
+	done
+
+	active="$($SRC display-message -p -t rem -F '#{pane_id}')"
+	# Settle, then confirm it stayed put rather than ping-ponging.
+	sleep 1
+	still="$($SRC display-message -p -t rem -F '#{pane_id}')"
+	dst_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$active" = "$target" ]
+	[ "$still" = "$target" ]
+	[ "$dst_panes" -eq 2 ]
+}
+
+# The queue-safety guarantee: a gated keypress against a dead daemon must fail
+# fast and non-zero, never stall tmux's command queue on a dial that hangs.
+@test "ctl against a dead socket fails fast and non-zero" {
+	dead="$BATS_TEST_TMPDIR/dead.sock"
+	start=$(date +%s)
+	run "$CTL" --sock "$dead" split-h '%1'
+	elapsed=$(($(date +%s) - start))
+	[ "$status" -ne 0 ]
+	[ "$elapsed" -lt 5 ]
+	[[ $output == *"unreachable"* ]]
+}
+
+# An unmirrored pane id must be refused rather than acted on.
+@test "ctl refuses a pane this bridge does not mirror" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c8
+
+	run "$CTL" --sock "$sock" split-h '%999'
+	status_seen="$status"
+	output_seen="$output"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$status_seen" -ne 0 ]
+	[[ $output_seen == *"not mirrored"* ]]
 }

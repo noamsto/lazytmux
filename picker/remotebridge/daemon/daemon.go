@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -96,25 +95,31 @@ func Run(cfg Config) error {
 	var sendMu sync.Mutex
 	closed := false
 	cmds := bufio.NewWriter(cfg.Ctl)
-	// send is called from this setup path and from every renderer's input
-	// pump goroutine — mutex-guarded so command lines never interleave on the
-	// wire (mirrors M1 main.go's sendMu).
-	send := func(s string) {
+	// sendOK is called from this setup path, from every renderer's input pump
+	// goroutine, and from ctl connections — mutex-guarded so command lines never
+	// interleave on the wire (mirrors M1 main.go's sendMu). It reports whether
+	// the line was written: a ctl request that loses the race with teardown must
+	// not be acked as accepted, or the keybind reports success for a gesture that
+	// never happened.
+	sendOK := func(s string) bool {
 		sendMu.Lock()
 		defer sendMu.Unlock()
 		if closed {
-			return
+			return false
 		}
 		fmt.Fprintf(cmds, "%s\n", s)
 		cmds.Flush()
+		return true
 	}
+	// send is the fire-and-forget form the mirror paths use.
+	send := func(s string) { sendOK(s) }
 
 	// Drain the implicit attach reply (startup skip is sanctioned — B3).
 	readReply(reader)
 
 	// Enumerate every window of the bridged remote session. Read BOTH index
 	// and id: --window is an *index*, the registry is keyed by *id* (@N).
-	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id} #{window_name}'", tmuxQuote(cfg.RemoteSession)))
+	send(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	lw, ok := readReply(reader)
 	if !ok || lw.Kind == controlmode.Error {
 		return fmt.Errorf("daemon: list-windows for %s failed", cfg.RemoteSession)
@@ -145,7 +150,25 @@ func Run(cfg Config) error {
 		fmt.Fprintf(os.Stderr, "daemon: write pidfile %s: %v\n", pidFile, err)
 	}
 	connCh := make(chan helloConn, 64)
-	go acceptRenderers(listener, connCh)
+	cst := newCtlState()
+	go acceptConns(listener, connCh, func(argv []string) error {
+		req, err := cst.parseCtl(argv, cfg.RemoteSession)
+		if err != nil {
+			return err
+		}
+		if !cst.submit(req, sendOK) {
+			return fmt.Errorf("bridge is shutting down")
+		}
+		return nil
+	})
+
+	// @bridge_sock is the carrier a keybind reads to reach this daemon. Stamped
+	// on the session before any mirror window exists, so no gate can fire against
+	// a bridge window whose session has no socket yet — and stamped by the daemon
+	// rather than the launcher so the offline --test-local harness gets it too.
+	if cfg.LocalSess != "" {
+		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_sock", cfg.SockPath)
+	}
 
 	reg := newRegistry(cfg.BaseIndex)
 	cv := newConverger()
@@ -198,7 +221,7 @@ func Run(cfg Config) error {
 			cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals window_name
 		}
 		mw := reg.add(rw.id, localWin)
-		if err := setupWindow(cfg, reader, send, router, connCh, mw, cv, readReply); err != nil {
+		if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, readReply); err != nil {
 			teardown()
 			return err
 		}
@@ -240,7 +263,7 @@ func Run(cfg Config) error {
 		case controlmode.LayoutChange:
 			if len(l.Args) > 0 {
 				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
-					reconcileLayout(cfg, mw, reader, send, router, connCh)
+					reconcileLayout(cfg, mw, reader, send, router, connCh, cst)
 				}
 			}
 		case controlmode.WindowRenamed, controlmode.SessionWindowChanged:
@@ -249,14 +272,25 @@ func Run(cfg Config) error {
 			}
 		case controlmode.WindowAdd:
 			if len(l.Args) > 0 {
-				addWindow(cfg, reader, send, router, connCh, reg, cv, l.Args[0])
+				addWindow(cfg, reader, send, router, connCh, cst, reg, cv, l.Args[0])
 			}
 		case controlmode.WindowClose:
 			if len(l.Args) > 0 {
-				closeWindow(cfg, router, reg, cv, l.Args[0])
+				closeWindow(cfg, router, cst, reg, cv, l.Args[0])
 				if reg.empty() {
 					teardown()
 					return nil
+				}
+			}
+		case controlmode.WindowPaneChanged:
+			// The remote's active pane moved. The echo guards decide whether this
+			// is our own select-pane coming back or a genuine external change that
+			// local focus must follow (focus.go).
+			if len(l.Args) > 1 {
+				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
+					if pane, follow := cst.applyRemoteFocus(mw.remoteID, l.Args[1]); follow {
+						focusLocalPane(cfg, cst, mw, mw.remotePanes, pane)
+					}
 				}
 			}
 		case controlmode.Pause:
@@ -270,6 +304,27 @@ func Run(cfg Config) error {
 		case controlmode.Exit:
 			teardown()
 			return nil
+		}
+
+		// Drain the reconcile intents a ctl request registered. This runs after
+		// the line above because reader.Next() blocks: the reply block for the
+		// ctl request's own remote command is what wakes the loop back to here,
+		// so a gesture is always followed by a drain without needing a timer.
+		if wantWindows, layouts := cst.takeIntents(); wantWindows || len(layouts) > 0 {
+			if wantWindows {
+				reconcileWindows(cfg, reader, send, router, connCh, cst, reg, cv)
+				if reg.empty() {
+					teardown()
+					return nil
+				}
+			}
+			for _, remoteID := range layouts {
+				// A layout intent for a window reconcileWindows just closed has
+				// nothing to reconcile.
+				if mw, ok := reg.byRemoteID(remoteID); ok {
+					reconcileLayout(cfg, mw, reader, send, router, connCh, cst)
+				}
+			}
 		}
 	}
 	teardown()
@@ -292,7 +347,7 @@ func Run(cfg Config) error {
 // For a 1-pane remote window this is exactly M1's behavior — no split, one
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
-func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, mw *mirrorWindow, cv *converger, reply replyFn) error {
+func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, mw *mirrorWindow, cv *converger, reply replyFn) error {
 	// Cap the remote window at what the local clients can show before reading
 	// its layout, so the layout that gets mirrored is the converged one.
 	if w, h := cfg.LocalArea(); cv.need(mw.remoteID, w, h) {
@@ -300,7 +355,7 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 		reply(reader) // consume refresh-client's own (empty) reply
 	}
 
-	L, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), reply)
+	L, _, err := readLayout(reader, send, remoteWinTarget(cfg, mw.remoteID), reply)
 	if err != nil {
 		return err
 	}
@@ -313,6 +368,7 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 	}
 
 	mw.remotePanes = RemotePaneOrder(L)
+	cst.setWindowPanes(mw.remoteID, mw.remotePanes)
 
 	// Spawn one renderer per local pane, targeted by position — the local
 	// window has no other source of pane identity available through Config
@@ -362,13 +418,13 @@ func setupWindow(cfg Config, reader *controlmode.Reader, send func(string), rout
 // the same plan/spawn/hello/seed pipeline as startup (routing-aware, since
 // siblings are live). Otherwise (the window belongs elsewhere, or a duplicate
 // notification for an already-registered window) it's a no-op.
-func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reg *registry, cv *converger, remoteID string) {
+func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, remoteID string) {
 	if _, already := reg.byRemoteID(remoteID); already {
 		return
 	}
 	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
 
-	send(fmt.Sprintf("list-windows -t %s -F '#{window_index} #{window_id} #{window_name}'", tmuxQuote(cfg.RemoteSession)))
+	send(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	lw, ok := reply(reader)
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: list-windows failed\n", remoteID)
@@ -399,7 +455,7 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
 	}
 	mw := reg.add(remoteID, localWin)
-	if err := setupWindow(cfg, reader, send, router, connCh, mw, cv, reply); err != nil {
+	if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, reply); err != nil {
 		// Drop the half-created entry + local window so the already-registered
 		// guard doesn't block a later %window-add retry for this id.
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)
@@ -413,12 +469,13 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 // closes) each pane's output sink, closes each renderer conn, and kills the
 // local window. A notification for a window outside the registry is a no-op
 // (B2) — kill-window must never run against a window this daemon doesn't own.
-func closeWindow(cfg Config, router *Router, reg *registry, cv *converger, remoteID string) {
+func closeWindow(cfg Config, router *Router, cst *ctlState, reg *registry, cv *converger, remoteID string) {
 	mw, ok := reg.remove(remoteID)
 	if !ok {
 		return
 	}
 	cv.forget(remoteID)
+	cst.forgetWindow(remoteID)
 	for _, id := range mw.remotePanes {
 		router.Unregister(id)
 	}
@@ -490,35 +547,61 @@ func tmuxQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func readLayout(reader *controlmode.Reader, send func(string), target string, reply replyFn) (controlmode.Layout, error) {
-	send(fmt.Sprintf("display-message -p -t %s -F '#{window_layout}'", target))
+// readLayout reads target's layout string and, in the same round-trip, the
+// remote window's active pane id — #{pane_id} in window scope. Layout strings
+// contain no spaces, so one space-separated reply carries both, and every
+// reconcile gets the remote's focus from ground truth instead of a belief.
+func readLayout(reader *controlmode.Reader, send func(string), target string, reply replyFn) (controlmode.Layout, string, error) {
+	send(fmt.Sprintf("display-message -p -t %s -F '#{window_layout} #{pane_id}'", target))
 	l, ok := reply(reader)
 	if !ok {
-		return controlmode.Layout{}, fmt.Errorf("daemon: control connection closed reading layout for %s", target)
+		return controlmode.Layout{}, "", fmt.Errorf("daemon: control connection closed reading layout for %s", target)
 	}
 	if l.Kind == controlmode.Error {
-		return controlmode.Layout{}, fmt.Errorf("daemon: display-message window_layout -t %s: %s", target, l.Data)
+		return controlmode.Layout{}, "", fmt.Errorf("daemon: display-message window_layout -t %s: %s", target, l.Data)
 	}
-	return controlmode.ParseLayout(strings.TrimSpace(string(l.Data)))
+	fields := strings.Fields(string(l.Data))
+	if len(fields) == 0 {
+		return controlmode.Layout{}, "", fmt.Errorf("daemon: empty layout reply for %s", target)
+	}
+	active := ""
+	if len(fields) > 1 {
+		active = fields[1]
+	}
+	L, err := controlmode.ParseLayout(fields[0])
+	return L, active, err
 }
 
 // spawnRenderer respawns localWin's pane at position index (targeted by
 // window.index, since PlanWindow's local panes are created in RemotePaneOrder
 // position) with the renderer binary, wired to dial back with remotePane's id.
+//
+// It also stamps the pane's remote id into the @bridge_pane pane option: that
+// is the carrier a local keybind reads to tell the daemon which remote pane a
+// structural gesture applies to. Pane options survive respawn-pane -k and ride
+// with the pane through select-layout and swap-pane (verified), so this is the
+// only place it needs writing.
 func spawnRenderer(cfg Config, localWin string, index int, remotePane string) error {
 	target := fmt.Sprintf("%s.%d", localWin, index)
-	return cfg.LocalTmux("respawn-pane", "-k",
+	if err := cfg.LocalTmux("respawn-pane", "-k",
 		"-e", "LZTMUX_RENDER_SOCK="+cfg.SockPath,
 		"-e", "LZTMUX_RENDER_PANE="+remotePane,
 		"-t", target,
 		cfg.RendererBin,
-	)
+	); err != nil {
+		return err
+	}
+	cfg.LocalTmux("set-option", "-p", "-t", target, "@bridge_pane", remotePane)
+	return nil
 }
 
-// acceptRenderers accepts connections on l until it's closed, reads each
-// one's FrameHello, and delivers (remote pane id, conn) pairs to out.
-// Connections that don't Hello correctly are dropped.
-func acceptRenderers(l net.Listener, out chan<- helloConn) {
+// acceptConns accepts connections on l until it's closed and dispatches each on
+// its FIRST frame: a FrameHello is a renderer, delivered to out and kept open for
+// the life of its pane; a FrameCtl is a one-shot structural request from a local
+// keybind, answered with a FrameCtlAck and closed. Anything else is dropped.
+//
+// onCtl reports an error to send back in the ack; an empty ack means accepted.
+func acceptConns(l net.Listener, out chan<- helloConn, onCtl func(argv []string) error) {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -526,11 +609,23 @@ func acceptRenderers(l net.Listener, out chan<- helloConn) {
 		}
 		go func() {
 			f, err := wire.ReadFrame(conn)
-			if err != nil || f.Type != wire.FrameHello {
+			if err != nil {
 				conn.Close()
 				return
 			}
-			out <- helloConn{paneID: string(f.Payload), conn: conn}
+			switch f.Type {
+			case wire.FrameHello:
+				out <- helloConn{paneID: string(f.Payload), conn: conn}
+			case wire.FrameCtl:
+				defer conn.Close()
+				msg := ""
+				if err := onCtl(wire.DecodeArgv(f.Payload)); err != nil {
+					msg = err.Error()
+				}
+				wire.WriteFrame(conn, wire.FrameCtlAck, []byte(msg))
+			default:
+				conn.Close()
+			}
 		}()
 	}
 }
@@ -691,157 +786,4 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 			send(strings.Join(args, " "))
 		}
 	}
-}
-
-// maxReconcilePasses bounds reconcileLayout's trailing-reread loop (below).
-const maxReconcilePasses = 5
-
-// reconcileLayout re-reads window w's remote layout and, if the pane set
-// changed, applies the two minimal M2.1 cases: a pure tail-append (a remote
-// split added panes) or a pure tail-removal (remote pane(s) closed). Any
-// other change (reordering, mid-list insert/remove) is a full diff engine —
-// deferred — so it's logged and left as-is for this cycle. The updated
-// pane-order is stored back on w.remotePanes.
-//
-// Round-trips here use the routing-aware reply reader (B3): sibling windows
-// are streaming during a live reconcile, so any %output seen while awaiting a
-// reply is routed rather than dropped. The remote window is targeted by its
-// id (@N) directly, never by a bare index.
-//
-// Loops on a trailing re-read after applying: a second remote layout change
-// landing back-to-back with the first can have its own %layout-change
-// swallowed while this function is mid-flight (readReplyRouting still returns
-// on the reply block, not on the async notification). Re-reading once more
-// right after applying catches this: the round-trips above give the remote
-// plenty of time to settle, so a still-different layout means something
-// changed underneath us and needs its own pass.
-func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn) {
-	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
-	target := remoteWinTarget(cfg, w.remoteID)
-
-	remote := w.remotePanes
-	L, err := readLayout(reader, send, target, reply)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-		return
-	}
-
-	for pass := 0; pass < maxReconcilePasses; pass++ {
-		newRemote := RemotePaneOrder(L)
-		geometryOnly := reflect.DeepEqual(newRemote, remote)
-
-		switch {
-		case geometryOnly:
-			// Geometry-only change (typically a client/terminal resize propagated to
-			// the remote): same pane set, new dims. Re-seed below, after the local
-			// pane has been reshaped to accept the new screen.
-		case isPrefixOf(remote, newRemote):
-			// Relies on split-window's new pane landing at pane_index==i (bare
-			// split, no -b/target-pane games): spawnRenderer targets the local
-			// pane by that position right after the split with no readback
-			// confirming it.
-			for i := len(remote); i < len(newRemote); i++ {
-				if err := cfg.LocalTmux("split-window", "-h", "-t", w.localWin); err != nil {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change split: %v\n", err)
-					w.remotePanes = remote
-					return
-				}
-				if err := spawnRenderer(cfg, w.localWin, i, newRemote[i]); err != nil {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change spawn renderer: %v\n", err)
-					w.remotePanes = remote
-					return
-				}
-			}
-			added, err := collectHellos(connCh, len(newRemote)-len(remote), helloTimeout)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-				w.remotePanes = remote
-				return
-			}
-			for i := len(remote); i < len(newRemote); i++ {
-				id := newRemote[i]
-				c := added[id]
-				if c == nil {
-					continue
-				}
-				w.conns[id] = c
-				if seedRenderer(reader, send, router, c, id, reply, L.Panes[i]) {
-					go pumpInput(c, id, send)
-				} else {
-					delete(w.conns, id)
-				}
-			}
-		case isPrefixOf(newRemote, remote):
-			for i := len(remote) - 1; i >= len(newRemote); i-- {
-				removed := remote[i]
-				router.Unregister(removed)
-				if c := w.conns[removed]; c != nil {
-					c.Close()
-					delete(w.conns, removed)
-				}
-				if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change kill-pane: %v\n", err)
-				}
-			}
-		default:
-			fmt.Fprintf(os.Stderr, "daemon: layout-change: unsupported pane reshuffle %v -> %v, skipping reconcile\n", remote, newRemote)
-			w.remotePanes = remote
-			return
-		}
-
-		// Re-fit before select-layout: a geometry-only change is usually the
-		// remote resizing under us (the other client resized, or our own cap
-		// landed), and an unfitted window would rescale the layout to the
-		// local client's size instead of taking the remote's.
-		if err := cfg.LocalTmux(FitWindowCmd(w.localWin, L)...); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: layout-change resize-window: %v\n", err)
-		}
-		if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
-		}
-		// select-layout reshapes every surviving pane, so push each its new
-		// dims (layout is daemon-authoritative — renderers only record them).
-		for i, id := range newRemote {
-			if s := router.sink(id); s != nil {
-				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
-			}
-		}
-		if geometryOnly {
-			for _, id := range remote {
-				s := router.sink(id)
-				if s == nil {
-					continue
-				}
-				if seed, err := PaneSeed(reader, send, id, reply); err == nil {
-					s.enqueue(wire.FrameSeed, seed)
-				} else {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
-				}
-			}
-		}
-		remote = newRemote
-
-		fresh, err := readLayout(reader, send, target, reply)
-		if err != nil || fresh.Raw == L.Raw {
-			w.remotePanes = remote
-			return
-		}
-		L = fresh
-	}
-	fmt.Fprintf(os.Stderr, "daemon: layout-change: didn't converge after %d passes, stopping at %v\n", maxReconcilePasses, remote)
-	w.remotePanes = remote
-}
-
-// isPrefixOf reports whether a is a prefix of b (used to detect pure
-// tail-append/tail-removal pane-set changes).
-func isPrefixOf(a, b []string) bool {
-	if len(a) > len(b) {
-		return false
-	}
-	for i, v := range a {
-		if b[i] != v {
-			return false
-		}
-	}
-	return true
 }

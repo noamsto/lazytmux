@@ -32,7 +32,7 @@ func TestRouterRoutesByPane(t *testing.T) {
 
 func TestRouterDemuxAcrossWindows(t *testing.T) {
 	r := NewRouter()
-	var a, b capBuf // capBuf from daemon_test.go (same package)
+	var a, b capBuf      // capBuf from daemon_test.go (same package)
 	r.Register("%1", &a) // window @1's pane
 	r.Register("%9", &b) // window @2's pane
 	r.Route("%1", []byte("A1"))
@@ -62,7 +62,7 @@ func TestCloseWindowUnregistersOnlyItsPanes(t *testing.T) {
 	router.Register("%9", &s9)
 	cfg := Config{LocalTmux: func(...string) error { return nil }}
 
-	closeWindow(cfg, router, reg, newConverger(), "@1")
+	closeWindow(cfg, router, newCtlState(), reg, newConverger(), "@1")
 
 	router.Route("%1", []byte("x"))
 	router.Route("%2", []byte("y"))

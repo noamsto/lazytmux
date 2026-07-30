@@ -38,13 +38,14 @@ func TestRegistryLookup(t *testing.T) {
 
 func TestParseWindowList(t *testing.T) {
 	// index and id are distinct namespaces: window at index 3 has id @5.
+	// window_active sits before the name, which is the only free-form field.
 	// A name may contain spaces; a `|` is preserved here (sanitized at write time).
-	got := parseWindowList("1 @1 shell\n2 @2 my window\n3 @5 a|b\n4 @7\n")
+	got := parseWindowList("1 @1 0 shell\n2 @2 1 my window\n3 @5 0 a|b\n4 @7 0\n")
 	want := []remoteWindow{
-		{"1", "@1", "shell"},
-		{"2", "@2", "my window"},
-		{"3", "@5", "a|b"},
-		{"4", "@7", ""}, // no name field -> empty
+		{"1", "@1", false, "shell"},
+		{"2", "@2", true, "my window"},
+		{"3", "@5", false, "a|b"},
+		{"4", "@7", false, ""}, // no name field -> empty
 	}
 	if len(got) != len(want) {
 		t.Fatalf("parseWindowList = %v, want %v", got, want)
@@ -64,7 +65,7 @@ func TestParseWindowList(t *testing.T) {
 // select the local window mirroring @7 — never "@2" (which here is a different
 // window at index 1).
 func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
-	wins := []remoteWindow{{"1", "@2", ""}, {"2", "@7", ""}} // index 1 -> @2, index 2 -> @7
+	wins := []remoteWindow{{"1", "@2", false, ""}, {"2", "@7", false, ""}} // index 1 -> @2, index 2 -> @7
 	reg := newRegistry(1)
 	reg.add("@2", "h-s:1")
 	reg.add("@7", "h-s:2")

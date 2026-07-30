@@ -527,6 +527,23 @@
               touch $out
             '';
 
+          # buildGoModule's checkPhase runs `go test` over subPackages only, and
+          # non-recursively, so remotebridge/{daemon,wire,controlmode,render} —
+          # where the mirror engine, the pane diff, the ctl verb table and the
+          # focus state machine all live — were not covered by `nix flake check`
+          # at all. Same shape as agent-detect-go-tests. -race because M2.3 is the
+          # first milestone to touch mirror state from a second goroutine.
+          remotebridge-go-tests = pickerAgentDetect.overrideAttrs (_old: {
+            name = "remotebridge-go-tests";
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              export GOFLAGS=''${GOFLAGS//-trimpath/}
+              go test -race ./remotebridge/...
+              runHook postCheck
+            '';
+          });
+
           remote-bridge-integration-tests =
             pkgs.runCommand "remote-bridge-integration-tests" {
               # tmux: same private, config-less server pattern as the other
@@ -561,6 +578,10 @@
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep (mkTmux pkgs)];
               DAEMON = "${pickerAgentDetect}/bin/lztmux-remote-bridge-daemon";
               RENDERER = "${pickerAgentDetect}/bin/lztmux-remote-bridge-renderer";
+              # M2.3 structural input: the tests drive ctl straight at the
+              # daemon's socket, since these vanilla -L servers carry no
+              # lazytmux keybindings for a gate to intercept.
+              CTL = "${pickerAgentDetect}/bin/lztmux-remote-bridge-ctl";
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
