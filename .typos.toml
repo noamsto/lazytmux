@@ -1,3 +1,5 @@
 [default.extend-words]
 # Catppuccin theme variable prefix (@thm_green, @thm_bg, etc.)
 thm = "thm"
+# tmux layout-string checksums quoted verbatim in the bridge design docs
+ba = "ba"

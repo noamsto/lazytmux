@@ -111,8 +111,7 @@ func Run(cfg Config) error {
 		cmds.Flush()
 		return true
 	}
-	// send is the fire-and-forget form the mirror paths use, where a write lost
-	// to teardown is exactly as harmless as it sounds.
+	// send is the fire-and-forget form the mirror paths use.
 	send := func(s string) { sendOK(s) }
 
 	// Drain the implicit attach reply (startup skip is sanctioned — B3).

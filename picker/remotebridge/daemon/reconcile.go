@@ -84,8 +84,6 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
 			}
 		}
-		// #233: the geometry-only re-seed lands here, after the local pane has
-		// been reshaped to accept the new screen.
 		if !structural {
 			for _, id := range newRemote {
 				s := router.sink(id)
