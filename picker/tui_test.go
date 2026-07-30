@@ -271,6 +271,53 @@ func TestRenderWindowItemsLongIDClamped(t *testing.T) {
 	}
 }
 
+func TestRenderWindowItemsBridgeName(t *testing.T) {
+	// A remote-bridge mirror window (#232): the picker must show the daemon-owned
+	// @window_bridge_name, not the pane cwd basename — mirroring the status bar.
+	windows := []windowData{
+		{session: "s", index: 1, name: "noams", bridgeName: "ZULU"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	var row string
+	for _, it := range items {
+		if !it.isHeader {
+			row = it.plain
+		}
+	}
+	if !strings.Contains(row, "ZULU") {
+		t.Errorf("bridge name should render inline; got %q", row)
+	}
+	if strings.Contains(row, "noams") {
+		t.Errorf("cwd basename should not leak through for a bridge window; got %q", row)
+	}
+}
+
+func TestRenderWindowItemsBridgeNameOutrankedByIssueAndBranch(t *testing.T) {
+	// bridgeName must sit after issue and non-default-branch identity in the
+	// chain, matching the status bar's priority (though a real bridge window
+	// never carries either, per #182).
+	windows := []windowData{
+		{session: "s", index: 1, name: "noams", bridgeName: "ZULU", labelID: "L ENG-1", labelRest: " title"},
+		{session: "s", index: 2, name: "other", bridgeName: "ZULU", branch: "feat/foo"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(rows))
+	}
+	if !strings.Contains(rows[0], "ENG-1") || strings.Contains(rows[0], "ZULU") {
+		t.Errorf("issue identity should outrank bridge name; got %q", rows[0])
+	}
+	if !strings.Contains(rows[1], "feat/foo") || strings.Contains(rows[1], "ZULU") {
+		t.Errorf("branch identity should outrank bridge name; got %q", rows[1])
+	}
+}
+
 func TestPreviewToggleResizesViewport(t *testing.T) {
 	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
 		visible: []listItem{{target: "a", display: "a"}}}

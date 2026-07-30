@@ -72,6 +72,7 @@ type windowData struct {
 	// stamped (single source of truth — the status bar reads the same).
 	labelID     string // @window_label_id   — "<provider> <id>" or ""
 	labelRest   string // @window_label_rest_long — issue title (leading space)
+	bridgeName  string // @window_bridge_name — daemon-owned remote window name, or ""
 	prPlain     string // @window_pr_plain   — " <glyph> #<n>" or ""
 	prState     string // @pr_state
 	prCheck     string // @pr_check_state
@@ -213,7 +214,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}").Output()
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}\t#{@window_bridge_name}").Output()
 	if err != nil {
 		return nil
 	}
@@ -230,6 +231,7 @@ func collectWindows() []windowData {
 		path        string // pane_current_path for git branch fallback
 		labelID     string
 		labelRest   string
+		bridgeName  string
 		prPlain     string
 		prState     string
 		prCheck     string
@@ -250,7 +252,7 @@ func collectWindows() []windowData {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 16)
+		parts := strings.SplitN(line, "\t", 17)
 		if len(parts) < 6 {
 			continue
 		}
@@ -276,6 +278,7 @@ func collectWindows() []windowData {
 				prMergeable: field(parts, 13),
 				crewName:    field(parts, 14),
 				crewColor:   field(parts, 15),
+				bridgeName:  field(parts, 16),
 				seen:        make(map[string]bool),
 			}
 			m[k] = wi
@@ -319,6 +322,7 @@ func collectWindows() []windowData {
 			procs:       wi.procs,
 			labelID:     wi.labelID,
 			labelRest:   wi.labelRest,
+			bridgeName:  wi.bridgeName,
 			prPlain:     wi.prPlain,
 			prState:     wi.prState,
 			prCheck:     wi.prCheck,
