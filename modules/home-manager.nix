@@ -392,8 +392,13 @@ in {
 
       prRefreshSeconds = lib.mkOption {
         type = lib.types.ints.between 10 300;
-        default = 30;
-        description = "Background PR enrichment cadence in seconds (clamped 10–300).";
+        default = 120;
+        description = ''
+          Background PR enrichment cadence in seconds (clamped 10–300). Every pass
+          spends GitHub API budget per repo, so a short cadence across many
+          worktree windows adds up fast — 30s alone was enough to exhaust a
+          5000/hr GraphQL bucket.
+        '';
       };
 
       icons = lib.mkOption {

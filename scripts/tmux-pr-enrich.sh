@@ -22,7 +22,9 @@ source @lib_log@
 REFRESH_SECONDS="@pr_refresh_seconds@"
 TTL=60
 # A cached "no PR" expires faster: none→PR is the transition a user actively
-# waits on right after `gh pr create`; PR-state changes are less urgent.
+# waits on right after `gh pr create`; PR-state changes are less urgent. Applies
+# only where an open PR hasn't been ruled out — single-target mode and a failed
+# batch. In a full pass the batch itself surfaces the new PR (fetch_terminal_pr).
 TTL_NONE=15
 # Merged/closed PRs are terminal: re-polling them every TTL wastes two serial
 # gh calls per branch. The long TTL (not infinity) still catches a reopened PR
@@ -173,13 +175,37 @@ branch_cache_key() {
 # fetch_branch_pr DIR BRANCH [KEY]  → echoes cache JSON path, refreshing via
 # gh if stale. DIR is a checkout of the branch's repo; KEY is the precomputed
 # cache key (derived from DIR+BRANCH when absent, saving a git fork for
-# callers that already hold it).
+# callers that already hold it). Asks for the open PR first, then --state all
+# for a merged/closed one, so an open PR always wins over an older closed one
+# on the same head.
 fetch_branch_pr() {
 	local d="$1" b="$2" key="${3:-}"
 	if [[ -z $key ]]; then
 		branch_cache_key "$d" "$b"
 		key="$REPLY"
 	fi
+	fetch_pr_cached "$d" "$b" "$key" open+all "$TTL_NONE"
+}
+
+# fetch_terminal_pr DIR BRANCH KEY  → echoes cache JSON path. For a branch the
+# repo batch has already proven has no OPEN PR: merged, closed, and never-had-one
+# are all terminal, so the answer holds for TTL_TERMINAL rather than TTL_NONE,
+# and one --state all call settles it (the batch ruled open out already).
+#
+# This is where the poller's API budget used to go: a branch with no PR answers
+# "[]", TTL_NONE expires it before the next pass, and the full lookup spends two
+# serial gh calls to learn the same nothing — every pass, for exactly the
+# branches with the least to say. A PR opened later needs no lookup at all: it
+# appears in the next pass's batch by headRefName.
+fetch_terminal_pr() {
+	fetch_pr_cached "$1" "$2" "$3" all "$TTL_TERMINAL"
+}
+
+# fetch_pr_cached DIR BRANCH KEY STATES TTL_NONE — shared body of the two
+# lookups above. STATES is "open+all" (open PR first, fall back to merged/closed)
+# or "all" (one call). TTL_NONE governs how long a "no PR" answer is trusted.
+fetch_pr_cached() {
+	local d="$1" b="$2" key="$3" states="$4" ttl_none="$5"
 	local cache="$ENRICH_CACHE_DIR/$key.json"
 	local lock="$ENRICH_CACHE_DIR/$key.lock"
 
@@ -190,7 +216,7 @@ fetch_branch_pr() {
 		content="$(<"$cache")"
 		age=$((EPOCHSECONDS - $(file_mtime "$cache")))
 	fi
-	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$TTL_NONE" "$TTL_TERMINAL"
+	pr_cache_decision "$force" "$exists" "$content" "$age" "$TTL" "$ttl_none" "$TTL_TERMINAL"
 	if [[ $REPLY == "serve" ]]; then
 		printf '%s' "$cache"
 		return
@@ -210,9 +236,11 @@ fetch_branch_pr() {
 	(
 		acquire_lock "$lock" || exit 0
 		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
-		local json
-		json="$(gh pr list --head "$b" --state open --limit 1 \
-			--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
+		local json=""
+		if [[ $states == open+all ]]; then
+			json="$(gh pr list --head "$b" --state open --limit 1 \
+				--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
+		fi
 		if [[ $json == "[]" || -z $json ]]; then
 			json="$(gh pr list --head "$b" --state all --limit 1 \
 				--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
@@ -268,10 +296,11 @@ apply_cache_to_target() {
 # run_full_pass; reused for cache keys so no git forks happen here). BRANCHES
 # is newline-separated; WINDOWS is newline-separated "target|branch" lines.
 # One gh call indexes the repo's open PRs by head branch (headRefName; each
-# value is a single-element array matching the per-branch cache format). Only
-# heads with no open PR fall back to a per-branch lookup (which catches
-# merged/closed via --state all). So the common case — each worktree has an
-# open PR — costs a single API round-trip per repo.
+# value is a single-element array matching the per-branch cache format), so the
+# common case — each worktree has an open PR — costs a single API round-trip per
+# repo. A successful batch is authoritative for open PRs: heads missing from it
+# have none, which is a terminal answer (fetch_terminal_pr), so they cost at most
+# one call an hour rather than two every pass.
 enrich_repo_group() {
 	local d="$1" repo_id="$2"
 	local branches=() wlines=()
@@ -279,11 +308,12 @@ enrich_repo_group() {
 	mapfile -t wlines <<<"$4"
 
 	declare -A open_pr
-	local all_json head obj
+	local all_json head obj batch_ok=0
 	if command -v gh >/dev/null 2>&1 &&
 		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
 			--json number,title,url,state,statusCheckRollup,mergeable,isDraft,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
+		batch_ok=1
 		while IFS=$'\t' read -r head obj; do
 			[[ -n $head ]] && open_pr[$head]="$obj"
 		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
@@ -297,9 +327,14 @@ enrich_repo_group() {
 		cache="$ENRICH_CACHE_DIR/$ck.json"
 		if [[ -n ${open_pr[$br]+x} ]]; then
 			printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+		elif ((batch_ok)); then
+			# No open PR for this head, on the batch's authority: only merged,
+			# closed or none is left, and the next batch catches a PR opened later.
+			cache="$(fetch_terminal_pr "$d" "$br" "$ck")"
 		else
-			# No open PR for this head (or gh/batch unavailable): the per-branch
-			# lookup resolves merged/closed and serves the cache on failure.
+			# The batch itself failed (no gh, offline, rate-limited): nothing has
+			# been ruled out, so run the full lookup — it serves the cache on
+			# failure rather than wiping to "none".
 			cache="$(fetch_branch_pr "$d" "$br" "$ck")"
 		fi
 		for line in "${wlines[@]}"; do
