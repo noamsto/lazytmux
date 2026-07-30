@@ -336,23 +336,23 @@ sorted_dims() {
 		>"$BATS_TEST_TMPDIR/dg.log" 2>&1 &
 	daemon_pid=$!
 
-	# Darwin CI can take longer than the other M2 cases to start this renderer.
-	for _ in $(seq 1 100); do
-		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
-		sleep 0.1
+	# Gate on an observable paint rather than pane_current_command: tmux reports
+	# renderer process names differently on Darwin. Retry the startup marker so
+	# an output emitted while the daemon is still wiring its first pane is not
+	# lost to setup's reply reader.
+	painted=no
+	for _ in $(seq 1 20); do
+		$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
+		for _ in $(seq 1 10); do
+			out="$($DST capture-pane -p -t host-sess:1 2>/dev/null)"
+			[[ $out == *RESEED_GEOMETRY_9F3Q* ]] && {
+				painted=yes
+				break 2
+			}
+			sleep 0.1
+		done
 	done
-	[[ $cmd == *renderer* ]] || {
-		cat "$BATS_TEST_TMPDIR/dg.log" >&3
-		false
-	}
-	$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
-	for _ in $(seq 1 40); do
-		out="$($DST capture-pane -p -t host-sess:1 2>/dev/null)"
-		[[ $out == *RESEED_GEOMETRY_9F3Q* ]] && break
-		sleep 0.1
-	done
-	[[ $out == *RESEED_GEOMETRY_9F3Q* ]]
+	[ "$painted" = yes ]
 
 	# A pty-hosted second remote client starts at the current size, then shrinks.
 	# The per-window cap permits this smaller client to resize the remote without
