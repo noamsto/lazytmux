@@ -329,7 +329,6 @@ sorted_dims() {
 @test "daemon repaints mirrored content after a remote geometry change" {
 	$SRC new-session -d -s rem -x 100 -y 30
 	$DST new-session -d -s host-sess -x 100 -y 30
-	$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
 
 	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
@@ -349,6 +348,13 @@ sorted_dims() {
 		cat "$BATS_TEST_TMPDIR/dg.log" >&3
 		false
 	}
+	$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
+	for _ in $(seq 1 40); do
+		out="$($DST capture-pane -p -t host-sess:1 2>/dev/null)"
+		[[ $out == *RESEED_GEOMETRY_9F3Q* ]] && break
+		sleep 0.1
+	done
+	[[ $out == *RESEED_GEOMETRY_9F3Q* ]]
 
 	# A pty-hosted second remote client starts at the current size, then shrinks.
 	# The per-window cap permits this smaller client to resize the remote without
