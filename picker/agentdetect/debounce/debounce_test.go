@@ -1,6 +1,7 @@
 package debounce
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -39,9 +40,9 @@ func TestCeilingFiresWhenQuietWindowNeverSettles(t *testing.T) {
 		}
 	}
 	// Paced by the ceiling alone: first at 500, then 500 past the mark that
-	// followed it. Without the ceiling this list is empty — the bug.
+	// followed it. Without the ceiling this list is empty.
 	want := []int{500, 1010}
-	if len(fireAt) != len(want) || fireAt[0] != want[0] || fireAt[1] != want[1] {
+	if !slices.Equal(fireAt, want) {
 		t.Fatalf("ceiling samples: got %v, want %v", fireAt, want)
 	}
 }

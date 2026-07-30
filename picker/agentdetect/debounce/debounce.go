@@ -35,10 +35,8 @@ func (d *Debouncer) Due(now time.Time) bool {
 		return false
 	}
 	// dirtyAt is the first mark since the last sample, so the ceiling paces
-	// samples of an animating pane instead of measuring from its first frame
-	// ever. Such a sample can land mid-repaint and blend two frames; harmless
-	// in practice, since consecutive frames differ only where they animate and
-	// the next sample corrects any transient misread.
+	// samples of an animating pane rather than measuring from its first frame
+	// ever. Such a sample can land mid-repaint; the next one corrects it.
 	if now.Sub(d.lastMark) >= d.window || now.Sub(d.dirtyAt) >= d.ceiling {
 		d.fired = true
 		d.dirty = false
