@@ -156,6 +156,18 @@
               touch $out
             '';
 
+          enrich-budget-tests =
+            pkgs.runCommand "enrich-budget-tests" {
+              # git: the pass groups windows by `git rev-parse --git-common-dir`,
+              # so the fixture needs a real repo.
+              nativeBuildInputs = [pkgs.bats pkgs.jq pkgs.coreutils pkgs.git];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/enrich-budget.bats
+              touch $out
+            '';
+
           reflow-tests =
             pkgs.runCommand "reflow-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
