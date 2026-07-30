@@ -566,28 +566,22 @@ pane_map() {
 }
 
 # bridge_up starts a daemon mirroring SRC session "rem" into DST "host-sess" and
-# blocks until the mirror is live. Sets `daemon_pid` and `sock`.
+# blocks until the mirror is actually live. Sets `daemon_pid` and `sock`.
 #
-# It gates on two options the DAEMON writes about itself, both instant and
-# identical on every platform:
-#   @bridge_ready  — set on the mirror session just before the daemon starts
-#                    draining the control stream, which is the precondition every
-#                    case here needs before it touches the remote (a change fired
-#                    mid-setup is discarded by the plain reply reader).
-#   @bridge_pane   — stamped per mirror pane, so the pane count is confirmed too.
+# It deliberately does NOT gate on pane_current_command containing "renderer":
+# tmux reports renderer process names differently on Darwin, so that gate never
+# matches there (the same reason PR #233 switched its own gate to an observable
+# paint). The pre-existing cases in this file only *poll* that condition and fall
+# through, so they survive it; a case that asserts it fails on Darwin only.
 #
-# Deliberately NOT pane_current_command containing "renderer": tmux reports
-# renderer process names differently on Darwin, so that gate never matches there
-# (PR #233 hit the same thing). The older cases in this file only poll it and fall
-# through, which is why they survive it; a case that asserts it fails on Darwin.
-#
-# Budgets are small and the failure is loud: a missing observable costs seconds
-# and prints the daemon's own log, instead of burning a long timeout in silence
-# across every case.
-BRIDGE_UP_TRIES=80 # x 0.1s = 8s per observable, ~16s worst case per call
-
+# Two portable observables instead:
+#   1. every mirror pane carries @bridge_pane, which the daemon stamps itself;
+#   2. output typed on the remote actually paints into the mirror, which is what
+#      proves the daemon reached its main read loop and the router is wired — the
+#      precondition every case here needs before it touches the remote.
 bridge_up() {
 	local want_panes="$1" tag="$2"
+	local marker="BRIDGEUP_${tag}_$$"
 	sock="$BATS_TEST_TMPDIR/$tag.sock"
 	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
@@ -595,19 +589,8 @@ bridge_up() {
 		>"$BATS_TEST_TMPDIR/$tag.log" 2>&1 &
 	daemon_pid=$!
 
-	local ready=""
-	for _ in $(seq 1 $BRIDGE_UP_TRIES); do
-		ready="$($DST show-options -v -t host-sess @bridge_ready 2>/dev/null || true)"
-		[ "$ready" = 1 ] && break
-		sleep 0.1
-	done
-	if [ "$ready" != 1 ]; then
-		bridge_up_failed "$tag" "daemon never set @bridge_ready (it did not finish mirroring)"
-		return 1
-	fi
-
 	local stamped=0
-	for _ in $(seq 1 $BRIDGE_UP_TRIES); do
+	for _ in $(seq 1 100); do
 		stamped="$($DST list-panes -t host-sess:1 -F '#{@bridge_pane}' 2>/dev/null | grep -c '^%' || true)"
 		[ "$stamped" -eq "$want_panes" ] && break
 		sleep 0.1
@@ -616,14 +599,42 @@ bridge_up() {
 		bridge_up_failed "$tag" "only $stamped/$want_panes mirror panes carry @bridge_pane"
 		return 1
 	fi
-	return 0
+
+	# Re-send the marker each round: output produced while setup's own reply reader
+	# is still running is dropped rather than routed, so a single send can be lost.
+	local _outer _inner
+	for _outer in $(seq 1 20); do
+		$SRC send-keys -t rem "printf '$marker\\n'" Enter
+		for _inner in $(seq 1 10); do
+			if mirror_contains "$want_panes" "$marker"; then
+				return 0
+			fi
+			sleep 0.1
+		done
+	done
+	bridge_up_failed "$tag" "mirror never painted the startup marker"
+	return 1
 }
 
-# bridge_up_failed prints why the gate gave up plus the daemon's own log, so a CI
-# failure here is diagnosable without a re-run.
+# mirror_contains reports whether any of the first $1 mirror panes shows $2.
+# capture-pane takes one pane, and the remote's active pane (hence the pane the
+# marker lands in) is not necessarily index 0 — split-window makes the new pane
+# active — so check them all.
+mirror_contains() {
+	local panes="$1" needle="$2" i
+	for ((i = 0; i < panes; i++)); do
+		if $DST capture-pane -p -t "host-sess:1.$i" 2>/dev/null | grep -q "$needle"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# bridge_up_failed prints why the gate gave up plus the daemon's own log, so a
+# CI failure here is diagnosable without a re-run.
 bridge_up_failed() {
-	printf 'bridge_up(%s): %s\n--- daemon log ---\n' "$1" "$2" >&2
-	tail -40 "$BATS_TEST_TMPDIR/$1.log" >&2 2>/dev/null || true
+	printf 'bridge_up(%s): %s\n--- daemon log ---\n' "$1" "$2" >&3
+	tail -40 "$BATS_TEST_TMPDIR/$1.log" >&3 2>/dev/null || true
 }
 
 # Regression for the pre-existing reconcile hole M2.3 had to close: layout

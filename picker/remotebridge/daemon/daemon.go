@@ -239,17 +239,6 @@ func Run(cfg Config) error {
 	ticker := time.NewTicker(resizePollInterval)
 	go func() { defer ticker.Stop(); watchResize(cfg.LocalArea, reg, cv, send, stopWatch, ticker.C) }()
 
-	// @bridge_ready says every window is mirrored and the loop below is about to
-	// start draining the control stream. Until then a remote structural change
-	// arrives mid-setup, where the plain reply reader discards async
-	// notifications, so it is silently lost. Anything waiting for the bridge —
-	// the integration tests, and any future launcher that wants to know the
-	// mirror is live — should gate on this rather than on a pane's process name,
-	// which tmux reports differently per platform.
-	if cfg.LocalSess != "" {
-		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_ready", "1")
-	}
-
 	// Main loop.
 	pauseAfterSet := false
 	for {
