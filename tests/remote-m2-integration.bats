@@ -323,6 +323,69 @@ sorted_dims() {
 	[ "$dims" = "120x40" ]
 }
 
+# Regression for #231: a remote geometry change emits %layout-change without
+# new pane output. The geometry-only reconcile must re-seed the renderer so
+# its screen stays identical to the remote after the local window is re-fit.
+@test "daemon repaints mirrored content after a remote geometry change" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dg.sock" \
+		>"$BATS_TEST_TMPDIR/dg.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate on an observable paint rather than pane_current_command: tmux reports
+	# renderer process names differently on Darwin. Retry the startup marker so
+	# an output emitted while the daemon is still wiring its first pane is not
+	# lost to setup's reply reader.
+	painted=no
+	for _ in $(seq 1 20); do
+		$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
+		for _ in $(seq 1 10); do
+			out="$($DST capture-pane -p -t host-sess:1 2>/dev/null)"
+			[[ $out == *RESEED_GEOMETRY_9F3Q* ]] && {
+				painted=yes
+				break 2
+			}
+			sleep 0.1
+		done
+	done
+	[ "$painted" = yes ]
+
+	# A pty-hosted second remote client starts at the current size, then shrinks.
+	# The per-window cap permits this smaller client to resize the remote without
+	# producing pane output, which must re-fit and re-seed the local mirror.
+	OBS="tmux -L m2obs"
+	$OBS new-session -d -s obs -x 100 -y 30 "$SRC attach -t rem"
+	for _ in $(seq 1 40); do
+		clients="$($SRC list-clients -t rem 2>/dev/null | wc -l | tr -d ' ')"
+		[ "$clients" -ge 2 ] && break
+		sleep 0.1
+	done
+	[ "$clients" -ge 2 ]
+	initial_dims="$(sorted_dims "$SRC" rem)"
+	$OBS resize-window -t obs -x 80 -y 24
+
+	# Let the re-seed frame drain without adding any remote output.
+	for _ in $(seq 1 50); do
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		[ "$src_dims" != "$initial_dims" ] && [ "$dst_dims" = "$src_dims" ] && break
+		sleep 0.1
+	done
+	src_screen="$($SRC capture-pane -p -t rem)"
+	dst_screen="$($DST capture-pane -p -t host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_dims" != "$initial_dims" ]
+	[ "$dst_dims" = "$src_dims" ]
+	[ "$dst_screen" = "$src_screen" ]
+}
+
 @test "daemon converges when DST size != SRC size (ConvergeCmd resizes remote)" {
 	# remote starts 120x40; local mirror created at 100x30 — the daemon's
 	# refresh-client -C must push 100x30 onto the remote so pane dims converge.

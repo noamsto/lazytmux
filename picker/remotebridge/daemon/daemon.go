@@ -728,22 +728,13 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 
 	for pass := 0; pass < maxReconcilePasses; pass++ {
 		newRemote := RemotePaneOrder(L)
+		geometryOnly := reflect.DeepEqual(newRemote, remote)
 
 		switch {
-		case reflect.DeepEqual(newRemote, remote):
+		case geometryOnly:
 			// Geometry-only change (typically a client/terminal resize propagated to
-			// the remote): same pane set, new dims. The painters hold no back-buffer to
-			// reflow, so re-seed each pane's current screen for a clean repaint at the
-			// new size; the FrameResize broadcast below records the dims.
-			for _, id := range remote {
-				s := router.sink(id)
-				if s == nil {
-					continue
-				}
-				if seed, err := PaneSeed(reader, send, id, reply); err == nil {
-					s.enqueue(wire.FrameSeed, seed)
-				}
-			}
+			// the remote): same pane set, new dims. Re-seed below, after the local
+			// pane has been reshaped to accept the new screen.
 		case isPrefixOf(remote, newRemote):
 			// Relies on split-window's new pane landing at pane_index==i (bare
 			// split, no -b/target-pane games): spawnRenderer targets the local
@@ -813,6 +804,19 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 		for i, id := range newRemote {
 			if s := router.sink(id); s != nil {
 				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
+			}
+		}
+		if geometryOnly {
+			for _, id := range remote {
+				s := router.sink(id)
+				if s == nil {
+					continue
+				}
+				if seed, err := PaneSeed(reader, send, id, reply); err == nil {
+					s.enqueue(wire.FrameSeed, seed)
+				} else {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
+				}
 			}
 		}
 		remote = newRemote
