@@ -333,12 +333,10 @@ sorted_dims() {
 	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
 		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dg.sock" \
-		--pause-after 0 \
 		>"$BATS_TEST_TMPDIR/dg.log" 2>&1 &
 	daemon_pid=$!
 
-	# Darwin CI can take longer than the other M2 cases to start this renderer:
-	# the initial marker has already been written when the daemon attaches.
+	# Darwin CI can take longer than the other M2 cases to start this renderer.
 	for _ in $(seq 1 100); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
 		[[ $cmd == *renderer* ]] && break
