@@ -1171,7 +1171,8 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			leadDW := iconCellWidth(leadPlain)
 
 			// Inline identity (the name): issue id+title → non-default branch →
-			// repo basename. Mirrors the status bar's build_window_label priority.
+			// remote bridge name → repo basename. Mirrors the status bar's
+			// build_window_label priority.
 			var ri rawIdentity
 			var idSearch string
 			if w.labelID != "" {
@@ -1183,6 +1184,9 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 					ri.leadGlyph = iBranch + " "
 				}
 				idSearch = w.branch
+			} else if w.bridgeName != "" {
+				ri = rawIdentity{kind: 0, text: truncateCells(w.bridgeName, 40)}
+				idSearch = w.bridgeName
 			} else {
 				ri = rawIdentity{kind: 0, text: name}
 				idSearch = name
