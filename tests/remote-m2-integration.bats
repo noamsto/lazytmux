@@ -579,9 +579,18 @@ pane_map() {
 #   2. output typed on the remote actually paints into the mirror, which is what
 #      proves the daemon reached its main read loop and the router is wired — the
 #      precondition every case here needs before it touches the remote.
+#
+# Both waits are bounded by ONE deadline, BRIDGE_UP_BUDGET_SECS, and the moment it
+# passes the call fails with bridge_up_failed diagnostics. A CI stall must cost
+# this suite seconds per case, not minutes: nine cases each silently burning a
+# long per-observable timeout is how a missing observable turns into a
+# half-hour job.
+BRIDGE_UP_BUDGET_SECS=12
+
 bridge_up() {
 	local want_panes="$1" tag="$2"
 	local marker="BRIDGEUP_${tag}_$$"
+	local deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
 	sock="$BATS_TEST_TMPDIR/$tag.sock"
 	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
@@ -590,21 +599,21 @@ bridge_up() {
 	daemon_pid=$!
 
 	local stamped=0
-	for _ in $(seq 1 100); do
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		stamped="$($DST list-panes -t host-sess:1 -F '#{@bridge_pane}' 2>/dev/null | grep -c '^%' || true)"
 		[ "$stamped" -eq "$want_panes" ] && break
 		sleep 0.1
 	done
 	if [ "$stamped" -ne "$want_panes" ]; then
-		bridge_up_failed "$tag" "only $stamped/$want_panes mirror panes carry @bridge_pane"
+		bridge_up_failed "$tag" "only $stamped/$want_panes mirror panes carry @bridge_pane after ${BRIDGE_UP_BUDGET_SECS}s"
 		return 1
 	fi
 
 	# Re-send the marker each round: output produced while setup's own reply reader
 	# is still running is dropped rather than routed, so a single send can be lost.
-	local _outer _inner
-	for _outer in $(seq 1 20); do
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		$SRC send-keys -t rem "printf '$marker\\n'" Enter
+		local _inner
 		for _inner in $(seq 1 10); do
 			if mirror_contains "$want_panes" "$marker"; then
 				return 0
@@ -612,7 +621,7 @@ bridge_up() {
 			sleep 0.1
 		done
 	done
-	bridge_up_failed "$tag" "mirror never painted the startup marker"
+	bridge_up_failed "$tag" "mirror never painted the startup marker within ${BRIDGE_UP_BUDGET_SECS}s"
 	return 1
 }
 
