@@ -338,12 +338,17 @@ sorted_dims() {
 		>"$BATS_TEST_TMPDIR/dg.log" 2>&1 &
 	daemon_pid=$!
 
-	for _ in $(seq 1 40); do
+	# Darwin CI can take longer than the other M2 cases to start this renderer:
+	# the initial marker has already been written when the daemon attaches.
+	for _ in $(seq 1 100); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
 		[[ $cmd == *renderer* ]] && break
 		sleep 0.1
 	done
-	[[ $cmd == *renderer* ]]
+	[[ $cmd == *renderer* ]] || {
+		cat "$BATS_TEST_TMPDIR/dg.log" >&3
+		false
+	}
 
 	# A pty-hosted second remote client starts at the current size, then shrinks.
 	# The per-window cap permits this smaller client to resize the remote without
