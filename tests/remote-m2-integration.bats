@@ -550,3 +550,166 @@ sorted_dims() {
 
 	[ "$painted" = yes ]
 }
+
+# pane_map prints TARGET's panes in pane_index order, one id per line: the
+# remote's own #{pane_id} for SRC, the mirror's #{@bridge_pane} carrier for DST.
+# Comparing the two ORDERED lists asserts the mirror's core invariant — local
+# pane i renders remote pane i — and sidesteps the base-index difference between
+# the servers (SRC/DST run pane-base-index 1; the daemon forces 0 on every mirror
+# window), since list-panes emits in index order either way.
+pane_map() {
+	$1 list-panes -t "$2" -F "$3"
+}
+
+# Regression for the pre-existing reconcile hole M2.3 had to close: layout
+# traversal order means a split of a NON-LAST pane is a mid-list INSERT
+# (measured: %0 %1 %2 split at %0 -> %0 %3 %1 %2), which the old three-case
+# reconcile (identical / tail-append / tail-removal) classified as an
+# "unsupported pane reshuffle" and skipped — leaving the mirror silently stale.
+@test "daemon reconciles a mid-list remote split (non-last pane)" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dmi.sock" \
+		>"$BATS_TEST_TMPDIR/dmi.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate: all 3 panes wired to renderers before touching the remote.
+	for _ in $(seq 1 60); do
+		n="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c renderer || true)"
+		[ "$n" -eq 3 ] && break
+		sleep 0.1
+	done
+	[ "$n" -eq 3 ]
+
+	# Split the FIRST remote pane: a mid-list insert, not a tail-append.
+	first="$($SRC list-panes -t rem -F '#{pane_id}' | head -1)"
+	$SRC split-window -v -t "$first"
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# 4 panes, in the remote's order, each wired to the right remote pane.
+	[ "$(printf '%s\n' "$src_map" | wc -l)" -eq 4 ]
+	[ "$src_map" = "$dst_map" ]
+	[ "$src_dims" = "$dst_dims" ]
+}
+
+# The mirror-image hole: killing a non-last pane is a mid-list REMOVAL.
+@test "daemon reconciles a mid-list remote kill (non-last pane)" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dmk.sock" \
+		>"$BATS_TEST_TMPDIR/dmk.log" 2>&1 &
+	daemon_pid=$!
+
+	for _ in $(seq 1 60); do
+		n="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c renderer || true)"
+		[ "$n" -eq 3 ] && break
+		sleep 0.1
+	done
+	[ "$n" -eq 3 ]
+
+	# Kill the MIDDLE remote pane.
+	mid="$($SRC list-panes -t rem -F '#{pane_id}' | sed -n 2p)"
+	$SRC kill-pane -t "$mid"
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$(printf '%s\n' "$src_map" | wc -l)" -eq 2 ]
+	[ "$src_map" = "$dst_map" ]
+	# the killed pane is gone from the mirror's carriers
+	survivor_hit="$(printf '%s\n' "$dst_map" | grep -cx "$mid" || true)"
+	[ "$survivor_hit" -eq 0 ]
+}
+
+# A remote swap-pane permutes the pane set without changing its membership —
+# neither a tail-append nor a tail-removal, so the old reconcile skipped it and
+# each pane kept painting at its old cell. Asserts IDENTITY (which local pane
+# carries which remote pane) and CONTENT (the marker moved with its pane), not
+# just geometry: dims alone cannot tell a correct permutation from a no-op.
+@test "daemon reconciles a remote swap-pane, content following the pane" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dsw.sock" \
+		>"$BATS_TEST_TMPDIR/dsw.log" 2>&1 &
+	daemon_pid=$!
+
+	for _ in $(seq 1 60); do
+		n="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c renderer || true)"
+		[ "$n" -eq 2 ] && break
+		sleep 0.1
+	done
+	[ "$n" -eq 2 ]
+
+	# Mark the FIRST remote pane, and wait for the marker to reach the mirror.
+	first="$($SRC list-panes -t rem -F '#{pane_id}' | head -1)"
+	$SRC send-keys -t "$first" 'echo SWAPMARK_7K2' Enter
+	for _ in $(seq 1 60); do
+		out="$($DST capture-pane -p -t host-sess:1.0 2>/dev/null)"
+		[[ $out == *SWAPMARK_7K2* ]] && break
+		sleep 0.15
+	done
+	[[ $out == *SWAPMARK_7K2* ]]
+
+	# Swap it with the other pane on the remote.
+	$SRC swap-pane -t "$first" -D
+
+	for _ in $(seq 1 60); do
+		src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+		dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+		[ "$src_map" = "$dst_map" ] && [ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ] && break
+		sleep 0.15
+	done
+
+	src_map="$(pane_map "$SRC" rem '#{pane_id}')"
+	dst_map="$(pane_map "$DST" host-sess:1 '#{@bridge_pane}')"
+	# the marked pane is now second on both sides; its content must be there too
+	moved="$($DST capture-pane -p -t host-sess:1.1 2>/dev/null)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# the permutation really happened on the remote...
+	[ "$(printf '%s\n' "$src_map" | head -1)" != "$first" ]
+	# ...the mirror's carrier order follows it...
+	[ "$src_map" = "$dst_map" ]
+	# ...and the content rode along with its pane.
+	[[ $moved == *SWAPMARK_7K2* ]]
+}
