@@ -87,7 +87,7 @@ func TestCloseWindowTearsDownOnlyItsWindow(t *testing.T) {
 
 	cv := newConverger()
 	cv.need("@1", 100, 30)
-	closeWindow(cfg, router, reg, cv, "@1")
+	closeWindow(cfg, router, newCtlState(), reg, cv, "@1")
 
 	if !cv.need("@1", 100, 30) {
 		t.Fatal("closeWindow must forget the closed window's asserted size")
@@ -120,7 +120,7 @@ func TestCloseWindowOutOfRegistryIsNoop(t *testing.T) {
 	called := false
 	cfg := Config{LocalTmux: func(args ...string) error { called = true; return nil }}
 
-	closeWindow(cfg, router, reg, newConverger(), "@9")
+	closeWindow(cfg, router, newCtlState(), reg, newConverger(), "@9")
 
 	if called {
 		t.Fatal("closeWindow must no-op for an out-of-registry window (B2)")
@@ -224,7 +224,7 @@ func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	defer l.Close()
 
 	connCh := make(chan helloConn, 16)
-	go acceptRenderers(l, connCh)
+	go acceptConns(l, connCh, func([]string) error { return nil })
 
 	start := time.Now()
 	_, err = collectHellos(connCh, 1, 100*time.Millisecond)

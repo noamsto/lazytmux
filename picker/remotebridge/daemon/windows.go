@@ -101,13 +101,19 @@ func (r *registry) all() []*mirrorWindow {
 // (#{window_id}, @N). --window / Config.RemoteWindow is an *index*; the registry
 // is keyed by *id* — different tmux namespaces, so both must be carried.
 type remoteWindow struct {
-	index string
-	id    string
-	name  string
+	index  string
+	id     string
+	active bool
+	name   string
 }
 
-// parseWindowList turns a `list-windows -F '#{window_index} #{window_id} #{window_name}'` reply
-// body into the ordered remote windows, dropping blank/malformed rows.
+// windowListFormat is the one format every list-windows in the daemon uses.
+// window_active sits BEFORE window_name because a name may contain spaces, so
+// only the last field can be free-form.
+const windowListFormat = "'#{window_index} #{window_id} #{window_active} #{window_name}'"
+
+// parseWindowList turns a list-windows reply body (windowListFormat) into the
+// ordered remote windows, dropping blank/malformed rows.
 func parseWindowList(body string) []remoteWindow {
 	var wins []remoteWindow
 	for _, row := range strings.Split(body, "\n") {
@@ -119,8 +125,13 @@ func parseWindowList(body string) []remoteWindow {
 		if !ok {
 			continue
 		}
-		id, name, _ := strings.Cut(rest, " ") // name is optional; "" when absent
-		wins = append(wins, remoteWindow{index: idx, id: id, name: name})
+		id, rest, ok := strings.Cut(rest, " ")
+		if !ok {
+			continue
+		}
+		// name is optional; "" when absent
+		active, name, _ := strings.Cut(rest, " ")
+		wins = append(wins, remoteWindow{index: idx, id: id, active: active == "1", name: name})
 	}
 	return wins
 }

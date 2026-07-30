@@ -27,7 +27,7 @@ const maxReconcilePasses = 5
 // applying catches this: the round-trips above give the remote plenty of time to
 // settle, so a still-different layout means something changed underneath us and
 // needs its own pass.
-func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn) {
+func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState) {
 	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
 	target := remoteWinTarget(cfg, w.remoteID)
 
@@ -45,7 +45,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 
 		switch {
 		case ops.Reset:
-			if err := resetWindow(cfg, w, reader, send, router, connCh, reply); err != nil {
+			if err := resetWindow(cfg, w, reader, send, router, connCh, cst, reply); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 				w.remotePanes = remote
 				return
@@ -104,10 +104,11 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 		// from the same round-trip as the layout, so it is ground truth rather
 		// than a tracked belief.
 		if structural {
-			focusLocalPane(cfg, w.localWin, newRemote, remoteActive)
+			focusLocalPane(cfg, cst, w, newRemote, remoteActive)
 		}
 		remote = newRemote
 		w.remotePanes = remote
+		cst.setWindowPanes(w.remoteID, remote)
 
 		fresh, freshActive, err := readLayout(reader, send, target, reply)
 		if err != nil || fresh.Raw == L.Raw {
@@ -189,7 +190,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // resetWindow rebuilds w from scratch, for the case where no current pane
 // survives (planPaneOps.Reset). Killing every pane instead would make tmux
 // destroy the mirror window and leave a registry entry pointing at nothing.
-func resetWindow(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reply replyFn) error {
+func resetWindow(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reply replyFn) error {
 	for _, id := range w.remotePanes {
 		router.Unregister(id)
 		if c := w.conns[id]; c != nil {
@@ -204,18 +205,21 @@ func resetWindow(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send f
 		}
 	}
 	w.remotePanes = nil
-	return setupWindow(cfg, reader, send, router, connCh, w, newConverger(), reply)
+	return setupWindow(cfg, reader, send, router, connCh, cst, w, newConverger(), reply)
 }
 
 // focusLocalPane points local focus at whichever local pane renders the
 // remote's active pane. A remote pane the mirror does not render (it closed
 // between the layout read and now) leaves local focus alone.
-func focusLocalPane(cfg Config, localWin string, order []string, remoteActive string) {
+func focusLocalPane(cfg Config, cst *ctlState, w *mirrorWindow, order []string, remoteActive string) {
 	i := indexOf(order, remoteActive)
 	if i < 0 {
 		return
 	}
-	if err := cfg.LocalTmux("select-pane", "-t", fmt.Sprintf("%s.%d", localWin, i)); err != nil {
+	// Record before issuing: the local select-pane fires after-select-pane, whose
+	// ctl report must be recognised as this move's echo rather than a new gesture.
+	cst.noteLocalFocus(w.remoteID, remoteActive)
+	if err := cfg.LocalTmux("select-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: reconcile select-pane: %v\n", err)
 	}
 }
