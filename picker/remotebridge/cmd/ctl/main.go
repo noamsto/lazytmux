@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
@@ -39,7 +40,15 @@ func main() {
 		fail("usage: ctl --sock <path> <verb> <remote-pane-id> [args...]")
 	}
 
-	if err := run(*sock, flag.Args()); err != nil {
+	args := flag.Args()
+	// The focus hook runs backgrounded, so its requests can reach the daemon out
+	// of order. Stamp a sequence here rather than in the keybind — tmux formats
+	// have no monotonic counter — so the daemon can drop a stale one.
+	if args[0] == "focus" && len(args) == 2 {
+		args = append(args, strconv.FormatInt(time.Now().UnixNano(), 10))
+	}
+
+	if err := run(*sock, args); err != nil {
 		fail(err.Error())
 	}
 }

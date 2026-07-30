@@ -257,6 +257,23 @@
   picker-splash-bin = "${picker-generate}/bin/tmux-splash";
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
+  picker-bridge-ctl-bin = "${picker-generate}/bin/lztmux-remote-bridge-ctl";
+
+  # === Remote bridge: structural input gate (M2.3) ===
+  # Inside a mirror window a structural gesture must act on the REMOTE, not on
+  # the local mirror. bridgeGate is the format that says "this is a live mirror
+  # pane": @bridge_win (window) and @bridge_pane (pane) are stamped by the bridge
+  # daemon, @bridge_sock (session) is where it listens. Requiring both the window
+  # tag and the pane carrier means a pane the daemon does not own falls through to
+  # the normal local action instead of failing at the daemon.
+  #
+  # `if-shell -F` expands a format and picks a branch without forking, so a
+  # non-bridge window pays one format expansion per gated keypress and spawns no
+  # process. Every gated bind keeps its existing local behavior verbatim in the
+  # else branch — a regression in normal keybind behavior would defeat the whole
+  # point of the bridge (zero blast radius on the human's live session).
+  bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}";
+  bridgeCtl = "${picker-bridge-ctl-bin} --sock '#{@bridge_sock}'";
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   # Commands the pipe-pane sweep in tmux-update-icons watches for, derived from
@@ -603,23 +620,31 @@
 
     # Pane splitting (| and _)
     unbind %
-    bind | split-window -h -c "#{pane_current_path}"
+    bind | if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-h '#{@bridge_pane}'" } { split-window -h -c "#{pane_current_path}" }
     unbind '"'
-    bind _ split-window -v -c "#{pane_current_path}"
-    bind c if-shell -F '#{m:scratch-*,#{session_name}}' \
-      'display-message "scratchpad: new windows disabled"' \
-      'new-window -c "#{pane_current_path}"'
+    bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v '#{@bridge_pane}'" } { split-window -v -c "#{pane_current_path}" }
+    bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window '#{@bridge_pane}'" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
     bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
     bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
 
-    # Resize panes
-    bind -r -T prefix M-Up    resize-pane -U 5
-    bind -r -T prefix M-Down  resize-pane -D 5
-    bind -r -T prefix M-Left  resize-pane -L 5
-    bind -r -T prefix M-Right resize-pane -R 5
+    # Resize panes. In a mirror window the resize lands on the remote pane and the
+    # mirror re-fits from the remote's new layout; -r still repeats.
+    bind -r -T prefix M-Up    if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' U 5" } { resize-pane -U 5 }
+    bind -r -T prefix M-Down  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' D 5" } { resize-pane -D 5 }
+    bind -r -T prefix M-Left  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' L 5" } { resize-pane -L 5 }
+    bind -r -T prefix M-Right if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' R 5" } { resize-pane -R 5 }
+
+    # === Remote bridge: keys this config did NOT previously bind ===
+    # Gating them means the config now owns them, so each else-branch reproduces
+    # next-3.8's default verbatim, -N note included (the note feeds which-key).
+    # The rename prompt seeds from @window_bridge_name, not #W: on a mirror window
+    # #W is the label reflow derived, while the option holds the remote's own name.
+    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename '#{@bridge_pane}' '%%'" } } { command-prompt -I'#W' { rename-window -- '%%' } }
+    bind-key -N 'Swap the active pane with the pane above' '{' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap '#{@bridge_pane}' U" } { swap-pane -U }
+    bind-key -N 'Swap the active pane with the pane below' '}' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap '#{@bridge_pane}' D" } { swap-pane -D }
 
     # Alt-shift window navigation: H/L step within a row, J/K move row-to-row in
     # the reflowed multi-line window grid (no-op when there is no row that way).
@@ -690,10 +715,11 @@
     # (vim, a build, a REPL) prompts first, so a reflexive prefix+x can't
     # silently take down a working pane. The guard reads the pane's claude-status
     # state and normalizes the nix makeWrapper decoration before matching shells.
-    bind-key x if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{pane_id} #{pane_current_command}' \
-      kill-pane \
-      'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane'
-    bind-key & confirm-before -p "kill-window #W? (y/n)" kill-window
+    # In a mirror window the guard would be reading the wrong process — a mirror
+    # pane runs the renderer, not the remote workload — so a bridge kill always
+    # confirms, naming the remote pane, then kills it on the remote.
+    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}? (y/n)" { run-shell "${bridgeCtl} kill-pane '#{@bridge_pane}'" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{pane_id} #{pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
+    bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window '#{@bridge_pane}'" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
@@ -778,6 +804,7 @@
     set-hook -gu after-resize-pane
     set-hook -gu after-kill-pane
     set-hook -gu pane-focus-in
+    set-hook -gu after-select-pane
 
     # Notification producers (#164): bare -gu clears every index, so prefix+r
     # stays idempotent — and a rebuild with notifications OFF cannot leave a hook
@@ -833,6 +860,15 @@
     # change, the hottest per-interaction path in this config, and
     # tmux-reconcile-window forks ~7 subprocesses even in its idempotent
     # branch. Not worth it.
+
+    # Mirror local pane focus onto the remote inside a bridge window.
+    # after-select-pane is the reliable seam: it fires whether or not a client is
+    # attached, and tmux skips it for a select-pane that was already a no-op
+    # (pane-focus-in needs terminal focus reporting and fires erratically).
+    # Backgrounded so a socket round-trip never sits on the server's command queue
+    # — the daemon drops a request that arrives out of order. Indexed [20] so it
+    # coexists with any future consumer; the bare `set-hook -gu` above clears it.
+    set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus '#{@bridge_pane}'\" }"
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
     set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id}"'
