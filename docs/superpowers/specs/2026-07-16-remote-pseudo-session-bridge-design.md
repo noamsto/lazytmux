@@ -1,8 +1,10 @@
 # Remote pseudo-sessions via a tmux control-mode bridge
 
 **Issue:** #167
-**Status:** approach approved (post-spike pivot), pre-implementation
-**Supersedes:** the grouped-session approach (rejected — see below); long-term the arch-C reverse-socket promotion (#155)
+**Status:** M3 closed (#167) — picker remote section + arch-C retirement.
+M1–M2.3 shipped on main; M2.4 (copy-mode/mouse/OSC 52/mega-menu) remains
+documented deferred work.
+**Supersedes:** the grouped-session approach (rejected — see below); the arch-C reverse-socket promotion (#155)
 
 ## Goal
 

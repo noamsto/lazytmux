@@ -18,24 +18,28 @@ import (
 
 // listItem is one row in the picker list.
 type listItem struct {
-	target          string // tmux target; "" = unselectable
+	target          string // tmux target; "" = unselectable (unless remoteHost set)
 	display         string // ANSI-rendered display line
 	plain           string // display stripped of ANSI (cached for width)
 	searchText      string // filterable text (name, branch — no paths/icons)
 	isHeader        bool   // session header row
 	isZoxideHeader  bool   // the "── New session ──" divider
+	isRemoteHeader  bool   // the "── Remote ──" divider
 	session         string // owning session name (for kill)
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
 	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
 	createName      string // zoxide suggestion: derived session name
+	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
+	remoteSess      string // remote bridge row: optional remote session name
 }
 
 // tuiModel is the bubbletea model for the picker.
 type tuiModel struct {
 	// Data
-	allItems     []listItem // unfiltered: sessionItems + zoxideItems
+	allItems     []listItem // unfiltered: sessionItems + remoteItems + zoxideItems
 	sessionItems []listItem // session/window rows (base for recombination)
+	remoteItems  []listItem // remote host/session rows, loaded async after first paint
 	zoxideItems  []listItem // zoxide suggestions, loaded async after first paint
 	visible      []listItem // after query + mode filter
 	cursor       int
@@ -97,6 +101,10 @@ type zoxideMsg struct {
 	items []listItem
 }
 
+type remoteMsg struct {
+	items []listItem
+}
+
 type previewMsg struct {
 	content   string
 	target    string
@@ -141,7 +149,7 @@ func (m tuiModel) Init() tea.Cmd {
 	if !m.windowMode {
 		// First paint skips the ps -A fork; kick a full refresh right away so
 		// CPU/Mem replace the placeholder without waiting for the 1s tick.
-		cmds = append(cmds, m.zoxideCmd(), m.refreshDataCmd())
+		cmds = append(cmds, m.zoxideCmd(), m.remoteCmd(), m.refreshDataCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -185,6 +193,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case zoxideMsg:
 		m.zoxideItems = msg.items
+		m = m.recombine().withFilter()
+		return m, m.loadPreviewCmd()
+
+	case remoteMsg:
+		m.remoteItems = msg.items
 		m = m.recombine().withFilter()
 		return m, m.loadPreviewCmd()
 
@@ -276,7 +289,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.activateCurrent()
 
 	case "ctrl+x":
-		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" {
+		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" && item.remoteHost == "" {
 			if strings.Contains(item.target, ":") {
 				logEvent("picker", "event", "kill_window", "target", item.target)
 				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
@@ -555,7 +568,7 @@ func (m tuiModel) moveCursor(delta int) tuiModel {
 }
 
 func (m tuiModel) isSelectable(item listItem) bool {
-	if item.target == "" {
+	if item.target == "" && item.remoteHost == "" {
 		return false
 	}
 	// In window mode, session headers are not selectable
@@ -588,8 +601,15 @@ func (m tuiModel) currentItem() (listItem, bool) {
 // activateCurrent switches to (or creates) the highlighted target and quits.
 func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 	item, ok := m.currentItem()
-	if !ok || item.target == "" {
+	if !ok || (item.target == "" && item.remoteHost == "") {
 		return m, nil
+	}
+	if item.remoteHost != "" {
+		if err := openRemoteBridge(item.remoteHost, item.remoteSess); err != nil {
+			m.statusMsg = err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	}
 	if item.createPath != "" {
 		if err := createAndSwitch(item.createName, item.createPath); err != nil {
@@ -641,7 +661,8 @@ func (m tuiModel) inPreview(x, y int) bool {
 // itemVisible reports whether an item passes the current mode filters
 // (scratch/claude). Headers are always visible (pruned separately).
 // Zoxide suggestion rows are intentionally hidden by both modes: a dir
-// has no claude activity and is never a scratch session.
+// has no claude activity and is never a scratch session. Remote bridge rows
+// share those defaults, so the same filters hide them.
 func (m tuiModel) itemVisible(item listItem) bool {
 	if m.scratchOnly && !item.isScratch {
 		return false
@@ -694,12 +715,22 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 	}
 
-	// Sort by score descending; sessions always rank above zoxide suggestions.
-	// Stable preserves original order for ties.
+	// Sort by score descending; sessions always rank above remote + zoxide
+	// suggestions. Stable preserves original order for ties.
 	sort.SliceStable(matches, func(i, j int) bool {
-		ci, cj := matches[i].item.createPath != "", matches[j].item.createPath != ""
-		if ci != cj {
-			return !ci
+		rank := func(it listItem) int {
+			switch {
+			case it.createPath != "":
+				return 2
+			case it.remoteHost != "":
+				return 1
+			default:
+				return 0
+			}
+		}
+		ri, rj := rank(matches[i].item), rank(matches[j].item)
+		if ri != rj {
+			return ri < rj
 		}
 		return matches[i].score > matches[j].score
 	})
@@ -725,17 +756,23 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 		m.visible = out
 	} else {
-		// Re-insert the section header before the first suggestion row
-		// (sessions sort first, so suggestions form a contiguous tail).
-		var sugHeader *listItem
+		// Re-insert section headers before the first row of each suggestion
+		// block (sessions sort first, remotes next, zoxide last).
+		var remoteHeader, sugHeader *listItem
 		for i := range m.allItems {
+			if m.allItems[i].isRemoteHeader {
+				remoteHeader = &m.allItems[i]
+			}
 			if m.allItems[i].isZoxideHeader {
 				sugHeader = &m.allItems[i]
-				break
 			}
 		}
 		var out []listItem
 		for _, match := range matches {
+			if remoteHeader != nil && match.item.remoteHost != "" {
+				out = append(out, *remoteHeader)
+				remoteHeader = nil
+			}
 			if sugHeader != nil && match.item.createPath != "" {
 				out = append(out, *sugHeader)
 				sugHeader = nil
@@ -796,11 +833,25 @@ func (m tuiModel) zoxideCmd() tea.Cmd {
 	}
 }
 
+// remoteCmd collects remote host/session rows off the first-paint path
+// (session mode only). ssh probes are bounded; the result merges via remoteMsg.
+func (m tuiModel) remoteCmd() tea.Cmd {
+	opts := m.tmuxOpts
+	return func() tea.Msg {
+		local := map[string]bool{}
+		for _, s := range collectSessions() {
+			local[s.name] = true
+		}
+		return remoteMsg{items: collectRemoteItems(opts, local, nil)}
+	}
+}
+
 // recombine rebuilds allItems from the session base plus the async suggestion
-// rows, so a 1s refresh (sessions only) doesn't drop loaded zoxide entries.
+// rows, so a 1s refresh (sessions only) doesn't drop loaded remote/zoxide entries.
 func (m tuiModel) recombine() tuiModel {
-	all := make([]listItem, 0, len(m.sessionItems)+len(m.zoxideItems))
+	all := make([]listItem, 0, len(m.sessionItems)+len(m.remoteItems)+len(m.zoxideItems))
 	all = append(all, m.sessionItems...)
+	all = append(all, m.remoteItems...)
 	all = append(all, m.zoxideItems...)
 	m.allItems = all
 	return m
@@ -815,6 +866,17 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 	if cp := item.createPath; cp != "" {
 		return func() tea.Msg {
 			return previewMsg{content: listDir(cp), target: t, scrollTop: true}
+		}
+	}
+	if item.remoteHost != "" {
+		host, sess := item.remoteHost, item.remoteSess
+		return func() tea.Msg {
+			msg := "remote bridge → " + host
+			if sess != "" {
+				msg += "/" + sess
+			}
+			msg += "\n\nEnter runs lztmux-remote-open (outbound ssh)."
+			return previewMsg{content: msg, target: t, scrollTop: true}
 		}
 	}
 	return func() tea.Msg {

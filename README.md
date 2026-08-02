@@ -76,7 +76,7 @@ cachix use lazytmux
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, OpenCode, etc.) |
 | **AI agent status** | Real-time spinner/icon in status bar for Claude Code and OpenCode |
-| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, and issue/PR badges |
+| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
 | **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
@@ -171,6 +171,38 @@ wt merge                # merge the current branch into its target
 
 **Model:** one tmux session per repository, one window per worktree/branch. See the
 [worktrunk docs](https://worktrunk.dev/) for the full command set.
+
+---
+
+## Remote tmux bridge
+
+Open a remote host's tmux session as **native local windows** (one per remote
+window) over outbound SSH — no reverse socket, no nested status bar.
+
+```nix
+programs.lazytmux.remote.hosts = [ "tp-g6" "lab" ];
+```
+
+`prefix + s` then shows a **Remote** section. Enter runs `lztmux-remote-open`
+(or call it directly: `lztmux-remote-open <host> [<sess>]`). Live window
+add/close/rename sync through the control-mode daemon; structural keybinds
+inside a mirror window act on the remote.
+
+**Known limitations** (documented, not solved here):
+
+- Remote copy-mode / scrollback is not pre-seeded locally yet (M2.4).
+- Mouse: border-drag self-reverts; right-click mega-menu and
+  `M-MouseDrag1Border` still act locally.
+- Root-table `M-H`/`M-J`/`M-K`/`M-L` window nav has no remote counterpart;
+  `prefix ;` does not fire `after-select-pane`.
+- OSC 52 clipboard / focus-event passthrough unprobed; kitty graphics won't
+  render (remote tmux consumes the DCS).
+- Exclusive-attach sizing is the supported case; no auto-reconnect after link
+  drop (e.g. laptop sleep).
+
+The older arch-C reverse-socket promotion (`remote.enable` /
+`remote.trustedHosts` / `nixosModules.default`) was retired; rebuilds that
+still set those options fail loudly via `mkRemovedOptionModule`.
 
 ---
 
