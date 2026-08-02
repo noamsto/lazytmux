@@ -126,6 +126,7 @@
     inherit prdash;
     extraProcessIcons = cfg.processIcons;
     zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
+    remoteBridgeHosts = lib.concatStringsSep " " cfg.remote.hosts;
     inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
@@ -207,6 +208,12 @@ in {
     (lib.mkRenamedOptionModule
       ["programs" "lazytmux" "claudeIntegration" "enable"]
       ["programs" "lazytmux" "agentIntegration" "enable"])
+    (lib.mkRemovedOptionModule
+      ["programs" "lazytmux" "remote" "enable"]
+      "The arch-C reverse-socket promotion was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
+    (lib.mkRemovedOptionModule
+      ["programs" "lazytmux" "remote" "trustedHosts"]
+      "The arch-C RemoteForward block was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
   ];
 
   options.programs.lazytmux = {
@@ -288,16 +295,14 @@ in {
     };
 
     remote = {
-      enable = lib.mkEnableOption "remote nested-session promotion (architecture C; opt-in, security-sensitive)";
-      trustedHosts = lib.mkOption {
+      hosts = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
-        example = ["lab-*" "myserver"];
+        example = ["tp-g6" "lab"];
         description = ''
-          ssh Host patterns that receive the RemoteForward + SendEnv block.
-          Only enable for hosts where root is you: a peer who can reach the
-          forwarded socket can force UI actions on this machine (see spec
-          security model).
+          ssh Host aliases the session picker (`prefix + s`) probes for remote
+          tmux sessions. Enter on a row runs `lztmux-remote-open` (control-mode
+          bridge). Empty list hides the remote section.
         '';
       };
     };
@@ -1125,23 +1130,6 @@ in {
               ExecStart = "${cfg.persist.package}/bin/tmux-remux gc";
             };
           };
-
-          # Listens on a unix socket forwarded in from trusted remote hosts
-          # (see programs.ssh.settings."lztmux-remote" below); each
-          # connection execs lztmux-listener to promote a nested session.
-          lztmux-listener = lib.mkIf cfg.remote.enable {
-            Unit.Description = "lztmux remote-session promotion listener";
-            Install.WantedBy = ["default.target"];
-            Service = {
-              # Point the listener's tmux at the user's real socket. Without it
-              # bare tmux uses /tmp/tmux-$UID, but lazytmux servers live under
-              # %t (=$XDG_RUNTIME_DIR), so every promote would hit a dead socket.
-              Environment = ["TMUX_TMPDIR=%t"];
-              ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.local/state/lztmux";
-              ExecStart = "${pkgs.socat}/bin/socat UNIX-LISTEN:%h/.local/state/lztmux/listener.sock,fork,mode=0600,unlink-early EXEC:${tmuxConfig.script.lztmux-listener}/bin/lztmux-listener";
-              Restart = "on-failure";
-            };
-          };
         };
 
         timers = {
@@ -1212,29 +1200,6 @@ in {
             };
           };
         };
-    })
-    # Remote nested-session promotion (architecture C): the shim replaces the
-    # `tmux` command on remote hosts so `tmux attach`/`new-session` there
-    # instead asks this machine's listener (over the RemoteForward'd socket
-    # below) to promote the session into a first-class local window.
-    (lib.mkIf cfg.remote.enable {
-      programs.fish.functions.tmux.body = ''${tmuxConfig.script.lztmux-remote-shim}/bin/lztmux-remote-shim $argv'';
-      programs.bash.initExtra = ''
-        tmux() { ${tmuxConfig.script.lztmux-remote-shim}/bin/lztmux-remote-shim "$@"; }
-      '';
-    })
-    (lib.mkIf (cfg.remote.enable && cfg.remote.trustedHosts != []) {
-      programs.ssh = {
-        enable = true;
-        settings."lztmux-remote" = {
-          host = lib.concatStringsSep " " cfg.remote.trustedHosts;
-          RemoteForward = "/tmp/lztmux-outer-%r.sock %d/.local/state/lztmux/listener.sock";
-          SendEnv = "TMUX_PANE";
-          SetEnv = {LZTMUX_OUTER = 1;};
-          StreamLocalBindUnlink = "yes";
-          ExitOnForwardFailure = "no";
-        };
-      };
     })
   ]);
 }

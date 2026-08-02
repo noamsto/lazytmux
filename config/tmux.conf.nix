@@ -27,6 +27,9 @@
   # Comma-separated glob/basename patterns the session picker drops from its
   # zoxide suggestions (e.g. "*/.ssh,/tmp/*"). Empty => suggest everything.
   zoxideExclude ? "",
+  # Whitespace-separated ssh Host aliases the session picker probes for remote
+  # tmux sessions (prefix + s remote section). Empty => no remote section.
+  remoteBridgeHosts ? "",
   # tmux prefix key (literal character). Default backtick.
   prefix ? "`",
   # Absolute path to the shell tmux spawns in new panes (default-shell).
@@ -312,8 +315,6 @@
     "lazytmux-log-event"
     "lazytmux-debug"
     "codex-relaunch-stamp"
-    "lztmux-listener"
-    "lztmux-remote-shim"
     "lztmux-remote-open"
     "lztmux-notify"
     "lztmux-notify-center"
@@ -387,7 +388,7 @@
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
   # Scripts that source lib-remote get its store path substituted
-  scriptsWithRemote = ["lztmux-listener" "lztmux-remote-shim" "lztmux-remote-open"];
+  scriptsWithRemote = ["lztmux-remote-open"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings ["@lib_remote@"] ["${lib-remote}"]
@@ -760,6 +761,7 @@
     set -g @icon_branch "${icons.branch}"
     set -g @icon_dir "${icons.dir}"
     set -g @picker_zoxide_exclude "${zoxideExclude}"
+    set -g @remote_bridge_hosts "${remoteBridgeHosts}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | App info (right)
     # The statusline #() takes only stable args (session, theme, icons); it
