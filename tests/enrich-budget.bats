@@ -14,6 +14,7 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$FAKEBIN"
 	export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+	export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"
 	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
 	unset TMUX TMUX_PANE
 
@@ -21,6 +22,7 @@ setup() {
 		#!/bin/sh
 		printf '%s\n' "$*" >>"$GH_LOG"
 		case "$*" in
+		*"--json headRefName,statusCheckRollup"*) printf '%s' "$GH_CHECK_JSON" ;;
 		*"--state open --limit 100"*)
 			[ -n "${GH_BATCH_FAIL:-}" ] && exit 1
 			printf '%s' "$GH_BATCH_JSON"
@@ -36,6 +38,7 @@ setup() {
 		case "$1" in
 		list-windows) printf '%s\n' "$FAKE_WINDOWS" ;;
 		display-message) printf '\n' ;;
+		set-option) printf '%s\n' "$*" >>"$TMUX_LOG" ;;
 		esac
 		exit 0
 	EOF
@@ -56,6 +59,7 @@ setup() {
 	export FAKE_WINDOWS='$1:@1|'"$REPO"'||feat/has-pr|
 $1:@2|'"$REPO"'||feat/no-pr|'
 	export GH_BATCH_JSON='[{"number":7,"title":"t","url":"u","state":"OPEN","statusCheckRollup":[],"mergeable":"MERGEABLE","isDraft":false,"headRefName":"feat/has-pr"}]'
+	export GH_CHECK_JSON='[{"headRefName":"feat/has-pr","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}]'
 
 	make_pr_enrich
 }
@@ -69,7 +73,9 @@ gh_calls() {
 	run bash "$PR_ENRICH_SCRIPT" --tick-run
 	[ "$status" -eq 0 ]
 	[ "$(gh_calls '--head feat/has-pr')" -eq 0 ]
-	[ "$(gh_calls '--state open --limit 100')" -eq 1 ]
+	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,headRefName')" -eq 1 ]
+	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 1 ]
+	grep -q -- '@pr_check_state success' "$TMUX_LOG"
 }
 
 @test "pass: a PR-less branch is settled with one --state all call, never --state open" {
@@ -84,10 +90,18 @@ gh_calls() {
 	[ "$status" -eq 0 ]
 	run bash "$PR_ENRICH_SCRIPT" --tick-run
 	[ "$status" -eq 0 ]
-	# Two batches (they carry the open PR's live check state), but the terminal
-	# answer for feat/no-pr is cached for TTL_TERMINAL.
-	[ "$(gh_calls '--state open --limit 100')" -eq 2 ]
+	# Identity stays fresh on every pass, but check state remains cached until
+	# the independent, slower cadence expires. The terminal answer for feat/no-pr
+	# is also cached for TTL_TERMINAL.
+	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,headRefName')" -eq 2 ]
+	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 1 ]
 	[ "$(gh_calls '--head feat/no-pr')" -eq 1 ]
+}
+
+@test "force refresh fetches the current branch's check rollup immediately" {
+	run bash "$PR_ENRICH_SCRIPT" --target '$1:@1' --branch feat/has-pr --dir "$REPO" --force
+	[ "$status" -eq 0 ]
+	[ "$(gh_calls '--head feat/has-pr --state open --limit 1 --json number,title,url,state,mergeable,isDraft,statusCheckRollup')" -eq 1 ]
 }
 
 @test "pass: a failed batch falls back to the full open-then-all lookup" {

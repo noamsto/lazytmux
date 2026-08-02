@@ -137,6 +137,7 @@
     enrichEnable = cfg.enrich.enable;
     enrichProviders = cfg.enrich.providers;
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
+    enrichPrCheckRefreshSeconds = cfg.enrich.prCheckRefreshSeconds;
     enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
     splashEnable = cfg.splash.enable;
     splashTips = cfg.splash.tips;
@@ -397,6 +398,16 @@ in {
           Background PR enrichment cadence in seconds (clamped 10–300). Each pass
           spends GitHub API budget per repo, so short cadences across many
           worktree windows can exhaust the hourly quota on their own.
+        '';
+      };
+
+      prCheckRefreshSeconds = lib.mkOption {
+        type = lib.types.ints.between 10 300;
+        default = 300;
+        description = ''
+          CI check-state refresh cadence in seconds (clamped 10–300). PR
+          identity still refreshes at `prRefreshSeconds`; this slower query
+          keeps routine status-line polling within GitHub's API budget.
         '';
       };
 

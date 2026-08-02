@@ -20,6 +20,7 @@ source @lib_enrich@
 source @lib_log@
 
 REFRESH_SECONDS="@pr_refresh_seconds@"
+CHECK_REFRESH_SECONDS="@pr_check_refresh_seconds@"
 TTL=60
 # A cached "no PR" expires faster: none→PR is the transition a user actively
 # waits on right after `gh pr create`; PR-state changes are less urgent. Applies
@@ -202,6 +203,7 @@ fetch_terminal_pr() {
 fetch_pr_cached() {
 	local d="$1" b="$2" key="$3" states="$4" ttl_none="$5"
 	local cache="$ENRICH_CACHE_DIR/$key.json"
+	local check_cache="$ENRICH_CACHE_DIR/$key.checks.json"
 	local lock="$ENRICH_CACHE_DIR/$key.lock"
 
 	# Serve the cache when the decision says so (fresh + not forced).
@@ -231,16 +233,22 @@ fetch_pr_cached() {
 	(
 		acquire_lock "$lock" || exit 0
 		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
-		local json=""
+		local json="" fields="number,title,url,state,mergeable,isDraft"
+		((force)) && fields+=",statusCheckRollup"
 		if [[ $states == open+all ]]; then
 			json="$(gh pr list --head "$b" --state open --limit 1 \
-				--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
+				--json "$fields" 2>/dev/null)" || exit 0
 		fi
 		if [[ $json == "[]" || -z $json ]]; then
 			json="$(gh pr list --head "$b" --state all --limit 1 \
-				--json number,title,url,state,statusCheckRollup,mergeable,isDraft 2>/dev/null)" || exit 0
+				--json "$fields" 2>/dev/null)" || exit 0
 		fi
-		printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+		if ((force)); then
+			jq 'map(del(.statusCheckRollup))' <<<"$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+			jq 'map({statusCheckRollup: (.statusCheckRollup // [])})' <<<"$json" >"$check_cache.tmp.$$" && mv -f "$check_cache.tmp.$$" "$check_cache"
+		else
+			printf '%s' "$json" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+		fi
 	)
 	printf '%s' "$cache"
 }
@@ -258,18 +266,16 @@ apply_cache_to_target() {
 		write_pr_options "$tgt" "none" "" "" "" "" "" "$br"
 		return
 	fi
-	# One jq pass emits every field on its own line (line-by-line `read`
-	# preserves empty fields — a tab/space delimiter would collapse them); the
-	# rollup stays compact JSON for collapse_check_rollup. PR titles are
+	# One jq pass emits every identity field on its own line (line-by-line `read`
+	# preserves empty fields — a tab/space delimiter would collapse them). PR titles are
 	# single-line, so newline-delimiting is safe.
-	local number title url state rollup mergeable draft
+	local number title url state mergeable draft
 	{
 		IFS= read -r number
 		IFS= read -r state
 		IFS= read -r mergeable
 		IFS= read -r draft
 		IFS= read -r url
-		IFS= read -r rollup
 		IFS= read -r title
 	} < <(jq -r '
 		(.[0].number // "" | tostring),
@@ -277,13 +283,50 @@ apply_cache_to_target() {
 		(.[0].mergeable // "" | ascii_downcase),
 		(if .[0].isDraft then "1" else "" end),
 		(.[0].url // ""),
-		((.[0].statusCheckRollup // []) | @json),
 		(.[0].title // "")
 	' <<<"$json")
+	local check_cache="${cache%.json}.checks.json" rollup="[]"
+	if [[ -f $check_cache ]]; then
+		rollup="$(jq -c '.[0].statusCheckRollup // []' <"$check_cache")"
+	elif jq -e '.[0].statusCheckRollup' >/dev/null 2>&1 <<<"$json"; then
+		# Preserve check state from combined cache entries during an upgrade.
+		rollup="$(jq -c '.[0].statusCheckRollup // []' <<<"$json")"
+	fi
 	collapse_check_rollup "$rollup"
 	local check="$REPLY"
 	sanitize_title "$title"
 	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br" "$draft"
+}
+
+# refresh_repo_checks DIR REPO_ID BRANCHES — refresh a repo's open-PR rollups.
+# Identity has a separate, faster cache, so routine refreshes never combine the
+# two GraphQL selections.
+refresh_repo_checks() {
+	local d="$1" repo_id="$2"
+	local branches=() all_json head obj
+	mapfile -t branches <<<"$3"
+	command -v gh >/dev/null 2>&1 || return
+	all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
+		--json headRefName,statusCheckRollup 2>/dev/null)" || return
+	[[ -n $all_json ]] || return
+
+	declare -A checks
+	while IFS=$'\t' read -r head obj; do
+		[[ -n $head ]] && checks[$head]="$obj"
+	done < <(jq -r '.[] | "\(.headRefName)\t\([{statusCheckRollup}])"' <<<"$all_json")
+
+	local br ck check_cache
+	for br in "${branches[@]}"; do
+		[[ -z $br ]] && continue
+		branch_sha1 "$repo_id|$br"
+		ck="$REPLY"
+		check_cache="$ENRICH_CACHE_DIR/$ck.checks.json"
+		if [[ -n ${checks[$br]+x} ]]; then
+			printf '%s' "${checks[$br]}" >"$check_cache.tmp.$$" && mv -f "$check_cache.tmp.$$" "$check_cache"
+		else
+			printf '[]' >"$check_cache.tmp.$$" && mv -f "$check_cache.tmp.$$" "$check_cache"
+		fi
+	done
 }
 
 # enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
@@ -296,7 +339,7 @@ apply_cache_to_target() {
 # repo. A successful batch is authoritative for open PRs: heads missing from it
 # have none, which is a terminal answer (fetch_terminal_pr).
 enrich_repo_group() {
-	local d="$1" repo_id="$2"
+	local d="$1" repo_id="$2" refresh_checks="$5"
 	local branches=() wlines=()
 	mapfile -t branches <<<"$3"
 	mapfile -t wlines <<<"$4"
@@ -305,7 +348,7 @@ enrich_repo_group() {
 	local all_json head obj batch_ok=0
 	if command -v gh >/dev/null 2>&1 &&
 		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
-			--json number,title,url,state,statusCheckRollup,mergeable,isDraft,headRefName 2>/dev/null)" &&
+			--json number,title,url,state,mergeable,isDraft,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
 		batch_ok=1
 		while IFS=$'\t' read -r head obj; do
@@ -313,7 +356,7 @@ enrich_repo_group() {
 		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
 	fi
 
-	local br ck cache line tgt b2
+	local br ck cache
 	for br in "${branches[@]}"; do
 		[[ -z $br ]] && continue
 		branch_sha1 "$repo_id|$br"
@@ -331,6 +374,16 @@ enrich_repo_group() {
 			# failure rather than wiping to "none".
 			cache="$(fetch_branch_pr "$d" "$br" "$ck")"
 		fi
+	done
+	if ((refresh_checks)); then
+		refresh_repo_checks "$d" "$repo_id" "$3"
+	fi
+
+	local line tgt b2
+	for br in "${branches[@]}"; do
+		[[ -z $br ]] && continue
+		branch_sha1 "$repo_id|$br"
+		cache="$ENRICH_CACHE_DIR/$REPLY.json"
 		for line in "${wlines[@]}"; do
 			IFS="|" read -r tgt b2 <<<"$line"
 			[[ $b2 == "$br" ]] && apply_cache_to_target "$tgt" "$cache" "$br"
@@ -343,6 +396,11 @@ enrich_repo_group() {
 # group runs concurrently as one enrich_repo_group. Multi-repo setups pay one
 # round-trip per repo, all in flight at once.
 run_full_pass() {
+	local refresh_checks=0 check_tick="$ENRICH_CACHE_DIR/.last-check-tick"
+	if [[ ! -f $check_tick ]] || ((EPOCHSECONDS - $(file_mtime "$check_tick") >= CHECK_REFRESH_SECONDS)); then
+		refresh_checks=1
+		touch "$check_tick"
+	fi
 	local windows
 	mapfile -t windows < <(tmux list-windows -a -F '#{session_id}:#{window_id}|#{@worktree}|#{@git_root}|#{@branch}|#{@bridge_win}' | awk -F'|' 'NF>=5')
 
@@ -381,7 +439,7 @@ run_full_pass() {
 
 	local k
 	for k in "${!grp_branches[@]}"; do
-		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" &
+		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" "$refresh_checks" &
 	done
 	wait
 }

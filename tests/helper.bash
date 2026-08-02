@@ -96,7 +96,7 @@ make_notify_center() {
 }
 
 # Builds a runnable tmux-pr-enrich. Every placeholder the script contains must be
-# stubbed: @lib_enrich@ and @lib_log@ are sourced, @pr_refresh_seconds@ is used
+# stubbed: @lib_enrich@ and @lib_log@ are sourced, refresh placeholders are used
 # in arithmetic (an unsubstituted value is a syntax error), and @reflow@ is
 # EXECUTED from write_pr_options on exactly the change path the notify tests
 # exercise (left unstubbed, the test execs the literal string). @notify@ is
@@ -107,6 +107,7 @@ make_pr_enrich() {
 	sed -e "s|@lib_enrich@|$PWD/scripts/lib-enrich.sh|" \
 		-e "s|@lib_log@|$PWD/scripts/lib-log.sh|" \
 		-e 's|@pr_refresh_seconds@|30|' \
+		-e 's|@pr_check_refresh_seconds@|300|' \
 		-e 's|@reflow@|true|' \
 		scripts/tmux-pr-enrich.sh >"$PR_ENRICH_SCRIPT"
 }

@@ -18,7 +18,8 @@
   # Issue/PR enrichment config (threaded from the home-manager module).
   enrichEnable ? true,
   enrichProviders ? ["linear" "github"],
-  enrichPrRefreshSeconds ? 30,
+  enrichPrRefreshSeconds ? 120,
+  enrichPrCheckRefreshSeconds ? 300,
   enrichIcons ? {},
   # Notifications for background events (threaded from the home-manager module).
   # When false the hooks and the prefix+n bind are omitted and @notify@ is left
@@ -361,6 +362,7 @@
       [
         "@lib_enrich@"
         "@pr_refresh_seconds@"
+        "@pr_check_refresh_seconds@"
         "@issue_stamp_linear@"
         "@issue_stamp_github@"
         "@pr_enrich@"
@@ -371,6 +373,7 @@
       [
         "${lib-enrich}"
         (toString enrichPrRefreshSeconds)
+        (toString enrichPrCheckRefreshSeconds)
         "${enrich-linear-bin}/bin/tmux-issue-stamp-linear"
         "${enrich-github-bin}/bin/tmux-issue-stamp-github"
         "${enrich-pr-bin}/bin/tmux-pr-enrich"
