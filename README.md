@@ -227,6 +227,29 @@ the canonical definitions in
 | `ElicitationResult`                         | processing             |
 | `SessionEnd`                                | clear                  |
 
+### Codex Hooks (Home Manager)
+
+Enable native Codex status hooks alongside the agent-integration binaries:
+
+```nix
+programs.lazytmux = {
+  agentIntegration.enable = true;
+  codexStatus.enable = true;
+};
+```
+
+Home Manager appends lazytmux hook definitions to `~/.codex/config.toml`.
+They write processing, waiting, done, compacting, and idle state for the current
+`$TMUX_PANE`; the screen scraper remains a fallback when a hook state is absent
+or stale. The hook commands use the stable profile path to
+`claude-status-update`, so ordinary lazytmux rebuilds do not change the hook
+definition and re-trigger Codex's trust review.
+
+Codex requires a one-time local approval before these non-managed hooks run:
+start `codex`, open `/hooks`, then choose **Trust all**. Native hooks cannot
+currently provide error, denied, or interrupted state, and this integration does
+not parse prompt payloads for task labels or AI window names.
+
 ### OpenCode Plugin
 
 OpenCode uses a [plugin system](https://opencode.ai/docs/plugins/) instead of JSON hooks.

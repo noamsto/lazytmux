@@ -212,6 +212,17 @@
               touch $out
             '';
 
+          codex-status-hooks-tests =
+            pkgs.runCommand "codex-status-hooks-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk pkgs.gnused];
+            } ''
+              cp -r ${./tests} tests
+              mkdir modules
+              cp ${./modules/home-manager.nix} modules/home-manager.nix
+              bats tests/codex-status-hooks.bats
+              touch $out
+            '';
+
           prune-stale-state-tests =
             pkgs.runCommand "prune-stale-state-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
