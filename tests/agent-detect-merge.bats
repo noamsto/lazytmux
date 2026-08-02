@@ -20,6 +20,13 @@ screen() { printf 'state=%s\ntimestamp=%s\n' "$2" "$3" >"$CLAUDE_STATUS_DIR/scre
 	[ "$REPLY" = processing ]
 }
 
+@test "fresh native Codex hook state wins over screen" {
+	hook 3 waiting $((CLAUDE_NOW - 5))
+	screen 3 processing $((CLAUDE_NOW - 1))
+	read_pane_state "$CLAUDE_STATUS_DIR/panes/3"
+	[ "$REPLY" = waiting ]
+}
+
 @test "stale hook + screen -> screen" {
 	hook 3 processing $((CLAUDE_NOW - 400))
 	screen 3 idle $((CLAUDE_NOW - 1))
