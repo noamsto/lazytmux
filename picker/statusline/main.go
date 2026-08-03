@@ -132,7 +132,7 @@ type args struct {
 
 	// coding-agent usage segment (feature off when usageMonthlyThreshold == 0)
 	iconUsageClaude, iconUsageCodex, iconUsageCursor string
-	usageMonthlyThreshold                           int
+	usageMonthlyThreshold                            int
 }
 
 // branchDisplay mirrors tmux-branch-display.sh: prefer the cached @branch,
@@ -338,7 +338,7 @@ func main() {
 			usageDir = usageCacheDir
 		}
 		if caches := loadUsageCaches(usageDir); len(caches) > 0 && agentsRunning() {
-			usage = usageSegment(a, caches)
+			usage = usageSegment(a, caches, time.Now().Unix())
 		}
 	}
 

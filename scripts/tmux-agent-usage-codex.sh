@@ -27,10 +27,13 @@ out=$(jq -c '
 		windows: ([.rate_limit.primary_window, .rate_limit.secondary_window]
 			| map(select(. != null))
 			| sort_by(.limit_window_seconds)
-			| map({label: lbl(.limit_window_seconds), pct: .used_percent})),
+			| map({label: lbl(.limit_window_seconds), pct: .used_percent}
+				+ (if .reset_at == null then {} else {reset_at: .reset_at} end))),
 		monthly: (if .spend_control.individual_limit.limit != null
-			then {label: "mo", pct: (100 * (.spend_control.individual_limit.used | tonumber)
+			then ({label: "mo", pct: (100 * (.spend_control.individual_limit.used | tonumber)
 				/ (.spend_control.individual_limit.limit | tonumber) | floor)}
+				+ (if .spend_control.individual_limit.reset_at == null then {}
+					else {reset_at: .spend_control.individual_limit.reset_at} end))
 			else null end)
 	}' <<<"$resp" 2>/dev/null) || exit 0
 

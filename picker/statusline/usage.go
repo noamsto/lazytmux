@@ -20,8 +20,9 @@ type usageCache struct {
 }
 
 type usageWindow struct {
-	Label string  `json:"label"`
-	Pct   float64 `json:"pct"`
+	Label   string  `json:"label"`
+	Pct     float64 `json:"pct"`
+	ResetAt int64   `json:"reset_at,omitempty"`
 }
 
 const usageCacheDir = "/tmp/lazytmux-agent-usage"
@@ -92,13 +93,35 @@ func (a args) usageIcon(agent string) string {
 	}
 }
 
+// usageResetSuffix appends a "↻<dur>" countdown to a nearly-exhausted window,
+// the moment the reset time starts to matter. Duration granularity matches
+// the window's own: minutes under an hour, hours under two days, then days.
+func usageResetSuffix(w usageWindow, now int64) string {
+	if w.Pct < 90 || w.ResetAt <= now {
+		return ""
+	}
+	d := w.ResetAt - now
+	switch {
+	case d < 3600:
+		return fmt.Sprintf("↻%dm", max(d/60, 1))
+	case d < 172800:
+		return fmt.Sprintf("↻%dh", d/3600)
+	default:
+		return fmt.Sprintf("↻%dd", d/86400)
+	}
+}
+
 // usageSegment renders "<icon> <pct>·<label> …" per agent with data, joined
 // and trailing-padded for the right-aligned group. The monthly window only
 // appears at/above the configured threshold; an agent with nothing to show
 // (e.g. an uncapped enterprise tier) drops out entirely.
-func usageSegment(a args, caches map[string]usageCache) string {
+func usageSegment(a args, caches map[string]usageCache, now int64) string {
 	if a.usageMonthlyThreshold <= 0 {
 		return ""
+	}
+	render := func(w usageWindow) string {
+		return "#[fg=" + usageColor(w.Pct, a) + "]" +
+			fmt.Sprintf("%.0f%%·%s%s", w.Pct, w.Label, usageResetSuffix(w, now))
 	}
 	var blocks []string
 	for _, agent := range usageAgentOrder {
@@ -108,10 +131,10 @@ func usageSegment(a args, caches map[string]usageCache) string {
 		}
 		var parts []string
 		for _, w := range c.Windows {
-			parts = append(parts, "#[fg="+usageColor(w.Pct, a)+"]"+fmt.Sprintf("%.0f%%·%s", w.Pct, w.Label))
+			parts = append(parts, render(w))
 		}
 		if c.Monthly != nil && c.Monthly.Pct >= float64(a.usageMonthlyThreshold) {
-			parts = append(parts, "#[fg="+usageColor(c.Monthly.Pct, a)+"]"+fmt.Sprintf("%.0f%%·%s", c.Monthly.Pct, c.Monthly.Label))
+			parts = append(parts, render(*c.Monthly))
 		}
 		if len(parts) == 0 {
 			continue

@@ -17,11 +17,15 @@ resp=$(curl -fsS --max-time 10 \
 	https://api.anthropic.com/api/oauth/usage 2>/dev/null) || exit 0
 
 out=$(jq -c '
-	def w(l; u): if u == null then empty else {label: l, pct: (u | floor)} end;
+	def epoch(r): if r == null then null
+		else (r | sub("\\.[0-9]+"; "") | strptime("%Y-%m-%dT%H:%M:%S%z") | mktime) end;
+	def w(l; u; r): if u == null then empty
+		else ({label: l, pct: (u | floor)}
+			+ (epoch(r) as $e | if $e == null then {} else {reset_at: $e} end)) end;
 	{
 		windows: [
-			w("5h"; .five_hour.utilization),
-			w("7d"; .seven_day.utilization)
+			w("5h"; .five_hour.utilization; .five_hour.resets_at),
+			w("7d"; .seven_day.utilization; .seven_day.resets_at)
 		],
 		monthly: (if .extra_usage.is_enabled == true and .extra_usage.utilization != null
 			then {label: "mo", pct: (.extra_usage.utilization | floor)}
