@@ -223,6 +223,18 @@
               touch $out
             '';
 
+          cursor-status-hooks-tests =
+            pkgs.runCommand "cursor-status-hooks-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.jq];
+            } ''
+              cp -r ${./tests} tests
+              cp -r ${./scripts} scripts
+              mkdir modules
+              cp ${./modules/home-manager.nix} modules/home-manager.nix
+              bats tests/cursor-status-hooks.bats
+              touch $out
+            '';
+
           prune-stale-state-tests =
             pkgs.runCommand "prune-stale-state-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

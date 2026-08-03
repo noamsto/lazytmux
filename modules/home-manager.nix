@@ -585,14 +585,37 @@ in {
       };
     };
 
+    cursorStatus = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Drive the tmux status line from Cursor Agent CLI hooks
+          (sessionStart / beforeSubmitPrompt / preToolUse / postToolUse /
+          postToolUseFailure / preCompact / stop / subagentStart) via a thin
+          `cursor-status-hook` wrapper around `claude-status-update`, keyed off
+          `$TMUX_PANE`. Home-manager activation upserts entries into
+          `~/.cursor/hooks.json` every switch (strips prior
+          `/bin/cursor-status-hook` commands, leaves other entries alone —
+          including aeye's carousel hooks). Requires agentIntegration.enable
+          (asserted): the wrapper and `claude-status-update` must sit side by
+          side on the rebuild-stable profile path.
+
+          Defaults to false: mutates an EXTERNAL tool's config file. agent-detect
+          remains the backfill (and the source of `waiting` — Cursor has no clean
+          permission-prompt hook equivalent).
+        '';
+      };
+    };
+
     agentIntegration = {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = ''
           Expose claude-status-update and claude-status on PATH via
-          home.packages. Needed when agent hooks (Claude Code, Codex, OpenCode)
-          call them by bare name in a shell that doesn't inherit the tmux
+          home.packages. Needed when agent hooks (Claude Code, Codex, OpenCode,
+          Cursor) call them by bare name in a shell that doesn't inherit the tmux
           wrapper's PATH — e.g. a fish login shell, or a direnv-loaded devshell.
         '';
       };
@@ -735,6 +758,14 @@ in {
             path, which agentIntegration installs. Without it the binary isn't on
             the profile and codex would re-prompt for hook trust on every bump.
           '';
+        }
+        ++ lib.optional (cfg.cursorStatus.enable && !cfg.agentIntegration.enable) {
+          assertion = false;
+          message = ''
+            programs.lazytmux.cursorStatus.enable requires agentIntegration.enable:
+            the Cursor hooks call cursor-status-hook (sibling of claude-status-update)
+            on the rebuild-stable profile path, which agentIntegration installs.
+          '';
         };
 
       home = {
@@ -745,6 +776,10 @@ in {
           ++ lib.optionals cfg.agentIntegration.enable [
             tmuxConfig.script.claude-status-update
             tmuxConfig.script.claude-status
+          ]
+          ++ lib.optionals cfg.cursorStatus.enable [
+            tmuxConfig.script.cursor-status-hook
+            tmuxConfig.script.cursor-hooks-install
           ]
           ++ lib.optionals cfg.enrich.enable [
             tmuxConfig.script.tmux-issue-stamp
@@ -940,9 +975,22 @@ in {
                   # Removing it stays the user's call — lazytmux does not own this file.
                   echo "lazytmux: ~/.codex/config.toml has a stale lazytmux hook block ([[hooks.Notification]] is not a codex event, so 'waiting' never fires)." >&2
                   echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch to get the corrected one." >&2
+                elif ! grep -qF ${lib.escapeShellArg csu} "$CONFIG"; then
+                  echo "lazytmux: ~/.codex/config.toml status hooks don't reference ${csu}." >&2
+                  echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch (then re-trust /hooks), or sed the command paths in place." >&2
                 fi
               ''
             )
+          );
+
+          # Upsert Cursor CLI status hooks into ~/.cursor/hooks.json every switch
+          # (strip prior /bin/cursor-status-hook entries; leave aeye/user alone).
+          provisionCursorStatusHooks = lib.mkIf cfg.cursorStatus.enable (
+            lib.hm.dag.entryAfter ["writeBoundary"] ''
+              run env PATH="${lib.makeBinPath [pkgs.jq pkgs.coreutils]}:$PATH" \
+                ${tmuxConfig.script.cursor-hooks-install}/bin/cursor-hooks-install \
+                ${config.home.profileDirectory}/bin/cursor-status-hook
+            ''
           );
         };
       };
