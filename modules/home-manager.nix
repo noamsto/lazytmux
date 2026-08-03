@@ -1053,7 +1053,10 @@ in {
             [post-switch]
             tmux = """
             [ -z "$TMUX" ] && exit 0
+            # Agents drive their own windows (dispatch / in-session wt). Skip
+            # so we don't stack a bare sibling (Claude: $CLAUDECODE; Cursor: $CURSOR_AGENT).
             [ -n "$CLAUDECODE" ] && exit 0
+            [ -n "$CURSOR_AGENT" ] && exit 0
             # display-message resolves against the attached client's ACTIVE
             # window unless pinned to the invoking pane — and wt's pane often
             # isn't the active one at hook time (long checkout, multi-client,
@@ -1134,7 +1137,7 @@ in {
             # git-hooks.nix .pre-commit-config.yaml symlink, which is gitignored and
             # absent until a devshell loads. Without this, commits from a non-direnv
             # shell (agents, scripts) fail with "No .pre-commit-config.yaml file".
-            # No $CLAUDECODE guard: the agent case is the one this most helps.
+            # No agent-env guard: the agent case is the one this most helps.
             wt="{{ worktree_path }}"
             [ -f "$wt/flake.nix" ] || exit 0
             [ -e "$wt/.pre-commit-config.yaml" ] && exit 0
@@ -1148,6 +1151,7 @@ in {
             tmux = """
             [ -z "$TMUX" ] && exit 0
             [ -n "$CLAUDECODE" ] && exit 0
+            [ -n "$CURSOR_AGENT" ] && exit 0
             SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}')
             WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
               | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
