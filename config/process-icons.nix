@@ -9,6 +9,7 @@
   claude = "🧠";
   codex = "🤖";
   "cursor-agent" = "🧊";
+  agent = "🧊"; # cursor-agent binary name
   opencode = "🧩";
   amp = "⚡";
   nh = "❄";
