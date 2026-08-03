@@ -93,6 +93,12 @@
       # the live pane isn't needed. Kind stays "pane-died" — tmux-remux's diff
       # switches on it.
       set-hook -g pane-exited[99]           'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
+
+      # prefix+x kills the pane without its program exiting, so pane-exited never
+      # fires and the close went unrecorded. after-kill-pane is a command hook and
+      # carries no hook_pane; tmux-remux recovers the id by diffing the survivors
+      # against the last snapshot, and records nothing when that's ambiguous.
+      set-hook -g after-kill-pane[99]       'run-shell -b "${tmuxStateBin} capture-event pane-died"'
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
