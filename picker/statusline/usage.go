@@ -93,9 +93,13 @@ func (a args) usageIcon(agent string) string {
 	}
 }
 
-// usageResetSuffix appends a "↻<dur>" countdown to a nearly-exhausted window,
-// the moment the reset time starts to matter. Duration granularity matches
-// the window's own: minutes under an hour, hours under two days, then days.
+// usageResetGlyph is a 1-cell nerd refresh mark. The previous ↻ (U+21BB) reads
+// dense next to the %·label run and often measures 2 cells in terminal fonts.
+const usageResetGlyph = "󰑐" // nerd: nf-md-refresh
+
+// usageResetSuffix appends a "<glyph><dur>" countdown to a nearly-exhausted
+// window, the moment the reset time starts to matter. Duration granularity
+// matches the window's own: minutes under an hour, hours under two days, then days.
 func usageResetSuffix(w usageWindow, now int64) string {
 	if w.Pct < 90 || w.ResetAt <= now {
 		return ""
@@ -103,11 +107,11 @@ func usageResetSuffix(w usageWindow, now int64) string {
 	d := w.ResetAt - now
 	switch {
 	case d < 3600:
-		return fmt.Sprintf("↻%dm", max(d/60, 1))
+		return fmt.Sprintf("%s%dm", usageResetGlyph, max(d/60, 1))
 	case d < 172800:
-		return fmt.Sprintf("↻%dh", d/3600)
+		return fmt.Sprintf("%s%dh", usageResetGlyph, d/3600)
 	default:
-		return fmt.Sprintf("↻%dd", d/86400)
+		return fmt.Sprintf("%s%dd", usageResetGlyph, d/86400)
 	}
 }
 
