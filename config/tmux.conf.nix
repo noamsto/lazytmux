@@ -316,6 +316,8 @@
     "lazytmux-log-event"
     "lazytmux-debug"
     "codex-relaunch-stamp"
+    "cursor-status-hook"
+    "cursor-hooks-install"
     "lztmux-remote-open"
     "lztmux-notify"
     "lztmux-notify-center"

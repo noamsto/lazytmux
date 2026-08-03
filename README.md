@@ -75,7 +75,7 @@ cachix use lazytmux
 | **Catppuccin theme** | Consistent Mocha/Latte colors across status bar and pane borders, following your light/dark theme |
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, OpenCode, etc.) |
-| **AI agent status** | Real-time spinner/icon in status bar for Claude Code and OpenCode |
+| **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, and OpenCode |
 | **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
@@ -209,7 +209,7 @@ still set those options fail loudly via `mkRemovedOptionModule`.
 ## AI Agent Status Integration
 
 The status bar and pickers show the AI agent state for each pane, window, and session
-in real time. Both Claude Code and OpenCode are supported via `claude-status-update`
+in real time. Claude Code, Codex, Cursor, and OpenCode are supported via `claude-status-update`
 (bundled in the wrapper's PATH), which writes state files the status bar reads every second.
 
 ### Status Indicators
@@ -281,6 +281,24 @@ Codex requires a one-time local approval before these non-managed hooks run:
 start `codex`, open `/hooks`, then choose **Trust all**. Native hooks cannot
 currently provide error, denied, or interrupted state, and this integration does
 not parse prompt payloads for task labels or AI window names.
+
+### Cursor Hooks (Home Manager)
+
+Enable Cursor Agent CLI status hooks alongside the agent-integration binaries:
+
+```nix
+programs.lazytmux = {
+  agentIntegration.enable = true;
+  cursorStatus.enable = true;
+};
+```
+
+Home Manager upserts lazytmux entries into `~/.cursor/hooks.json` on every
+switch (strips prior `/bin/cursor-status-hook` commands; leaves other entries
+alone). They write processing, done, compacting, idle, and error state for the
+current `$TMUX_PANE` via a silent `cursor-status-hook` wrapper around
+`claude-status-update`. The screen scraper remains the backfill — and the
+source of `waiting`, since Cursor has no clean permission-prompt hook.
 
 ### OpenCode Plugin
 
