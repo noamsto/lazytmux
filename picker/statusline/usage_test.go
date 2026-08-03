@@ -118,8 +118,25 @@ func TestUsageSegmentResetSuffixOnlyNearExhaustion(t *testing.T) {
 		}},
 	}
 	got := usageSegment(a, caches, now)
-	want := "#[fg=#9a8]CL #[fg=#fa0]85%·5h #[fg=#f00]100%·7d↻6h #[fg=#f00]95%·wk↻3d #[fg=#f00]99%·mo  "
+	want := "#[fg=#9a8]CL #[fg=#fa0]85%·5h #[fg=#f00]100%·7d" + usageResetGlyph + "6h #[fg=#f00]95%·wk" + usageResetGlyph + "3d #[fg=#f00]99%·mo  "
 	if got != want {
 		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestUsageSegmentCursorMonthlyZeroDropsOut(t *testing.T) {
+	a := args{
+		usageMonthlyThreshold: 50,
+		iconUsageClaude:       "CL", iconUsageCursor: "CU",
+		thmSubtext0: "#9a8", thmGreen: "#0f0",
+	}
+	// Cursor with a hard limit but 0% spend: provider still writes monthly.
+	caches := map[string]usageCache{
+		"claude": {Windows: []usageWindow{{Label: "5h", Pct: 10}}},
+		"cursor": {Windows: []usageWindow{}, Monthly: &usageWindow{Label: "mo", Pct: 0}},
+	}
+	got := usageSegment(a, caches, 0)
+	if strings.Contains(got, "CU") {
+		t.Fatalf("cursor at 0%% monthly should not render, got %q", got)
 	}
 }
