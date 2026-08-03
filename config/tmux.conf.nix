@@ -60,6 +60,13 @@
   # so restore relaunches `claude --resume <uuid>` instead of a bare shell.
   # Exposed as the @resume_claude global, read by update-icons each tick.
   resumeClaudeEnable ? true,
+  # Coding-agent usage-limit stats on line 0 (threaded from the module).
+  # Polled by tmux-agent-usage into /tmp/lazytmux-agent-usage/<agent>.json with
+  # each CLI's own stored token; rendered by tmux-statusline while any agent
+  # pane exists. The monthly window shows only at/above the threshold percent.
+  agentUsageEnable ? true,
+  agentUsageRefreshSeconds ? 120,
+  agentUsageMonthlyThreshold ? 50,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -321,6 +328,10 @@
     "lztmux-remote-open"
     "lztmux-notify"
     "lztmux-notify-center"
+    "tmux-agent-usage"
+    "tmux-agent-usage-claude"
+    "tmux-agent-usage-codex"
+    "tmux-agent-usage-cursor"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -392,6 +403,28 @@
   enrich-github-bin = mkScriptEnrich "tmux-issue-stamp-github";
   enrich-pr-bin = mkScriptEnrich "tmux-pr-enrich";
 
+  # Agent-usage providers are plain scripts; only the dispatcher needs
+  # substitution (lib-log, the agent-command gate list, provider store paths —
+  # the daemonized pass must not resolve providers against the tmux server's
+  # frozen PATH).
+  agent-usage-provider-bins =
+    lib.genAttrs ["claude" "codex" "cursor"] (p: mkScript "tmux-agent-usage-${p}");
+
+  mkScriptAgentUsage = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings
+      ["@lib_log@" "@refresh_seconds@" "@AGENT_COMMANDS@" "@usage_claude@" "@usage_codex@" "@usage_cursor@"]
+      [
+        "${lib-log}"
+        (toString agentUsageRefreshSeconds)
+        agentCommands
+        "${agent-usage-provider-bins.claude}/bin/tmux-agent-usage-claude"
+        "${agent-usage-provider-bins.codex}/bin/tmux-agent-usage-codex"
+        "${agent-usage-provider-bins.cursor}/bin/tmux-agent-usage-cursor"
+      ]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # Scripts that source lib-remote get its store path substituted
   scriptsWithRemote = ["lztmux-remote-open"];
   mkRemoteScript = name:
@@ -445,6 +478,10 @@
     then enrich-github-bin
     else if name == "tmux-pr-enrich"
     then enrich-pr-bin
+    else if name == "tmux-agent-usage"
+    then mkScriptAgentUsage name
+    else if lib.hasPrefix "tmux-agent-usage-" name
+    then agent-usage-provider-bins.${lib.removePrefix "tmux-agent-usage-" name}
     else if builtins.elem name scriptsWithEnrich
     then mkScriptEnrich name
     else if name == "tmux-update-icons"
@@ -774,7 +811,7 @@
     # one display-message. Passing those as args would change the expanded
     # command string every tick and reset tmux's #() output cache → a blank
     # frame that shows as a blink under load. Do not add volatile #{...} here.
-    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay0 '#{@thm_overlay_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}' --icon-pending '${enrichIconSet.pending}' --icon-success '${enrichIconSet.success}' --icon-failure '${enrichIconSet.failure}' --icon-merged '${enrichIconSet.merged}' --icon-closed '${enrichIconSet.closed}' --icon-conflict '${enrichIconSet.conflict}' --icon-draft '${enrichIconSet.draft}')"
+    set -g status-format[0] "#(${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay0 '#{@thm_overlay_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}' --icon-pending '${enrichIconSet.pending}' --icon-success '${enrichIconSet.success}' --icon-failure '${enrichIconSet.failure}' --icon-merged '${enrichIconSet.merged}' --icon-closed '${enrichIconSet.closed}' --icon-conflict '${enrichIconSet.conflict}' --icon-draft '${enrichIconSet.draft}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"}')"
 
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
     # A window tagged by an external fan-out orchestrator (@crew_name codename +
@@ -1004,7 +1041,7 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [picker-generate pkgs.bash pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa pkgs.socat] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
+        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [picker-generate pkgs.bash pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.curl pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa pkgs.socat] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };

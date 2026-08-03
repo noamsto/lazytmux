@@ -145,6 +145,9 @@
     splashTimeout = cfg.splash.timeout;
     splashRemote = cfg.splash.remote;
     aiNamingEnable = cfg.aiNaming.enable;
+    agentUsageEnable = cfg.agentUsage.enable;
+    agentUsageRefreshSeconds = cfg.agentUsage.refreshSeconds;
+    agentUsageMonthlyThreshold = cfg.agentUsage.monthlyThreshold;
     notifyEnable = cfg.notifications.enable;
     # Only stamp @remux_relaunch when tmux-remux is actually installed to read it.
     resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
@@ -440,6 +443,40 @@ in {
           message line; anything else lands in the history buffer on
           `prefix + n` (which shadows tmux's built-in next-window — this config
           already binds M-L / M-H for that).
+        '';
+      };
+    };
+
+    agentUsage = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Coding-agent usage-limit stats (Claude/Codex/Cursor) on the top-right
+          of status line 0, shown while any coding agent is running. Data comes
+          from the providers' own usage endpoints using each CLI's stored
+          credentials — no extra API keys. Agents without meaningful caps (e.g.
+          Cursor on an enterprise tier) stay hidden.
+        '';
+      };
+
+      refreshSeconds = lib.mkOption {
+        type = lib.types.ints.between 10 300;
+        default = 120;
+        description = ''
+          Usage-endpoint polling cadence in seconds (clamped 10–300). Each pass
+          spends provider API budget, and the numbers move slowly, so short
+          cadences buy little.
+        '';
+      };
+
+      monthlyThreshold = lib.mkOption {
+        type = lib.types.ints.between 0 100;
+        default = 50;
+        description = ''
+          Utilization percent at which the monthly spend window joins the
+          always-on short-window stats. Below it the monthly segment stays
+          hidden — it's the "only when close to the cap" window.
         '';
       };
     };
