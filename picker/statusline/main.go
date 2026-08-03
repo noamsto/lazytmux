@@ -129,6 +129,10 @@ type args struct {
 	iconSession, iconBranch, iconDir                                                                    string
 	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconClosed, iconConflict string
 	iconDraft                                                                                           string
+
+	// coding-agent usage segment (feature off when usageMonthlyThreshold == 0)
+	iconUsageClaude, iconUsageCodex, iconUsageCursor string
+	usageMonthlyThreshold                           int
 }
 
 // branchDisplay mirrors tmux-branch-display.sh: prefer the cached @branch,
@@ -254,7 +258,7 @@ func paneCmdDisplay(cmd string) string {
 	return cmd
 }
 
-func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64) string {
+func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, usage string) string {
 	var b strings.Builder
 	b.WriteString("#[align=left,bg=" + a.thmBg + "]")
 	b.WriteString(sessionSegment(a, prefixActive))
@@ -265,6 +269,7 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64) s
 	}
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
+	b.WriteString(usage)
 	if a.bridgeWin != "1" {
 		b.WriteString(prBadge(a))
 	}
@@ -300,6 +305,10 @@ func main() {
 	flag.StringVar(&a.iconClosed, "icon-closed", "", "")
 	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
 	flag.StringVar(&a.iconDraft, "icon-draft", "", "")
+	flag.StringVar(&a.iconUsageClaude, "icon-usage-claude", "", "")
+	flag.StringVar(&a.iconUsageCodex, "icon-usage-codex", "", "")
+	flag.StringVar(&a.iconUsageCursor, "icon-usage-cursor", "", "")
+	flag.IntVar(&a.usageMonthlyThreshold, "agent-usage-monthly-threshold", 0, "")
 	flag.Parse()
 
 	prefixActive, ok := a.fetchVolatile()
@@ -319,7 +328,21 @@ func main() {
 		}
 	}
 
-	line := renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix())
+	// Usage segment: cheapest gates first — reading the three cache files
+	// forks nothing, so the per-second tmux list-panes gate only runs when
+	// there's actual data to display.
+	usage := ""
+	if a.usageMonthlyThreshold > 0 {
+		usageDir := os.Getenv("LAZYTMUX_AGENT_USAGE_DIR")
+		if usageDir == "" {
+			usageDir = usageCacheDir
+		}
+		if caches := loadUsageCaches(usageDir); len(caches) > 0 && agentsRunning() {
+			usage = usageSegment(a, caches)
+		}
+	}
+
+	line := renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix(), usage)
 	if ok {
 		writeLastGood(statuslineCacheDir, a.session, line)
 	}

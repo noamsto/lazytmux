@@ -218,7 +218,7 @@ func TestRenderLineFull(t *testing.T) {
 		paneIcon: "I", paneCmd: ".nvim-wrapped",
 	}
 
-	got := renderLine(a, dir, "dark", false, now)
+	got := renderLine(a, dir, "dark", false, now, "")
 	want := "#[align=left,bg=#000]" +
 		"#[fg=#c6a] #[range=left]S work#[norange]  #[fg=#89b,bold]B feat/x" +
 		"  #[fg=#9a8,nobold]D ./" +
@@ -251,7 +251,7 @@ func TestRenderLineBridgeWinSuppressesDirAndPR(t *testing.T) {
 		paneIcon: "I", paneCmd: ".nvim-wrapped",
 	}
 
-	got := renderLine(a, dir, "dark", false, now)
+	got := renderLine(a, dir, "dark", false, now, "")
 	want := "#[align=left,bg=#000]" +
 		"#[fg=#c6a] #[range=left]S work#[norange]  " +
 		"  #[fg=#777]" +
