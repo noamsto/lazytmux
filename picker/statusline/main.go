@@ -10,8 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
 
 // gitOutput runs git with a short timeout so a stalled repo (NFS, held
@@ -30,7 +28,7 @@ func gitOutput(dir string, args ...string) (string, bool) {
 // volatileFields lists the tmux tokens fetched in one display-message call, in
 // output order. Keeping these OUT of the #() argv is what stops line 0 from
 // blinking: tmux keys each #() job's output cache by the fully-expanded command
-// string, so any changing arg (pane_current_command, client_prefix, @pr_*, …)
+// string, so any changing arg (pane_current_command, client_prefix, @issue_*, …)
 // mints a fresh job whose output starts empty — a blank frame that becomes
 // visible once the machine is loaded enough that the recompute spans several
 // redraws. A command string that stays constant across ticks lets tmux reuse
@@ -39,7 +37,6 @@ var volatileFields = []string{
 	"#{client_prefix}",
 	"#{@issue_id}", "#{@issue_branch}", "#{@issue_provider}", "#{@issue_title}",
 	"#{@branch}", "#{pane_current_path}", "#{@git_root}",
-	"#{@pr_number}", "#{@pr_branch}", "#{@pr_state}", "#{@pr_check_state}", "#{@pr_mergeable}", "#{@pr_title}", "#{@pr_draft}",
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
 	"#{@bridge_win}",
@@ -64,11 +61,9 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	}
 	a.issueID, a.issueBranch, a.issueProvider, a.issueTitle = f[1], f[2], f[3], f[4]
 	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]
-	a.prNumber, a.prBranch, a.prState, a.prCheck, a.prMergeable, a.prTitle = f[8], f[9], f[10], f[11], f[12], f[13]
-	a.prDraft = f[14]
-	a.paneIcon, a.paneCmd, a.claudeFg = f[15], f[16], f[17]
-	a.crewName, a.crewColor = f[18], f[19]
-	a.bridgeWin = f[20]
+	a.paneIcon, a.paneCmd, a.claudeFg = f[8], f[9], f[10]
+	a.crewName, a.crewColor = f[11], f[12]
+	a.bridgeWin = f[13]
 	return f[0] == "1", true
 }
 
@@ -112,23 +107,20 @@ func writeLastGood(dir, session, line string) {
 }
 
 type args struct {
-	session                                                    string
-	issueID, issueBranch, issueProvider, issueTitle            string
-	branch, panePath, gitRoot                                  string
-	prNumber, prBranch, prState, prCheck, prMergeable, prTitle string
-	prDraft                                                    string
-	paneIcon, paneCmd, claudeFg                                string
-	crewName, crewColor                                        string
-	bridgeWin                                                  string
+	session                                         string
+	issueID, issueBranch, issueProvider, issueTitle string
+	branch, panePath, gitRoot                       string
+	paneIcon, paneCmd, claudeFg                     string
+	crewName, crewColor                             string
+	bridgeWin                                       string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
-	thmOverlay0, thmOverlay1, thmPeach, thmGreen           string
+	thmOverlay1, thmPeach, thmGreen                        string
 
-	// glyphs (tmux @icon_* options + Nix enrich icon set)
-	iconSession, iconBranch, iconDir                                                                    string
-	iconLinear, iconGitHub, iconPending, iconSuccess, iconFailure, iconMerged, iconClosed, iconConflict string
-	iconDraft                                                                                           string
+	// glyphs (tmux @icon_* options + Nix enrich icon set for issue provider)
+	iconSession, iconBranch, iconDir string
+	iconLinear, iconGitHub           string
 
 	// coding-agent usage segment (feature off when usageMonthlyThreshold == 0)
 	iconUsageClaude, iconUsageCodex, iconUsageCursor string
@@ -216,39 +208,6 @@ func sessionSegment(a args, prefixActive bool) string {
 	return b.String()
 }
 
-// prBadge renders the right-side PR badge, matching the nested conditional in
-// status-format[0]. Empty unless pr_number is a real number for this branch.
-func prBadge(a args) string {
-	if a.prNumber == "" || a.prNumber == "none" || a.prBranch != a.branch {
-		return ""
-	}
-
-	cr, gr := enrichstate.Classify(a.prState, a.prCheck, a.prMergeable)
-
-	color := map[enrichstate.ColorRole]string{
-		enrichstate.ColorMerged:  a.thmMauve,
-		enrichstate.ColorClosed:  a.thmOverlay0,
-		enrichstate.ColorFailure: a.thmRed,
-		enrichstate.ColorPending: a.thmPeach,
-		enrichstate.ColorSuccess: a.thmGreen,
-	}[cr]
-
-	glyph := map[enrichstate.GlyphRole]string{
-		enrichstate.GlyphMerged:   a.iconMerged,
-		enrichstate.GlyphClosed:   a.iconClosed,
-		enrichstate.GlyphConflict: a.iconConflict,
-		enrichstate.GlyphFailure:  a.iconFailure,
-		enrichstate.GlyphPending:  a.iconPending,
-		enrichstate.GlyphSuccess:  a.iconSuccess,
-	}[gr]
-
-	if enrichstate.Draft(a.prState, a.prDraft) {
-		glyph = a.iconDraft + " " + glyph
-	}
-
-	return "#[fg=" + color + "]" + glyph + " #" + a.prNumber + " " + a.prTitle + "  "
-}
-
 var wrappedRe = regexp.MustCompile(`^\.(.*)-wrapped$`)
 
 func paneCmdDisplay(cmd string) string {
@@ -262,17 +221,14 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, u
 	var b strings.Builder
 	b.WriteString("#[align=left,bg=" + a.thmBg + "]")
 	b.WriteString(sessionSegment(a, prefixActive))
-	// Remote-bridge mirror window: dir and PR belong to the host repo the
-	// launcher ran in, not the remote content this window mirrors — suppress.
+	// Remote-bridge mirror window: dir belongs to the host repo the launcher
+	// ran in, not the remote content this window mirrors — suppress.
 	if a.bridgeWin != "1" {
 		b.WriteString("  #[fg=" + a.thmSubtext0 + ",nobold]" + a.iconDir + " " + dirDisplay(a.panePath, a.gitRoot))
 	}
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
 	b.WriteString(usage)
-	if a.bridgeWin != "1" {
-		b.WriteString(prBadge(a))
-	}
 	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + a.paneIcon + " " + paneCmdDisplay(a.paneCmd) + " ")
 	return b.String()
 }
@@ -289,7 +245,6 @@ func main() {
 	flag.StringVar(&a.thmBlue, "thm-blue", "", "")
 	flag.StringVar(&a.thmText, "thm-text", "", "")
 	flag.StringVar(&a.thmSubtext0, "thm-subtext0", "", "")
-	flag.StringVar(&a.thmOverlay0, "thm-overlay0", "", "")
 	flag.StringVar(&a.thmOverlay1, "thm-overlay1", "", "")
 	flag.StringVar(&a.thmPeach, "thm-peach", "", "")
 	flag.StringVar(&a.thmGreen, "thm-green", "", "")
@@ -298,13 +253,6 @@ func main() {
 	flag.StringVar(&a.iconDir, "icon-dir", "", "")
 	flag.StringVar(&a.iconLinear, "icon-linear", "", "")
 	flag.StringVar(&a.iconGitHub, "icon-github", "", "")
-	flag.StringVar(&a.iconPending, "icon-pending", "", "")
-	flag.StringVar(&a.iconSuccess, "icon-success", "", "")
-	flag.StringVar(&a.iconFailure, "icon-failure", "", "")
-	flag.StringVar(&a.iconMerged, "icon-merged", "", "")
-	flag.StringVar(&a.iconClosed, "icon-closed", "", "")
-	flag.StringVar(&a.iconConflict, "icon-conflict", "", "")
-	flag.StringVar(&a.iconDraft, "icon-draft", "", "")
 	flag.StringVar(&a.iconUsageClaude, "icon-usage-claude", "", "")
 	flag.StringVar(&a.iconUsageCodex, "icon-usage-codex", "", "")
 	flag.StringVar(&a.iconUsageCursor, "icon-usage-cursor", "", "")

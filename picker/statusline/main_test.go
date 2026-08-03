@@ -107,75 +107,6 @@ func TestSessionSegmentBridgeWinStopsAtPill(t *testing.T) {
 	}
 }
 
-func TestPRBadgeHidden(t *testing.T) {
-	if got := prBadge(args{prNumber: "", branch: "x", prBranch: "x"}); got != "" {
-		t.Fatalf("empty pr = %q, want empty", got)
-	}
-	if got := prBadge(args{prNumber: "none", branch: "x", prBranch: "x"}); got != "" {
-		t.Fatalf("none pr = %q, want empty", got)
-	}
-	if got := prBadge(args{prNumber: "5", branch: "x", prBranch: "y"}); got != "" {
-		t.Fatalf("branch mismatch = %q, want empty", got)
-	}
-}
-
-func TestPRBadgeSuccess(t *testing.T) {
-	a := args{
-		prNumber: "42", branch: "x", prBranch: "x", prState: "open", prCheck: "success",
-		thmGreen: "#0f0", iconSuccess: "OK", prTitle: "Title",
-	}
-	want := "#[fg=#0f0]OK #42 Title  "
-	if got := prBadge(a); got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
-	}
-}
-
-func TestPRBadgeConflictWinsColorAndGlyph(t *testing.T) {
-	a := args{
-		prNumber: "9", branch: "x", prBranch: "x", prState: "open",
-		prCheck: "success", prMergeable: "conflicting",
-		thmRed: "#f00", iconConflict: "CF", prTitle: "T",
-	}
-	want := "#[fg=#f00]CF #9 T  "
-	if got := prBadge(a); got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
-	}
-}
-
-func TestPRBadgeClosedWinsOverStaleCheck(t *testing.T) {
-	a := args{
-		prNumber: "9", branch: "x", prBranch: "x", prState: "closed",
-		prCheck: "failure", prMergeable: "unknown",
-		thmOverlay0: "#666", iconClosed: "XX", prTitle: "T",
-	}
-	want := "#[fg=#666]XX #9 T  "
-	if got := prBadge(a); got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
-	}
-}
-
-func TestPRBadgeDraftPrependsGlyph(t *testing.T) {
-	a := args{
-		prNumber: "42", branch: "x", prBranch: "x", prState: "open", prCheck: "pending",
-		prDraft: "1", thmPeach: "#fa0", iconPending: "PD", iconDraft: "DR", prTitle: "T",
-	}
-	want := "#[fg=#fa0]DR PD #42 T  "
-	if got := prBadge(a); got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
-	}
-}
-
-func TestPRBadgeMergedDropsDraftMarker(t *testing.T) {
-	a := args{
-		prNumber: "42", branch: "x", prBranch: "x", prState: "merged", prCheck: "success",
-		prDraft: "1", thmMauve: "#c6f", iconMerged: "MG", iconDraft: "DR", prTitle: "T",
-	}
-	want := "#[fg=#c6f]MG #42 T  "
-	if got := prBadge(a); got != want {
-		t.Fatalf("\n got %q\nwant %q", got, want)
-	}
-}
-
 func TestLastGoodRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if _, ok := readLastGood(dir, "work"); ok {
@@ -212,9 +143,7 @@ func TestRenderLineFull(t *testing.T) {
 		session: "work", branch: "feat/x", panePath: "/repo", gitRoot: "/repo",
 		iconSession: "S", iconBranch: "B", iconDir: "D",
 		thmBg: "#000", thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
-		thmSubtext0: "#9a8", thmOverlay1: "#777", thmGreen: "#0f0",
-		prNumber: "42", prBranch: "feat/x", prState: "open", prCheck: "success",
-		iconSuccess: "OK", prTitle: "PR",
+		thmSubtext0: "#9a8", thmOverlay1: "#777",
 		paneIcon: "I", paneCmd: ".nvim-wrapped",
 	}
 
@@ -224,18 +153,17 @@ func TestRenderLineFull(t *testing.T) {
 		"  #[fg=#9a8,nobold]D ./" +
 		"  #[fg=#777]#[fg=#94e2d5]󰪞#[fg=default] " +
 		" #[align=right]" +
-		"#[fg=#0f0]OK #42 PR  " +
 		"#[fg=#9a8]I nvim "
 	if got != want {
 		t.Fatalf("renderLine\n got %q\nwant %q", got, want)
 	}
 }
 
-// TestRenderLineBridgeWinSuppressesDirAndPR mirrors TestRenderLineFull but with
-// @bridge_win set: dir and PR must drop out (they describe the host repo the
-// mirror daemon launched from, not the remote content), while the session
-// pill and pane-command segment survive untouched.
-func TestRenderLineBridgeWinSuppressesDirAndPR(t *testing.T) {
+// TestRenderLineBridgeWinSuppressesDir mirrors TestRenderLineFull but with
+// @bridge_win set: dir must drop out (it describes the host repo the mirror
+// daemon launched from, not the remote content), while the session pill and
+// pane-command segment survive untouched.
+func TestRenderLineBridgeWinSuppressesDir(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(dir+"/panes", 0o755)
 	now := int64(9000)
@@ -245,9 +173,7 @@ func TestRenderLineBridgeWinSuppressesDirAndPR(t *testing.T) {
 		bridgeWin:   "1",
 		iconSession: "S", iconBranch: "B", iconDir: "D",
 		thmBg: "#000", thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
-		thmSubtext0: "#9a8", thmOverlay1: "#777", thmGreen: "#0f0",
-		prNumber: "42", prBranch: "feat/x", prState: "open", prCheck: "success",
-		iconSuccess: "OK", prTitle: "PR",
+		thmSubtext0: "#9a8", thmOverlay1: "#777",
 		paneIcon: "I", paneCmd: ".nvim-wrapped",
 	}
 
