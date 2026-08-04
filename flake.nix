@@ -105,6 +105,12 @@
             '';
           });
       in {
+        # Not a check: the hook closure (python + every nix/shell linter, ~1200
+        # store paths) is the largest fetch in the repo, and as a check it was
+        # paid on both CI matrix legs. It moves to `packages.lint`, built once.
+        # The devShell shellHook below still installs the hooks locally.
+        pre-commit.check.enable = false;
+
         pre-commit.settings.hooks = {
           # Nix
           statix.enable = true;
@@ -602,6 +608,8 @@
 
         packages = {
           default = tmuxConfig.tmux-wrapped;
+          # Runs every pre-commit hook over the tree (see pre-commit.check above).
+          lint = config.pre-commit.settings.run;
           # Stable store path for the Codex managed-hook config (lazytmux#140
           # Task 3) to point its `command` at, independent of the tmux wrapper.
           codex-relaunch-stamp = tmuxConfig.script.codex-relaunch-stamp;
