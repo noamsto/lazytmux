@@ -7,8 +7,21 @@ import_vars_block() {
 	sed -n '/startupImportVars =/,/^$/p' "$MODULE"
 }
 
+# The list appended after the gated block — vars imported unconditionally.
+import_vars_ungated() {
+	import_vars_block | sed -n '/++ \[/p'
+}
+
 unit_block() {
 	sed -n '/tmux-startup = lib.mkIf cfg.startupSession.enable {/,/^          };$/p' "$MODULE"
+}
+
+graphical_gate_block() {
+	unit_block | sed -n '/lib.optionalAttrs (!cfg.startupSession.headless)/,/};/p'
+}
+
+install_block() {
+	unit_block | sed -n '/Install = {/,/};/p'
 }
 
 @test "headless is opt-in" {
@@ -18,19 +31,15 @@ unit_block() {
 	[[ $output == *'default = false;'* ]]
 }
 
-@test "graphical-session ordering is dropped when headless" {
-	run unit_block
-	[ "$status" -eq 0 ]
-	[[ $output == *'lib.optionalAttrs (!cfg.startupSession.headless)'* ]]
-	# After/Wants must live inside the gated block, not unconditionally.
-	run bash -c 'sed -n "/tmux-startup = lib.mkIf cfg.startupSession.enable {/,/^          };$/p" "'"$MODULE"'" | sed -n "/lib.optionalAttrs (!cfg.startupSession.headless)/,/};/p"'
+@test "graphical-session ordering sits behind the headless gate" {
+	run graphical_gate_block
 	[ "$status" -eq 0 ]
 	[[ $output == *'After = ["graphical-session.target"];'* ]]
 	[[ $output == *'Wants = ["graphical-session.target"];'* ]]
 }
 
 @test "WantedBy follows headless" {
-	run bash -c 'sed -n "/Install = {/,/};/p" "'"$MODULE"'"'
+	run install_block
 	[ "$status" -eq 0 ]
 	[[ $output == *'if cfg.startupSession.headless'* ]]
 	[[ $output == *'then "default.target"'* ]]
@@ -38,7 +47,7 @@ unit_block() {
 }
 
 # A headless start has no graphical session to read DISPLAY/WAYLAND_DISPLAY
-# from, but the terminal vars still come from the unit's own Environment.
+# from; the terminal vars come from the unit's own Environment, so they stay.
 @test "display vars are imported only when not headless" {
 	run import_vars_block
 	[ "$status" -eq 0 ]
@@ -46,8 +55,7 @@ unit_block() {
 	[[ $output == *'"DISPLAY"'* ]]
 	[[ $output == *'"WAYLAND_DISPLAY"'* ]]
 
-	# The terminal trio sits outside the gate.
-	run bash -c 'sed -n "/startupImportVars =/,/^$/p" "'"$MODULE"'" | sed -n "/++ \[/p"'
+	run import_vars_ungated
 	[ "$status" -eq 0 ]
 	[[ $output == *'"COLORTERM"'* ]]
 	[[ $output == *'"TERM"'* ]]
