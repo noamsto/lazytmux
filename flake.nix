@@ -235,6 +235,17 @@
               touch $out
             '';
 
+          startup-session-tests =
+            pkgs.runCommand "startup-session-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused];
+            } ''
+              cp -r ${./tests} tests
+              mkdir modules
+              cp ${./modules/home-manager.nix} modules/home-manager.nix
+              bats tests/startup-session.bats
+              touch $out
+            '';
+
           cursor-status-hooks-tests =
             pkgs.runCommand "cursor-status-hooks-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.jq];
