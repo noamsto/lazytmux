@@ -15,6 +15,12 @@ import (
 // host cannot stall the session picker's async remote section.
 const remoteProbeTimeout = 3 * time.Second
 
+// remoteListSessionsCmd lists remote tmux sessions under the same TMUX_TMPDIR /
+// binary resolution as lztmux-remote-open. Must stay fish-safe: no `var=value`
+// shell assignments — fish login shells reject them and the picker would mark
+// a reachable host unreachable.
+const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+
 // parseRemoteHosts splits a whitespace-separated @remote_bridge_hosts value
 // into ssh Host aliases. Empty tokens are dropped.
 func parseRemoteHosts(raw string) []string {
@@ -68,16 +74,13 @@ func sshListRemoteSessions(host string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteProbeTimeout)
 	defer cancel()
 
-	// Mirrors scripts/lztmux-remote-open.sh: resolve uid-scoped TMUX_TMPDIR and
-	// a usable tmux binary, then list session names.
-	remoteCmd := `td=/run/user/$(id -u); t=$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux); env TMUX_TMPDIR="$td" "$t" list-sessions -F '#{session_name}' 2>/dev/null`
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=2",
 		"-T",
 		host,
 		"--",
-		remoteCmd,
+		remoteListSessionsCmd,
 	)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
