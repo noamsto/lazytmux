@@ -82,12 +82,23 @@
       set-hook -g window-linked[99]         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
       set-hook -g client-detached[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
 
+      # tmux has no pane-created hook, so a split pane reached no snapshot until
+      # the next window/session event — and undo can only restore what a
+      # snapshot recorded. after-split-window is the stand-in.
+      set-hook -g after-split-window[99]    'run-shell -b "${tmuxStateBin} save --reason=hook:after-split-window"'
+
       # Hook pane-exited, not pane-died: pane-died only fires when remain-on-exit
       # is on (off by default), so it never caught a normal close. Capture happens
       # after the pane is gone (tmux-remux diffs against the prior snapshot), so
       # the live pane isn't needed. Kind stays "pane-died" — tmux-remux's diff
       # switches on it.
       set-hook -g pane-exited[99]           'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
+
+      # prefix+x kills the pane without its program exiting, so pane-exited never
+      # fires and the close went unrecorded. after-kill-pane is a command hook and
+      # carries no hook_pane; tmux-remux recovers the id by diffing the survivors
+      # against the last snapshot, and records nothing when that's ambiguous.
+      set-hook -g after-kill-pane[99]       'run-shell -b "${tmuxStateBin} capture-event pane-died"'
       set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
       set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
 
@@ -1284,10 +1295,19 @@ in {
         // lib.optionalAttrs persistEnabled {
           # Periodic snapshot. No TMUX_TMPDIR: darwin tmux uses its default
           # /tmp/tmux-$UID socket, which tmux-remux also resolves to by default.
+          #
+          # PATH is load-bearing: launchd hands an agent a bare
+          # /usr/bin:/bin:/usr/sbin:/sbin, so a nix-store tmux is invisible and
+          # every firing died with `exec: "tmux": executable file not found in
+          # $PATH` — silently, since the timer is fire-and-forget. That left
+          # snapshots to the tmux hooks alone, and anything closed between two
+          # hooks was unrecoverable. The systemd unit is unaffected: it inherits
+          # the user's session PATH.
           lazytmux-remux-save = {
             enable = true;
             config = {
               ProgramArguments = ["${cfg.persist.package}/bin/tmux-remux" "save" "--reason=timer"];
+              EnvironmentVariables.PATH = "${cfg.tmuxPackage}/bin:/usr/bin:/bin";
               StartInterval = cfg.persist.saveInterval;
             };
           };
