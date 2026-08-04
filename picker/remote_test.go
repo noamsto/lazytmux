@@ -50,8 +50,7 @@ func TestRemoteSessionsForHost(t *testing.T) {
 		t.Fatalf("down host state = %v, want remoteProbeUnreachable", state)
 	}
 
-	// The bug behind #266: a reachable host whose tmux server is not running
-	// must not be reported as unreachable.
+	// A reachable host whose tmux server is down must not read as unreachable.
 	if _, state := remoteSessionsForHost("serverless", local, probe); state != remoteProbeNoServer {
 		t.Fatalf("serverless host state = %v, want remoteProbeNoServer", state)
 	}
@@ -123,9 +122,7 @@ func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 	}
 }
 
-// ssh's exit 255 is the only signal that the host itself is out of reach; the
-// remote command's own status (list-sessions exits 1 with no server running)
-// must not be read as unreachable (#266).
+// Exit 255 is the only status that means the host is out of reach.
 func TestClassifyProbeErr(t *testing.T) {
 	exitErr := func(code int) error {
 		return exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()

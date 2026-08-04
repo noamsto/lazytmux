@@ -22,19 +22,13 @@ const remoteProbeTimeout = 3 * time.Second
 // a reachable host unreachable.
 const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
 
-// sshConnectFailureExit is ssh's own exit status when it cannot reach the host;
-// any other non-zero status is the remote command's, passed through verbatim.
 const sshConnectFailureExit = 255
 
-// A probe failure means one of two very different things, and rendering both as
-// "unreachable" sends you debugging the network when the host is fine (#266).
 var (
 	errRemoteUnreachable = errors.New("remote unreachable")
 	errRemoteNoServer    = errors.New("remote tmux server not running")
 )
 
-// remoteProbeState is what one host's probe established: reachable with
-// sessions, reachable with no tmux server to bridge, or not reachable at all.
 type remoteProbeState int
 
 const (
@@ -97,7 +91,7 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 
 // classifyProbeErr decides which failure a non-zero probe was. ssh exits 255
 // when it could not reach the host; any other status is the remote command's
-// own, so the host answered and only its tmux server is missing.
+// own, so the host answered and only its tmux server is missing (#266).
 func classifyProbeErr(err error, timedOut bool) error {
 	if timedOut {
 		return fmt.Errorf("%w: probe timed out", errRemoteUnreachable)
