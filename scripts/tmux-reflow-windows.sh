@@ -260,12 +260,10 @@ TALL_CLIENT_ROWS=40
 LONG_TRUNC_FLOOR=24
 
 # Per-window widths driving the grid: a floor (id + badge + zoom marker, none of
-# which the renderer can shrink) and a want (floor + branch/title). The allocator
-# sizes each column to the windows stacked in it, so one wide window no longer
-# charges its width to every column (#271). The rest is capped at MAX_REST_WIDTH
-# so one very long name can't stretch the grid; floors are never capped. The
-# single-line fit totals stay uncapped and unpadded — that path renders full
-# names via the global format, so it must reserve them.
+# which the renderer can shrink) and a want (floor + branch/title). The rest is
+# capped at MAX_REST_WIDTH so one very long name can't stretch the grid; floors
+# are never capped. The single-line fit totals stay uncapped and unpadded — that
+# path renders full names via the global format, so it must reserve them.
 MAX_REST_WIDTH=40
 floor_list=""
 want_long_list=""
@@ -326,8 +324,8 @@ for pos in "${!indices[@]}"; do
 	# this window's label and the id is a fixed prefix, so all three are charged
 	# here. When even they overrun the column the badge goes first — it is
 	# decoration, the ticket id is identity — and only then is the id clipped.
-	# The column can never be narrower than REFLOW_MIN_COLW, so identity_avail
-	# stays positive and truncate_to_width always has room for its ellipsis.
+	# REFLOW_MIN_COLW keeps identity_avail positive, so truncate_to_width always
+	# has room for its ellipsis.
 	identity_avail=$((colw - win_zoom_dw[$idx]))
 	cur_crew="${win_crew[$idx]}"
 	cur_crew_dw=${win_crew_dw[$idx]}

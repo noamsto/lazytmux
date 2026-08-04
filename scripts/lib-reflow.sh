@@ -4,12 +4,13 @@
 # testable under bats (tests/reflow.bats).
 # Functions use the REPLY convention (set REPLY* instead of echoing) to avoid
 # subshell forks, matching lib-icons.sh / lib-claude.sh / lib-enrich.sh.
+# Accumulators assign (sum=$((sum + x))) rather than ((sum += x)): a standalone
+# arithmetic command whose result is 0 exits 1, which aborts under errexit.
 
 # shellcheck disable=SC2034  # REPLY* outputs are used by callers
 
-# Narrowest a starved column may get before the label is all ellipsis. Columns
-# only reach it once even the incompressible parts overflow the row, where
-# running past the row width is unavoidable anyway.
+# Narrowest a starved column may get. Only reached once even the incompressible
+# parts overflow the row, where running past the row width is unavoidable.
 REFLOW_MIN_COLW=6
 
 # reflow_fit_columns PER AVAILABLE OVERHEAD SEP_WIDTH FLOORS WANTS
@@ -49,8 +50,6 @@ reflow_fit_columns() {
 	local budget=$((available - (per - 1) * sep_width - per * overhead))
 	((budget < 0)) && budget=0
 
-	# Plain assignments, not ((sum += ...)): a standalone arithmetic command whose
-	# result is 0 exits 1, which aborts under the errexit the bats suite runs with.
 	local sum_f=0 sum_w=0
 	for ((c = 0; c < per; c++)); do
 		sum_f=$((sum_f + cf[c]))
@@ -97,10 +96,13 @@ reflow_fit_columns() {
 		done
 	fi
 
-	REPLY_MIN_STARVED=0
+	# Seeded out of band so a column starved to 0 cells reports 0 instead of
+	# colliding with the "nothing starved" encoding. REPLY_FITS=0 guarantees a
+	# starved column here, so the seed never survives.
+	REPLY_MIN_STARVED=-1
 	for ((c = 0; c < per; c++)); do
 		((width[c] >= cw[c])) && continue
-		((REPLY_MIN_STARVED == 0 || width[c] < REPLY_MIN_STARVED)) && REPLY_MIN_STARVED=${width[c]}
+		((REPLY_MIN_STARVED < 0 || width[c] < REPLY_MIN_STARVED)) && REPLY_MIN_STARVED=${width[c]}
 	done
 	REPLY_COLWS="${width[*]}"
 }
