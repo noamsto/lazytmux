@@ -58,6 +58,18 @@
     then emulatorCfg.terminfoPath
     else cfg.startupSession.terminal.terminfoPath;
 
+  # Session env the startup service imports. The display/seat half only exists
+  # once a graphical session has set it, so a headless start leaves it out.
+  startupImportVars =
+    lib.optionals (!cfg.startupSession.headless) [
+      "DISPLAY"
+      "WAYLAND_DISPLAY"
+      "XDG_SESSION_TYPE"
+      "XDG_SESSION_DESKTOP"
+      "XDG_CURRENT_DESKTOP"
+    ]
+    ++ ["COLORTERM" "TERM" "TERMINFO"];
+
   # tmux-remux binary path (null when persist is disabled or package missing).
   # Resolving here keeps the conditional logic out of the conf string itself.
   tmuxStateBin =
@@ -731,6 +743,22 @@ in {
     startupSession = {
       enable = lib.mkEnableOption "systemd service to start a tmux session on login";
 
+      headless = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Start the session without waiting for a graphical login: bind the
+          service to `default.target` instead of `graphical-session.target` and
+          skip the DISPLAY/WAYLAND_DISPLAY import, which has nothing to read.
+
+          Enable this on a host you reach over ssh — with the default graphical
+          gating, a machine sitting at its login screen never starts a tmux
+          server, so there is nothing for the remote bridge to attach to. Pair
+          with `loginctl enable-linger <user>` to start at boot rather than on
+          first login.
+        '';
+      };
+
       name = lib.mkOption {
         type = lib.types.str;
         default = "main";
@@ -1187,15 +1215,18 @@ in {
       systemd.user = {
         services = {
           tmux-startup = lib.mkIf cfg.startupSession.enable {
-            Unit = {
-              Description = "Start tmux server on login";
-              After = ["graphical-session.target"];
-              Wants = ["graphical-session.target"];
-            };
+            Unit =
+              {
+                Description = "Start tmux server on login";
+              }
+              // lib.optionalAttrs (!cfg.startupSession.headless) {
+                After = ["graphical-session.target"];
+                Wants = ["graphical-session.target"];
+              };
 
             Service = {
               Type = "forking";
-              ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP COLORTERM TERM TERMINFO";
+              ExecStartPre = "${lib.getExe' pkgs.systemd "systemctl"} --user import-environment ${lib.concatStringsSep " " startupImportVars}";
               ExecStart = "${tmux-startup-script}";
               RemainAfterExit = true;
               TimeoutStopSec = "5s";
@@ -1214,7 +1245,13 @@ in {
             };
 
             Install = {
-              WantedBy = ["graphical-session.target"];
+              WantedBy = [
+                (
+                  if cfg.startupSession.headless
+                  then "default.target"
+                  else "graphical-session.target"
+                )
+              ];
             };
           };
 
