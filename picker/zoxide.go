@@ -169,6 +169,49 @@ func parseExcludePatterns(raw string) []string {
 	return out
 }
 
+// canonicalZoxidePath maps a raw zoxide entry to the path the picker offers:
+// symlink-resolved, worktrees folded into their main repo root. The second
+// normalize matters because a worktree root recovered from a ".git" file is raw
+// file content, not symlink-resolved like normalizePath/session paths.
+func canonicalZoxidePath(line string) string {
+	return normalizePath(collapseWorktree(normalizePath(line)))
+}
+
+// zoxideLinesFor returns the raw zoxide entries that canonicalize to path.
+func zoxideLinesFor(lines []string, path string) []string {
+	var out []string
+	for _, l := range lines {
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		if canonicalZoxidePath(l) == path {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// zoxideForget drops a suggested dir from the zoxide database. It removes every
+// raw entry canonicalizing to path, not path alone: one suggestion can stand for
+// several entries (worktrees folded into their repo root, an unresolved symlink),
+// and any survivor would just re-offer the row on the next refresh.
+func zoxideForget(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "zoxide", "query", "-l").Output()
+	if err != nil {
+		return fmt.Errorf("zoxide query: %w", err)
+	}
+	raw := zoxideLinesFor(strings.Split(strings.TrimSpace(string(out)), "\n"), path)
+	if len(raw) == 0 {
+		return nil
+	}
+	if out, err := exec.Command("zoxide", append([]string{"remove"}, raw...)...).CombinedOutput(); err != nil {
+		return fmt.Errorf("zoxide remove: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // collectZoxide returns ranked zoxide dirs not already covered by a session
 // and not matching an exclude pattern. Missing zoxide binary, errors, or dead
 // dirs degrade to no suggestions.
@@ -186,10 +229,7 @@ func collectZoxide(sessions []sessionData, exclude []string) []suggestion {
 		if l == "" {
 			continue
 		}
-		p := normalizePath(l)
-		// Re-normalize: a worktree root recovered from a ".git" file is raw file
-		// content, not symlink-resolved like normalizePath/session paths.
-		p = normalizePath(collapseWorktree(p))
+		p := canonicalZoxidePath(l)
 		if isExcluded(p, exclude) {
 			continue
 		}

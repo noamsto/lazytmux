@@ -260,6 +260,31 @@ func TestCollapseThenSuggest(t *testing.T) {
 	}
 }
 
+func TestZoxideLinesFor(t *testing.T) {
+	// One suggestion row can stand for several raw zoxide entries: the repo
+	// itself, its worktrees (folded to the repo root), and a symlink to it.
+	// Forgetting the row must remove all of them, or the survivors re-offer it.
+	repo := t.TempDir()
+	wt := mkWorktree(t, repo, filepath.Join(repo, ".worktrees", "feat-x"), "feat-x")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+
+	lines := []string{repo, wt, link, other, ""}
+	got := zoxideLinesFor(lines, normalizePath(repo))
+	want := []string{repo, wt, link}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // mkWorktree writes a linked-worktree ".git" file at path pointing back into
 // mainRoot's ".git/worktrees/<name>", mirroring what `git worktree add` creates.
 func mkWorktree(t *testing.T, mainRoot, path, name string) string {

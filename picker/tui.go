@@ -194,6 +194,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case zoxideMsg:
 		m.zoxideItems = msg.items
 		m = m.recombine().withFilter()
+		if m.cursor >= len(m.visible) {
+			m.cursor = m.firstSelectable(0)
+		}
 		return m, m.loadPreviewCmd()
 
 	case remoteMsg:
@@ -289,7 +292,19 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.activateCurrent()
 
 	case "ctrl+x":
-		if item, ok := m.currentItem(); ok && item.target != "" && item.createPath == "" && item.remoteHost == "" {
+		item, ok := m.currentItem()
+		if !ok {
+			return m, nil
+		}
+		if item.createPath != "" {
+			logEvent("picker", "event", "zoxide_forget", "path", item.createPath)
+			if err := zoxideForget(item.createPath); err != nil {
+				m.statusMsg = err.Error()
+				return m, nil
+			}
+			return m, m.zoxideCmd()
+		}
+		if item.target != "" && item.remoteHost == "" {
 			if strings.Contains(item.target, ":") {
 				logEvent("picker", "event", "kill_window", "target", item.target)
 				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
@@ -477,10 +492,15 @@ func (m tuiModel) renderHints() string {
 		scratchLabel = highlight.Render(scratchLabel)
 	}
 
+	killLabel := "kill"
+	if item, ok := m.currentItem(); ok && item.createPath != "" {
+		killLabel = "forget"
+	}
+
 	parts := []string{
 		hint("^jk/↑↓", "nav"),
 		hint("enter", "open"),
-		hint("^x", "kill"),
+		hint("^x", killLabel),
 		hint("^a", claudeLabel),
 		hint("^s", scratchLabel),
 		hint("^/", "preview"),
