@@ -47,8 +47,8 @@ wait_for_option() {
 	for i in {1..50}; do
 		got="$(t show-options -t s -qv "$option" 2>/dev/null || true)"
 		[[ $got == "$want" ]] && return 0
-		# @reflow_key "N:" means the width probe was empty — fail loud (#235).
-		if [[ $option == @reflow_key && $got =~ ^[0-9]+:$ ]]; then
+		# @reflow_key "N::H" means the width probe was empty — fail loud (#235).
+		if [[ $option == @reflow_key && $got =~ ^[0-9]+:: ]]; then
 			printf 'empty width in %s=%s (want %s); width probe was empty\n' \
 				"$option" "$got" "$want" >&2
 			return 1
@@ -113,7 +113,7 @@ wait_for_client() {
 	[[ $thm_mauve =~ ^#[0-9a-fA-F]{6}$ ]]
 }
 
-@test "status-format 0-3 parse and the W loop expands after reflow" {
+@test "status-format 0-4 parse and the W loop expands after reflow" {
 	t set-option -t s:1 -w @branch "feat/next38-one"
 	for idx in 2 3 4 5 6 7 8 9 10; do
 		t new-window -t s -c "$PWD"
@@ -127,16 +127,25 @@ wait_for_client() {
 	PATH="$SHIM_DIR:$PATH" "$reflow" s 36 --force
 	# Keep the control client attached until the key is observed — detach first
 	# used to race backgrounded empty-width reflows over the good stamp (#235).
-	wait_for_option @reflow_key "10:36"
+	# Height trails the width in the key; a control client contributes no size, so
+	# it resolves to 0 and the row cap stays at its 3-row baseline.
+	wait_for_option @reflow_key "10:36:0"
 	printf 'detach-client\n' >&"${REFLOW_CTL[1]}" || true
 	kill "$REFLOW_CTL_PID" 2>/dev/null || true
 
 	[ "$(t show-options -t s -qv status)" -ge 3 ]
 	[ "$(t show-options -t s -qv @window_split)" != "999" ]
 	[ "$(t show-options -t s -qv @window_per)" -lt 10 ]
+	# Row 4 exists but stays unreached at the 3-row cap.
+	[ "$(t show-options -t s -qv @window_split3)" = "999" ]
 
 	for i in 0 1 2 3; do
 		fmt="$(t show -gv "status-format[$i]")"
+		t display-message -p -F "$fmt" >/dev/null
+	done
+	# Reflow's own session-level rows, including the row-4 format it now writes.
+	for i in 1 2 3 4; do
+		fmt="$(t show-options -t s -qv "status-format[$i]")"
 		t display-message -p -F "$fmt" >/dev/null
 	done
 

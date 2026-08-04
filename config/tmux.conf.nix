@@ -791,10 +791,13 @@
     set -g status-interval 1
     set -g status-style "bg=#{@thm_bg}"
 
-    # Multi-line status bar (tmux 3.4+)
+    # Multi-line status bar (tmux 3.4+). The splits default past any real window
+    # index so a session tmux-reflow-windows has not stamped yet still resolves
+    # every row's "index <= split" test.
     set -g status 2
     set -g @window_split 999
     set -g @window_split2 999
+    set -g @window_split3 999
 
     # Read by the CC plugin's UserPromptSubmit hook to gate the window-naming
     # nudge (programs.lazytmux.aiNaming.enable).
@@ -834,6 +837,7 @@
     set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
     set -g status-format[2] ""
     set -g status-format[3] ""
+    set -g status-format[4] ""
 
     # Reflow hooks: clear stale hooks first so source-file is idempotent.
     # Without this, hooks from previous configs or manual testing persist across reloads.

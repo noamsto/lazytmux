@@ -64,19 +64,25 @@ if ((DEBOUNCE)); then
 	[[ $last == "$token" ]] || exit 0
 fi
 
-# Fast-path: skip if window count + width unchanged since last reflow. Layout
-# (detail mode + column width) depends only on the window set + width, not on
-# which window is active — focus only changes the active tab's color, which tmux
-# re-renders on its own without a reflow.
-# One display-message fetches both the window count and the stored key (the
-# fast path runs on every reflow, so halving its forks matters).
+# Fast-path: skip if window count + size unchanged since last reflow. Layout
+# (detail mode + column widths + row cap) depends only on the window set and the
+# client size, not on which window is active — focus only changes the active
+# tab's color, which tmux re-renders on its own without a reflow.
+# One display-message fetches the window count, the stored key and the height
+# (the fast path runs on every reflow, so keeping its forks down matters).
 {
 	IFS= read -r win_count
 	IFS= read -r prev_key
-} < <(tmux display-message -t "$SESSION" -p $'#{session_windows}\n#{@reflow_key}' 2>/dev/null)
-cache_key="${win_count}:${WIDTH}"
+	IFS= read -r HEIGHT
+} < <(tmux display-message -t "$SESSION" -p $'#{session_windows}\n#{@reflow_key}\n#{client_height}' 2>/dev/null)
+# Height only gates the extra window row, so a size-neutral client (empty
+# client_height) falls back to the baseline cap instead of skipping the reflow
+# the way an empty width has to. Resolve it before it reaches the cache key so
+# the key can never be stamped with a trailing blank field.
+[[ $HEIGHT =~ ^[1-9][0-9]*$ ]] || HEIGHT=0
+cache_key="${win_count}:${WIDTH}:${HEIGHT}"
 if ((!FORCE)) && [[ $cache_key == "$prev_key" ]]; then
-	log_enabled && log_event reflow event cache_hit wins "$win_count" width "$WIDTH" sess "$SESSION"
+	log_enabled && log_event reflow event cache_hit wins "$win_count" width "$WIDTH" height "$HEIGHT" sess "$SESSION"
 	exit 0
 fi
 
@@ -177,9 +183,10 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	((win_pr_dw[$idx] > pr_colw)) && pr_colw=${win_pr_dw[$idx]}
 
 	# Agent codename badge (external fan-out harness stamps @crew_name/@crew_color).
-	# Its own shared column, mirroring the PR pattern: charged per-window in the
-	# single-line fit test, as a uniform padded column in the multi-line grid. The
-	# trailing separator space is folded into the segment so the width math is exact.
+	# Rendered inline off the window's own label, so it is charged per-window in
+	# both the single-line fit test and the grid column floor below — never a
+	# shared column of its own. The trailing separator space is folded into the
+	# segment so the width math is exact.
 	if [[ -n $crew ]]; then
 		win_crew[$idx]="${crew} "
 		measure_display_width "${win_crew[$idx]}"
@@ -219,10 +226,10 @@ unset win_seen
 # claude glyph on every --force reflow, flickering it out until the next tick.
 max_icon_width=$((MAX_ICONS * 3 + 2))
 
-# --- Layout: pick label detail (long/short) + column width, then pack ---
+# --- Layout: pick label detail (long/short) + column widths, then pack ---
 # Slot = idx_width + ": "(2) + name + pr + " "(1) + icon column.
 # The PR segment carries its own leading space, so no PR adds nothing.
-# The shared pr column (pr_colw) is only charged in the multi-line uniform
+# The shared pr column (pr_colw) is only charged in the multi-line grid
 # slot; single-line entries are unpadded, so the one-row fit charges each
 # window its own PR width — otherwise one window growing a PR inflates the
 # fit test by pr_colw × window count and flips to compact despite free space.
@@ -239,77 +246,114 @@ available=$((WIDTH - PREFIX_WIDTH))
 zoom_extra=0
 ((has_zoom)) && zoom_extra=2
 SEP_WIDTH=3 # " │ "
+# tmux renders at most 5 status lines: the global line plus up to 4 window rows.
+# Spending the 5th is only worth it when the terminal has the height to give, so
+# the extra row unlocks above TALL_CLIENT_ROWS — a 5-line status bar is an eighth
+# of the screen there, against a fifth of an 80x25 at the baseline 3 rows.
 MAX_WIN_LINES=3
-# Floor for rung 2.5 (truncated long grid): keep it only while each column can
-# still show the id + ~12 chars of branch (≈24 for typical 8-char issue ids).
-# Below it the grid degrades to illegible slivers, so fall through to short.
+TALL_CLIENT_ROWS=40
+((HEIGHT >= TALL_CLIENT_ROWS)) && MAX_WIN_LINES=4
+# Floor for rung 2.5 (long labels in starved columns): keep it only while a
+# starved column can still show the id + ~12 chars of branch (≈24 for typical
+# 8-char issue ids). Below it the grid degrades to illegible slivers, so fall
+# through to short.
 LONG_TRUNC_FLOOR=24
 
-# Aggregate widths for the long and short label variants. The grid column
-# (colw) is sized to the widest id + rest + badge, so a tagged window's label
-# and badge fit its own column — the badge is carved from rest_avail below, so
-# omitting it here lets the widest tagged window overflow past the icon column.
-# The rest (branch/title) is capped at MAX_REST_WIDTH so one very long name
-# can't stretch the whole grid; id and badge are never capped. any_capped forces
-# truncation on in the long grid rung. The single-line fit tests stay uncapped —
-# that path renders full names via the global format, so it must reserve them.
+# Per-window widths driving the grid: a floor (id + badge + zoom marker, none of
+# which the renderer can shrink) and a want (floor + branch/title). The allocator
+# sizes each column to the windows stacked in it, so one wide window no longer
+# charges its width to every column (#271). The rest is capped at MAX_REST_WIDTH
+# so one very long name can't stretch the grid; floors are never capped. The
+# single-line fit totals stay uncapped and unpadded — that path renders full
+# names via the global format, so it must reserve them.
 MAX_REST_WIDTH=40
-any_capped=0
-colw_long=0
-colw_short=0
+floor_list=""
+want_long_list=""
+want_short_list=""
 total_long=0
 total_short=0
 for idx in "${indices[@]}"; do
+	floor=$((win_id_dw[$idx] + win_crew_dw[$idx] + win_zoom_dw[$idx]))
 	rest_long=$((win_long_dw[$idx] - win_id_dw[$idx]))
-	((rest_long > MAX_REST_WIDTH)) && {
-		rest_long=$MAX_REST_WIDTH
-		any_capped=1
-	}
-	label_long=$((win_id_dw[$idx] + rest_long + win_crew_dw[$idx]))
-	((label_long > colw_long)) && colw_long=$label_long
+	((rest_long > MAX_REST_WIDTH)) && rest_long=$MAX_REST_WIDTH
 	rest_short=$((win_short_dw[$idx] - win_id_dw[$idx]))
 	((rest_short > MAX_REST_WIDTH)) && rest_short=$MAX_REST_WIDTH
-	label_short=$((win_id_dw[$idx] + rest_short + win_crew_dw[$idx]))
-	((label_short > colw_short)) && colw_short=$label_short
+	floor_list+="${floor_list:+ }$floor"
+	want_long_list+="${want_long_list:+ }$((floor + rest_long))"
+	want_short_list+="${want_short_list:+ }$((floor + rest_short))"
 	((total_long += win_long_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
 	((total_short += win_short_dw[$idx] + slot_overhead + win_pr_dw[$idx] + win_crew_dw[$idx]))
 done
 total_long=$((total_long + (total - 1) * SEP_WIDTH))
 total_short=$((total_short + (total - 1) * SEP_WIDTH))
 
-# Detail ladder (which label detail + column width + row count to use) is
-# pure integer arithmetic over the aggregates above -- extracted to
+# Detail ladder (which label detail + per-column widths + row count to use) is
+# pure integer arithmetic over the per-window widths above -- extracted to
 # lib-reflow.sh so it's unit-testable without tmux (tests/reflow.bats).
-reflow_pick_layout "$colw_long" "$colw_short" "$total_long" "$total_short" "$any_capped" \
-	"$total" "$available" "$zoom_extra" "$overhead" "$SEP_WIDTH" \
-	"$MAX_WIN_LINES" "$LONG_TRUNC_FLOOR"
+reflow_pick_layout "$floor_list" "$want_long_list" "$want_short_list" \
+	"$total_long" "$total_short" "$total" "$available" "$zoom_extra" \
+	"$overhead" "$SEP_WIDTH" "$MAX_WIN_LINES" "$LONG_TRUNC_FLOOR"
 labels_mode=$REPLY_LABELS_MODE
-colw=$REPLY_COLW
-trunc=$REPLY_TRUNC
 needs_multiline=$REPLY_NEEDS_MULTILINE
 per=$REPLY_PER
+read -ra colws <<<"$REPLY_COLWS"
 
 # Resolved display segments per window. The name column is rendered as
-# bold(@window_label_id) + @window_label_disp, so the rest segment alone is
-# truncated/padded against the column budget left after the (never-truncated)
-# identity prefix: id + rest fills colw exactly. The PR segment is padded to
-# its own shared column. Single-line mode uses the unpadded live-select
-# options instead.
-declare -A win_disp win_pr_disp
-for idx in "${indices[@]}"; do
+# bold(@window_label_id_disp) + @window_label_disp, so identity + rest fills the
+# window's column exactly. The PR segment is padded to its own shared column.
+# Single-line mode renders full names via the global format off @window_label_id
+# / @window_label_rest_*, so it leaves everything here unpadded.
+declare -A win_disp win_pr_disp win_id_disp
+for pos in "${!indices[@]}"; do
+	idx=${indices[$pos]}
 	if [[ $labels_mode == long ]]; then
 		cur_rest="${win_rest_long[$idx]}"
 	else
 		cur_rest="${win_rest_short[$idx]}"
 	fi
-	# The agent badge (win_crew_dw, 0 when untagged) and zoom marker (win_zoom_dw,
-	# 0 unless zoomed) both render inline off this window's label; steal their
-	# width so the slot stays colw+overhead wide regardless.
-	rest_avail=$((colw - win_id_dw[$idx] - win_crew_dw[$idx] - win_zoom_dw[$idx]))
+
+	if ((!needs_multiline)); then
+		win_id_disp[$idx]="${win_id[$idx]}"
+		win_crew_disp[$idx]="${win_crew[$idx]}"
+		win_disp[$idx]="$cur_rest"
+		win_pr_disp[$idx]="${win_pr[$idx]}"
+		continue
+	fi
+
+	colw=${colws[pos % per]}
+	# The label must never render wider than its column, or every slot to its
+	# right on the row shifts (#271). The badge and zoom marker render inline off
+	# this window's label and the id is a fixed prefix, so all three are charged
+	# here. When even they overrun the column the badge goes first — it is
+	# decoration, the ticket id is identity — and only then is the id clipped.
+	# The column can never be narrower than REFLOW_MIN_COLW, so identity_avail
+	# stays positive and truncate_to_width always has room for its ellipsis.
+	identity_avail=$((colw - win_zoom_dw[$idx]))
+	cur_crew="${win_crew[$idx]}"
+	cur_crew_dw=${win_crew_dw[$idx]}
+	cur_id="${win_id[$idx]}"
+	cur_id_dw=${win_id_dw[$idx]}
+	if ((cur_crew_dw + cur_id_dw > identity_avail)); then
+		cur_crew=""
+		cur_crew_dw=0
+	fi
+	if ((cur_id_dw > identity_avail)); then
+		truncate_to_width "$cur_id" "$identity_avail"
+		cur_id="$REPLY"
+		measure_display_width "$cur_id"
+		cur_id_dw=$REPLY_DW
+	fi
+	win_id_disp[$idx]="$cur_id"
+	# Agent badge: the codename + separator space, emitted after the index (see
+	# ENTRY). Blank for untagged windows, which then render a pristine full-width
+	# label with no leading gap.
+	win_crew_disp[$idx]="$cur_crew"
+
+	rest_avail=$((identity_avail - cur_crew_dw - cur_id_dw))
 	((rest_avail < 0)) && rest_avail=0
 	if ((rest_avail == 0)); then
 		cur_rest=""
-	elif ((trunc)); then
+	else
 		truncate_to_width "$cur_rest" "$rest_avail"
 		cur_rest="$REPLY"
 	fi
@@ -319,18 +363,16 @@ for idx in "${indices[@]}"; do
 
 	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
 	win_pr_disp[$idx]="$REPLY"
-
-	# Agent badge: the codename + separator space, emitted after the index (see
-	# ENTRY). Blank for untagged windows, which then render a pristine full-width
-	# label with no leading gap.
-	win_crew_disp[$idx]="${win_crew[$idx]}"
 done
 
-# Split points (uniform columns): break after every REPLY_PER windows.
-# per is already set by reflow_pick_layout above (columns per row for colw).
+# Split points: break after every REPLY_PER windows. per is already set by
+# reflow_pick_layout above (columns per row). An unreached split stays at 999 so
+# its row's "index <= split" test passes for every window and the row below it
+# renders empty.
 current_line=0
 split1=999
 split2=999
+split3=999
 if ((needs_multiline)); then
 	if ((total > per)); then
 		split1=${indices[$((per - 1))]}
@@ -339,6 +381,10 @@ if ((needs_multiline)); then
 	if ((total > 2 * per)); then
 		split2=${indices[$((2 * per - 1))]}
 		current_line=2
+	fi
+	if ((total > 3 * per)); then
+		split3=${indices[$((3 * per - 1))]}
+		current_line=3
 	fi
 fi
 
@@ -354,15 +400,18 @@ fi
 declare -a tmux_cmds=()
 
 # Per-window vars use tmux's argv command-sequence form — one tmux exec per
-# window, the 8 sets joined by literal ';' arguments — instead of one exec per
-# set (8N execs before). Not `tmux source -`: source re-parses a text stream, so
+# window, the 9 sets joined by literal ';' arguments — instead of one exec per
+# set (9N execs before). Not `tmux source -`: source re-parses a text stream, so
 # free-form issue titles with quotes/';'/'#' would break it. In argv form each
 # value is its own execve argument and is never reparsed, so titles pass verbatim.
+# @window_label_id stays the full identity for the pickers and the single-line
+# global format; @window_label_id_disp is the grid's copy, clipped to the column.
 for idx in "${indices[@]}"; do
 	target="${SESSION}:${idx}"
 	tmux \
 		set -w -t "$target" @window_label_short "${win_short[$idx]}" ';' \
 		set -w -t "$target" @window_label_id "${win_id[$idx]}" ';' \
+		set -w -t "$target" @window_label_id_disp "${win_id_disp[$idx]}" ';' \
 		set -w -t "$target" @window_label_rest_short "${win_rest_short[$idx]}" ';' \
 		set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}" ';' \
 		set -w -t "$target" @window_label_disp "${win_disp[$idx]}" ';' \
@@ -374,24 +423,19 @@ done
 # Split points and status line count
 tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
 tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
+tmux_cmds+=("set -t '$SESSION' @window_split3 '$split3'")
 tmux_cmds+=("set -t '$SESSION' @window_per '$window_per'")
 tmux_cmds+=("set -t '$SESSION' @reflow_key '$cache_key'")
 tmux_cmds+=("set -t '$SESSION' @labels_mode '${labels_mode}'")
 
-if ((current_line >= 2)); then
-	tmux_cmds+=("set -t '$SESSION' status 4")
-elif ((current_line >= 1)); then
-	tmux_cmds+=("set -t '$SESSION' status 3")
-else
-	tmux_cmds+=("set -t '$SESSION' status 2")
-fi
+tmux_cmds+=("set -t '$SESSION' status $((current_line + 2))")
 
 # Single-line branch collapses into the same batch as an atomic unset of the
 # whole session-level status-format array. Doing this as one command matters:
 # tmux treats session-level status-format as all-or-nothing (any set index
 # suppresses global for ALL indices), so unsetting [0], [1], [2], [3] in
 # separate tmux calls creates a visible intermediate where [0] is unset but
-# [1..3] are still set — line 0 renders blank and the session name flashes
+# [1..4] are still set — line 0 renders blank and the session name flashes
 # away. The per-index unsets that used to live here are redundant with the
 # bare `status-format` unset below.
 if ((!needs_multiline && current_line == 0)); then
@@ -400,11 +444,9 @@ fi
 
 # Execute batched simple commands + early redraw so layout appears immediately
 if log_enabled; then
-	lines=2
-	((current_line >= 1)) && lines=3
-	((current_line >= 2)) && lines=4
 	log_event reflow event recompute forced "$FORCE" wins "${cache_key%%:*}" \
-		width "$WIDTH" split1 "$split1" split2 "$split2" lines "$lines" \
+		width "$WIDTH" height "$HEIGHT" split1 "$split1" split2 "$split2" \
+		split3 "$split3" lines "$((current_line + 2))" colws "${colws[*]}" \
 		labels_mode "$labels_mode" sess "$SESSION"
 fi
 {
@@ -416,11 +458,11 @@ fi
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
 # Name column: bold identity prefix + column-padded remainder (id + disp fill
-# colw exactly). The id is always bold; the remainder stays bold on the active
-# window (BASE turns bold on for the whole marker) and drops to regular weight
-# elsewhere. Label content changes outside structural events (issue stamp, PR
-# arrival) re-enter via the providers' forced reflow calls.
-NAME="#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{@window_label_disp}"
+# the window's column exactly). The id is always bold; the remainder stays bold
+# on the active window (BASE turns bold on for the whole marker) and drops to
+# regular weight elsewhere. Label content changes outside structural events
+# (issue stamp, PR arrival) re-enter via the providers' forced reflow calls.
+NAME="#[bold]#{@window_label_id_disp}#{?window_active,,#[nobold]}#{@window_label_disp}"
 LABEL_Z="${NAME}#{?window_zoomed_flag, 󰁌,}"
 IDX="#{p${idx_width}:window_index}"
 # Base tab color: the active window's "index: label" text takes bold mauve
@@ -466,6 +508,7 @@ elif ((current_line == 0)); then
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
 	tmux set -t "$SESSION" status-format[2] ""
 	tmux set -t "$SESSION" status-format[3] ""
+	tmux set -t "$SESSION" status-format[4] ""
 else
 	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
 	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
@@ -477,8 +520,15 @@ else
 	tmux set -t "$SESSION" status-format[2] \
 		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}"
 
+	PREFIX3="#{?#{e|>|:#{session_windows},#{@window_split3}},├,╰}─"
 	tmux set -t "$SESSION" status-format[3] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX3} #{W:#{?#{e|>|:#{window_index},#{@window_split2}},#{?#{e|<=|:#{window_index},#{@window_split3}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split3}},,${SEP}}},},}}"
+
+	# Row 4 only ever holds windows when MAX_WIN_LINES rose to 4 on a tall
+	# client; at 3 rows @window_split3 stays 999 so this renders empty and tmux
+	# is left at `status 4`, which never asks for index 4 anyway.
+	tmux set -t "$SESSION" status-format[4] \
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split3}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
 fi
 
 # Force immediate status bar redraw
