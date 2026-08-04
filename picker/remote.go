@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,21 @@ const remoteProbeTimeout = 3 * time.Second
 // shell assignments — fish login shells reject them and the picker would mark
 // a reachable host unreachable.
 const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+
+const sshConnectFailureExit = 255
+
+var (
+	errRemoteUnreachable = errors.New("remote unreachable")
+	errRemoteNoServer    = errors.New("remote tmux server not running")
+)
+
+type remoteProbeState int
+
+const (
+	remoteProbeOK remoteProbeState = iota
+	remoteProbeNoServer
+	remoteProbeUnreachable
+)
 
 // parseRemoteHosts splits a whitespace-separated @remote_bridge_hosts value
 // into ssh Host aliases. Empty tokens are dropped.
@@ -45,14 +61,20 @@ func localBridgeSession(host, sess string) string {
 	return host + "-" + sess
 }
 
-// remoteSessionsForHost probes one host for live tmux session names.
-// ok is false on probe failure (caller shows a bare host row). When ok is true,
-// the returned list is the remote sessions not already bridged locally as
-// <host>-<sess> (may be empty when every session is already open).
-func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) ([]string, error)) (sessions []string, ok bool) {
+// remoteSessionsForHost probes one host for live tmux session names. On
+// remoteProbeOK the returned list is the remote sessions not already bridged
+// locally as <host>-<sess> (may be empty when every session is already open).
+// An empty list with no error means the remote has no server to list.
+func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) ([]string, error)) ([]string, remoteProbeState) {
 	names, err := probe(host)
-	if err != nil || len(names) == 0 {
-		return nil, false
+	if err != nil {
+		if errors.Is(err, errRemoteNoServer) {
+			return nil, remoteProbeNoServer
+		}
+		return nil, remoteProbeUnreachable
+	}
+	if len(names) == 0 {
+		return nil, remoteProbeNoServer
 	}
 	out := make([]string, 0, len(names))
 	for _, sess := range names {
@@ -64,12 +86,27 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 		}
 		out = append(out, sess)
 	}
-	return out, true
+	return out, remoteProbeOK
+}
+
+// classifyProbeErr decides which failure a non-zero probe was. ssh exits 255
+// when it could not reach the host; any other status is the remote command's
+// own, so the host answered and only its tmux server is missing (#266).
+func classifyProbeErr(err error, timedOut bool) error {
+	if timedOut {
+		return fmt.Errorf("%w: probe timed out", errRemoteUnreachable)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() != sshConnectFailureExit {
+		return fmt.Errorf("%w: %w", errRemoteNoServer, err)
+	}
+	return fmt.Errorf("%w: %w", errRemoteUnreachable, err)
 }
 
 // sshListRemoteSessions runs the same path/tmpdir resolution as
 // lztmux-remote-open so a remote without tmux on the non-interactive PATH still
-// lists. Returns session names or an error.
+// lists. Returns session names, or an error wrapping errRemoteUnreachable /
+// errRemoteNoServer.
 func sshListRemoteSessions(host string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteProbeTimeout)
 	defer cancel()
@@ -85,7 +122,7 @@ func sshListRemoteSessions(host string) ([]string, error) {
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
-		return nil, err
+		return nil, classifyProbeErr(err, ctx.Err() != nil)
 	}
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	out := make([]string, 0, len(lines))
@@ -131,9 +168,9 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	reset := "\033[0m"
 
 	type hostResult struct {
-		host   string
-		sess   []string
-		failed bool
+		host  string
+		sess  []string
+		state remoteProbeState
 	}
 	results := make([]hostResult, len(hosts))
 	var wg sync.WaitGroup
@@ -141,8 +178,8 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		wg.Add(1)
 		go func(i int, h string) {
 			defer wg.Done()
-			sess, ok := remoteSessionsForHost(h, localSessionNames, probe)
-			results[i] = hostResult{host: h, sess: sess, failed: !ok}
+			sess, state := remoteSessionsForHost(h, localSessionNames, probe)
+			results[i] = hostResult{host: h, sess: sess, state: state}
 		}(i, h)
 	}
 	wg.Wait()
@@ -158,8 +195,10 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 
 	anyRow := false
 	for _, r := range results {
-		if r.failed {
-			// Bare host: open defaults to the remote's most-recent session.
+		switch r.state {
+		case remoteProbeUnreachable:
+			// Bare host: open defaults to the remote's most-recent session — the
+			// host may be back up by the time it is picked.
 			display := fmt.Sprintf("%s %s  %s", cPeach+iSess+reset, r.host, cDim+"(unreachable — open default)"+reset)
 			plain := fmt.Sprintf("%s %s  (unreachable — open default)", iSess, r.host)
 			items = append(items, listItem{
@@ -171,9 +210,21 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 			})
 			anyRow = true
 			continue
+		case remoteProbeNoServer:
+			// Reachable, nothing to bridge. Left unselectable (empty target and
+			// remoteHost) because opening it would resolve an empty session name.
+			display := fmt.Sprintf("%s%s %s  (no tmux server)%s", cDim, iSess, r.host, reset)
+			plain := fmt.Sprintf("%s %s  (no tmux server)", iSess, r.host)
+			items = append(items, listItem{
+				display:    display,
+				plain:      plain,
+				searchText: r.host,
+			})
+			anyRow = true
+			continue
 		}
 		if len(r.sess) == 0 {
-			// Probe ok but every session already bridged (or remote empty) — omit.
+			// Every session already bridged locally — omit.
 			continue
 		}
 		for _, sess := range r.sess {
