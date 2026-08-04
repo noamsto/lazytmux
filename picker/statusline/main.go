@@ -39,7 +39,7 @@ var volatileFields = []string{
 	"#{@branch}", "#{pane_current_path}", "#{@git_root}",
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
-	"#{@bridge_win}",
+	"#{@bridge_win}", "#{@bridge_host}",
 }
 
 // fetchVolatile fills the volatile fields via a single display-message
@@ -63,7 +63,7 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]
 	a.paneIcon, a.paneCmd, a.claudeFg = f[8], f[9], f[10]
 	a.crewName, a.crewColor = f[11], f[12]
-	a.bridgeWin = f[13]
+	a.bridgeWin, a.bridgeHost = f[13], f[14]
 	return f[0] == "1", true
 }
 
@@ -112,7 +112,7 @@ type args struct {
 	branch, panePath, gitRoot                       string
 	paneIcon, paneCmd, claudeFg                     string
 	crewName, crewColor                             string
-	bridgeWin                                       string
+	bridgeWin, bridgeHost                           string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
@@ -121,6 +121,7 @@ type args struct {
 	// glyphs (tmux @icon_* options + Nix enrich icon set for issue provider)
 	iconSession, iconBranch, iconDir string
 	iconLinear, iconGitHub           string
+	iconRemote                       string
 
 	// coding-agent usage segment (feature off when usageMonthlyThreshold == 0)
 	iconUsageClaude, iconUsageCodex, iconUsageCursor string
@@ -179,8 +180,11 @@ func sessionSegment(a args, prefixActive bool) string {
 
 	// Remote-bridge mirror window (#167 @bridge_win opt-out): the active
 	// window's identity belongs to the remote session, not this host repo —
-	// stop at the session pill.
+	// stop at the session pill, after naming the machine it really runs on.
 	if a.bridgeWin == "1" {
+		if a.bridgeHost != "" {
+			b.WriteString("#[fg=" + a.thmPeach + "]" + a.iconRemote + " " + a.bridgeHost + "  ")
+		}
 		return b.String()
 	}
 
@@ -253,6 +257,7 @@ func main() {
 	flag.StringVar(&a.iconDir, "icon-dir", "", "")
 	flag.StringVar(&a.iconLinear, "icon-linear", "", "")
 	flag.StringVar(&a.iconGitHub, "icon-github", "", "")
+	flag.StringVar(&a.iconRemote, "icon-remote", "", "")
 	flag.StringVar(&a.iconUsageClaude, "icon-usage-claude", "", "")
 	flag.StringVar(&a.iconUsageCodex, "icon-usage-codex", "", "")
 	flag.StringVar(&a.iconUsageCursor, "icon-usage-cursor", "", "")

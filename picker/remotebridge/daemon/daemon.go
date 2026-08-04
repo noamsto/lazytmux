@@ -34,6 +34,18 @@ type Config struct {
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
 	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
+	Reflow         func()                     // forces a status-bar reflow of the mirror session (injected; nil = off)
+}
+
+// reflow re-derives the mirror session's window labels. The after-new-window
+// hook's own reflow races the @bridge_win / @window_bridge_name stamps that
+// follow the create, so it can label a mirror window from the launcher's cwd
+// (#196); and a later rename changes no window count, so reflow's
+// count:width cache would skip it. Every path that stamps a name ends here.
+func (c Config) reflow() {
+	if c.Reflow != nil {
+		c.Reflow()
+	}
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
@@ -233,6 +245,7 @@ func Run(cfg Config) error {
 	if initWin, ok := localWinForRemoteIndex(remoteWins, reg, cfg.RemoteWindow); ok {
 		cfg.LocalTmux("select-window", "-t", initWin)
 	}
+	cfg.reflow()
 
 	// Re-converge the remote whenever the local client resizes. A local resize
 	// emits no control-stream event, so poll; teardown closes stopWatch.
@@ -269,6 +282,9 @@ func Run(cfg Config) error {
 		case controlmode.WindowRenamed, controlmode.SessionWindowChanged:
 			if argv, ok := translateWindowNotification(l, reg); ok {
 				cfg.LocalTmux(argv...)
+				if l.Kind == controlmode.WindowRenamed {
+					cfg.reflow()
+				}
 			}
 		case controlmode.WindowAdd:
 			if len(l.Args) > 0 {
@@ -462,7 +478,9 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		reg.remove(remoteID)
 		cv.forget(remoteID)
 		cfg.LocalTmux("kill-window", "-t", localWin)
+		return
 	}
+	cfg.reflow()
 }
 
 // closeWindow tears down remoteID's local mirror: unregisters (and thereby

@@ -31,9 +31,12 @@ for a in "$@"; do
 done
 set -- "${pos[@]}"
 
-# Accept session/width as args (from hooks) or fall back to display-message
+# Accept session/width as args (from hooks) or fall back to display-message.
+# The width fallback is targeted at SESSION, not the caller's current client:
+# the bridge daemon forces a reflow of its mirror session from outside any
+# client, where an untargeted #{client_width} expands to nothing.
 SESSION=${1:-$(tmux display-message -p '#{session_name}')}
-WIDTH=${2:-$(tmux display-message -p '#{client_width}')}
+WIDTH=${2:-$(tmux display-message -t "$SESSION" -p '#{client_width}')}
 MAX_ICONS=@MAX_ICONS@
 
 # Scratch sessions manage their own status bar (hints bar); skip reflow.

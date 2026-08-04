@@ -45,6 +45,7 @@ sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 # Absolute store path: pane PATH is stale until server restart, and the daemon
 # respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
 renderer="$(command -v lztmux-remote-bridge-renderer)"
+reflow="$(command -v tmux-reflow-windows)"
 
 # Dedup: if a daemon for this host+session is already running (pidfile present
 # and live), just attach to the existing mirror session — no new SSH connection.
@@ -67,6 +68,10 @@ tmux kill-session -t "=$local_sess" 2>/dev/null || true
 # for the first remote window and creates the rest.
 tmux new-session -d -s "$local_sess" -n "$sess"
 
+# Read by tmux-statusline to name the machine on line 0. Session-scoped, so it
+# survives the daemon replacing every window under it.
+tmux set-option -t "$local_sess" @bridge_host "$host"
+
 # Pass the (remote-derived, untrusted) params through the environment instead
 # of interpolating them into a shell/command string tmux/ssh would re-parse,
 # so a crafted remote session name can't break out into local shell execution.
@@ -78,6 +83,7 @@ export LZTMUX_BRIDGE_TMPDIR="$remote_tmpdir"
 export LZTMUX_DAEMON_LOCAL_SESS="$local_sess"
 export LZTMUX_DAEMON_SOCK="$sock"
 export LZTMUX_DAEMON_RENDERER="$renderer"
+export LZTMUX_DAEMON_REFLOW="$reflow"
 
 # Launch the daemon DETACHED, outside the panes it manages (I4): it is not the
 # window's command — it respawns the local panes into renderers. setsid is

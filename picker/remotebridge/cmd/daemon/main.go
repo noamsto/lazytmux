@@ -34,6 +34,7 @@ func main() {
 	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
+	reflowBin := flag.String("reflow", os.Getenv("LZTMUX_DAEMON_REFLOW"), "absolute path to tmux-reflow-windows (empty = never force a reflow)")
 	baseIndex := flag.Int("base-index", envIntDefault("LZTMUX_DAEMON_BASE_INDEX", 1), "local tmux base-index for daemon-created windows")
 	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
@@ -106,6 +107,14 @@ func main() {
 		return cmd.Run()
 	}
 	area := func() (int, int) { return localArea(localTmuxArgv, *localSess) }
+	// -b so the reflow's own tmux round-trips stay off the command queue the
+	// daemon is about to use again.
+	reflow := func() {
+		if *reflowBin == "" {
+			return
+		}
+		runLocalTmux("run-shell", "-b", shellQuote(*reflowBin)+" --force "+shellQuote(*localSess))
+	}
 
 	cfg := daemon.Config{
 		Ctl:            rwc{stdout, stdin},
@@ -118,6 +127,7 @@ func main() {
 		RendererBin:    *rendererBin,
 		LocalTmux:      runLocalTmux,
 		LocalArea:      area,
+		Reflow:         reflow,
 	}
 
 	if err := daemon.Run(cfg); err != nil {

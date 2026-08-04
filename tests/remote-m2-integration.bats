@@ -594,12 +594,13 @@ BRIDGE_UP_BUDGET_SECS=12
 
 bridge_up() {
 	local want_panes="$1" tag="$2"
+	shift 2 # anything left is passed through to the daemon (e.g. --reflow)
 	local marker="BRIDGEUP_${tag}_$$"
 	local deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
 	sock="$BATS_TEST_TMPDIR/$tag.sock"
 	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
 		--session rem --window 1 --local-sess host-sess \
-		--renderer "$RENDERER" --sock "$sock" \
+		--renderer "$RENDERER" --sock "$sock" "$@" \
 		>"$BATS_TEST_TMPDIR/$tag.log" 2>&1 &
 	daemon_pid=$!
 
@@ -962,6 +963,44 @@ remote_pane_of() {
 
 	[ "$src_name" = "ctl renamed" ]
 	[ "$dst_name" = "ctl renamed" ]
+}
+
+# Guards the two label regressions in Config.reflow's doc: a mirror window
+# labeled from the launcher's cwd, and a remote rename that never repaints.
+@test "daemon forces a reflow after mirroring and again after a rename" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+
+	local stub="$BATS_TEST_TMPDIR/reflow-stub"
+	local hits="$BATS_TEST_TMPDIR/reflow-hits"
+	printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\n' "$hits" >"$stub"
+	chmod +x "$stub"
+	: >"$hits" # so the counts below read a file even when the daemon never fires
+
+	bridge_up 1 c14 --reflow "$stub"
+
+	for _ in $(seq 1 60); do
+		[ -s "$hits" ] && break
+		sleep 0.15
+	done
+	local after_mirror
+	after_mirror="$(wc -l <"$hits")"
+
+	$SRC rename-window -t rem:1 "renamed remotely"
+	for _ in $(seq 1 60); do
+		[ "$(wc -l <"$hits")" -gt "$after_mirror" ] && break
+		sleep 0.15
+	done
+	local after_rename
+	after_rename="$(wc -l <"$hits")"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$after_mirror" -ge 1 ]
+	[ "$after_rename" -gt "$after_mirror" ]
+	# --force is what gets past reflow's window-count:width cache on a rename.
+	grep -q -- '--force host-sess' "$hits"
 }
 
 @test "ctl focus moves the REMOTE active pane without oscillating" {

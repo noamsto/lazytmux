@@ -75,6 +75,8 @@ func reconcileWindows(cfg Config, reader *controlmode.Reader, send func(string),
 			cfg.LocalTmux("select-window", "-t", mw.localWin)
 		}
 	}
+
+	cfg.reflow()
 }
 
 // mirrorNewWindow creates and wires the local mirror for one remote window,

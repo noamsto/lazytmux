@@ -187,3 +187,29 @@ func TestRenderLineBridgeWinSuppressesDir(t *testing.T) {
 		t.Fatalf("renderLine bridge\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestRenderLineBridgeHost: a mirror window names the machine it really runs on
+// right after the session pill, so it can't read as a local window.
+func TestRenderLineBridgeHost(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/panes", 0o755)
+
+	a := args{
+		session: "g6-main", bridgeWin: "1", bridgeHost: "g6",
+		iconSession: "S", iconRemote: "R",
+		thmBg: "#000", thmMauve: "#c6a", thmSubtext0: "#9a8", thmOverlay1: "#777",
+		thmPeach: "#fab",
+		paneIcon: "I", paneCmd: "zsh",
+	}
+
+	got := renderLine(a, dir, "dark", false, 9000, "")
+	want := "#[align=left,bg=#000]" +
+		"#[fg=#c6a] #[range=left]S g6-main#[norange]  " +
+		"#[fg=#fab]R g6  " +
+		"  #[fg=#777]" +
+		" #[align=right]" +
+		"#[fg=#9a8]I zsh "
+	if got != want {
+		t.Fatalf("renderLine bridge host\n got %q\nwant %q", got, want)
+	}
+}
