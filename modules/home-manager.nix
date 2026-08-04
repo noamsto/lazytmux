@@ -687,6 +687,10 @@ in {
         Set to [] to opt out entirely, or drop individual entries if you
         install those tools elsewhere (home-manager errors if two
         different derivations install the same file).
+
+        prefix+k → k9s is deliberately not in the default: k9s pulls kubectl
+        along for 237 MB. Add pkgs.k9s here (or install it any other way) to
+        make that bind resolve.
       '';
     };
 
