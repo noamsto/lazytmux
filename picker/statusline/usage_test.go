@@ -118,7 +118,7 @@ func TestUsageSegmentResetSuffixOnlyNearExhaustion(t *testing.T) {
 		}},
 	}
 	got := usageSegment(a, caches, now)
-	want := "#[fg=#9a8]CL #[fg=#fa0]85%·5h #[fg=#f00]100%·7d" + usageResetGlyph + "6h #[fg=#f00]95%·wk" + usageResetGlyph + "3d #[fg=#f00]99%·mo  "
+	want := "#[fg=#9a8]CL #[fg=#fa0]85%·5h #[fg=#f00]100%·7d#[fg=#9a8] " + usageResetGlyph + " 6h #[fg=#f00]95%·wk#[fg=#9a8] " + usageResetGlyph + " 3d #[fg=#f00]99%·mo  "
 	if got != want {
 		t.Fatalf("\n got %q\nwant %q", got, want)
 	}
