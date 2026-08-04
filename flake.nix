@@ -84,12 +84,17 @@
         };
 
         # buildGoModule's checkPhase only runs `go test ./<pkg>` per subPackage
-        # (non-recursive), so the default `picker` derivation never exercises
-        # picker/agentdetect's nested debounce/manifest/screen/statefile
-        # packages. Override checkPhase to scope it to `./agentdetect/...`.
-        # Reused (not just for its checkPhase) by remote-bridge-integration-tests
-        # below, which needs the prebuilt lztmux-remote-bridge binary offline.
-        pickerAgentDetect =
+        # (non-recursive), so the default `picker` derivation never exercises the
+        # nested packages under agentdetect/ (debounce/manifest/screen/statefile)
+        # or remotebridge/ (daemon/wire/controlmode/render) — where the mirror
+        # engine, the pane diff, the ctl verb table and the focus state machine
+        # live. Both run here in one derivation: as two, all nine subPackages got
+        # compiled twice over the same source, the most expensive thing in a CI
+        # run. -race on remotebridge because the mirror engine touches mirror
+        # state from a second goroutine (M2.3).
+        # Reused (not just for its checkPhase) by the remote bridge integration
+        # checks below, which need its binaries prebuilt and offline.
+        pickerChecked =
           (import ./picker {
             inherit pkgs lib;
             processIcons = import ./config/process-icons.nix;
@@ -101,6 +106,7 @@
               runHook preCheck
               export GOFLAGS=''${GOFLAGS//-trimpath/}
               go test ./agentdetect/...
+              go test -race ./remotebridge/...
               runHook postCheck
             '';
           });
@@ -494,7 +500,7 @@
               touch $out
             '';
 
-          agent-detect-go-tests = pickerAgentDetect;
+          picker-go-tests = pickerChecked;
 
           reflow-fanout-tests =
             pkgs.runCommand "reflow-fanout-tests" {
@@ -537,33 +543,16 @@
               touch $out
             '';
 
-          # buildGoModule's checkPhase runs `go test` over subPackages only, and
-          # non-recursively, so remotebridge/{daemon,wire,controlmode,render} —
-          # where the mirror engine, the pane diff, the ctl verb table and the
-          # focus state machine all live — were not covered by `nix flake check`
-          # at all. Same shape as agent-detect-go-tests. -race because M2.3 is the
-          # first milestone to touch mirror state from a second goroutine.
-          remotebridge-go-tests = pickerAgentDetect.overrideAttrs (_old: {
-            name = "remotebridge-go-tests";
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              export GOFLAGS=''${GOFLAGS//-trimpath/}
-              go test -race ./remotebridge/...
-              runHook postCheck
-            '';
-          });
-
           remote-bridge-integration-tests =
             pkgs.runCommand "remote-bridge-integration-tests" {
               # tmux: same private, config-less server pattern as the other
               # integration tests. The bridge binary is prebuilt via the
-              # vendored buildGoModule (pickerAgentDetect) so this check never
+              # vendored buildGoModule (pickerChecked) so this check never
               # invokes `go build` — a non-FOD sandbox has no network.
               # util-linux provides `script`, which the real-tty case uses to
               # give the bridge a pty (so refresh-client + real cursor fire).
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux pkgs.util-linux];
-              BRIDGE = "${pickerAgentDetect}/bin/lztmux-remote-bridge";
+              BRIDGE = "${pickerChecked}/bin/lztmux-remote-bridge";
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
@@ -577,7 +566,7 @@
               # "remote" tmux -L server plus an isolated "local" tmux -L
               # server, wired together by the M2.1 daemon's --test-local seam
               # (no ssh). Both binaries are prebuilt via the vendored
-              # buildGoModule (pickerAgentDetect) so this check never invokes
+              # buildGoModule (pickerChecked) so this check never invokes
               # `go build` — a non-FOD sandbox has no network.
               #
               # Uses the pinned next-3.8 tmux (mkTmux), not pkgs.tmux (3.7b):
@@ -586,12 +575,12 @@
               # from 3.7b, so the mirror is exercised against the version it —
               # and production, local + remote — actually runs.
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep (mkTmux pkgs)];
-              DAEMON = "${pickerAgentDetect}/bin/lztmux-remote-bridge-daemon";
-              RENDERER = "${pickerAgentDetect}/bin/lztmux-remote-bridge-renderer";
+              DAEMON = "${pickerChecked}/bin/lztmux-remote-bridge-daemon";
+              RENDERER = "${pickerChecked}/bin/lztmux-remote-bridge-renderer";
               # M2.3 structural input: the tests drive ctl straight at the
               # daemon's socket, since these vanilla -L servers carry no
               # lazytmux keybindings for a gate to intercept.
-              CTL = "${pickerAgentDetect}/bin/lztmux-remote-bridge-ctl";
+              CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
