@@ -101,3 +101,18 @@ func TestLocalBridgeSession(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// Fish login shells reject `td=...; t=...` assignments (exit 127), which made
+// reachable remotes show as "(unreachable — open default)". Guard the probe
+// command against regressing to bash-only assignment syntax.
+func TestRemoteListSessionsCmdFishSafe(t *testing.T) {
+	if strings.Contains(remoteListSessionsCmd, "td=") || strings.Contains(remoteListSessionsCmd, "; t=") {
+		t.Fatalf("probe must not use shell assignments (fish-incompatible): %q", remoteListSessionsCmd)
+	}
+	if !strings.Contains(remoteListSessionsCmd, "env TMUX_TMPDIR=") {
+		t.Fatalf("probe should set TMUX_TMPDIR via env(1): %q", remoteListSessionsCmd)
+	}
+	if !strings.Contains(remoteListSessionsCmd, "list-sessions") {
+		t.Fatalf("probe should list sessions: %q", remoteListSessionsCmd)
+	}
+}
