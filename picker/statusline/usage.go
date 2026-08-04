@@ -97,7 +97,7 @@ func (a args) usageIcon(agent string) string {
 // dense next to the %·label run and often measures 2 cells in terminal fonts.
 const usageResetGlyph = "󰑐" // nerd: nf-md-refresh
 
-// usageResetSuffix appends a "<glyph><dur>" countdown to a nearly-exhausted
+// usageResetSuffix appends a " <glyph> <dur>" countdown to a nearly-exhausted
 // window, the moment the reset time starts to matter. Duration granularity
 // matches the window's own: minutes under an hour, hours under two days, then days.
 func usageResetSuffix(w usageWindow, now int64) string {
@@ -107,11 +107,11 @@ func usageResetSuffix(w usageWindow, now int64) string {
 	d := w.ResetAt - now
 	switch {
 	case d < 3600:
-		return fmt.Sprintf("%s%dm", usageResetGlyph, max(d/60, 1))
+		return fmt.Sprintf(" %s %dm", usageResetGlyph, max(d/60, 1))
 	case d < 172800:
-		return fmt.Sprintf("%s%dh", usageResetGlyph, d/3600)
+		return fmt.Sprintf(" %s %dh", usageResetGlyph, d/3600)
 	default:
-		return fmt.Sprintf("%s%dd", usageResetGlyph, d/86400)
+		return fmt.Sprintf(" %s %dd", usageResetGlyph, d/86400)
 	}
 }
 
@@ -124,8 +124,11 @@ func usageSegment(a args, caches map[string]usageCache, now int64) string {
 		return ""
 	}
 	render := func(w usageWindow) string {
-		return "#[fg=" + usageColor(w.Pct, a) + "]" +
-			fmt.Sprintf("%.0f%%·%s%s", w.Pct, w.Label, usageResetSuffix(w, now))
+		s := "#[fg=" + usageColor(w.Pct, a) + "]" + fmt.Sprintf("%.0f%%·%s", w.Pct, w.Label)
+		if suf := usageResetSuffix(w, now); suf != "" {
+			s += "#[fg=" + a.thmSubtext0 + "]" + suf
+		}
+		return s
 	}
 	var blocks []string
 	for _, agent := range usageAgentOrder {
