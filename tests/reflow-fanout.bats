@@ -108,7 +108,7 @@ run_update_icons() {
 
 @test "a held reflow lock defers a concurrent reflow's write (no lost update)" {
 	tmux new-window -d
-	tmux new-window -d # 3 windows -> reflow computes key 3:200
+	tmux new-window -d # 3 windows -> reflow computes key 3:200:0 (no client height)
 	local lock="$TDIR/lazytmux-reflow.lock.S"
 	mkdir "$lock" # simulate an in-flight reflow holding the lock
 	tmux set -q @reflow_key "sentinel"
@@ -123,7 +123,7 @@ run_update_icons() {
 	rmdir "$lock" # holder finishes
 	wait "$rpid"
 	# now it acquired, recomputed against fresh state, and stamped the real key
-	[ "$(tmux show -v @reflow_key)" = "3:200" ]
+	[ "$(tmux show -v @reflow_key)" = "3:200:0" ]
 }
 
 @test "empty or non-numeric WIDTH exits without poisoning @reflow_key" {
