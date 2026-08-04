@@ -48,6 +48,27 @@ func (c Config) reflow() {
 	}
 }
 
+// stampMirrorWindow marks localWin as this daemon's mirror of a remote window
+// and gives it that window's name.
+//
+// automatic-rename goes off because the daemon owns the name: tmux only
+// re-derives one when the active pane produces output, and an idle renderer
+// never does — so a name derived once, during setup, would freeze on the
+// launcher's cwd for the life of the window.
+//
+// Panes are addressed 0-based (spawnRenderer/reconcileLayout use index starting
+// at 0); the pane-base-index override keeps that true regardless of the host's
+// global (real hosts set 1).
+func stampMirrorWindow(cfg Config, localWin, remoteName string) {
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "automatic-rename", "off")
+	if name := sanitizeWindowName(remoteName); name != "" {
+		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
+		cfg.LocalTmux("rename-window", "-t", localWin, name)
+	}
+}
+
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
 // frame rather than blocking the control-stream loop; the pane self-heals on
 // its next %output, or on the fresh FrameSeed any %continue sends.
@@ -223,15 +244,7 @@ func Run(cfg Config) error {
 				return fmt.Errorf("daemon: new-window %s: %w", localWin, err)
 			}
 		}
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
-		// Panes are addressed 0-based (spawnRenderer/reconcileLayout use index
-		// starting at 0); force window-level pane-base-index 0 so that holds
-		// regardless of the host's global pane-base-index (real hosts set 1).
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
-		if name := sanitizeWindowName(rw.name); name != "" {
-			cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-			cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals window_name
-		}
+		stampMirrorWindow(cfg, localWin, rw.name)
 		mw := reg.add(rw.id, localWin)
 		if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, readReply); err != nil {
 			teardown()
@@ -464,12 +477,7 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: new-window %s: %v\n", remoteID, localWin, err)
 		return
 	}
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
-	if name := sanitizeWindowName(addedName); name != "" {
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
-	}
+	stampMirrorWindow(cfg, localWin, addedName)
 	mw := reg.add(remoteID, localWin)
 	if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, reply); err != nil {
 		// Drop the half-created entry + local window so the already-registered

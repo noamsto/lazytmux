@@ -87,12 +87,7 @@ func mirrorNewWindow(cfg Config, reader *controlmode.Reader, send func(string), 
 		fmt.Fprintf(os.Stderr, "daemon: mirror %s: new-window %s: %v\n", rw.id, localWin, err)
 		return false
 	}
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
-	if name := sanitizeWindowName(rw.name); name != "" {
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
-	}
+	stampMirrorWindow(cfg, localWin, rw.name)
 	mw := reg.add(rw.id, localWin)
 	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
 	if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, reply); err != nil {
