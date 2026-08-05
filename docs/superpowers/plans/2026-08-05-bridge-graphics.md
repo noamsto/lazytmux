@@ -546,6 +546,11 @@ func decodeSeq(b []byte) (*Seq, int) {
 		q.Wrapped = true
 		return q, n
 	}
+	// Feed only calls this at an indexSeqStart hit, so a non-passthrough head is
+	// necessarily an apcStart and decodeBare can only fail for want of the ST —
+	// hence 0 (hold). Hence also no exact-fill guard on this path: only a wrapper
+	// has a boundary to fill, and bytes after a bare sequence are simply the next
+	// chunk to scan.
 	q, n, ok := decodeBare(b)
 	if !ok {
 		return nil, 0
