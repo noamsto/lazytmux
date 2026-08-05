@@ -85,6 +85,28 @@ func TestScanCompleteNonGraphicsPassthroughForwardsVerbatim(t *testing.T) {
 	}
 }
 
+// A wrapper holding more than its first sequence is forwarded whole. Decoding
+// only the leading sequence would drop whatever trailed it, and a proxy must
+// never lose bytes it was asked to relay.
+func TestScanWrapperWithTrailingBytesForwardsWhole(t *testing.T) {
+	const in = "\x1bPtmux;\x1b\x1b_Gi=1,a=T;abc\x1b\x1b\\extra\x1b\\"
+	s := NewScanner()
+	cs := s.Feed([]byte(in))
+	var got []byte
+	for _, c := range cs {
+		if c.Seq != nil {
+			t.Fatal("wrapper with trailing bytes decoded as a graphics sequence")
+		}
+		got = append(got, c.Literal...)
+	}
+	if string(got) != in {
+		t.Fatalf("forwarded %q, want byte-identical %q", got, in)
+	}
+	if len(s.held) != 0 {
+		t.Fatalf("held %q, want nothing held", s.held)
+	}
+}
+
 func TestScanRecoversAfterNonGraphicsPassthrough(t *testing.T) {
 	cs := NewScanner().Feed([]byte("\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\" + bareSeq))
 	if got := chunkKinds(cs); got != "LS" {

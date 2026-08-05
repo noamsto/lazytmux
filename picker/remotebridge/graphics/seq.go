@@ -31,8 +31,14 @@ func decodeSeq(b []byte) (*Seq, int) {
 		if !ok {
 			return nil, 0
 		}
-		q, _, ok := decodeBare(inner)
-		if !ok {
+		q, m, ok := decodeBare(inner)
+		// The sequence must fill the wrapper exactly. A wrapper carrying anything
+		// after its first sequence is treated as not-ours and forwarded whole:
+		// decoding only the first would silently drop the rest, and a proxy must
+		// never lose bytes it was asked to relay. The cost is that such a store
+		// goes unlocalised (blank image, per D7) — a case aeye cannot produce,
+		// since tmuxPassthrough wraps exactly one sequence.
+		if !ok || m != len(inner) {
 			return nil, n
 		}
 		q.Wrapped = true
