@@ -177,13 +177,9 @@ type seed struct {
 // display-message, capture-pane) and reads exactly one reply block per
 // command. On a real tty (hasTTY) refresh-client is sent and its own reply
 // consumed, so the display-message/capture-pane replies stay aligned with
-// their commands on both the tty and non-tty paths.
+// their commands on both the tty and non-tty paths. The implicit attach reply
+// needs no draining: readReply skips every block we did not ask for.
 func seedFlow(reader *controlmode.Reader, send func(string), session string, window int, hasTTY bool, w, h int) (seed, error) {
-	// The first reply block on the wire is the implicit, empty reply to the
-	// attach-session command control mode runs on startup — drain it so the
-	// commands below line up with their own replies.
-	readReply(reader)
-
 	send(fmt.Sprintf("list-panes -t %s:%d -F '#{pane_active} #{pane_id}'", tmuxQuote(session), window))
 	pane := readActivePane(reader)
 	if !paneIDRe.MatchString(pane) {
@@ -202,16 +198,18 @@ func seedFlow(reader *controlmode.Reader, send func(string), session string, win
 	return seed{pane, cx, cy, alt, appck, readCapture(reader)}, nil
 }
 
-// readReply returns the next command-reply block (Kind End or Error),
-// skipping %output and async notifications (%session-changed, %layout-change,
-// …). ok is false at EOF.
+// readReply returns the next reply block to a command we sent (Kind End or
+// Error carrying ClientCommandFlag), skipping %output, async notifications and
+// the blocks tmux emits for commands we did not send — the implicit attach
+// reply, and anything a remote hook runs in our command queue (#276). ok is
+// false at EOF.
 func readReply(reader *controlmode.Reader) (controlmode.Line, bool) {
 	for {
 		l, ok := reader.Next()
 		if !ok {
 			return controlmode.Line{}, false
 		}
-		if l.Kind == controlmode.End || l.Kind == controlmode.Error {
+		if (l.Kind == controlmode.End || l.Kind == controlmode.Error) && l.Flags == controlmode.ClientCommandFlag {
 			return l, true
 		}
 	}

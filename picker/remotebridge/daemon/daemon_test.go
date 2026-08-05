@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"reflect"
 	"sort"
@@ -17,9 +18,13 @@ import (
 // routed output.
 type capBuf struct{ bytes.Buffer }
 
-func newTestReader(stream string) *controlmode.Reader {
-	return controlmode.NewReader(strings.NewReader(stream))
+func newTestReader(s string) *controlmode.Reader {
+	return controlmode.NewReader(strings.NewReader(s))
 }
+
+// testStream is a stream whose command side goes nowhere, for driving a reply
+// reader against a scripted response stream.
+func testStream() *stream { return newStream(io.Discard) }
 
 // TestLoopRoutesAndExits, TestLoopStopsOnWindowClose, and
 // TestLoopReturnsFalseOnEOF (M2.1) drove the extracted runLoop/handleLine
@@ -31,27 +36,80 @@ func newTestReader(stream string) *controlmode.Reader {
 // add/close/rename coverage).
 
 // TestReadReplyRoutingRoutesSiblingOutput: while awaiting one command's
-// %begin..%end reply, standalone %output for another pane (NOT inside the
-// %begin guard) must be routed, not dropped. Reader.Next absorbs guarded lines
-// into the reply body, so pane-B output is emitted between reply blocks.
+// %begin..%end reply, %output for another pane must be routed, not dropped —
+// whether it arrives between blocks or inside the guard.
 func TestReadReplyRoutingRoutesSiblingOutput(t *testing.T) {
 	stream := strings.Join([]string{
 		"%output %2 live-B",
-		"%begin 1 1 0",
+		"%begin 1 1 1",
 		"cursor-and-capture-reply",
-		"%end 1 1 0",
+		"%end 1 1 1",
 	}, "\n") + "\n"
 	reader := newTestReader(stream)
 	router := NewRouter()
 	var sink capBuf
 	router.Register("%2", &sink)
 
-	l, ok := readReplyRouting(reader, router)
+	l, ok := readReplyRouting(reader, router, &asyncQueue{}, testStream(), 1)
 	if !ok || l.Kind != controlmode.End {
 		t.Fatalf("readReplyRouting returned %+v ok=%v, want End", l, ok)
 	}
 	if sink.String() != "live-B" {
 		t.Errorf("sibling pane-B output %q was dropped, want %q", sink.String(), "live-B")
+	}
+}
+
+// TestReadReplyRoutingMatchesItsOwnCommand is #276, in the exact shape `prefix
+// c` produces: our list-windows is command 2, but three blocks reach it first —
+// the reply to the fire-and-forget `new-window` a ctl gesture sent (command 1),
+// and one flagged 0 per after-new-window hook the remote ran in our queue.
+// Returning any of them hands back an empty body instead of the window list, and
+// leaves every later round-trip a command behind.
+func TestReadReplyRoutingMatchesItsOwnCommand(t *testing.T) {
+	s := strings.Join([]string{
+		"%begin 1 1 1", // the ctl gesture's own new-window reply
+		"%end 1 1 1",
+		"%begin 1 2 0", // after-new-window[0] on the remote
+		"%end 1 2 0",
+		"%begin 1 3 0", // after-new-window[10]
+		"%end 1 3 0",
+		"%begin 1 4 1", // ours
+		"@5",
+		"@6",
+		"%end 1 4 1",
+	}, "\n") + "\n"
+
+	l, ok := readReplyRouting(newTestReader(s), NewRouter(), &asyncQueue{}, testStream(), 2)
+	if !ok || l.Kind != controlmode.End {
+		t.Fatalf("readReplyRouting returned %+v ok=%v, want End", l, ok)
+	}
+	if got := string(l.Data); got != "@5\n@6" {
+		t.Errorf("reply body = %q, want the list-windows output %q", got, "@5\n@6")
+	}
+}
+
+// TestReadReplyRoutingQueuesNotifications: a notification met while awaiting a
+// reply must be handed to the main loop, not dropped. A dropped %pause left its
+// pane paused on the remote with no %continue ever sent.
+func TestReadReplyRoutingQueuesNotifications(t *testing.T) {
+	s := strings.Join([]string{
+		"%pause %1",
+		"%window-add @7",
+		"%begin 1 1 1",
+		"body",
+		"%end 1 1 1",
+	}, "\n") + "\n"
+
+	async := &asyncQueue{}
+	if _, ok := readReplyRouting(newTestReader(s), NewRouter(), async, testStream(), 1); !ok {
+		t.Fatal("readReplyRouting: want the reply block")
+	}
+	queued := async.take()
+	if len(queued) != 2 || queued[0].Kind != controlmode.Pause || queued[1].Kind != controlmode.WindowAdd {
+		t.Fatalf("queued = %+v, want %%pause then %%window-add", queued)
+	}
+	if rest := async.take(); len(rest) != 0 {
+		t.Errorf("take must empty the queue, still holds %+v", rest)
 	}
 }
 
@@ -150,22 +208,31 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 	// PaneSeed issues two commands (cursor display-message + capture-pane), so
 	// the %continue round-trip carries two reply blocks; the sibling %output
 	// lands mid-round-trip, exercising the routing-aware reply reader.
-	stream := strings.Join([]string{
+	s := strings.Join([]string{
 		"%pause %1",
 		"%output %1 dropped-while-paused", // paused: must never reach %1's conn
 		"%continue %1",
 		"%output %2 sibling", // routed by readReplyRouting during the round-trip
-		"%begin 1 1 0",
+		"%begin 1 1 1",
 		"0 0 0 0",
-		"%end 1 1 0",
-		"%begin 1 2 0",
+		"%end 1 1 1",
+		"%begin 1 2 1",
 		"FRESH-CAPTURE",
-		"%end 1 2 0",
+		"%end 1 2 1",
 		"%output %1 after-continue", // must arrive AFTER the seed frame
 		"%exit",
 	}, "\n") + "\n"
 
-	reader := newTestReader(stream)
+	reader := newTestReader(s)
+	st := newStream(io.Discard)
+	async := &asyncQueue{}
+	rt := func(cmd string) (controlmode.Line, bool) {
+		seq, ok := st.stamp(cmd)
+		if !ok {
+			return controlmode.Line{}, false
+		}
+		return readReplyRouting(reader, router, async, st, seq)
+	}
 	send := func(string) {}
 	for {
 		l, ok := reader.Next()
@@ -178,7 +245,7 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 		case controlmode.Pause:
 			handlePause(router, send, l.Args[0])
 		case controlmode.Continue:
-			handleContinue(reader, router, send, l.Args[0])
+			handleContinue(router, rt, l.Args[0])
 		case controlmode.Exit:
 			// stop below
 		}

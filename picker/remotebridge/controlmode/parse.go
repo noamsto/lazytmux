@@ -3,8 +3,18 @@ package controlmode
 import (
 	"bufio"
 	"io"
+	"strconv"
 	"strings"
 )
+
+// ClientCommandFlag is the third field of %begin/%end/%error for a block that a
+// command THIS control client sent produced: tmux writes
+// !!(state->flags & CMDQ_STATE_CONTROL) there (cmdq_fire_command). A hook on the
+// remote runs its commands in our own command queue and so emits blocks flagged
+// 0 — with lazytmux on the far side, one per after-new-window hook follows every
+// new-window. Matching replies without this flag takes a hook's empty block as
+// our reply and desynchronises every later round-trip (#276).
+const ClientCommandFlag = 1
 
 // Unescape decodes tmux control-mode %output data: bytes below 0x20 and the
 // backslash are written as three-digit octal (\NNN); all else is literal.
@@ -52,6 +62,9 @@ type Line struct {
 	Pane string
 	Args []string
 	Data []byte
+	// Flags is the guard flags field, set on Begin/End/Error only; see
+	// ClientCommandFlag.
+	Flags int
 }
 
 func ParseLine(raw string) Line {
@@ -72,11 +85,14 @@ func ParseLine(raw string) Line {
 		_, data, _ := strings.Cut(r, " : ")
 		return Line{Kind: Output, Pane: pane, Data: Unescape(data)}
 	case "%begin":
-		return Line{Kind: Begin, Args: strings.Fields(rest)}
+		f := strings.Fields(rest)
+		return Line{Kind: Begin, Args: f, Flags: guardFlags(f)}
 	case "%end":
-		return Line{Kind: End, Args: strings.Fields(rest)}
+		f := strings.Fields(rest)
+		return Line{Kind: End, Args: f, Flags: guardFlags(f)}
 	case "%error":
-		return Line{Kind: Error, Args: strings.Fields(rest)}
+		f := strings.Fields(rest)
+		return Line{Kind: Error, Args: f, Flags: guardFlags(f)}
 	case "%window-close":
 		return Line{Kind: WindowClose, Args: strings.Fields(rest)}
 	case "%exit":
@@ -103,7 +119,24 @@ func ParseLine(raw string) Line {
 	}
 }
 
-type Reader struct{ sc *bufio.Scanner }
+// guardFlags reads the flags field of a %begin/%end/%error guard line.
+func guardFlags(fields []string) int {
+	if len(fields) < 3 {
+		return 0
+	}
+	n, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+type Reader struct {
+	sc *bufio.Scanner
+	// pending holds the lines a completed block yielded, in stream order, until
+	// Next has handed them out one at a time.
+	pending []Line
+}
 
 func NewReader(r io.Reader) *Reader {
 	sc := bufio.NewScanner(r)
@@ -112,26 +145,54 @@ func NewReader(r io.Reader) *Reader {
 }
 
 func (rd *Reader) Next() (Line, bool) {
-	for rd.sc.Scan() {
+	for {
+		if len(rd.pending) > 0 {
+			l := rd.pending[0]
+			rd.pending = rd.pending[1:]
+			return l, true
+		}
+		if !rd.sc.Scan() {
+			return Line{}, false
+		}
 		l := ParseLine(rd.sc.Text())
 		if l.Kind != Begin {
 			return l, true
 		}
-		// Accumulate the reply body until %end/%error (matching id in Args[0]).
-		id := ""
-		if len(l.Args) > 0 {
-			id = l.Args[0]
-		}
-		var body []string
-		for rd.sc.Scan() {
-			raw := rd.sc.Text()
-			t := ParseLine(raw)
-			if t.Kind == End || t.Kind == Error {
-				return Line{Kind: t.Kind, Args: []string{id}, Data: []byte(strings.Join(body, "\n"))}, true
-			}
-			body = append(body, raw)
-		}
-		return Line{Kind: End, Args: []string{id}, Data: []byte(strings.Join(body, "\n"))}, true
+		rd.pending = rd.readBlock(l)
 	}
-	return Line{}, false
+}
+
+// readBlock consumes a guarded block and returns, in stream order, each
+// notification tmux emitted inside it followed by the block's own terminal line
+// (Kind End or Error, Data = the command output alone). tmux emits the
+// notifications a command causes inside that command's block, so they have to
+// be lifted out — left in the body they read as that command's output.
+//
+// A body line is only taken for a notification when it parses as a known verb,
+// so pane content that merely starts with '%' stays body.
+func (rd *Reader) readBlock(begin Line) []Line {
+	id := ""
+	if len(begin.Args) > 0 {
+		id = begin.Args[0]
+	}
+	var (
+		out  []Line
+		body []string
+	)
+	end := func(kind Kind, flags int) []Line {
+		return append(out, Line{Kind: kind, Args: []string{id}, Flags: flags, Data: []byte(strings.Join(body, "\n"))})
+	}
+	for rd.sc.Scan() {
+		raw := rd.sc.Text()
+		t := ParseLine(raw)
+		switch {
+		case t.Kind == End || t.Kind == Error:
+			return end(t.Kind, t.Flags)
+		case t.Kind == Other || t.Kind == Begin:
+			body = append(body, raw)
+		default:
+			out = append(out, t)
+		}
+	}
+	return end(End, begin.Flags)
 }
