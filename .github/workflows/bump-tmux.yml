@@ -1,0 +1,104 @@
+name: Bump tmux upstream
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # Weekly, Monday 8am UTC
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get current and latest revs
+        id: revs
+        run: |
+          current=$(grep -oP '(?<=github:tmux/tmux/)[a-f0-9]{40}' flake.nix)
+          latest=$(git ls-remote https://github.com/tmux/tmux.git HEAD | cut -f1)
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "short=${latest:0:7}" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Nothing to do
+        if: steps.revs.outputs.up_to_date == 'true'
+        run: echo "Already at latest (${current}), skipping."
+        env:
+          current: ${{ steps.revs.outputs.current }}
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+        if: steps.revs.outputs.up_to_date == 'false'
+
+      - uses: cachix/cachix-action@v17
+        if: steps.revs.outputs.up_to_date == 'false'
+        with:
+          name: lazytmux
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Update flake.nix and flake.lock
+        if: steps.revs.outputs.up_to_date == 'false'
+        env:
+          current: ${{ steps.revs.outputs.current }}
+          latest: ${{ steps.revs.outputs.latest }}
+        run: |
+          sed -i "s|github:tmux/tmux/${current}|github:tmux/tmux/${latest}|" flake.nix
+          nix flake update tmux-upstream --accept-flake-config
+
+      - name: Collect changelog
+        if: steps.revs.outputs.up_to_date == 'false'
+        id: log
+        env:
+          current: ${{ steps.revs.outputs.current }}
+        run: |
+          # Shallow-fetch enough history to span from current to HEAD
+          git clone --depth=100 --bare https://github.com/tmux/tmux.git /tmp/tmux-log
+          log=$(git -C /tmp/tmux-log log --oneline --no-merges "${current}..HEAD" 2>/dev/null | head -30 || echo "(changelog unavailable)")
+          {
+            echo 'log<<EOF'
+            echo "$log"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit and open PR
+        if: steps.revs.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          current: ${{ steps.revs.outputs.current }}
+          latest: ${{ steps.revs.outputs.latest }}
+          short: ${{ steps.revs.outputs.short }}
+          log: ${{ steps.log.outputs.log }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          branch="chore/bump-tmux-upstream"
+          git checkout -B "$branch"
+          git add flake.nix flake.lock
+          git commit -m "chore(tmux): bump upstream pin to ${short} (next-3.8)"
+          git push -f origin "$branch"
+          body="Auto-bumped tmux upstream from \`${current:0:7}\` to \`${short}\` (next-3.8).
+
+          ## Commits since previous pin
+
+          \`\`\`
+          ${log}
+          \`\`\`
+
+          ## Test plan
+          - [ ] CI green (build + flake check)
+          - [ ] Review upstream changelog for breaking changes
+          - [ ] Deploy via nix-config bump + server restart"
+          gh pr create \
+            --title "chore(tmux): bump upstream pin to ${short} (next-3.8)" \
+            --body "$body" \
+            --base main \
+            --head "$branch" \
+            --assignee "@me" \
+            || echo "PR already open for this branch; branch updated."
