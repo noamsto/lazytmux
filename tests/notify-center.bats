@@ -17,6 +17,7 @@ setup() {
 	unset TMUX TMUX_PANE
 	make_notify_center
 	NOW=$(date +%s)
+	export NOTIFY_CENTER_NOW="$NOW"
 }
 
 # seed NAME TS SOURCE LEVEL WINDOW SESSION TITLE [BODY]
