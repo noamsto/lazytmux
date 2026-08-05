@@ -137,6 +137,29 @@ func TestScanLiteralBeforePartialIsEmittedImmediately(t *testing.T) {
 	}
 }
 
+// Flush is the whole mechanism behind "held bytes are never silently
+// swallowed", so both directions are pinned: a held partial comes back out as a
+// literal, and a Scanner holding nothing stays quiet. The second call also
+// proves Flush clears what it emitted — re-emitting would duplicate those bytes
+// into the pane.
+func TestFlushEmitsHeldPartialThenNothing(t *testing.T) {
+	const partial = "\x1b_Gi=1,a=T;abc"
+	s := NewScanner()
+	if cs := s.Feed([]byte(partial)); chunkKinds(cs) != "" {
+		t.Fatalf("partial emitted early: %q", chunkKinds(cs))
+	}
+	cs := s.Flush()
+	if chunkKinds(cs) != "L" || string(cs[0].Literal) != partial {
+		t.Fatalf("kinds = %q literal = %q, want L / %q", chunkKinds(cs), cs[0].Literal, partial)
+	}
+	if got := s.Flush(); got != nil {
+		t.Fatalf("second Flush = %v, want nil", got)
+	}
+	if got := NewScanner().Flush(); got != nil {
+		t.Fatalf("fresh Flush = %v, want nil", got)
+	}
+}
+
 func TestScanOversizedPartialFlushesAsLiteral(t *testing.T) {
 	s := NewScanner()
 	s.Feed([]byte("\x1b_Gi=1,a=T;"))

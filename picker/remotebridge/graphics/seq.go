@@ -57,7 +57,7 @@ func decodeBare(b []byte) (*Seq, int, bool) {
 	if !bytes.HasPrefix(b, []byte(apcStart)) {
 		return nil, 0, false
 	}
-	end := indexOf(b[len(apcStart):], st)
+	end := bytes.Index(b[len(apcStart):], []byte(st))
 	if end < 0 {
 		return nil, 0, false
 	}

@@ -5,6 +5,8 @@
 // placeholders are ordinary grid text and already cross the bridge.
 package graphics
 
+import "bytes"
+
 // maxPartial bounds the bytes held waiting for a sequence terminator. A frame
 // dropped by the sink's bounded buffer can truncate a sequence mid-flight, and
 // without a cap the scanner would swallow the pane's stream forever waiting for
@@ -33,6 +35,9 @@ func NewScanner() *Scanner { return &Scanner{} }
 
 // Feed consumes p and returns every chunk that completed. Bytes belonging to a
 // sequence whose terminator hasn't arrived are retained for the next call.
+//
+// Feed does not retain p; the caller may reuse the buffer once it returns. A
+// Scanner is single-goroutine — one per pane.
 func (s *Scanner) Feed(p []byte) []Chunk {
 	buf := p
 	if len(s.held) > 0 {
@@ -96,18 +101,9 @@ func appendLiteral(out []Chunk, b []byte) []Chunk {
 func indexSeqStart(b []byte) int {
 	best := -1
 	for _, pat := range []string{apcStart, passStart} {
-		if i := indexOf(b, pat); i >= 0 && (best < 0 || i < best) {
+		if i := bytes.Index(b, []byte(pat)); i >= 0 && (best < 0 || i < best) {
 			best = i
 		}
 	}
 	return best
-}
-
-func indexOf(b []byte, pat string) int {
-	for i := 0; i+len(pat) <= len(b); i++ {
-		if string(b[i:i+len(pat)]) == pat {
-			return i
-		}
-	}
-	return -1
 }
