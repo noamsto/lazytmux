@@ -1100,6 +1100,10 @@ remote_pane_of() {
 	done
 	body="$(cat "$pane_file" 2>/dev/null || true)"
 	task="$(cat "$CLAUDE_STATUS_DIR/tasks/${local_pane#%}" 2>/dev/null || true)"
+	# The mirror pane runs a renderer, so its own command says nothing;
+	# @bridge_proc carries the remote's, which is what the icons are built from.
+	remote_proc="$($SRC list-panes -t rem -F '#{pane_current_command}')"
+	bridge_proc="$($DST show-options -p -t "$local_pane" -qv @bridge_proc)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
@@ -1108,6 +1112,8 @@ remote_pane_of() {
 	[[ $body == *"session=host-sess"* ]]
 	[[ $body == *"unseen=1"* ]]
 	[ "$task" = "ship it" ]
+	[ -n "$remote_proc" ]
+	[ "$bridge_proc" = "$remote_proc" ]
 	# The bridge owns what it wrote: SIGTERM teardown takes it away again.
 	[ ! -f "$pane_file" ]
 }

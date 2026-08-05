@@ -16,56 +16,65 @@ import (
 // state redraws its pane first, which is what wakes that loop.
 const agentStatusPollInterval = time.Second
 
-// agentStatusFormat reads what claude-status-update stamped on each remote pane.
-// @claude_status is "<state> <epoch> <unseen>"; the free-form task goes last so
-// a '|' inside it lands in the final field instead of shifting the row.
-const agentStatusFormat = "'#{pane_id}|#{@claude_status}|#{@claude_issues}|#{@claude_task}'"
+// agentStatusFormat reads each remote pane's foreground command plus whatever
+// claude-status-update stamped on it. @claude_status is "<state> <epoch>
+// <unseen>"; the free-form task goes last so a '|' inside it lands in the final
+// field instead of shifting the row.
+const agentStatusFormat = "'#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@claude_issues}|#{@claude_task}'"
 
-// paneStatus is one remote pane's agent state, as stamped by the hook writer.
+// paneStatus is one remote pane's foreground command and, when an agent runs
+// there, the state the hook writer stamped.
 type paneStatus struct {
 	pane   string // remote pane id, with %
-	state  string
-	ts     int64 // epoch on the REMOTE's clock
+	proc   string // remote foreground command; the local pane only ever runs a renderer
+	state  string // "" when no agent reported
+	ts     int64  // epoch on the REMOTE's clock
 	unseen bool
 	issues string
 	task   string
 }
 
-// parseAgentStatus turns an agentStatusFormat reply body into the panes that
-// actually reported a state. A pane with no @claude_status has no agent.
+// parseAgentStatus turns an agentStatusFormat reply body into one row per
+// remote pane. Rows without an agent are kept — their command still drives the
+// mirror window's icons.
 func parseAgentStatus(body string) []paneStatus {
 	var out []paneStatus
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimRight(line, "\r")
 		// Trailing empty fields may or may not survive the trip, so read them
-		// positionally rather than demanding all four.
-		fields := strings.SplitN(line, "|", 4)
-		if len(fields) < 2 || fields[1] == "" {
+		// positionally rather than demanding all five.
+		fields := strings.SplitN(line, "|", 5)
+		if len(fields) < 2 || fields[0] == "" {
 			continue
 		}
-		st := strings.Fields(fields[1])
-		if len(st) < 2 {
-			continue
-		}
-		ts, err := strconv.ParseInt(st[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		row := paneStatus{
-			pane:   fields[0],
-			state:  st[0],
-			ts:     ts,
-			unseen: len(st) > 2 && st[2] == "1",
-		}
+		row := paneStatus{pane: fields[0], proc: fields[1]}
 		if len(fields) > 2 {
-			row.issues = fields[2]
+			row.readStatus(fields[2])
 		}
 		if len(fields) > 3 {
-			row.task = fields[3]
+			row.issues = fields[3]
+		}
+		if len(fields) > 4 {
+			row.task = fields[4]
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// readStatus parses the "<state> <epoch> <unseen>" triple, leaving state empty
+// when the pane carries no usable stamp.
+func (r *paneStatus) readStatus(v string) {
+	st := strings.Fields(v)
+	if len(st) < 2 {
+		return
+	}
+	ts, err := strconv.ParseInt(st[1], 10, 64)
+	if err != nil {
+		return
+	}
+	r.state, r.ts = st[0], ts
+	r.unseen = len(st) > 2 && st[2] == "1"
 }
 
 // agentShipper writes the remote's agent state into the local claude-status
@@ -101,8 +110,9 @@ func newAgentShipper(localSess string, skew int64) *agentShipper {
 	return &agentShipper{dir: dir, sess: localSess, skew: skew, written: map[string]paneStatus{}}
 }
 
-// apply writes a file per reporting pane and drops the ones that stopped
-// reporting (the agent exited, or its pane is gone).
+// apply stamps each mirrored pane's remote command, writes a file per pane an
+// agent reported on, and drops the ones that stopped reporting (the agent
+// exited, or its pane is gone).
 func (a *agentShipper) apply(cfg Config, rows []paneStatus) {
 	if cfg.LocalPanes == nil {
 		return
@@ -111,19 +121,33 @@ func (a *agentShipper) apply(cfg Config, rows []paneStatus) {
 	live := make(map[string]bool, len(rows))
 
 	for _, r := range rows {
-		id, ok := local[r.pane]
+		localPane, ok := local[r.pane]
 		if !ok {
 			continue
 		}
-		id = strings.TrimPrefix(id, "%")
+		id := strings.TrimPrefix(localPane, "%")
 		live[id] = true
-		// Write only on a real change: rewriting an unchanged row would undo the
+		// Act only on a real change: rewriting an unchanged row would undo the
 		// local mark-seen hook, which clears `unseen` the moment you look at the
-		// mirror window while the remote's stamp still says 1.
-		if prev, seen := a.written[id]; seen && prev == r {
+		// mirror window while the remote's stamp still says 1. It also keeps the
+		// stamp below from forking tmux once per pane per second.
+		prev, seen := a.written[id]
+		if seen && prev == r {
 			continue
 		}
 		a.written[id] = r
+
+		// @bridge_proc is the mirror pane's real command: the local one runs a
+		// renderer, which would give every mirrored window the fallback icon.
+		if !seen || prev.proc != r.proc {
+			cfg.LocalTmux("set-option", "-p", "-t", localPane, "@bridge_proc", r.proc)
+		}
+		if r.state == "" {
+			// The pane is mirrored but has no agent — nothing to render but the
+			// icon, and a leftover file would keep one lit.
+			a.removeFiles(id)
+			continue
+		}
 
 		body := fmt.Sprintf("state=%s\ntimestamp=%d\nsession=%s\n", r.state, r.ts+a.skew, a.sess)
 		if r.unseen {
@@ -154,10 +178,14 @@ func (a *agentShipper) clear() {
 }
 
 func (a *agentShipper) forget(id string) {
+	a.removeFiles(id)
+	delete(a.written, id)
+}
+
+func (a *agentShipper) removeFiles(id string) {
 	for _, sub := range []string{"panes", "tasks", "issues"} {
 		os.Remove(filepath.Join(a.dir, sub, id))
 	}
-	delete(a.written, id)
 }
 
 func lineOrEmpty(s string) string {
