@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 )
 
 func main() {
@@ -30,6 +32,9 @@ func main() {
 	remoteTmux := flag.String("tmux", envDefault("LZTMUX_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
 	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
 	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
+	term := flag.String("term", os.Getenv("LZTMUX_BRIDGE_TERM"), "termname to advertise to the remote (steers the remote viewer's graphics backend)")
+	cacheDir := flag.String("gfx-cache", envDefault("LZTMUX_BRIDGE_GFX_CACHE", filepath.Join(os.TempDir(), "lztmux-gfx")), "local cache dir for images fetched from the remote")
+	gfxMax := flag.Int64("gfx-max-bytes", 8<<20, "largest single image fetched from the remote; bigger stores are dropped")
 	localTmux := flag.String("local-tmux", envDefault("LZTMUX_DAEMON_LOCAL_TMUX", "tmux"), "local tmux binary (may carry args, e.g. \"tmux -L sock\")")
 	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
@@ -55,6 +60,7 @@ func main() {
 	}
 
 	var ctl *exec.Cmd
+	var ctlSock string
 	var localTmuxArgv []string
 	if *testLocal {
 		ctl = exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
@@ -67,10 +73,27 @@ func main() {
 			ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
 				"-C", "attach-session", "-t", *session)...)
 		} else {
+			// ControlMaster on the control connection makes every image fetch a
+			// multiplexed exec on this same TCP connection: no second handshake,
+			// and image bytes never share the control stream with live output.
+			// ControlPersist=no ties the master's lifetime to this process.
+			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
+			args := []string{"-T", "-e", "none",
+				"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctlSock, "-o", "ControlPersist=no",
+				*host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}
+			// TERM decides the remote viewer's graphics backend: it reads
+			// #{client_termname}, which is whatever this control client
+			// advertises. A non-kitty local terminal therefore degrades the
+			// remote carousel to block art on its own. -T means no pty, so ssh
+			// won't send TERM itself — it has to ride in this env prefix like
+			// TMUX_TMPDIR does.
+			if *term != "" {
+				args = append(args, "TERM="+*term)
+			}
+			args = append(args, tmuxArgv...)
 			// ssh space-joins the post-host argv into one string run by the
 			// remote login shell, so shell-quote the session name (may
 			// contain spaces) to keep it a single target token.
-			args := append([]string{"-T", "-e", "none", *host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}, tmuxArgv...)
 			args = append(args, "-C", "attach-session", "-t", shellQuote(*session))
 			ctl = exec.Command(*sshCmd, args...)
 		}
@@ -131,6 +154,15 @@ func main() {
 		LocalArea:      area,
 		Reflow:         reflow,
 		LocalPanes:     panes,
+		NewGraphics: func(string) *graphics.Proxy {
+			if ctlSock == "" {
+				return nil // --test-local / local-tmux transport: no remote filesystem
+			}
+			return graphics.New(
+				graphics.NewSSHFetcher(*host, ctlSock, *cacheDir, *gfxMax),
+				func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) },
+			)
+		},
 	}
 
 	if err := daemon.Run(cfg); err != nil {
