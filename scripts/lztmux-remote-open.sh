@@ -26,9 +26,34 @@ remote_tmpdir="${LZTMUX_REMOTE_TMPDIR:-/run/user/$(ssh "$host" id -u)}"
 # single-quoted: $(id -un) expands on the remote side (NixOS profile fallback)
 remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux')"
 
-if [[ -z $sess ]]; then
+# Prints the host's most-recent session name, or nothing when the remote has no
+# tmux server: list-sessions fails into `head`, so the remote pipeline still
+# exits 0 with empty output.
+first_remote_session() {
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-	sess="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1")"
+	ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1"
+}
+
+if [[ -z $sess ]]; then
+	sess="$(first_remote_session)"
+fi
+
+# Nothing to bridge: start the host's OWN startup session rather than inventing
+# a name here — tmux-startup.service carries the remote's configured session
+# name and directory. Starting it blind is safe: the unit is Type=forking with
+# RemainAfterExit, and its script exact-matches `has-session` before creating
+# anything. Then re-probe, because unit state is not server state — a live
+# server can sit behind an `inactive` unit (#287).
+if [[ -z $sess ]]; then
+	if ! ssh "$host" -- systemctl --user start tmux-startup.service; then
+		echo "lztmux-remote-open: $host has no tmux server, and no tmux-startup.service to start one" >&2
+		exit 1
+	fi
+	sess="$(first_remote_session)"
+	if [[ -z $sess ]]; then
+		echo "lztmux-remote-open: started tmux-startup.service on $host but no session appeared" >&2
+		exit 1
+	fi
 fi
 
 if [[ -z $win ]]; then
