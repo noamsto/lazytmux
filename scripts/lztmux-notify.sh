@@ -151,10 +151,11 @@ if [[ $routed == message ]]; then
 	# One display-message PER ATTACHED CLIENT, each with an explicit -c. A
 	# client-less display-message from a detached process exits 0 and shows
 	# NOTHING, so an unnamed client is a silent no-op bug. Target the session by
-	# id, not name. -N so a keystroke in the pane cannot eat the message.
+	# id, not name. No -N, so a keystroke dismisses the toast and still reaches
+	# the pane/key table; -C so the pane's tty keeps redrawing while it's up.
 	while IFS= read -r client; do
 		[[ -n $client ]] || continue
-		tmux display-message -c "$client" -d "$ms" -N "$msg" 2>/dev/null || true
+		tmux display-message -c "$client" -d "$ms" -C "$msg" 2>/dev/null || true
 	done < <(tmux list-clients -t "$sess_id" -F '#{client_name}' 2>/dev/null)
 fi
 
