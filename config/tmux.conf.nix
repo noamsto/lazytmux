@@ -525,13 +525,16 @@
     "set -g default-shell ${defaultShell}\n    ";
 
   # prefix+I bind for the agent-carousel image gallery, emitted only when the
-  # toggle package is wired in (carousel-toggle != null). tmux's run-shell does not
-  # export TMUX_PANE, so the toggle can't key the manifest to the pressing pane and
-  # reports "no images yet for this pane". Inject it via #{pane_id}, which tmux
-  # format-expands in the command string before exec.
+  # toggle package is wired in (carousel-toggle != null). Inside a mirror window
+  # the carousel must open on the REMOTE (its manifest and its images live
+  # there) via the carousel ctl verb; the local branch is the existing bind,
+  # verbatim — tmux's run-shell does not export TMUX_PANE, so the toggle can't
+  # key the manifest to the pressing pane and reports "no images yet for this
+  # pane". Inject it via #{pane_id}, which tmux format-expands in the command
+  # string before exec.
   carouselBind =
     lib.optionalString (carousel-toggle != null)
-    "bind I run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images'";
+    "bind I if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} carousel '#{@bridge_pane}'\" } { run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images' }";
 
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
