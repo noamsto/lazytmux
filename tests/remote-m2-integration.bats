@@ -1049,8 +1049,11 @@ remote_pane_of() {
 	# inherits this environment when it starts.
 	stub="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$stub"
+	# /bin/sh, not /usr/bin/env bash: the Linux nix build sandbox has no
+	# /usr/bin/env, so an env shebang leaves the stub unexecutable there and the
+	# assertion below fails with an empty capture rather than a wrong one.
 	cat >"$stub/tmux-claude-images" <<-EOF
-		#!/usr/bin/env bash
+		#!/bin/sh
 		printf '%s %s\n' "\$TMUX_PANE" "\$AEYE_BRIDGED" >"$BATS_TEST_TMPDIR/toggled"
 	EOF
 	chmod +x "$stub/tmux-claude-images"
@@ -1076,8 +1079,13 @@ remote_pane_of() {
 	wait "$daemon_pid" 2>/dev/null || true
 
 	# The verb reached the REMOTE pane, carrying the exact pairing the viewer's
-	# network-frame-policy switch depends on.
-	[ "$got" = "$pane 1" ]
+	# network-frame-policy switch depends on. Reported rather than bare-asserted:
+	# an empty capture (stub never ran) and a wrong one (env not forwarded) fail
+	# identically otherwise, and they have completely different causes.
+	if [ "$got" != "$pane 1" ]; then
+		echo "stub captured '$got', want '$pane 1'" >&2
+		false
+	fi
 }
 
 # The queue-safety guarantee: a gated keypress against a dead daemon must fail
