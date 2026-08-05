@@ -259,3 +259,28 @@ func TestCtlArgvRoundTrip(t *testing.T) {
 		t.Errorf("empty payload decoded to %q, want nil", got)
 	}
 }
+
+func TestCarouselVerbBuildsRemoteToggle(t *testing.T) {
+	v, ok := verbs["carousel"]
+	if !ok {
+		t.Fatal("no carousel verb")
+	}
+	cmds, err := v.build("%5", "@2", "sess", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 1 {
+		t.Fatalf("want one command, got %v", cmds)
+	}
+	for _, want := range []string{"run-shell", "-t %5", "TMUX_PANE=%5", "AEYE_BRIDGED=1", "tmux-claude-images"} {
+		if !strings.Contains(cmds[0], want) {
+			t.Fatalf("command %q missing %q", cmds[0], want)
+		}
+	}
+	if !strings.Contains(cmds[0], "command -v") || !strings.Contains(cmds[0], "split-window") {
+		t.Fatalf("a missing binary must surface as a visible split, not a silent no-op: %q", cmds[0])
+	}
+	if !v.moves || !v.layout {
+		t.Fatal("the toggle opens a split that takes focus: needs moves+layout")
+	}
+}
