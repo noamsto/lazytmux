@@ -21,7 +21,14 @@ teardown() {
 }
 
 t() {
-	"$TMUX_BIN" -L "$SOCKET" "$@"
+	timeout --foreground 30s "$TMUX_BIN" -L "$SOCKET" "$@"
+	local status=$?
+	if [[ $status -eq 124 ]]; then
+		printf 'tmux invocation timed out after 30s:' >&2
+		printf ' %q' "$TMUX_BIN" -L "$SOCKET" "$@" >&2
+		printf '\n' >&2
+	fi
+	return "$status"
 }
 
 wait_for_nonempty_option() {
