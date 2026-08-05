@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -288,15 +291,61 @@ func TestCarouselVerbBuildsRemoteToggle(t *testing.T) {
 	if len(cmds) != 1 {
 		t.Fatalf("want one command, got %v", cmds)
 	}
-	for _, want := range []string{"run-shell", "-t %5", "exec /bin/sh -c", "display-message -p -t %5", "#{@claude_img_src}", "src=%5", "TMUX_PANE=\"$src\"", "AEYE_BRIDGED=1", "tmux-claude-images"} {
+	script := carouselResolveScript("%5")
+	if strings.Contains(script, "'") {
+		t.Fatalf("resolve script must have zero single quotes: %q", script)
+	}
+	wantCmd := fmt.Sprintf("run-shell -b -t %%5 %s", tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+	if cmds[0] != wantCmd {
+		t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
+	}
+	for _, want := range []string{
+		"show-options -pqv",
+		"@claude_img_src",
+		"TMUX_PANE=\"$src\"",
+		"AEYE_BRIDGED=1",
+		"tmux-claude-images",
+		"command -v",
+		"split-window",
+	} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
 		}
 	}
-	if !strings.Contains(cmds[0], "command -v") || !strings.Contains(cmds[0], "split-window") {
-		t.Fatalf("a missing binary must surface as a visible split, not a silent no-op: %q", cmds[0])
+	for _, ban := range []string{"display-message", "#{@claude_img_src}", "''|*"} {
+		if strings.Contains(cmds[0], ban) {
+			t.Fatalf("command %q must not contain %q", cmds[0], ban)
+		}
 	}
 	if !v.moves || !v.layout {
 		t.Fatal("the toggle opens a split that takes focus: needs moves+layout")
+	}
+}
+
+func TestCarouselSrcValidation(t *testing.T) {
+	const pane = "%1"
+	// Mirror the case arms in carouselResolveScript (lookup stubbed via $src).
+	validate := `case "$src" in %[0-9]*) case "${src#%}" in *[!0-9]*) src=` + pane + `;; esac;; *) src=` + pane + `;; esac; printf %s "$src"`
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{"%0", "%0"},
+		{"", pane},
+		{"%1", "%1"},
+		{"junk", pane},
+		{"%12", "%12"},
+		{"%0x", pane},
+	}
+	for _, tc := range tests {
+		cmd := exec.Command("/bin/sh", "-c", validate)
+		cmd.Env = append(os.Environ(), "src="+tc.src)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("src=%q: %v", tc.src, err)
+		}
+		if got := string(out); got != tc.want {
+			t.Errorf("src=%q: got %q, want %q", tc.src, got, tc.want)
+		}
 	}
 }
