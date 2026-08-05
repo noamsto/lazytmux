@@ -839,10 +839,9 @@
     # nothing, so each must lead with `echo;` to land an (empty) line
     # immediately. Left untreated this does not merely blink: refresh-client -S
     # (which claude-status-update and reflow call constantly) job_free()s the
-    # in-flight job without reaching the completion callback that would publish
-    # an empty output, so under CPU load the placeholder PINS — measured at 85%
-    # of frames over 20s with a >1s ticker plus a 1.6s refresh cadence, versus
-    # 0% once each ticker leads with `echo;`.
+    # in-flight job without ever reaching the completion callback that would
+    # publish an empty output, so under CPU load the placeholder pins instead of
+    # passing.
     # ticker per client attach — whenever that first tick exceeds 1s, i.e. under
     # CPU load.
     set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"

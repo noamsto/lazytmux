@@ -231,10 +231,8 @@ func paneCmdDisplay(cmd string) string {
 // tmux does the measuring, not Go: #{=/N/…:} truncates to N display cells and
 // appends a 1-cell ellipsis, and #{p-N:} left-pads to N cells with the same
 // utf8_cstrwidth() that computes the right section's width in format-draw.c, so
-// the pad cannot disagree with tmux's own layout. A Go width measure would be a
-// third copy of the rule (scripts/lib-icons.sh, picker/main.go) — the drift that
-// produced #198/#234. 16 cells fits the longest agent command in use
-// (cursor-agent, 12) plus a 2-cell icon and a space.
+// the pad cannot disagree with tmux's own layout. 16 cells fits the longest
+// agent command in use (cursor-agent, 12) plus a 2-cell icon and a space.
 const (
 	paneSlotKeep = 16
 	// Derived, not independent: bumping keep without the pad would let the

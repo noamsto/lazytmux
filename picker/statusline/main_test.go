@@ -233,11 +233,6 @@ func TestPaneSlotEmptyIcon(t *testing.T) {
 	}
 }
 
-// TestPaneSlotStripsFormatChars: pane_current_command is argv[0], so a process
-// can name itself anything. `}` closed #{l:} early and leaked the tail past the
-// padding (measured 18 cells instead of 17); `#` could open a #[...] run that
-// format_draw strips only after #{p-} has padded for its width. Both must be
-// gone before interpolation or the fixed-width guarantee is void.
 func TestPaneSlotStripsFormatChars(t *testing.T) {
 	for _, tc := range []struct{ icon, cmd, want string }{
 		{"I", "foo}bar", "#{p-17:#{=/16/…:#{l:I foobar}}}"},
