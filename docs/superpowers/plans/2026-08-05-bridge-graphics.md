@@ -1226,6 +1226,7 @@ Refs #280"
 package graphics
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
