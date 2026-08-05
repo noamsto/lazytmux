@@ -30,8 +30,11 @@ type listItem struct {
 	isScratch       bool   // scratch-* session
 	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
 	createName      string // zoxide suggestion: derived session name
+	isRemoteRow     bool   // belongs to the Remote section (set even when unselectable)
 	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
 	remoteSess      string // remote bridge row: optional remote session name
+	displayEnd      string // remote session row: display with the closing tree glyph
+	plainEnd        string // remote session row: plain with the closing tree glyph
 }
 
 // tuiModel is the bubbletea model for the picker.
@@ -682,8 +685,12 @@ func (m tuiModel) inPreview(x, y int) bool {
 // (scratch/claude). Headers are always visible (pruned separately).
 // Zoxide suggestion rows are intentionally hidden by both modes: a dir
 // has no claude activity and is never a scratch session. Remote bridge rows
-// share those defaults, so the same filters hide them.
+// are exempt instead — they are the only way to reach a host from here, so
+// neither mode may drop the section.
 func (m tuiModel) itemVisible(item listItem) bool {
+	if item.isRemoteRow {
+		return true
+	}
 	if m.scratchOnly && !item.isScratch {
 		return false
 	}
@@ -712,7 +719,7 @@ func (m tuiModel) withFilter() tuiModel {
 			}
 			out = append(out, item)
 		}
-		m.visible = pruneOrphanHeaders(out)
+		m.visible = markRemoteTreeEnds(pruneOrphanHeaders(out))
 		return m
 	}
 
@@ -737,20 +744,30 @@ func (m tuiModel) withFilter() tuiModel {
 
 	// Sort by score descending; sessions always rank above remote + zoxide
 	// suggestions. Stable preserves original order for ties.
+	const (
+		rankSession = iota
+		rankRemote
+		rankZoxide
+	)
 	sort.SliceStable(matches, func(i, j int) bool {
 		rank := func(it listItem) int {
 			switch {
 			case it.createPath != "":
-				return 2
-			case it.remoteHost != "":
-				return 1
+				return rankZoxide
+			case it.isRemoteRow:
+				return rankRemote
 			default:
-				return 0
+				return rankSession
 			}
 		}
 		ri, rj := rank(matches[i].item), rank(matches[j].item)
 		if ri != rj {
 			return ri < rj
+		}
+		// Remote rows keep collection order so a host's sessions stay grouped
+		// under it; ranking them by score breaks the tree.
+		if ri == rankRemote {
+			return false
 		}
 		return matches[i].score > matches[j].score
 	})
@@ -779,6 +796,7 @@ func (m tuiModel) withFilter() tuiModel {
 		// Re-insert section headers before the first row of each suggestion
 		// block (sessions sort first, remotes next, zoxide last).
 		var remoteHeader, sugHeader *listItem
+		hostRows := make(map[string]listItem)
 		for i := range m.allItems {
 			if m.allItems[i].isRemoteHeader {
 				remoteHeader = &m.allItems[i]
@@ -786,12 +804,24 @@ func (m tuiModel) withFilter() tuiModel {
 			if m.allItems[i].isZoxideHeader {
 				sugHeader = &m.allItems[i]
 			}
+			if it := m.allItems[i]; it.remoteHost != "" && it.remoteSess == "" {
+				hostRows[it.remoteHost] = it
+			}
 		}
+		seenHost := make(map[string]bool)
 		var out []listItem
 		for _, match := range matches {
-			if remoteHeader != nil && match.item.remoteHost != "" {
+			if remoteHeader != nil && match.item.isRemoteRow {
 				out = append(out, *remoteHeader)
 				remoteHeader = nil
+			}
+			// A matching session row pulls its host row in with it, so the
+			// tree prefix never dangles under a host the query dropped.
+			if h := match.item.remoteHost; h != "" && !seenHost[h] {
+				seenHost[h] = true
+				if row, ok := hostRows[h]; ok && match.item.remoteSess != "" {
+					out = append(out, row)
+				}
 			}
 			if sugHeader != nil && match.item.createPath != "" {
 				out = append(out, *sugHeader)
@@ -799,9 +829,29 @@ func (m tuiModel) withFilter() tuiModel {
 			}
 			out = append(out, match.item)
 		}
-		m.visible = out
+		m.visible = markRemoteTreeEnds(out)
 	}
 	return m
+}
+
+// markRemoteTreeEnds gives the last visible session row under each host the
+// closing tree glyph. Which row is last depends on the filter, not on the order
+// the rows were collected in.
+func markRemoteTreeEnds(items []listItem) []listItem {
+	for i := range items {
+		if items[i].displayEnd == "" {
+			continue
+		}
+		next := i + 1
+		sibling := next < len(items) &&
+			items[next].remoteSess != "" &&
+			items[next].remoteHost == items[i].remoteHost
+		if !sibling {
+			items[i].display = items[i].displayEnd
+			items[i].plain = items[i].plainEnd
+		}
+	}
+	return items
 }
 
 func pruneOrphanHeaders(items []listItem) []listItem {
@@ -942,6 +992,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	cMauve := ansiFg(thmMauve)
 	cBlue := ansiFg(thmBlue)
 	cDim := ansiFg(thmSubtext0)
+	cPeach := ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387"))
 	rc := newResourceColors(tmuxOpts)
 	reset := "\033[0m"
 	dim := "\033[2m"
@@ -979,6 +1030,27 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	}
 	emptyIcons := strings.Repeat(" ", iconCol)
 
+	// Host column: only remote-bridge mirrors carry @bridge_host, so an
+	// all-local list spends no width on it at all.
+	hostCol := 0
+	for i := range sessions {
+		hostCol = max(hostCol, len(sessions[i].bridgeHost))
+	}
+	if hostCol > 0 {
+		hostCol = max(hostCol, len("Host"))
+	}
+	// color wraps the text only, so the plain variant (color "") stays escape-free.
+	hostCell := func(host, color string) string {
+		if hostCol == 0 {
+			return ""
+		}
+		tail := strings.Repeat(" ", hostCol-len(host)) + "  "
+		if host == "" || color == "" {
+			return host + tail
+		}
+		return color + host + reset + tail
+	}
+
 	if withResources {
 		mergeResources(sessions, <-resCh)
 	}
@@ -1009,18 +1081,19 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-len(hdrCPU)))
 	hdrMemPad := strings.Repeat(" ", max(0, maxMem-len(hdrMem)))
 	hdrRes := hdrCPUPad + hdrCPU + " / " + hdrMemPad + hdrMem
-	hdrDisplay := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
+	hdrDisplay := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
 		cDim+iSess+reset,
 		cDim+"Session"+reset,
 		strings.Repeat(" ", max(0, maxName-7)),
+		hostCell("Host", cDim),
 		cDim+padToWidth("Procs", 5, iconCol)+reset,
 		cDim+hdrRes+reset,
 		cDim+iDir+reset,
 		cDim+"Path"+reset,
 	)
-	hdrPlain := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
+	hdrPlain := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
 		iSess, "Session", strings.Repeat(" ", max(0, maxName-7)),
-		padToWidth("Procs", 5, iconCol), hdrRes, iDir, "Path",
+		hostCell("Host", ""), padToWidth("Procs", 5, iconCol), hdrRes, iDir, "Path",
 	)
 
 	home := os.Getenv("HOME")
@@ -1041,10 +1114,11 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 		}
 		cpuPad := strings.Repeat(" ", max(0, maxCPU-len(cpuStrs[i])))
 		memPad := strings.Repeat(" ", max(0, maxMem-len(memStrs[i])))
-		display := fmt.Sprintf("%s %s%s  %s  %s%s %s %s%s  %s %s",
+		display := fmt.Sprintf("%s %s%s  %s%s  %s%s %s %s%s  %s %s",
 			cMauve+iSess+reset,
 			cMauve+r.sess.name+reset,
 			pad,
+			hostCell(r.sess.bridgeHost, cPeach),
 			icons,
 			cpuPad,
 			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
@@ -1055,8 +1129,9 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			cDim+shortPath+reset,
 		)
 		resPlain := cpuPad + cpuStrs[i] + " / " + memPad + memStrs[i]
-		plain := fmt.Sprintf("%s %s%s  %s  %s  %s %s",
-			iSess, r.sess.name, pad, stripANSI(icons), resPlain, iDir, shortPath,
+		plain := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
+			iSess, r.sess.name, pad, hostCell(r.sess.bridgeHost, ""),
+			stripANSI(icons), resPlain, iDir, shortPath,
 		)
 		items = append(items, listItem{
 			target:          r.sess.name,

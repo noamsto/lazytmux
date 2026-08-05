@@ -71,11 +71,14 @@ func TestCollectRemoteItems(t *testing.T) {
 	local := map[string]bool{"lab-mono": true}
 
 	items := collectRemoteItems(opts, local, probe)
-	if len(items) < 3 {
-		t.Fatalf("expected header + lab/other + dead bare, got %d: %+v", len(items), items)
+	if len(items) != 4 {
+		t.Fatalf("expected header + lab + lab's other + dead, got %d: %+v", len(items), items)
 	}
 	if !items[0].isRemoteHeader {
 		t.Fatalf("first row should be remote header")
+	}
+	if items[1].remoteHost != "lab" || items[1].remoteSess != "" {
+		t.Fatalf("host row should precede its sessions; got %+v", items[1])
 	}
 
 	var labels []string
@@ -86,10 +89,10 @@ func TestCollectRemoteItems(t *testing.T) {
 		labels = append(labels, it.plain)
 	}
 	joined := strings.Join(labels, " | ")
-	if !strings.Contains(joined, "lab/other") {
-		t.Errorf("missing lab/other in %q", joined)
+	if !strings.Contains(joined, remoteTreeMid+" other") {
+		t.Errorf("missing tree row for other in %q", joined)
 	}
-	if strings.Contains(joined, "lab/mono") {
+	if strings.Contains(joined, "mono") {
 		t.Errorf("bridged lab-mono should be suppressed; got %q", joined)
 	}
 	if !strings.Contains(joined, "dead") || !strings.Contains(joined, "unreachable") {
@@ -147,6 +150,24 @@ func TestClassifyProbeErr(t *testing.T) {
 	// Non-ExitError (ssh binary missing) is not a host that answered.
 	if got := classifyProbeErr(errors.New("exec: \"ssh\": not found"), false); !errors.Is(got, errRemoteUnreachable) {
 		t.Errorf("non-exit error => %v, want errRemoteUnreachable", got)
+	}
+}
+
+// A host whose sessions are all bridged keeps its row, so attaching the last
+// one can't make the section disappear.
+func TestCollectRemoteItemsAllBridged(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab"}
+	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
+
+	items := collectRemoteItems(opts, map[string]bool{"lab-mono": true}, probe)
+	if len(items) != 2 {
+		t.Fatalf("expected header + lab host row, got %d: %+v", len(items), items)
+	}
+	if items[1].remoteHost != "lab" || items[1].remoteSess != "" {
+		t.Fatalf("row 1 should be the bare lab host row: %+v", items[1])
+	}
+	if !strings.Contains(items[1].plain, "(all open)") {
+		t.Errorf("host row should note everything is open; got %q", items[1].plain)
 	}
 }
 

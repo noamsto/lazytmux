@@ -49,14 +49,15 @@ var claudeColors = map[string]map[string]string{
 }
 
 type sessionData struct {
-	name     string
-	path     string
-	activity int64
-	procs    []string // unique process names
-	panePIDs []int    // shell PIDs for resource collection
-	claude   claudeCounts
-	cpuPct   float64 // total CPU% across all descendant processes
-	memMB    float64 // total RSS in MiB across all descendant processes
+	name       string
+	path       string
+	activity   int64
+	procs      []string // unique process names
+	panePIDs   []int    // shell PIDs for resource collection
+	bridgeHost string   // @bridge_host — ssh host this session mirrors, "" when local
+	claude     claudeCounts
+	cpuPct     float64 // total CPU% across all descendant processes
+	memMB      float64 // total RSS in MiB across all descendant processes
 }
 
 type windowData struct {
@@ -117,26 +118,30 @@ func main() {
 
 func collectSessions() []sessionData {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{pane_current_command}\t#{pane_pid}").Output()
+		// @bridge_host sits mid-format on purpose: the trailing field must be one
+		// that is never empty (TrimSpace below would eat the last line's tab, and
+		// with it that line's whole pane).
+		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{@bridge_host}\t#{pane_current_command}\t#{pane_pid}").Output()
 	if err != nil {
 		return nil
 	}
 
 	type sessInfo struct {
-		path     string
-		activity int64
-		seen     map[string]bool
-		procs    []string
-		panePIDs []int
+		path       string
+		activity   int64
+		seen       map[string]bool
+		procs      []string
+		panePIDs   []int
+		bridgeHost string
 	}
 	m := make(map[string]*sessInfo)
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) < 5 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
 			continue
 		}
-		name, path, actStr, proc := parts[0], parts[1], parts[2], parts[3]
+		name, path, actStr, proc := parts[0], parts[1], parts[2], parts[4]
 		// Expand %h (tmux may store literal %h for home dir)
 		if home := os.Getenv("HOME"); home != "" {
 			path = strings.Replace(path, "%h", home, 1)
@@ -145,7 +150,7 @@ func collectSessions() []sessionData {
 
 		si, ok := m[name]
 		if !ok {
-			si = &sessInfo{path: path, activity: act, seen: make(map[string]bool)}
+			si = &sessInfo{path: path, activity: act, seen: make(map[string]bool), bridgeHost: parts[3]}
 			m[name] = si
 		}
 		if act > si.activity {
@@ -155,7 +160,7 @@ func collectSessions() []sessionData {
 			si.seen[proc] = true
 			si.procs = append(si.procs, proc)
 		}
-		if pid, err := strconv.Atoi(parts[4]); err == nil && pid > 0 {
+		if pid, err := strconv.Atoi(parts[5]); err == nil && pid > 0 {
 			si.panePIDs = append(si.panePIDs, pid)
 		}
 	}
@@ -163,11 +168,12 @@ func collectSessions() []sessionData {
 	sessions := make([]sessionData, 0, len(m))
 	for name, si := range m {
 		sessions = append(sessions, sessionData{
-			name:     name,
-			path:     si.path,
-			activity: si.activity,
-			procs:    si.procs,
-			panePIDs: si.panePIDs,
+			name:       name,
+			path:       si.path,
+			activity:   si.activity,
+			procs:      si.procs,
+			panePIDs:   si.panePIDs,
+			bridgeHost: si.bridgeHost,
 		})
 	}
 	return sessions

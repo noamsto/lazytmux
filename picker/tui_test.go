@@ -68,6 +68,77 @@ func TestWithFilterZoxideHeader(t *testing.T) {
 	}
 }
 
+// remoteFixture is a Remote section as collectRemoteItems lays it out: divider,
+// host row, that host's session rows, then an unselectable no-server host.
+func remoteFixture() []listItem {
+	return []listItem{
+		{target: "lazytmux", searchText: "lazytmux", session: "lazytmux"},
+		{display: "── Remote ──", isHeader: true, isRemoteHeader: true},
+		{isRemoteRow: true, target: "remote:lab", remoteHost: "lab", searchText: "lab", plain: "lab"},
+		{
+			isRemoteRow: true,
+			target:      "remote:lab:mono", remoteHost: "lab", remoteSess: "mono",
+			searchText: "lab/mono lab mono",
+			plain:      remoteTreeMid + " mono", plainEnd: remoteTreeEnd + " mono",
+			display: remoteTreeMid + " mono", displayEnd: remoteTreeEnd + " mono",
+		},
+		{
+			isRemoteRow: true,
+			target:      "remote:lab:other", remoteHost: "lab", remoteSess: "other",
+			searchText: "lab/other lab other",
+			plain:      remoteTreeMid + " other", plainEnd: remoteTreeEnd + " other",
+			display: remoteTreeMid + " other", displayEnd: remoteTreeEnd + " other",
+		},
+		{isRemoteRow: true, searchText: "dead", plain: "dead  (no tmux server)"},
+	}
+}
+
+// The claude/scratch modes filter local sessions; remote rows are exempt, so
+// neither toggle may take the Remote section away.
+func TestWithFilterModesKeepRemote(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		m    tuiModel
+	}{
+		{"claude only", tuiModel{allItems: remoteFixture(), claudeOnly: true}},
+		{"scratch only", tuiModel{allItems: remoteFixture(), scratchOnly: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out := c.m.withFilter().visible
+			remotes := 0
+			for _, it := range out {
+				if it.isRemoteRow {
+					remotes++
+				}
+			}
+			if remotes != 4 {
+				t.Errorf("got %d remote rows, want 4 (visible: %+v)", remotes, out)
+			}
+		})
+	}
+}
+
+// A query that only matches a session row still has to show the host it hangs
+// off, and the surviving last child takes the closing glyph.
+func TestWithFilterRemoteTree(t *testing.T) {
+	m := tuiModel{allItems: remoteFixture(), query: "other"}
+	out := m.withFilter().visible
+
+	var plains []string
+	for _, it := range out {
+		plains = append(plains, it.plain)
+	}
+	if len(out) != 3 || !out[0].isRemoteHeader {
+		t.Fatalf("want divider + host + match, got %+v", plains)
+	}
+	if out[1].remoteSess != "" || out[1].remoteHost != "lab" {
+		t.Errorf("host row missing above the match: %+v", plains)
+	}
+	if out[2].plain != remoteTreeEnd+" other" {
+		t.Errorf("last visible child should close the tree; got %q", out[2].plain)
+	}
+}
+
 func TestFuzzyScore(t *testing.T) {
 	if got := fuzzyScore("lazytmux", ""); got != 0 {
 		t.Errorf("empty pattern = %d, want 0", got)

@@ -120,6 +120,7 @@ func main() {
 		Ctl:            rwc{stdout, stdin},
 		SockPath:       *sock,
 		LocalSess:      *localSess,
+		RemoteHost:     *host,
 		RemoteSession:  *session,
 		RemoteWindow:   strconv.Itoa(*window),
 		BaseIndex:      *baseIndex,

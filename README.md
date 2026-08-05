@@ -183,8 +183,11 @@ window) over outbound SSH — no reverse socket, no nested status bar.
 programs.lazytmux.remote.hosts = [ "tp-g6" "lab" ];
 ```
 
-`prefix + s` then shows a **Remote** section. Enter runs `lztmux-remote-open`
-(or call it directly: `lztmux-remote-open <host> [<sess>]`). Live window
+`prefix + s` then shows a **Remote** section: one row per host, with its
+not-yet-open sessions listed under it as a tree. Enter runs `lztmux-remote-open`
+(or call it directly: `lztmux-remote-open <host> [<sess>]`) — on a host row it
+opens that host's most-recent session. A bridged session moves up into the
+session list, tagged with its host in the **Host** column. Live window
 add/close/rename sync through the control-mode daemon; structural keybinds
 inside a mirror window act on the remote.
 
