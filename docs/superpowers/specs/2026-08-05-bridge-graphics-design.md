@@ -162,8 +162,16 @@ because a frozen pane is worse than a missing image.
 
 ### D5 — coalesce stores per image id
 
-If a store for image id N arrives while a fetch for N is in flight, the newer replaces the
-queued one. This is safe **because of how aeye pans**: `transmitPreviewOnly`
+Where a store for image id N is followed by a newer store for N, only the newest is forwarded.
+
+**Mechanism, settled during planning:** with the proxy on the pane's pump goroutine (D4), fetches
+are serial per pane, so there is never a second store arriving "while a fetch is in flight" to
+compare against. The pump instead **batch-drains** every `FrameOutput` already queued behind the
+one it woke on and hands the proxy the whole burst, so a superseded store is visible in the same
+buffer as the store that supersedes it. Draining stops at the first non-output frame: reordering
+a seed or resize past output would break the frozen wire invariant.
+
+This is safe **because of how aeye pans**: `transmitPreviewOnly`
 (`aeye/gallery_zoom.go:269`) re-places under the same id with `a=T` and no delete, so every
 store is a full replacement and intermediate frames are pure waste. The link therefore sets the
 frame rate instead of the sender, with bounded staleness (the newest framing always wins).
@@ -230,7 +238,7 @@ drops and logs, which is what guards the raw-RGBA path if `AEYE_BRIDGED` is ever
 | Failure | Behaviour |
 |---|---|
 | Local terminal not kitty-class | G4: remote aeye picks `backendSymbols`, block art over the plain text path; the proxy never engages |
-| `tmux-claude-images` missing on remote | ctl verb errors → daemon `display-message` locally; never a silent no-op |
+| `tmux-claude-images` missing on remote | The remote command falls back to opening a short split carrying the error, which mirrors back into the window the human is looking at. **Amended 2026-08-05 (planning):** the original "`display-message` locally" is not reachable — the only client attached to the remote is the daemon's control client, which has no status line for a message to land on. Never a silent no-op either way |
 | Fetch fails (file gone, perms, link drop) | Drop the sequence, log, resume; placements render empty until aeye's next repaint |
 | Fetch exceeds the hold deadline | Drop and resume (D4) |
 | Image over the size cap | Drop + log |
