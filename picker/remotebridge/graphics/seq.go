@@ -99,3 +99,44 @@ func unwrapPassthrough(b []byte) ([]byte, int, bool) {
 	}
 	return nil, 0, false
 }
+
+// Get returns the value of a comma-separated control key ("t", "i", "a", …),
+// or "" when absent.
+func (q *Seq) Get(key string) string {
+	for _, kv := range bytes.Split(q.Keys, []byte{','}) {
+		i := bytes.IndexByte(kv, '=')
+		if i < 0 {
+			continue
+		}
+		if string(kv[:i]) == key {
+			return string(kv[i+1:])
+		}
+	}
+	return ""
+}
+
+// Encode renders the canonical bare form.
+func (q *Seq) Encode() []byte {
+	out := append([]byte(apcStart), q.Keys...)
+	if q.HasBody {
+		out = append(out, ';')
+		out = append(out, q.Payload...)
+	}
+	return append(out, st...)
+}
+
+// EncodeWrapped renders the bare form inside exactly one tmux passthrough,
+// whatever the input form was: the renderer pane always sits inside the local
+// tmux, which needs one wrapper to unwrap to the outer terminal.
+func (q *Seq) EncodeWrapped() []byte {
+	inner := q.Encode()
+	out := make([]byte, 0, len(passStart)+2*len(inner)+len(st))
+	out = append(out, passStart...)
+	for _, c := range inner {
+		if c == 0x1b {
+			out = append(out, 0x1b)
+		}
+		out = append(out, c)
+	}
+	return append(out, st...)
+}
