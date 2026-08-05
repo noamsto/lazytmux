@@ -2,14 +2,17 @@ package graphics
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 )
 
 // Localizer turns a path on the remote host into a path the local terminal can
-// read. Injected so the policy below is testable without ssh.
+// read. The context bounds the fetch: Filter holds the pane's byte stream while
+// this runs, so an unbounded call would freeze the pane (spec D4). Injected so
+// the policy below is testable without ssh.
 type Localizer interface {
-	Localize(remotePath string) (localPath string, err error)
+	Localize(ctx context.Context, remotePath string) (localPath string, err error)
 }
 
 // Rewrite applies the localisation policy to one sequence. The returned *Seq
@@ -19,15 +22,15 @@ type Localizer interface {
 // The governing rule (spec D7) is that a store whose payload could not be
 // localised is DROPPED, never forwarded: a stale local path renders the wrong
 // image, where a missing one renders blank and self-heals on the sender's next
-// repaint.
-func Rewrite(q *Seq, l Localizer) (out *Seq, drop bool, err error) {
+// repaint. A fetch that outruns ctx is just another such failure.
+func Rewrite(ctx context.Context, q *Seq, l Localizer) (out *Seq, drop bool, err error) {
 	switch q.Get("t") {
 	case "f", "t":
 		remote, derr := base64.StdEncoding.DecodeString(string(q.Payload))
 		if derr != nil {
 			return nil, true, fmt.Errorf("payload is not base64: %w", derr)
 		}
-		local, ferr := l.Localize(string(remote))
+		local, ferr := l.Localize(ctx, string(remote))
 		if ferr != nil {
 			return nil, true, fmt.Errorf("localise %s: %w", remote, ferr)
 		}

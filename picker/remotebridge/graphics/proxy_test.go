@@ -1,8 +1,10 @@
 package graphics
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProxyRewritesAndWrapsInOnePass(t *testing.T) {
@@ -52,5 +54,39 @@ func TestProxyCloseFlushesAHeldPartial(t *testing.T) {
 	}
 	if got := string(p.Close()); got != bareSeq[:cut] {
 		t.Fatalf("Close() = %q, want the held partial %q", got, bareSeq[:cut])
+	}
+}
+
+// blockingLocalizer never returns on its own — it exercises the D4 timeout
+// path directly by returning only once its context is cancelled.
+type blockingLocalizer struct{}
+
+func (blockingLocalizer) Localize(ctx context.Context, remote string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// A fetch that never returns on its own must not freeze the pane forever
+// (spec D4): Filter has to come back within its bound, with the store dropped
+// down the same path as any other unlocalisable one and the surrounding
+// literals still forwarded — the stream resumes, it doesn't just abort.
+func TestFilterDropsAFetchThatOutrunsItsDeadline(t *testing.T) {
+	var logged int
+	p := New(blockingLocalizer{}, func(string, ...any) { logged++ })
+	p.timeout = 20 * time.Millisecond
+
+	done := make(chan []byte, 1)
+	go func() { done <- p.Filter([]byte("x" + bareSeq + "y")) }()
+
+	select {
+	case got := <-done:
+		if string(got) != "xy" {
+			t.Fatalf("out = %q, want the literals only (store dropped)", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Filter did not return within a bounded time")
+	}
+	if logged == 0 {
+		t.Fatal("a timed-out fetch must be logged as a drop")
 	}
 }

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"reflect"
@@ -388,7 +389,7 @@ func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
 
 type stubLocalizer struct{ local string }
 
-func (s *stubLocalizer) Localize(string) (string, error) { return s.local, nil }
+func (s *stubLocalizer) Localize(context.Context, string) (string, error) { return s.local, nil }
 
 // readAllFrames reads frames off conn until it goes quiet for the deadline and
 // returns their concatenated payloads.

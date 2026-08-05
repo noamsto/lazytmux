@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,12 +15,12 @@ func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
 	var gotArgs []string
 	f := &SSHFetcher{
 		Host: "g6", CtlSock: "/run/x.sock", CacheDir: dir, MaxBytes: 1 << 20,
-		Run: func(args ...string) ([]byte, error) {
+		Run: func(ctx context.Context, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte("1700000000 5\nHELLO"), nil
 		},
 	}
-	local, err := f.Localize("/tmp/a.png")
+	local, err := f.Localize(context.Background(), "/tmp/a.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +37,33 @@ func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
 	}
 }
 
+// The caller's context has to reach Run unchanged: NewSSHFetcher's production
+// Run wraps exec.CommandContext, and only the exec itself dying on cancel (not
+// a goroutine-plus-select wrapper around it) keeps a timed-out ssh from
+// running forever in the background (spec D4).
+func TestFetcherThreadsTheCallersContextToRun(t *testing.T) {
+	dir := t.TempDir()
+	type key struct{}
+	ctx := context.WithValue(context.Background(), key{}, "marker")
+	var gotCtx context.Context
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
+		gotCtx = ctx
+		return []byte("1700000000 5\nHELLO"), nil
+	}}
+	if _, err := f.Localize(ctx, "/tmp/a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if gotCtx.Value(key{}) != "marker" {
+		t.Fatal("Localize did not pass the caller's context through to Run")
+	}
+}
+
 func TestFetcherSecondCallIsAHitAndTransfersNothing(t *testing.T) {
 	dir := t.TempDir()
 	calls := 0
 	f := &SSHFetcher{
 		Host: "g6", CacheDir: dir, MaxBytes: 1 << 20,
-		Run: func(args ...string) ([]byte, error) {
+		Run: func(ctx context.Context, args ...string) ([]byte, error) {
 			calls++
 			if calls == 1 {
 				return []byte("1700000000 5\nHELLO"), nil
@@ -51,11 +73,11 @@ func TestFetcherSecondCallIsAHitAndTransfersNothing(t *testing.T) {
 			return []byte("1700000000 5\n"), nil
 		},
 	}
-	first, err := f.Localize("/tmp/a.png")
+	first, err := f.Localize(context.Background(), "/tmp/a.png")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := f.Localize("/tmp/a.png")
+	second, err := f.Localize(context.Background(), "/tmp/a.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +91,7 @@ func TestFetcherTreatsAChangedMtimeAsANewFile(t *testing.T) {
 	calls := 0
 	f := &SSHFetcher{
 		Host: "g6", CacheDir: dir, MaxBytes: 1 << 20,
-		Run: func(args ...string) ([]byte, error) {
+		Run: func(ctx context.Context, args ...string) ([]byte, error) {
 			calls++
 			if calls == 1 {
 				return []byte("1700000000 1\nA"), nil
@@ -77,8 +99,8 @@ func TestFetcherTreatsAChangedMtimeAsANewFile(t *testing.T) {
 			return []byte("1700000009 1\nB"), nil
 		},
 	}
-	first, _ := f.Localize("/tmp/scratch.raw")
-	second, _ := f.Localize("/tmp/scratch.raw")
+	first, _ := f.Localize(context.Background(), "/tmp/scratch.raw")
+	second, _ := f.Localize(context.Background(), "/tmp/scratch.raw")
 	if first == second {
 		t.Fatal("a rewritten scratch frame must not reuse the old cache entry")
 	}
@@ -92,16 +114,16 @@ func TestFetcherRejectsOversizeAndBadReplies(t *testing.T) {
 	dir := t.TempDir()
 	// Over the cap the remote script exits 3 without cat-ing, which surfaces as
 	// a non-zero ssh exit.
-	over := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 4, Run: func(...string) ([]byte, error) {
+	over := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 4, Run: func(context.Context, ...string) ([]byte, error) {
 		return nil, errors.New("exit status 3")
 	}}
-	if _, err := over.Localize("/tmp/big.raw"); err == nil {
+	if _, err := over.Localize(context.Background(), "/tmp/big.raw"); err == nil {
 		t.Fatal("oversize fetch must error so the store is dropped")
 	}
-	bad := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(...string) ([]byte, error) {
+	bad := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(context.Context, ...string) ([]byte, error) {
 		return []byte("garbage"), nil
 	}}
-	if _, err := bad.Localize("/tmp/a.png"); err == nil {
+	if _, err := bad.Localize(context.Background(), "/tmp/a.png"); err == nil {
 		t.Fatal("unparsable reply must error")
 	}
 }
@@ -109,19 +131,19 @@ func TestFetcherRejectsOversizeAndBadReplies(t *testing.T) {
 func TestFetcherRecoversWhenTheCachedCopyIsGone(t *testing.T) {
 	dir := t.TempDir()
 	calls := 0
-	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(...string) ([]byte, error) {
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(context.Context, ...string) ([]byte, error) {
 		calls++
 		if calls == 2 {
 			return []byte("1700000000 1\n"), nil // header only: "you already have it"
 		}
 		return []byte("1700000000 1\nA"), nil
 	}}
-	local, _ := f.Localize("/tmp/a.png")
+	local, _ := f.Localize(context.Background(), "/tmp/a.png")
 	os.Remove(local) // pruned, or the daemon restarted
-	if _, err := f.Localize("/tmp/a.png"); err == nil {
+	if _, err := f.Localize(context.Background(), "/tmp/a.png"); err == nil {
 		t.Fatal("a lost cache entry must error once")
 	}
-	if _, err := f.Localize("/tmp/a.png"); err != nil {
+	if _, err := f.Localize(context.Background(), "/tmp/a.png"); err != nil {
 		t.Fatalf("and then recover by refetching, got %v", err)
 	}
 }

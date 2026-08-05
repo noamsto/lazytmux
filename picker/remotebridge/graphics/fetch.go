@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -42,8 +43,10 @@ type SSHFetcher struct {
 	CtlSock  string
 	CacheDir string
 	MaxBytes int64
-	// Run executes ssh; injected so tests never touch the network.
-	Run func(args ...string) ([]byte, error)
+	// Run executes ssh; injected so tests never touch the network. It takes the
+	// context so production can use exec.CommandContext — cancellation has to
+	// kill the ssh process, not merely stop waiting on it.
+	Run func(ctx context.Context, args ...string) ([]byte, error)
 
 	mu      sync.Mutex
 	keys    map[string]string // remote path -> last seen "<mtime> <size>"
@@ -54,13 +57,15 @@ type SSHFetcher struct {
 // NewSSHFetcher builds the production fetcher.
 func NewSSHFetcher(host, ctlSock, cacheDir string, maxBytes int64) *SSHFetcher {
 	f := &SSHFetcher{Host: host, CtlSock: ctlSock, CacheDir: cacheDir, MaxBytes: maxBytes}
-	f.Run = func(args ...string) ([]byte, error) { return exec.Command("ssh", args...).Output() }
+	f.Run = func(ctx context.Context, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, "ssh", args...).Output()
+	}
 	_ = os.MkdirAll(cacheDir, 0o700)
 	f.prune()
 	return f
 }
 
-func (f *SSHFetcher) Localize(remote string) (string, error) {
+func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.keys == nil {
@@ -77,7 +82,7 @@ func (f *SSHFetcher) Localize(remote string) (string, error) {
 	args = append(args, "-T", f.Host, "--", "sh", "-c", shQuote(remoteFetch), "_",
 		shQuote(remote), shQuote(f.keys[remote]), strconv.FormatInt(f.MaxBytes, 10))
 
-	out, err := f.Run(args...)
+	out, err := f.Run(ctx, args...)
 	if err != nil {
 		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}

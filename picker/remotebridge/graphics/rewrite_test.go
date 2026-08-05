@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"testing"
@@ -14,7 +15,7 @@ type fakeLocalizer struct {
 	asked []string
 }
 
-func (f *fakeLocalizer) Localize(remote string) (string, error) {
+func (f *fakeLocalizer) Localize(ctx context.Context, remote string) (string, error) {
 	f.asked = append(f.asked, remote)
 	return f.local, f.err
 }
@@ -30,7 +31,7 @@ func seqOf(t *testing.T, raw string) *Seq {
 
 func TestRewriteLocalisesFilePayload(t *testing.T) {
 	f := &fakeLocalizer{local: "/local/cache/abc.bin"}
-	q, drop, err := Rewrite(seqOf(t, bareSeq), f)
+	q, drop, err := Rewrite(context.Background(), seqOf(t, bareSeq), f)
 	if err != nil || drop {
 		t.Fatalf("drop=%v err=%v", drop, err)
 	}
@@ -52,7 +53,7 @@ func TestRewriteLocalisesFilePayload(t *testing.T) {
 // exists to forbid.
 func TestRewriteLocalisesTransmitAndDelete(t *testing.T) {
 	f := &fakeLocalizer{local: "/local/cache/abc.bin"}
-	q, drop, err := Rewrite(seqOf(t, "\x1b_Gi=1,a=T,t=t;L3RtcC94LnBuZw==\x1b\\"), f)
+	q, drop, err := Rewrite(context.Background(), seqOf(t, "\x1b_Gi=1,a=T,t=t;L3RtcC94LnBuZw==\x1b\\"), f)
 	if err != nil || drop {
 		t.Fatalf("drop=%v err=%v", drop, err)
 	}
@@ -73,7 +74,7 @@ func TestRewriteDowngradesTransmitAndDeleteToTransmit(t *testing.T) {
 	f := &fakeLocalizer{local: "/local/cache/abc.bin"}
 	in := seqOf(t, "\x1b_Gi=1,a=T,t=t;L3RtcC94LnBuZw==\x1b\\")
 	inKeys := append([]byte(nil), in.Keys...)
-	q, drop, err := Rewrite(in, f)
+	q, drop, err := Rewrite(context.Background(), in, f)
 	if err != nil || drop {
 		t.Fatalf("drop=%v err=%v", drop, err)
 	}
@@ -95,7 +96,7 @@ func TestRewritePassesThroughInlineAndDelete(t *testing.T) {
 		"\x1b_Ga=d,d=I,i=31,q=2\x1b\\",
 	} {
 		f := &fakeLocalizer{}
-		q, drop, err := Rewrite(seqOf(t, raw), f)
+		q, drop, err := Rewrite(context.Background(), seqOf(t, raw), f)
 		if err != nil || drop {
 			t.Fatalf("%q: drop=%v err=%v", raw, drop, err)
 		}
@@ -109,14 +110,14 @@ func TestRewritePassesThroughInlineAndDelete(t *testing.T) {
 }
 
 func TestRewriteDropsSharedMemoryAndFetchFailures(t *testing.T) {
-	if _, drop, _ := Rewrite(seqOf(t, "\x1b_Gi=1,a=T,t=s;c2htMQ==\x1b\\"), &fakeLocalizer{}); !drop {
+	if _, drop, _ := Rewrite(context.Background(), seqOf(t, "\x1b_Gi=1,a=T,t=s;c2htMQ==\x1b\\"), &fakeLocalizer{}); !drop {
 		t.Fatal("t=s must be dropped: shared memory cannot cross hosts")
 	}
-	_, drop, err := Rewrite(seqOf(t, bareSeq), &fakeLocalizer{err: errFake})
+	_, drop, err := Rewrite(context.Background(), seqOf(t, bareSeq), &fakeLocalizer{err: errFake})
 	if !drop || err == nil {
 		t.Fatal("a failed fetch must drop the store, never emit a stale local path")
 	}
-	if _, drop, _ := Rewrite(seqOf(t, "\x1b_Gi=1,a=T,t=f;!!!not-base64!!!\x1b\\"), &fakeLocalizer{}); !drop {
+	if _, drop, _ := Rewrite(context.Background(), seqOf(t, "\x1b_Gi=1,a=T,t=f;!!!not-base64!!!\x1b\\"), &fakeLocalizer{}); !drop {
 		t.Fatal("undecodable payload must be dropped")
 	}
 }
