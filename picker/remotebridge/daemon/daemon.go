@@ -27,6 +27,7 @@ type Config struct {
 	Ctl            io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
 	SockPath       string                     // unix socket renderers dial
 	LocalSess      string                     // "<host>-<sess>"
+	RemoteHost     string                     // ssh host being mirrored (picker's Host column)
 	RemoteSession  string                     // remote session name (may contain spaces)
 	RemoteWindow   string                     // initially-selected remote window INDEX (not a mirror filter)
 	BaseIndex      int                        // local base-index for daemon-created windows (default 1)
@@ -260,6 +261,9 @@ func Run(cfg Config) error {
 	// rather than the launcher so the offline --test-local harness gets it too.
 	if cfg.LocalSess != "" {
 		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_sock", cfg.SockPath)
+		// @bridge_host is what the session picker's Host column reads; the local
+		// session name can't be split back into host+session (either may hold a "-").
+		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_host", cfg.RemoteHost)
 	}
 
 	reg := newRegistry(cfg.BaseIndex)

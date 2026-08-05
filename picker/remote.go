@@ -37,6 +37,13 @@ const (
 	remoteProbeUnreachable
 )
 
+// Tree prefixes for a host's session rows; markRemoteTreeEnds decides which
+// prefix each row ends up with.
+const (
+	remoteTreeMid = "├─"
+	remoteTreeEnd = "╰─"
+)
+
 // parseRemoteHosts splits a whitespace-separated @remote_bridge_hosts value
 // into ssh Host aliases. Empty tokens are dropped.
 func parseRemoteHosts(raw string) []string {
@@ -193,57 +200,58 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		isRemoteHeader: true,
 	})
 
-	anyRow := false
 	for _, r := range results {
+		// The host row is always present: it opens the remote's most-recent
+		// session, and keeps the section alive once every session is bridged.
+		note := ""
+		selectable := true
 		switch r.state {
 		case remoteProbeUnreachable:
-			// Bare host: open defaults to the remote's most-recent session — the
-			// host may be back up by the time it is picked.
-			display := fmt.Sprintf("%s %s  %s", cPeach+iSess+reset, r.host, cDim+"(unreachable — open default)"+reset)
-			plain := fmt.Sprintf("%s %s  (unreachable — open default)", iSess, r.host)
-			items = append(items, listItem{
-				target:     "remote:" + r.host,
-				remoteHost: r.host,
-				display:    display,
-				plain:      plain,
-				searchText: r.host,
-			})
-			anyRow = true
-			continue
+			// Still selectable: the host may be back up by the time it is picked.
+			note = "(unreachable — open default)"
 		case remoteProbeNoServer:
-			// Reachable, nothing to bridge. Left unselectable (empty target and
-			// remoteHost) because opening it would resolve an empty session name.
-			display := fmt.Sprintf("%s%s %s  (no tmux server)%s", cDim, iSess, r.host, reset)
-			plain := fmt.Sprintf("%s %s  (no tmux server)", iSess, r.host)
-			items = append(items, listItem{
-				display:    display,
-				plain:      plain,
-				searchText: r.host,
-			})
-			anyRow = true
-			continue
+			// Unselectable because opening it would resolve an empty session name.
+			note = "(no tmux server)"
+			selectable = false
+		default:
+			if len(r.sess) == 0 {
+				note = "(all open)"
+			}
 		}
-		if len(r.sess) == 0 {
-			// Every session already bridged locally — omit.
-			continue
+		icon := cPeach + iSess + reset
+		if !selectable {
+			icon = cDim + iSess + reset
 		}
+		display := fmt.Sprintf("%s %s", icon, r.host)
+		plain := fmt.Sprintf("%s %s", iSess, r.host)
+		if note != "" {
+			display += "  " + cDim + note + reset
+			plain += "  " + note
+		}
+		row := listItem{
+			isRemoteRow: true,
+			display:     display,
+			plain:       plain,
+			searchText:  r.host,
+		}
+		if selectable {
+			row.target = "remote:" + r.host
+			row.remoteHost = r.host
+		}
+		items = append(items, row)
 		for _, sess := range r.sess {
-			label := r.host + "/" + sess
-			display := fmt.Sprintf("%s %s", cPeach+iSess+reset, label)
-			plain := fmt.Sprintf("%s %s", iSess, label)
 			items = append(items, listItem{
-				target:     "remote:" + r.host + ":" + sess,
-				remoteHost: r.host,
-				remoteSess: sess,
-				display:    display,
-				plain:      plain,
-				searchText: label + " " + r.host + " " + sess,
+				isRemoteRow: true,
+				target:      "remote:" + r.host + ":" + sess,
+				remoteHost:  r.host,
+				remoteSess:  sess,
+				display:     cDim + remoteTreeMid + reset + " " + sess,
+				displayEnd:  cDim + remoteTreeEnd + reset + " " + sess,
+				plain:       remoteTreeMid + " " + sess,
+				plainEnd:    remoteTreeEnd + " " + sess,
+				searchText:  r.host + "/" + sess + " " + r.host + " " + sess,
 			})
-			anyRow = true
 		}
-	}
-	if !anyRow {
-		return nil
 	}
 	return items
 }
