@@ -149,6 +149,7 @@
     inherit prdash;
     extraProcessIcons = cfg.processIcons;
     zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
+    pickerListRatio = cfg.picker.listRatio;
     remoteBridgeHosts = lib.concatStringsSep " " cfg.remote.hosts;
     inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
@@ -722,6 +723,23 @@ in {
         Set to [] to opt out of diagram rendering (the hook then no-ops
         silently), or drop an entry if you install it elsewhere.
       '';
+    };
+
+    picker = {
+      listRatio = lib.mkOption {
+        type = lib.types.ints.between 20 80;
+        default = 50;
+        example = 30;
+        description = ''
+          Percentage of the picker body the list gets; the pane-content
+          preview takes the rest. Lower means a taller preview — 30 gives
+          the preview about two thirds.
+
+          Applies to both `prefix + s` and `prefix + w` (the older
+          `sessionPicker.*` options are session-picker-only). Clamped to
+          20-80 by the picker as well, so neither pane can collapse.
+        '';
+      };
     };
 
     sessionPicker = {

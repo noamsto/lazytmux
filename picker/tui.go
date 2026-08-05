@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,6 +96,10 @@ func (m tuiModel) thmColorHex(tmuxOpt, darkFallback, lightFallback string) strin
 
 type tickMsg struct{}
 
+// previewTickMsg drives the preview's own reload clock, separate from the 1s
+// data tick.
+type previewTickMsg struct{}
+
 type refreshMsg struct {
 	items []listItem
 }
@@ -148,7 +153,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 // --- Bubbletea interface ---
 
 func (m tuiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(), m.loadPreviewCmd()}
+	cmds := []tea.Cmd{tickCmd(), previewTickCmd(), m.loadPreviewCmd()}
 	if !m.windowMode {
 		// First paint skips the ps -A fork; kick a full refresh right away so
 		// CPU/Mem replace the placeholder without waiting for the 1s tick.
@@ -186,13 +191,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(tickCmd(), m.refreshDataCmd())
 
+	// This is the only periodic preview load: the data handlers below deliberately
+	// don't, because a list rebuild moving what sits under the cursor is picked up
+	// here within one interval.
+	case previewTickMsg:
+		return m, tea.Batch(previewTickCmd(), m.loadPreviewCmd())
+
 	case refreshMsg:
 		m.sessionItems = msg.items
 		m = m.recombine().withFilter()
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
 		}
-		return m, m.loadPreviewCmd()
+		return m, nil
 
 	case zoxideMsg:
 		m.zoxideItems = msg.items
@@ -200,12 +211,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
 		}
-		return m, m.loadPreviewCmd()
+		return m, nil
 
 	case remoteMsg:
 		m.remoteItems = msg.items
 		m = m.recombine().withFilter()
-		return m, m.loadPreviewCmd()
+		return m, nil
 
 	case previewMsg:
 		if msg.target == m.currentTarget() {
@@ -525,13 +536,33 @@ func (m tuiModel) bodyHeight() int {
 	return h
 }
 
+// The bounds keep both panes usable whatever the option says: a 2-row list or a
+// 2-row preview is worse than no split at all.
+const (
+	listRatioDefault = 50
+	listRatioMin     = 20
+	listRatioMax     = 80
+)
+
+// listRatio is the percentage of the body the list gets, from
+// @picker_list_ratio. Preview takes the rest, so a lower number is a taller
+// preview.
+func (m tuiModel) listRatio() int {
+	raw := envOrMap("PICKER_LIST_RATIO", m.tmuxOpts, "@picker_list_ratio", "")
+	r, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return listRatioDefault
+	}
+	return min(max(r, listRatioMin), listRatioMax)
+}
+
 func (m tuiModel) listHeight() int {
 	bh := m.bodyHeight()
 	if !m.showPreview {
 		return bh
 	}
-	// List gets the top ~50%, preview the bottom (minus 1 for the separator).
-	return bh * 50 / 100
+	// Preview gets the rest of the body, minus 1 for the separator.
+	return bh * m.listRatio() / 100
 }
 
 func (m tuiModel) innerWidth() int {
@@ -875,6 +906,18 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// previewInterval is the preview's reload clock. Fast enough that a build or a
+// Claude turn reads as moving; the fork it costs is skipped entirely when the
+// preview is hidden, because loadPreviewCmd returns nil then.
+const previewInterval = 400 * time.Millisecond
+
+// The clock runs for the whole session rather than being started and stopped
+// with the preview: restarting it on every ^/ would leave one live loop per
+// toggle, all firing.
+func previewTickCmd() tea.Cmd {
+	return tea.Tick(previewInterval, func(time.Time) tea.Msg { return previewTickMsg{} })
+}
+
 func (m tuiModel) refreshDataCmd() tea.Cmd {
 	wm := m.windowMode
 	opts := m.tmuxOpts
@@ -928,9 +971,16 @@ func (m tuiModel) recombine() tuiModel {
 }
 
 func (m tuiModel) loadPreviewCmd() tea.Cmd {
-	item, ok := m.currentItem()
-	if !ok || item.target == "" || !m.showPreview {
+	if !m.showPreview {
 		return nil
+	}
+	item, ok := m.currentItem()
+	if !ok || item.target == "" {
+		// A header row or a query that matched nothing. Emitting an empty
+		// preview clears the last target's content instead of leaving it on
+		// screen next to a selection it doesn't belong to; the handler's
+		// target gate accepts it because currentTarget() is "" here too.
+		return func() tea.Msg { return previewMsg{target: "", scrollTop: true} }
 	}
 	t := item.target
 	if cp := item.createPath; cp != "" {
