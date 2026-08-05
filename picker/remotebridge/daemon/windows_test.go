@@ -81,16 +81,22 @@ func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
 }
 
 func TestSanitizeWindowName(t *testing.T) {
-	cases := map[string]string{
-		"shell":     "shell",
-		"my window": "my window", // spaces preserved
-		"a|b":       "ab",        // FMT delimiter stripped
-		"a\nb\r":    "ab",        // newlines stripped
-		"tab\tend":  "tabend",    // control char stripped
+	cases := []struct {
+		in, want string
+	}{
+		{"shell", "shell"},
+		{"my window", "my window"}, // spaces preserved
+		{"a|b", "ab"},              // FMT delimiter stripped
+		{"a\nb\r", "ab"},           // newlines stripped
+		{"tab\tend", "tabend"},     // control char stripped
+		// Observed remote name: style sequences stripped, bare # escaped.
+		{"[nix-amd-ai 🧠 #[fg=#94e2d5]󰪣#[fg=default] 󰘭 #46]", "[nix-amd-ai 🧠 󰪣 󰘭 ##46]"},
+		{"PR #46", "PR ##46"}, // bare # with no style sequence
+		{"#[fg=red]PR #46#[fg=default]", "PR ##46"}, // styles + bare #
 	}
-	for in, want := range cases {
-		if got := sanitizeWindowName(in); got != want {
-			t.Errorf("sanitizeWindowName(%q) = %q, want %q", in, got, want)
+	for _, tc := range cases {
+		if got := sanitizeWindowName(tc.in); got != tc.want {
+			t.Errorf("sanitizeWindowName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

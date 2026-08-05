@@ -151,13 +151,31 @@ func localWinForRemoteIndex(wins []remoteWindow, reg *registry, remoteIdx string
 	return "", false
 }
 
-// sanitizeWindowName strips characters that would break the reflow FMT
-// delimiter ('|') or a tmux command line (newlines/control chars) from a
-// remote-derived window name before it is written to @window_bridge_name.
+// sanitizeWindowName cleans a remote-derived window name before it is written
+// to @window_bridge_name: strip tmux #[...] style sequences, escape surviving
+// '#' as '##', and drop '|' / newlines / control chars that would break the
+// reflow FMT delimiter or a tmux command line. Style strip must precede '#'
+// escape — otherwise '#[fg=red]' becomes '##[fg=red]' and no longer matches.
 func sanitizeWindowName(s string) string {
+	var stripped strings.Builder
+	for i := 0; i < len(s); {
+		if i+1 < len(s) && s[i] == '#' && s[i+1] == '[' {
+			j := strings.IndexByte(s[i:], ']')
+			if j >= 0 {
+				i += j + 1
+				continue
+			}
+		}
+		stripped.WriteByte(s[i])
+		i++
+	}
 	var b strings.Builder
-	for _, r := range s {
+	for _, r := range stripped.String() {
 		if r == '|' || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			continue
+		}
+		if r == '#' {
+			b.WriteString("##")
 			continue
 		}
 		b.WriteRune(r)
