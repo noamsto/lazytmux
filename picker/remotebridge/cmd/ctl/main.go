@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 
@@ -27,10 +28,16 @@ import (
 const (
 	dialTimeout    = 250 * time.Millisecond
 	overallTimeout = 2 * time.Second
+	errorPrefix    = "lztmux-remote-bridge-ctl: "
 )
+
+var runTmux = func(args ...string) error {
+	return exec.Command("tmux", args...).Run()
+}
 
 func main() {
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "bridge daemon unix socket")
+	displayError := flag.String("display-error", "", "tmux client to show request failures in")
 	flag.Parse()
 
 	if *sock == "" {
@@ -49,8 +56,15 @@ func main() {
 	}
 
 	if err := run(*sock, args); err != nil {
+		if *displayError != "" && showError(*displayError, err) == nil {
+			return
+		}
 		fail(err.Error())
 	}
+}
+
+func showError(client string, err error) error {
+	return runTmux("display-message", "-d", "5000", "-t", client, errorPrefix+err.Error())
 }
 
 func run(sock string, args []string) error {
@@ -88,6 +102,6 @@ func run(sock string, args []string) error {
 }
 
 func fail(msg string) {
-	fmt.Fprintf(os.Stderr, "lztmux-remote-bridge-ctl: %s\n", msg)
+	fmt.Fprintln(os.Stderr, errorPrefix+msg)
 	os.Exit(1)
 }

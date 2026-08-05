@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats @test blocks run in subshells; export is intentional
 # Offline M2.1 daemon integration: mirror a local "remote" tmux window into a
 # local "host" tmux window via the daemon's --test-local seam (two separate
 # tmux -L servers, no ssh). DAEMON / RENDERER are prebuilt absolute store
@@ -1044,7 +1045,7 @@ remote_pane_of() {
 	[ "$dst_panes" -eq 2 ]
 }
 
-@test "ctl carousel runs the toggle on the REMOTE pane with TMUX_PANE and AEYE_BRIDGED" {
+@test "ctl carousel targets its REMOTE source and a second toggle closes the viewer" {
 	# Must be exported BEFORE the first $SRC command: the "remote" tmux server
 	# inherits this environment when it starts.
 	stub="$BATS_TEST_TMPDIR/bin"
@@ -1054,7 +1055,15 @@ remote_pane_of() {
 	# assertion below fails with an empty capture rather than a wrong one.
 	cat >"$stub/tmux-claude-images" <<-EOF
 		#!/bin/sh
-		printf '%s %s\n' "\$TMUX_PANE" "\$AEYE_BRIDGED" >"$BATS_TEST_TMPDIR/toggled"
+		source="\$TMUX_PANE"
+		printf '%s %s\n' "\$source" "\$AEYE_BRIDGED" >>"$BATS_TEST_TMPDIR/toggled"
+		viewer="\$(tmux list-panes -a -F '#{pane_id} #{@claude_img_src}' 2>>"$BATS_TEST_TMPDIR/stub.err" | awk -v source="\$source" '\$2 == source { print \$1; exit }')"
+		if [ -n "\$viewer" ]; then
+			tmux kill-pane -t "\$viewer" 2>>"$BATS_TEST_TMPDIR/stub.err"
+		else
+			viewer="\$(tmux split-window -d -P -F '#{pane_id}' -t "\$source" 'sleep 60' 2>>"$BATS_TEST_TMPDIR/stub.err")"
+			tmux set-option -p -t "\$viewer" @claude_img_src "\$source" 2>>"$BATS_TEST_TMPDIR/stub.err"
+		fi
 	EOF
 	chmod +x "$stub/tmux-claude-images"
 	export PATH="$stub:$PATH"
@@ -1065,12 +1074,48 @@ remote_pane_of() {
 
 	pane="$(remote_pane_of 0)"
 	[ -n "$pane" ]
+	# `%0` is a normal first remote pane id, not a format fallback: the bridge
+	# stamped it on this local pane and it is a member of the remote pane map.
+	[[ $pane == %* ]]
+	$SRC list-panes -t rem -F '#{pane_id}' | grep -Fx "$pane"
 
 	run "$CTL" --sock "$sock" carousel "$pane"
 	[ "$status" -eq 0 ]
 
 	for _ in $(seq 1 60); do
-		[ -f "$BATS_TEST_TMPDIR/toggled" ] && break
+		remote_panes="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+		viewer="$($SRC list-panes -t rem -F '#{pane_id} #{@claude_img_src}' | awk -v source="$pane" '$2 == source { print $1; exit }')"
+		[ "$remote_panes" -eq 2 ] && [ -n "$viewer" ] && break
+		sleep 0.15
+	done
+	if [ "$remote_panes" -ne 2 ]; then
+		echo "carousel stub output: $(cat "$BATS_TEST_TMPDIR/toggled" 2>/dev/null || true)" >&3
+		cat "$BATS_TEST_TMPDIR/stub.err" >&3 2>/dev/null || true
+		false
+	fi
+	[ -n "$viewer" ]
+
+	# This is the remote pane the local renderer for the viewer carries. Sending
+	# the second request with it models prefix+I while the viewer is active.
+	for _ in $(seq 1 60); do
+		viewer_local="$($DST list-panes -t host-sess:1 -F '#{@bridge_pane}' | grep -Fx "$viewer" || true)"
+		[ -n "$viewer_local" ] && break
+		sleep 0.15
+	done
+	[ -n "$viewer_local" ]
+	# The renderer option is written before the ctl state's asynchronous layout
+	# reconcile updates its pane map, so wait for that map rather than treating a
+	# just-created viewer as immediately commandable.
+	for _ in $(seq 1 60); do
+		run "$CTL" --sock "$sock" carousel "$viewer"
+		[ "$status" -eq 0 ] && break
+		sleep 0.15
+	done
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		remote_panes="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+		[ "$remote_panes" -eq 1 ] && break
 		sleep 0.15
 	done
 	got="$(cat "$BATS_TEST_TMPDIR/toggled" 2>/dev/null || true)"
@@ -1078,14 +1123,60 @@ remote_pane_of() {
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
-	# The verb reached the REMOTE pane, carrying the exact pairing the viewer's
-	# network-frame-policy switch depends on. Reported rather than bare-asserted:
-	# an empty capture (stub never ran) and a wrong one (env not forwarded) fail
-	# identically otherwise, and they have completely different causes.
-	if [ "$got" != "$pane 1" ]; then
-		echo "stub captured '$got', want '$pane 1'" >&2
+	# Both invocations target the source pane: the first opens the viewer and the
+	# second closes that same viewer rather than opening a nested carousel.
+	if [ "$got" != "$pane 1
+$pane 1" ]; then
+		echo "stub captured '$got', want two source-pane bridged toggles for '$pane'" >&2
 		false
 	fi
+	[ "$remote_panes" -eq 1 ]
+}
+
+@test "q in a mirrored carousel viewer reaches the REMOTE process and dismisses it" {
+	stub="$BATS_TEST_TMPDIR/bin"
+	mkdir -p "$stub"
+	cat >"$stub/tmux-claude-images" <<-EOF
+		#!/bin/sh
+		viewer="\$(tmux split-window -d -P -F '#{pane_id}' -t "\$TMUX_PANE" "/bin/sh -c 'head -n 1 >$BATS_TEST_TMPDIR/viewer-input'")"
+		tmux set-option -p -t "\$viewer" @claude_img_src "\$TMUX_PANE"
+	EOF
+	chmod +x "$stub/tmux-claude-images"
+	export PATH="$stub:$PATH"
+
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 cq
+	source="$(remote_pane_of 0)"
+	run "$CTL" --sock "$sock" carousel "$source"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		viewer="$($SRC list-panes -t rem -F '#{pane_id} #{@claude_img_src}' | awk -v source="$source" '$2 == source { print $1; exit }')"
+		local_viewer="$($DST list-panes -t host-sess:1 -F '#{pane_id} #{@bridge_pane}' | awk -v viewer="$viewer" '$2 == viewer { print $1; exit }')"
+		[ -n "$viewer" ] && [ -n "$local_viewer" ] && break
+		sleep 0.15
+	done
+	[ -n "$viewer" ]
+	[ -n "$local_viewer" ]
+
+	for _ in $(seq 1 60); do
+		local_viewer="$($DST list-panes -t host-sess:1 -F '#{pane_id} #{@bridge_pane}' | awk -v viewer="$viewer" '$2 == viewer { print $1; exit }')"
+		if [ -n "$local_viewer" ]; then
+			run $DST send-keys -t "$local_viewer" q Enter
+		fi
+		remote_panes="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
+		local_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+		[ -f "$BATS_TEST_TMPDIR/viewer-input" ] && [ "$remote_panes" -eq 1 ] && [ "$local_panes" -eq 1 ] && break
+		sleep 0.15
+	done
+	input="$(tr -d '\n' <"$BATS_TEST_TMPDIR/viewer-input" 2>/dev/null || true)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	[ "$input" = q ]
+	[ "$remote_panes" -eq 1 ]
+	[ "$local_panes" -eq 1 ]
 }
 
 # The queue-safety guarantee: a gated keypress against a dead daemon must fail

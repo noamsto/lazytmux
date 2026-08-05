@@ -630,6 +630,7 @@
               CONF = tmuxConfig.tmuxConf;
             } ''
               grep -qE 'bind I if-shell -F .*@bridge_win' "$CONF"
+              grep -qE 'bind I if-shell -F .*--display-error.*client_name' "$CONF"
               touch $out
             '';
         };

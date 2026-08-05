@@ -29,7 +29,7 @@ const (
 // point a new ctl at an already-running old daemon. Bump this whenever the verb
 // table's wire meaning changes, so the mismatch is a message rather than a
 // silently-ignored gesture.
-const CtlProtocolVersion = "1"
+const CtlProtocolVersion = "2"
 
 // EncodeArgv packs argv as NUL-separated fields. NUL-separated rather than
 // space-joined so a window name containing spaces or quotes survives without a

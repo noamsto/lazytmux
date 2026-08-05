@@ -197,12 +197,29 @@ var verbs = map[string]verb{
 	// control client, which has no status line for a message to land on, while a
 	// split mirrors back into the window the human is looking at.
 	"carousel": {layout: true, moves: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
-		return []string{fmt.Sprintf(
-			"run-shell -b -t %s 'command -v tmux-claude-images >/dev/null 2>&1 && "+
-				"exec env TMUX_PANE=%s AEYE_BRIDGED=1 tmux-claude-images; "+
-				`tmux split-window -t %s -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"'`,
-			pane, pane, pane)}, nil
+		// show-options (not display-message -F "#{@…}"): run-shell expands #{}
+		// before /bin/sh runs. Case arms omit an '' empty alternative — that
+		// becomes a dense '\'' stack after double tmuxQuote and is not portable.
+		script := carouselResolveScript(pane)
+		// run-shell uses tmux's configured default shell (fish on the normal
+		// host), while this validation is POSIX shell syntax. Quote each layer so
+		// the remote pane id remains data all the way through both parsers.
+		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		return []string{cmd}, nil
 	}},
+}
+
+// carouselResolveScript is the POSIX body run under exec /bin/sh -c. It must
+// contain zero single-quote characters so double tmuxQuote only wraps.
+func carouselResolveScript(pane string) string {
+	return fmt.Sprintf(
+		"src=$(tmux show-options -pqv -t %s @claude_img_src); "+
+			"case \"$src\" in %%[0-9]*) case \"${src#%%}\" in *[!0-9]*) src=%s;; esac;; *) src=%s;; esac; "+
+			"command -v tmux-claude-images >/dev/null 2>&1 && "+
+			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 tmux-claude-images; "+
+			`tmux split-window -t "$src" -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
+		pane, pane, pane,
+	)
 }
 
 // parseCtl validates a FrameCtl argv and resolves it against the current
@@ -217,6 +234,15 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 		return ctlRequest{}, fmt.Errorf("ctl protocol version %q, this daemon speaks %q — reopen the bridge", argv[0], wire.CtlProtocolVersion)
 	}
 	name, pane, args := argv[1], argv[2], argv[3:]
+	// This probe deliberately resolves before pane lookup: a new ctl can tell a
+	// live v2 daemon from a pre-carousel v1 daemon without needing a mirrored
+	// pane. The latter rejects its v2 version before reaching this branch.
+	if name == "ping" {
+		if len(args) != 0 {
+			return ctlRequest{}, fmt.Errorf("ping wants no arguments")
+		}
+		return ctlRequest{}, nil
+	}
 
 	c.mu.Lock()
 	win, known := c.paneToWin[pane]

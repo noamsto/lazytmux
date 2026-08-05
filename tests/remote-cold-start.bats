@@ -13,11 +13,13 @@ setup() {
 
 	export SSH_LOG="$BATS_TEST_TMPDIR/ssh.log"
 	export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"
+	export CTL_LOG="$BATS_TEST_TMPDIR/ctl.log"
 	# Presence of this file is the fake remote's "a tmux server is running".
 	export REMOTE_SERVER="$BATS_TEST_TMPDIR/remote-server"
 	export REMOTE_SESSION="workstation"
 	: >"$SSH_LOG"
 	: >"$TMUX_LOG"
+	: >"$CTL_LOG"
 
 	# Skips the launcher's `ssh host id -u` round-trip.
 	export LZTMUX_REMOTE_TMPDIR="/run/user/1000"
@@ -60,6 +62,14 @@ setup() {
 	for stub in lztmux-remote-bridge-renderer tmux-reflow-windows lztmux-remote-bridge-daemon; do
 		printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/$stub"
 	done
+	cat >"$FAKEBIN/lztmux-remote-bridge-ctl" <<-'EOF'
+		#!/bin/sh
+		echo "$*" >>"$CTL_LOG"
+		if [ -n "${FAKE_CTL_ERROR:-}" ]; then
+			printf '%s\n' "$FAKE_CTL_ERROR" >&2
+			exit 1
+		fi
+	EOF
 
 	chmod +x "$FAKEBIN"/*
 	export PATH="$FAKEBIN:$PATH"
@@ -70,6 +80,12 @@ setup() {
 	sed "s|@lib_remote@|$PWD/scripts/lib-remote.sh|g" \
 		scripts/lztmux-remote-open.sh >"$LAUNCHER"
 	export LAUNCHER
+}
+
+teardown() {
+	if [[ -n ${DAEMON_PID:-} ]]; then
+		kill "$DAEMON_PID" 2>/dev/null || true
+	fi
 }
 
 # Every case runs `bash "$LAUNCHER"` rather than executing it: the nix check
@@ -110,6 +126,55 @@ setup() {
 	run grep -c systemctl "$SSH_LOG"
 	[ "$status" -ne 0 ]
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "live compatible daemon is reused only after its ping succeeds" {
+	touch "$REMOTE_SERVER"
+	sleep 30 &
+	DAEMON_PID=$!
+	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q -- "--sock $sock ping _" "$CTL_LOG"
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+	kill -0 "$DAEMON_PID"
+}
+
+@test "live incompatible daemon is terminated and replaced" {
+	touch "$REMOTE_SERVER"
+	export FAKE_CTL_ERROR='lztmux-remote-bridge-ctl: ctl protocol version "2", this daemon speaks "1" — reopen the bridge'
+	sleep 30 &
+	DAEMON_PID=$!
+	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q -- "--sock $sock ping _" "$CTL_LOG"
+	grep -q 'new-session -d -s tp-g6-workstation' "$TMUX_LOG"
+	run kill -0 "$DAEMON_PID"
+	[ "$status" -ne 0 ]
+}
+
+@test "unreachable bridge socket never signals a recycled live pid" {
+	touch "$REMOTE_SERVER"
+	export FAKE_CTL_ERROR='lztmux-remote-bridge-ctl: bridge daemon unreachable: connect: connection refused'
+	sleep 30 &
+	DAEMON_PID=$!
+	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q 'new-session -d -s tp-g6-workstation' "$TMUX_LOG"
+	kill -0 "$DAEMON_PID"
 }
 
 @test "cold start: an explicit session argument skips both the probe and the unit" {
