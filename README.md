@@ -202,9 +202,12 @@ requirements for this to work:
   `startupSession.headless = true` if the host has no graphical session (the
   unit is otherwise gated on `graphical-session.target`, so a host sitting at
   the login greeter never starts one).
-- `loginctl enable-linger <user>` on the remote. Without it the systemd user
-  manager — and the tmux server it just started — is tied to the SSH login
-  session, so a cold-started server may not outlive the bridge.
+- Lingering for the user, so the cold-started server survives the SSH session
+  that started it. Without it the systemd user manager — and the tmux server
+  with it — is torn down when that session ends, so the server dies the moment
+  the bridge disconnects. `startupSession.linger` is **on by default** and
+  handles this; set it false only to manage lingering yourself (e.g. NixOS
+  `users.users.<name>.linger = true`).
 
 **Known limitations** (documented, not solved here):
 
