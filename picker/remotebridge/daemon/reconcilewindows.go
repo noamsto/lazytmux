@@ -17,6 +17,11 @@ import (
 // truth covers add, close and rename with one round-trip, and self-heals a
 // notification lost for any other reason.
 func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	// Every return path reflows: the round-trip below can bail, and Run's
+	// startup batch has no other forced reflow — skipping it leaves those
+	// windows on the label the after-new-window hook raced in (#196).
+	defer cfg.reflow()
+
 	lw, ok := rt(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: reconcile-windows: list-windows failed\n")
@@ -65,8 +70,6 @@ func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan
 			cfg.LocalTmux("select-window", "-t", mw.localWin)
 		}
 	}
-
-	cfg.reflow()
 }
 
 // mirrorNewWindow creates and wires the local mirror for one remote window,
