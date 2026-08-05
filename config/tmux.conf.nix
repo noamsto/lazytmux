@@ -533,12 +533,17 @@
     lib.optionalString (carousel-toggle != null)
     "bind I run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images'";
 
-  # prdash PR dashboard popup (prefix+p), scoped to the pane's repo. `enter` opens
-  # a git worktree: prdash execs `wt switch` itself as it exits the popup, so the
-  # tmux window switches when the popup closes.
+  # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
+  # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
+  # switches when the pane closes.
+  #
+  # -x 100%: the board sheds columns as its list narrows and the preview takes
+  # 55%, so anything narrower starves the list — at 90% of a 213-column client
+  # its inner width lands at 82 cells, short of the 92 the full "+N -N" diffstat
+  # needs.
   prdashBind =
     lib.optionalString (prdash != null)
-    "bind-key p display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${prdash}/bin/prdash";
+    "bind-key p new-pane -c '#{pane_current_path}' -x 100% -y 95% ${prdash}/bin/prdash";
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
