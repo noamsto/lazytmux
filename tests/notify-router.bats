@@ -92,7 +92,7 @@ background_info='@9|0|1|$3|1500000000|#ff5555|#fab387|#a6e3a1|#9399b2|mysess'
 	grep -qF -- '-c /dev/pts/2' "$TMUX_LOG"
 }
 
-@test "message path: rendered argv carries resolved hex, explicit -d and -N" {
+@test "message path: rendered argv carries resolved hex, explicit -d and -C" {
 	export FAKE_INFO="$active_info"
 	run bash "$NOTIFY_ROUTER" emit --source claude --level error --pane %5 --title boom
 	[ "$status" -eq 0 ]
@@ -106,7 +106,9 @@ background_info='@9|0|1|$3|1500000000|#ff5555|#fab387|#a6e3a1|#9399b2|mysess'
 	run bash -c "grep 'display-message -c ' \"$TMUX_LOG\" | grep -qF '#{@thm_'"
 	[ "$status" -ne 0 ] # never a literal format reference in the rendered line
 	grep -qF -- '-d 4000' "$TMUX_LOG"
-	grep -qF -- ' -N ' "$TMUX_LOG"
+	grep -qF -- ' -C ' "$TMUX_LOG"
+	run bash -c "grep 'display-message -c ' \"$TMUX_LOG\" | grep -qF -- ' -N '"
+	[ "$status" -ne 0 ] # -N must never reappear: it is what caused #306
 }
 
 @test "message path: bell uses the short dwell" {
