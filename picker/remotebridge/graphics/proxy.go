@@ -44,5 +44,9 @@ func (p *Proxy) Filter(data []byte) []byte {
 // Close flushes any held partial sequence so it isn't swallowed when the pane
 // goes away.
 func (p *Proxy) Close() []byte {
-	return nil
+	var out []byte
+	for _, c := range p.sc.Flush() {
+		out = append(out, c.Literal...)
+	}
+	return out
 }
