@@ -104,7 +104,7 @@ func main() {
 	// ControlPersist=no ties the ControlMaster socket's lifetime to this
 	// process, so nothing but this process will ever unlink it — ssh cleans up
 	// its own ControlPath only when it exits normally or catches a signal, and
-	// a SIGKILL (the old unconditional Process.Kill() below) it can't catch.
+	// a SIGKILL (the fallback below) it cannot catch.
 	// Called explicitly at every exit path rather than deferred: fatal() calls
 	// os.Exit(1), which skips deferred functions.
 	cleanup := func() {
