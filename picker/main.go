@@ -4,6 +4,7 @@
 //
 //	tmux-picker-generate --tui              # session picker
 //	tmux-picker-generate --tui --windows    # window picker (add --claude to filter)
+//	tmux-picker-generate --tui --wall       # same, as a grid of live pane captures
 package main
 
 import (
@@ -106,7 +107,7 @@ func main() {
 	for _, a := range args {
 		flags[a] = true
 	}
-	if err := runTUI(flags["--windows"], flags["--claude"]); err != nil {
+	if err := runTUI(flags["--windows"], flags["--claude"], flags["--wall"]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

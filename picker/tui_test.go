@@ -446,6 +446,16 @@ func TestLoadPreviewSkippedWhenHidden(t *testing.T) {
 	}
 }
 
+// Same economy in the wall: it captures its own page, so a preview nobody can
+// see must not add 2.5 captures a second on top.
+func TestLoadPreviewSkippedInWallMode(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark",
+		mode: modeWall, visible: []listItem{{target: "a", display: "a"}}}
+	if cmd := m.loadPreviewCmd(); cmd != nil {
+		t.Error("wall mode: expected no preview capture command")
+	}
+}
+
 func TestListRatio(t *testing.T) {
 	ratio := func(raw string) int {
 		return tuiModel{tmuxOpts: map[string]string{"@picker_list_ratio": raw}}.listRatio()

@@ -111,6 +111,7 @@ Press <kbd>prefix</kbd> then <kbd>C-Space</kbd> for the in-terminal cheatsheet.
 | <kbd>M-Up/Down/Left/Right</kbd> | Resize pane (repeatable) |
 | <kbd>s</kbd> | Session picker |
 | <kbd>w</kbd> | Window picker |
+| <kbd>W</kbd> | Window wall — tiled live-preview grid of the same window list |
 | <kbd>a</kbd> | Claude-window picker (only windows with a running agent) |
 | <kbd>i</kbd> | Issue / PR enrich card (Linear/GitHub + PR state) |
 | <kbd>g</kbd> | LazyGit popup |

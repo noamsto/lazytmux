@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	imgcolor "image/color"
 	"os"
@@ -38,6 +39,15 @@ type listItem struct {
 	plainEnd        string // remote session row: plain with the closing tree glyph
 }
 
+// pickerMode selects which renderer draws the body. One model, three
+// renderers: modeList draws renderList (+ renderPreview), modeWall renderWall.
+type pickerMode int8
+
+const (
+	modeList pickerMode = iota
+	modeWall
+)
+
 // tuiModel is the bubbletea model for the picker.
 type tuiModel struct {
 	// Data
@@ -49,12 +59,21 @@ type tuiModel struct {
 	cursor       int
 
 	// Modes
+	mode        pickerMode
 	windowMode  bool
 	claudeOnly  bool
 	scratchOnly bool
 
+	// Wall
+	wallPage    int
+	wallContent map[string]string // target -> last capture
+	wallBad     map[string]bool   // targets capture-pane refused, skipped next batch
+
 	// Search
 	query string
+	// querying is the wall's modal filter prompt: letters navigate the grid, so
+	// they only reach the query while it is open.
+	querying bool
 
 	// Transient error shown in the hint line (e.g. session-create failure)
 	statusMsg string
@@ -100,6 +119,9 @@ type tickMsg struct{}
 // data tick.
 type previewTickMsg struct{}
 
+// wallTickMsg drives the wall's capture clock, separate from the preview's.
+type wallTickMsg struct{}
+
 type refreshMsg struct {
 	items []listItem
 }
@@ -119,6 +141,14 @@ type previewMsg struct {
 	scrollTop bool
 }
 
+// wallMsg carries one batch's captures. content is merged, never swapped in:
+// tmux aborts a batch at the first bad target, so a partial reply must not blank
+// the tiles it didn't reach. bad names that target, if there was one.
+type wallMsg struct {
+	content map[string]string
+	bad     string
+}
+
 // --- Entry point ---
 
 // layoutShowsPreview reports whether the picker opens with the preview shown,
@@ -128,7 +158,15 @@ func layoutShowsPreview(opts map[string]string) bool {
 	return envOrMap("PICKER_LAYOUT", opts, "@picker_layout", "preview") != "list"
 }
 
-func runTUI(windowMode, claudeOnly bool) error {
+// wallMode maps the --wall flag to the mode the picker opens in.
+func wallMode(wall bool) pickerMode {
+	if wall {
+		return modeWall
+	}
+	return modeList
+}
+
+func runTUI(windowMode, claudeOnly, wall bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
 	panes := collectClaudePanes()
@@ -141,6 +179,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 	}
 
 	m := tuiModel{
+		mode:         wallMode(wall),
 		windowMode:   windowMode,
 		claudeOnly:   claudeOnly,
 		showPreview:  layoutShowsPreview(opts),
@@ -148,9 +187,14 @@ func runTUI(windowMode, claudeOnly bool) error {
 		tmuxOpts:     opts,
 		allItems:     items,
 		sessionItems: items,
+		wallContent:  map[string]string{},
+		wallBad:      map[string]bool{},
 	}
 	m = m.withFilter()
 	m.cursor = m.firstSelectable(0)
+	if m.mode == modeWall {
+		m = m.snapWall()
+	}
 
 	p := tea.NewProgram(m)
 	_, err := p.Run()
@@ -160,7 +204,9 @@ func runTUI(windowMode, claudeOnly bool) error {
 // --- Bubbletea interface ---
 
 func (m tuiModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(), previewTickCmd(), m.loadPreviewCmd()}
+	// No wall capture here: the grid is derived from a size this model doesn't
+	// have yet, and nothing paints before the WindowSizeMsg that brings it.
+	cmds := []tea.Cmd{tickCmd(), previewTickCmd(), wallTickCmd(), m.loadPreviewCmd()}
 	if !m.windowMode {
 		// First paint skips the ps -A fork; kick a full refresh right away so
 		// CPU/Mem replace the placeholder without waiting for the 1s tick.
@@ -190,10 +236,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Window labels are truncated to the terminal width; when it changes,
 		// rebuild so the adaptive identity cap tracks the real size. Guarded on
 		// change so a fixed-size popup forks the rebuild ~once.
-		if m.windowMode && widthChanged {
-			return m, tea.Batch(m.loadPreviewCmd(), m.refreshDataCmd())
+		if m.mode == modeWall {
+			// The grid is derived from the size, so a resize changes how many
+			// tiles a page holds — and which page the cursor sits on.
+			m = m.snapWall()
 		}
-		return m, m.loadPreviewCmd()
+		if m.windowMode && widthChanged {
+			return m, tea.Batch(m.loadPreviewCmd(), m.captureWallCmd(), m.refreshDataCmd())
+		}
+		return m, tea.Batch(m.loadPreviewCmd(), m.captureWallCmd())
 
 	case tickMsg:
 		return m, tea.Batch(tickCmd(), m.refreshDataCmd())
@@ -204,11 +255,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewTickMsg:
 		return m, tea.Batch(previewTickCmd(), m.loadPreviewCmd())
 
+	case wallTickMsg:
+		return m, tea.Batch(wallTickCmd(), m.captureWallCmd())
+
+	case wallMsg:
+		return m.mergeWall(msg), nil
+
 	case refreshMsg:
+		// Read the selection before the rebuild invalidates its index.
+		keep := m.currentTarget()
 		m.sessionItems = msg.items
 		m = m.recombine().withFilter()
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
+		}
+		if m.mode == modeWall {
+			// A rebuild can move a header under the cursor, and reorder the rows
+			// under the selection; the wall has no non-tileable selection to fall
+			// back on, and follows the window rather than the row number.
+			m = m.snapWallTo(keep)
 		}
 		return m, nil
 
@@ -246,7 +311,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// Both mouse handlers hit-test by y against the list's rows, which the wall
+	// doesn't have — a stray click there would resolve to an arbitrary row and,
+	// when it matched the cursor, switch to it and quit.
 	case tea.MouseWheelMsg:
+		if m.mode != modeList {
+			return m, nil
+		}
 		mouse := msg.Mouse()
 		if m.inPreview(mouse.X, mouse.Y) {
 			var cmd tea.Cmd
@@ -262,6 +333,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreviewCmd()
 
 	case tea.MouseClickMsg:
+		if m.mode != modeList {
+			return m, nil
+		}
 		mouse := msg.Mouse()
 		if mouse.Button != tea.MouseLeft {
 			return m, nil
@@ -288,7 +362,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.statusMsg = "" // any keypress clears a stale create-error
-	switch msg.String() {
+	key := msg.String()
+	// The wall's keymap runs first: letters navigate the grid there, so a shared
+	// branch must never see a key the wall (or its filter prompt) owns.
+	if m.mode == modeWall {
+		if m.querying {
+			return m.handleWallQueryKey(key)
+		}
+		if wm, cmd, handled := m.handleWallKey(key); handled {
+			return wm, cmd
+		}
+	}
+	switch key {
 	case "ctrl+c":
 		return m, tea.Quit
 
@@ -337,21 +422,11 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+a":
-		m.claudeOnly = !m.claudeOnly
-		if m.claudeOnly {
-			m.scratchOnly = false
-		}
-		m = m.withFilter()
-		m.cursor = m.firstSelectable(0)
+		m = m.toggleClaudeOnly()
 		return m, m.loadPreviewCmd()
 
 	case "ctrl+s":
-		m.scratchOnly = !m.scratchOnly
-		if m.scratchOnly {
-			m.claudeOnly = false
-		}
-		m = m.withFilter()
-		m.cursor = m.firstSelectable(0)
+		m = m.toggleScratchOnly()
 		return m, m.loadPreviewCmd()
 
 	case "ctrl+/", "ctrl+_":
@@ -389,9 +464,8 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	default:
-		s := msg.String()
-		if len(s) == 1 && s[0] >= 0x20 && s[0] < 0x7f {
-			m.query += s
+		if printableKey(key) {
+			m.query += key
 			m = m.withFilter()
 			m.cursor = m.firstSelectable(0)
 			return m, m.loadPreviewCmd()
@@ -400,20 +474,264 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// printableKey reports whether a key press is a single printable character, i.e.
+// one that extends the query rather than triggering a binding.
+func printableKey(key string) bool {
+	return len(key) == 1 && key[0] >= 0x20 && key[0] < 0x7f
+}
+
+func (m tuiModel) toggleClaudeOnly() tuiModel {
+	m.claudeOnly = !m.claudeOnly
+	if m.claudeOnly {
+		m.scratchOnly = false
+	}
+	m = m.withFilter()
+	m.cursor = m.firstSelectable(0)
+	return m
+}
+
+func (m tuiModel) toggleScratchOnly() tuiModel {
+	m.scratchOnly = !m.scratchOnly
+	if m.scratchOnly {
+		m.claudeOnly = false
+	}
+	m = m.withFilter()
+	m.cursor = m.firstSelectable(0)
+	return m
+}
+
+// --- Wall keys ---
+
+// handleWallKey runs the wall's own bindings, returning handled=false for the
+// keys the shared switch already gets right (enter, ^x, ^c, …).
+func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
+	cols, _ := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems()))
+	switch key {
+	case "h", "left":
+		wm, cmd := m.moveTile(-1)
+		return wm, cmd, true
+	case "l", "right":
+		wm, cmd := m.moveTile(1)
+		return wm, cmd, true
+	case "k", "up", "ctrl+k":
+		wm, cmd := m.moveTile(-max(cols, 1))
+		return wm, cmd, true
+	case "j", "down", "ctrl+j":
+		wm, cmd := m.moveTile(max(cols, 1))
+		return wm, cmd, true
+	case "[", "pgup":
+		wm, cmd := m.turnWallPage(-1)
+		return wm, cmd, true
+	case "]", "pgdown":
+		wm, cmd := m.turnWallPage(1)
+		return wm, cmd, true
+	case "/":
+		m.querying = true
+		return m, nil, true
+	case "ctrl+/", "ctrl+_":
+		// Back to list+preview inside the popup the wall already has; a tmux
+		// popup can't be resized, so nothing is resized here.
+		m.mode = modeList
+		return m, m.loadPreviewCmd(), true
+	case "ctrl+a":
+		m = m.toggleClaudeOnly().snapWall()
+		return m, m.captureWallCmd(), true
+	case "ctrl+s":
+		m = m.toggleScratchOnly().snapWall()
+		return m, m.captureWallCmd(), true
+	case "q", "esc":
+		if m.query == "" {
+			return m, tea.Quit, true
+		}
+		m.query = ""
+		m = m.withFilter().snapWall()
+		return m, m.captureWallCmd(), true
+	}
+	// A half-modal wall where 4 letters move and the other 22 filter cannot
+	// express a query like "lazytmux", so no printable falls through to the
+	// shared query branch — / opens the prompt instead.
+	return m, nil, printableKey(key) || key == "backspace"
+}
+
+// handleWallQueryKey runs the wall's filter prompt. Every key belongs to the
+// prompt until esc/enter closes it; only ^c still quits.
+func (m tuiModel) handleWallQueryKey(key string) (tea.Model, tea.Cmd) {
+	switch {
+	case key == "ctrl+c":
+		return m, tea.Quit
+	case key == "esc" || key == "enter":
+		m.querying = false
+		return m, nil
+	case key == "backspace":
+		if m.query == "" {
+			return m, nil
+		}
+		runes := []rune(m.query)
+		m.query = string(runes[:len(runes)-1])
+	case printableKey(key):
+		m.query += key
+	default:
+		return m, nil
+	}
+	m = m.withFilter().snapWall()
+	return m, m.captureWallCmd()
+}
+
+// --- Wall model ---
+
+// tileItems returns the indices into visible that capture-pane can actually
+// read: a real local pane target, not a header, a zoxide suggestion or a remote
+// bridge row.
+func (m tuiModel) tileItems() []int {
+	var out []int
+	for i, item := range m.visible {
+		if item.target == "" || item.isHeader || item.createPath != "" || item.isRemoteRow || item.remoteHost != "" {
+			continue
+		}
+		out = append(out, i)
+	}
+	return out
+}
+
+// wallPerPage is the tile count one page holds; 1 when the terminal is too small
+// to tile, so paging arithmetic stays well-defined behind the list fallback.
+func (m tuiModel) wallPerPage() int {
+	cols, rows := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems()))
+	return max(cols*rows, 1)
+}
+
+func (m tuiModel) wallPageCount() int {
+	n := len(m.tileItems())
+	pp := m.wallPerPage()
+	return max((n+pp-1)/pp, 1)
+}
+
+// tilePos is the position in tiles of the first row at or after cursor — where
+// the selection snaps to when the filter moves the list underneath it.
+func tilePos(tiles []int, cursor int) int {
+	for i, idx := range tiles {
+		if idx >= cursor {
+			return i
+		}
+	}
+	return len(tiles) - 1
+}
+
+// snapWall pins the cursor to a tileable row and the page to the one showing it.
+func (m tuiModel) snapWall() tuiModel {
+	return m.snapWallTo("")
+}
+
+// snapWallTo is snapWall for a rebuilt list: it re-finds keep, the target that
+// was selected before the rebuild, because an index does not survive one. The
+// window list is grouped by session activity, so a session gaining focus shifts
+// every index after it and snapping by number lands on a different window.
+// Falls back to the index when keep is gone (its pane closed) or empty.
+func (m tuiModel) snapWallTo(keep string) tuiModel {
+	tiles := m.tileItems()
+	if len(tiles) == 0 {
+		m.wallPage = 0
+		return m
+	}
+	pos := tilePos(tiles, m.cursor)
+	if keep != "" {
+		for i, idx := range tiles {
+			if m.visible[idx].target == keep {
+				pos = i
+				break
+			}
+		}
+	}
+	m.cursor = tiles[pos]
+	m.wallPage = pos / m.wallPerPage()
+	return m
+}
+
+// moveTile steps the selection by delta tiles in grid order. Crossing a page
+// edge turns the page — that is what pagination is in the wall, there is no
+// scrolling — and the new page needs its captures now, not in 500ms.
+func (m tuiModel) moveTile(delta int) (tuiModel, tea.Cmd) {
+	tiles := m.tileItems()
+	if len(tiles) == 0 {
+		return m, nil
+	}
+	pos := tilePos(tiles, m.cursor) + delta
+	if pos < 0 || pos >= len(tiles) {
+		return m, nil
+	}
+	m.cursor = tiles[pos]
+	page := pos / m.wallPerPage()
+	if page == m.wallPage {
+		return m, nil
+	}
+	m.wallPage = page
+	return m, m.captureWallCmd()
+}
+
+// turnWallPage turns a whole page, landing the cursor on its first tile.
+func (m tuiModel) turnWallPage(delta int) (tuiModel, tea.Cmd) {
+	tiles := m.tileItems()
+	page := m.wallPage + delta
+	first := page * m.wallPerPage()
+	if page < 0 || first >= len(tiles) {
+		return m, nil
+	}
+	m.wallPage = page
+	m.cursor = tiles[first]
+	return m, m.captureWallCmd()
+}
+
+func (m tuiModel) mergeWall(msg wallMsg) tuiModel {
+	if m.wallContent == nil {
+		m.wallContent = make(map[string]string, len(msg.content))
+	}
+	for target, content := range msg.content {
+		m.wallContent[target] = content
+	}
+	if msg.bad != "" {
+		if m.wallBad == nil {
+			m.wallBad = map[string]bool{}
+		}
+		m.wallBad[msg.bad] = true
+	}
+	// Panes come and go while the wall is open; without a prune both caches grow
+	// for the life of the picker and a reused target could show dead content.
+	live := make(map[string]bool, len(m.visible))
+	for _, i := range m.tileItems() {
+		live[m.visible[i].target] = true
+	}
+	for target := range m.wallContent {
+		if !live[target] {
+			delete(m.wallContent, target)
+		}
+	}
+	for target := range m.wallBad {
+		if !live[target] {
+			delete(m.wallBad, target)
+		}
+	}
+	return m
+}
+
 // --- View ---
 
 func (m tuiModel) View() tea.View {
 	var content string
-	if !m.ready {
+	switch {
+	case !m.ready:
 		content = "Loading..."
-	} else {
-		listPane := m.renderList()
-		var body string
+
+	// No bordered wrapper: its Width() would re-measure rows renderTile already
+	// sized (see there), so the wall draws its own bottom rule instead.
+	case m.mode == modeWall:
+		content = strings.Join([]string{
+			m.renderSearch(), m.renderWall(), m.renderSeparator(), m.renderWallHints(),
+		}, "\n")
+
+	default:
+		body := m.renderList()
 		if m.showPreview {
-			sep := m.renderSeparator()
-			body = lipgloss.JoinVertical(lipgloss.Left, listPane, sep, m.preview.View())
-		} else {
-			body = listPane
+			body = m.renderPreview(body)
 		}
 		borderColor := m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0")
 		bordered := lipgloss.NewStyle().
@@ -429,107 +747,6 @@ func (m tuiModel) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
-}
-
-func (m tuiModel) renderList() string {
-	h := m.listHeight()
-	w := m.listWidth()
-
-	selBgHex := m.thmColorHex("@thm_surface_2", "#45475a", "#acb0be")
-	selBg := lipgloss.Color(selBgHex)
-	selStyle := lipgloss.NewStyle().
-		Background(selBg)
-	// ANSI reset (\033[0m) inside display strings kills the background.
-	// Replace resets with "reset fg + re-apply bg" so background persists.
-	selResetKeepBg := "\033[39m" + ansiBg(selBgHex) // reset fg only, re-set bg
-	start := m.scrollStart(h)
-
-	lines := make([]string, 0, h)
-	for i := start; i < start+h && i < len(m.visible); i++ {
-		item := m.visible[i]
-		if i == m.cursor {
-			patched := strings.ReplaceAll(item.display, "\033[0m", selResetKeepBg)
-			line := fitVisibleWidth("▶ "+patched, w)
-			lines = append(lines, selStyle.Render(line))
-		} else {
-			lines = append(lines, fitVisibleWidth("  "+item.display, w))
-		}
-	}
-	empty := strings.Repeat(" ", w)
-	for len(lines) < h {
-		lines = append(lines, empty)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (m tuiModel) renderSeparator() string {
-	sepColor := lipgloss.NewStyle().
-		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0"))
-	return sepColor.Render(strings.Repeat("─", m.innerWidth()))
-}
-
-func (m tuiModel) renderSearch() string {
-	blue := lipgloss.NewStyle().Foreground(m.thmColor("@thm_blue", "#89b4fa", "#1e66f5"))
-	dim := lipgloss.NewStyle().Foreground(m.thmColor("@thm_surface_2", "#585b70", "#9ca0b0"))
-
-	icon := blue.Render("  ")
-	var queryStr string
-	if m.query == "" {
-		queryStr = dim.Render("type to filter...") + " "
-	} else {
-		queryStr = m.query + "█"
-	}
-
-	return lipgloss.NewStyle().
-		Width(m.width).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderBottom(true).
-		BorderForeground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0")).
-		Render(icon + queryStr)
-}
-
-func (m tuiModel) renderHints() string {
-	dim := lipgloss.NewStyle().Foreground(m.thmColor("@thm_surface_2", "#585b70", "#9ca0b0"))
-	key := lipgloss.NewStyle().Foreground(m.thmColor("@thm_lavender", "#b4befe", "#7287fd"))
-
-	if m.statusMsg != "" {
-		red := lipgloss.NewStyle().Foreground(m.thmColor("@thm_red", "#f38ba8", "#d20f39"))
-		return red.Width(m.width).Render("  " + m.statusMsg)
-	}
-
-	hint := func(k, desc string) string {
-		return key.Render(k) + dim.Render(":"+desc)
-	}
-
-	highlight := lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b"))
-
-	claudeLabel := "claude"
-	if m.claudeOnly {
-		claudeLabel = highlight.Render(claudeLabel)
-	}
-	scratchLabel := "scratch"
-	if m.scratchOnly {
-		scratchLabel = highlight.Render(scratchLabel)
-	}
-
-	killLabel := "kill"
-	if item, ok := m.currentItem(); ok && item.createPath != "" {
-		killLabel = "forget"
-	}
-
-	parts := []string{
-		hint("^jk/↑↓", "nav"),
-		hint("enter", "open"),
-		hint("^x", killLabel),
-		hint("^a", claudeLabel),
-		hint("^s", scratchLabel),
-		hint("^/", "preview"),
-		hint("M-hjkl", "scroll"),
-		hint("q", "quit"),
-	}
-
-	return dim.Width(m.width).Render("  " + strings.Join(parts, "  "))
 }
 
 // --- Layout ---
@@ -925,6 +1142,53 @@ func previewTickCmd() tea.Cmd {
 	return tea.Tick(previewInterval, func(time.Time) tea.Msg { return previewTickMsg{} })
 }
 
+// wallInterval is the wall's capture clock. Slower than the preview's 400ms
+// because one batch redraws a page of panes rather than a single one; still fast
+// enough that a build or a Claude turn reads as moving.
+const wallInterval = 500 * time.Millisecond
+
+// Same reasoning as previewTickCmd: one clock for the whole session, or every
+// ^/ leaves another live loop behind.
+func wallTickCmd() tea.Cmd {
+	return tea.Tick(wallInterval, func(time.Time) tea.Msg { return wallTickMsg{} })
+}
+
+// captureWallCmd batches the current page's captures into one tmux call.
+func (m tuiModel) captureWallCmd() tea.Cmd {
+	if m.mode != modeWall {
+		return nil
+	}
+	targets := m.wallPageTargets()
+	if len(targets) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		content, err := captureTargets(targets, nil)
+		msg := wallMsg{content: content}
+		var cErr *captureErr
+		if errors.As(err, &cErr) {
+			msg.bad = cErr.Target
+		}
+		return msg
+	}
+}
+
+// wallPageTargets is the page's capture set. Targets a previous batch died on
+// are left out: one gone pane would otherwise abort every batch after it.
+func (m tuiModel) wallPageTargets() []string {
+	tiles := m.tileItems()
+	pp := m.wallPerPage()
+	var out []string
+	for i := m.wallPage * pp; i < len(tiles) && i < m.wallPage*pp+pp; i++ {
+		target := m.visible[tiles[i]].target
+		if m.wallBad[target] {
+			continue
+		}
+		out = append(out, target)
+	}
+	return out
+}
+
 func (m tuiModel) refreshDataCmd() tea.Cmd {
 	wm := m.windowMode
 	opts := m.tmuxOpts
@@ -978,7 +1242,9 @@ func (m tuiModel) recombine() tuiModel {
 }
 
 func (m tuiModel) loadPreviewCmd() tea.Cmd {
-	if !m.showPreview {
+	// The wall draws no preview, so its clock must not pay for one on top of the
+	// page it already captures.
+	if !m.showPreview || m.mode == modeWall {
 		return nil
 	}
 	item, ok := m.currentItem()
