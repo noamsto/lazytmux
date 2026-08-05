@@ -63,6 +63,51 @@ func TestScanSequenceSplitAcrossFeeds(t *testing.T) {
 	}
 }
 
+// A passthrough carrying something other than a graphics APC is complete, not
+// partial: it must be forwarded at once, or every later byte of the pane queues
+// behind it until the partial cap.
+func TestScanCompleteNonGraphicsPassthroughForwardsVerbatim(t *testing.T) {
+	const in = "\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\tail"
+	s := NewScanner()
+	cs := s.Feed([]byte(in))
+	var got []byte
+	for _, c := range cs {
+		if c.Seq != nil {
+			t.Fatal("OSC 52 passthrough decoded as a graphics sequence")
+		}
+		got = append(got, c.Literal...)
+	}
+	if string(got) != in {
+		t.Fatalf("forwarded %q, want byte-identical %q", got, in)
+	}
+	if len(s.held) != 0 {
+		t.Fatalf("held %q, want nothing held", s.held)
+	}
+}
+
+func TestScanRecoversAfterNonGraphicsPassthrough(t *testing.T) {
+	cs := NewScanner().Feed([]byte("\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\" + bareSeq))
+	if got := chunkKinds(cs); got != "LS" {
+		t.Fatalf("kinds = %q, want LS", got)
+	}
+	if got := string(cs[1].Seq.Keys); got != "i=31,a=T,U=1,f=100,t=f" {
+		t.Fatalf("keys = %q", got)
+	}
+}
+
+// The mirror of the case above: an unterminated passthrough is genuinely
+// partial and must still be held, not forwarded.
+func TestScanIncompletePassthroughIsHeld(t *testing.T) {
+	s := NewScanner()
+	if cs := s.Feed([]byte("\x1bPtmux;\x1b\x1b_Gi=1,a=T;abc")); chunkKinds(cs) != "" {
+		t.Fatalf("incomplete passthrough emitted early: %q", chunkKinds(cs))
+	}
+	cs := s.Feed([]byte("\x1b\x1b\\\x1b\\"))
+	if chunkKinds(cs) != "S" {
+		t.Fatalf("kinds = %q, want S", chunkKinds(cs))
+	}
+}
+
 func TestScanLiteralBeforePartialIsEmittedImmediately(t *testing.T) {
 	cs := NewScanner().Feed([]byte("visible\x1b_Gi=1,a=T;abc"))
 	if chunkKinds(cs) != "L" || string(cs[0].Literal) != "visible" {

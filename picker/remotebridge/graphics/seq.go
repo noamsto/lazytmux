@@ -13,22 +13,43 @@ type Seq struct {
 	Wrapped bool
 }
 
-// decodeSeq decodes the sequence at the head of b, returning it and the number
-// of bytes consumed. ok is false when the terminator hasn't arrived yet.
-func decodeSeq(b []byte) (*Seq, int, bool) {
+// decodeSeq decodes the sequence at the head of b:
+//
+//	seq != nil, n > 0  — a graphics sequence; consume n
+//	seq == nil, n > 0  — a COMPLETE sequence that isn't ours (a passthrough
+//	                     carrying something else, e.g. OSC 52); forward b[:n]
+//	                     verbatim and move past it
+//	seq == nil, n == 0 — incomplete; hold for more bytes
+//
+// The middle case is the reason this doesn't return a bool: "not complete yet"
+// and "complete, but not mine" both mean "no sequence", but conflating them
+// stalls the pane — a clipboard escape would hold every later byte behind it
+// until the partial cap or Flush.
+//
+// Forwarding that case unchanged is correct, not a fallback: the bytes arrived
+// wrapped for one tmux layer and the renderer pane sits inside the local tmux,
+// so exactly one wrapper reaches it and the escape still does what its sender
+// intended.
+func decodeSeq(b []byte) (*Seq, int) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
-			return nil, 0, false
+			return nil, 0
 		}
 		q, _, ok := decodeBare(inner)
 		if !ok {
-			return nil, 0, false
+			return nil, n
 		}
 		q.Wrapped = true
-		return q, n, true
+		return q, n
 	}
-	return decodeBare(b)
+	// Feed only calls this at an indexSeqStart hit, so a head that isn't a
+	// passthrough is an apcStart: decodeBare can only fail for want of the ST.
+	q, n, ok := decodeBare(b)
+	if !ok {
+		return nil, 0
+	}
+	return q, n
 }
 
 func decodeBare(b []byte) (*Seq, int, bool) {

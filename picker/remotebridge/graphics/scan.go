@@ -50,8 +50,8 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			out = appendLiteral(out, buf[:i])
 			buf = buf[i:]
 		}
-		seq, n, ok := decodeSeq(buf)
-		if !ok {
+		seq, n := decodeSeq(buf)
+		if n == 0 {
 			// Incomplete: hold it, unless it has outgrown the cap.
 			if len(buf) > maxPartial {
 				return appendLiteral(out, buf)
@@ -59,7 +59,12 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			s.held = append([]byte(nil), buf...)
 			return out
 		}
-		out = append(out, Chunk{Seq: seq})
+		if seq == nil {
+			// Complete, but not ours — forward it and carry on scanning.
+			out = appendLiteral(out, buf[:n])
+		} else {
+			out = append(out, Chunk{Seq: seq})
+		}
 		buf = buf[n:]
 	}
 	return out
