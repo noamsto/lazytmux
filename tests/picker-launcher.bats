@@ -32,6 +32,7 @@ mk_launcher() {
 }
 
 height_of() { sed -n 's/.*-h \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
+width_of() { sed -n 's/.*-w \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 
 @test "session picker: list layout opens the short popup" {
 	launcher="$(mk_launcher tmux-session-picker.sh)"
@@ -61,4 +62,18 @@ height_of() { sed -n 's/.*-h \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 	launcher="$(mk_launcher tmux-window-picker.sh)"
 	FAKE_LAYOUT=preview bash "$launcher"
 	[ "$(height_of)" = "85%" ]
+}
+
+@test "window wall: ignores list layout, opens fixed geometry" {
+	launcher="$(mk_launcher tmux-window-wall.sh)"
+	FAKE_LAYOUT=list bash "$launcher"
+	[ "$(width_of)" = "95%" ]
+	[ "$(height_of)" = "90%" ]
+}
+
+@test "window wall: ignores preview layout, opens fixed geometry" {
+	launcher="$(mk_launcher tmux-window-wall.sh)"
+	FAKE_LAYOUT=preview bash "$launcher"
+	[ "$(width_of)" = "95%" ]
+	[ "$(height_of)" = "90%" ]
 }

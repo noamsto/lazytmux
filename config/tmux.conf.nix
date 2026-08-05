@@ -309,6 +309,7 @@
     "tmux-reflow-windows"
     "tmux-session-picker"
     "tmux-window-picker"
+    "tmux-window-wall"
     "tmux-update-icons"
     "tmux-branch-display"
     "tmux-dir-display"
@@ -340,7 +341,7 @@
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
-  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-update-icons"];
+  scriptsWithIcons = ["tmux-reflow-windows" "tmux-session-picker" "tmux-window-picker" "tmux-window-wall" "tmux-update-icons"];
 
   iconSubstFrom = ["@lib_icons@" "@lib_claude@" "@lib_enrich@" "claude-status " "@claude_status_bin@" "@ICON_MAP@" "@FALLBACK_ICON@" "@MAX_ICONS@" "@MAX_ICONS_PICKER@" "@picker_generate@" "@lib_log@" "@lib_reflow@"];
   iconSubstTo = ["${lib-icons}" "${lib-claude}" "${lib-enrich}" "${claude-status-bin} " claude-status-bin iconMapBash fallbackIcon maxIcons maxIconsPicker picker-generate-bin "${lib-log}" "${lib-reflow}"];
@@ -707,10 +708,12 @@
     bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{session_name} #{window_index} #{@window_per}'
     bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{session_name} #{window_index} #{@window_per}'
 
-    # Session/window pickers (wrappers pre-compute claude status)
+    # Session/window pickers (wrappers pre-compute claude status), plus the
+    # tiled wall (W) — the same window list rendered as live preview tiles.
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
+    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.
     bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'

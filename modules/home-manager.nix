@@ -545,6 +545,10 @@ in {
             label = "Windows";
           }
           {
+            key = "prefix + W";
+            label = "Window wall";
+          }
+          {
             key = "prefix + a";
             label = "Claude windows";
           }
