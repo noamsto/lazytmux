@@ -18,7 +18,7 @@
     # is dropped: its overlay-clipping fix is already upstream (e242da16), and its
     # two #5336 popup-flicker fixes are now resolved — the overlay redraw fix
     # landed as tmux/tmux#5398, the other was rejected upstream.
-    # Bump: repoint rev, then `nix flake lock --update-input tmux-upstream`.
+    # Bump: repoint rev, then `nix flake update tmux-upstream`.
     tmux-upstream = {
       url = "github:tmux/tmux/d5afb67a81d8a30379e0d4186ec4b968244393bf";
       flake = false;

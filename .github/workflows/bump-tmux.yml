@@ -95,10 +95,13 @@ jobs:
           - [ ] CI green (build + flake check)
           - [ ] Review upstream changelog for breaking changes
           - [ ] Deploy via nix-config bump + server restart"
-          gh pr create \
-            --title "chore(tmux): bump upstream pin to ${short} (next-3.8)" \
-            --body "$body" \
-            --base main \
-            --head "$branch" \
-            --assignee "@me" \
-            || echo "PR already open for this branch; branch updated."
+          if gh pr view "$branch" --json number -q .number &>/dev/null; then
+            echo "PR already open for $branch; branch updated."
+          else
+            gh pr create \
+              --title "chore(tmux): bump upstream pin to ${short} (next-3.8)" \
+              --body "$body" \
+              --base main \
+              --head "$branch" \
+              --assignee noamsto
+          fi
