@@ -526,15 +526,21 @@ type Seq struct {
 // The middle case is why this returns a length rather than an ok bool. "Not
 // complete yet" and "complete, but not mine" both mean "no sequence here", but
 // conflating them stalls the pane: a clipboard escape would hold every later
-// byte behind it until the partial cap or Close.
+// byte behind it until the partial cap or Flush.
 func decodeSeq(b []byte) (*Seq, int) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
 			return nil, 0
 		}
-		q, _, ok := decodeBare(inner)
-		if !ok {
+		q, m, ok := decodeBare(inner)
+		// The sequence must fill the wrapper exactly. A wrapper carrying
+		// anything after its first sequence is treated as not-ours and forwarded
+		// whole: decoding only the first would silently drop the rest, and a
+		// proxy must never lose bytes it was asked to relay. The cost is that
+		// such a store goes unlocalised (blank image, D7) — a case aeye cannot
+		// produce, since tmuxPassthrough wraps exactly one sequence.
+		if !ok || m != len(inner) {
 			return nil, n
 		}
 		q.Wrapped = true
@@ -2132,5 +2138,5 @@ gh pr create --assignee @me --title "feat(bridge): render kitty graphics through
 
 - **`AEYE_BRIDGED` only reaches the carousel because the ctl verb sets it** (Task 11). A carousel the human opens by hand on the remote won't have it and will use the raw-RGBA path; the fetcher's 8 MB cap keeps that survivable rather than fast.
 - **Don't add a `t=d` conversion.** Inline payloads are self-contained and pass through; converting `t=f` to `t=d` instead of fetching would push image bytes onto the control stream, which is the option the spec rejected (D3).
-- **`decodeSeq` returns a length, not an `ok` bool** — amended during Task 3, after the first implementer caught the bug. `\ePtmux;` wraps *any* passthrough, not just graphics, so "incomplete" and "complete but not ours" are different answers; the original single bool conflated them and an OSC 52 clipboard escape (which aeye itself emits) would hold every later byte on that pane until the partial cap or Close. Non-graphics passthroughs are forwarded verbatim — already wrapped for exactly one tmux layer, which is what the renderer's local tmux wants.
+- **`decodeSeq` returns a length, not an `ok` bool** — amended during Task 3, after the first implementer caught the bug. `\ePtmux;` wraps *any* passthrough, not just graphics, so "incomplete" and "complete but not ours" are different answers; the original single bool conflated them and an OSC 52 clipboard escape (which aeye itself emits) would hold every later byte on that pane until the partial cap or `Flush`. Non-graphics passthroughs are forwarded verbatim — already wrapped for exactly one tmux layer, which is what the renderer's local tmux wants. The same branch requires the decoded sequence to fill its wrapper exactly: a wrapper carrying trailing bytes is forwarded whole rather than decoded, because decoding only the first sequence would silently drop the remainder, and losing relayed bytes is worse than leaving one store unlocalised.
 - **The proxy runs on the sink's pump goroutine and may block there.** That is deliberate (D4) — it holds one pane's stream so a store lands before the placements referencing it. Do not move it onto `Router.Route`, which runs on the single shared control-stream loop.
