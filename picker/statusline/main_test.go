@@ -153,7 +153,7 @@ func TestRenderLineFull(t *testing.T) {
 		"  #[fg=#9a8,nobold]D ./" +
 		"  #[fg=#777]#[fg=#94e2d5]󰪞#[fg=default] " +
 		" #[align=right]" +
-		"#[fg=#9a8]I nvim "
+		"#[fg=#9a8]#{p-17:#{=/16/…:#{l:I nvim}}} "
 	if got != want {
 		t.Fatalf("renderLine\n got %q\nwant %q", got, want)
 	}
@@ -182,7 +182,7 @@ func TestRenderLineBridgeWinSuppressesDir(t *testing.T) {
 		"#[fg=#c6a] #[range=left]S work#[norange]  " +
 		"  #[fg=#777]" +
 		" #[align=right]" +
-		"#[fg=#9a8]I nvim "
+		"#[fg=#9a8]#{p-17:#{=/16/…:#{l:I nvim}}} "
 	if got != want {
 		t.Fatalf("renderLine bridge\n got %q\nwant %q", got, want)
 	}
@@ -208,8 +208,40 @@ func TestRenderLineBridgeHost(t *testing.T) {
 		"#[fg=#fab]R g6  " +
 		"  #[fg=#777]" +
 		" #[align=right]" +
-		"#[fg=#9a8]I zsh "
+		"#[fg=#9a8]#{p-17:#{=/16/…:#{l:I zsh}}} "
 	if got != want {
 		t.Fatalf("renderLine bridge host\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestPaneSlot(t *testing.T) {
+	got := paneSlot("I", "nvim")
+	want := "#{p-17:#{=/16/…:#{l:I nvim}}}"
+	if got != want {
+		t.Fatalf("paneSlot\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestPaneSlotEmptyIcon covers the empty @active_pane_icon case (#260): the pad
+// swallows the missing icon's cells, so the slot's shape — modifiers, widths,
+// leading space before cmd — stays the same regardless of icon width.
+func TestPaneSlotEmptyIcon(t *testing.T) {
+	got := paneSlot("", "fish")
+	want := "#{p-17:#{=/16/…:#{l: fish}}}"
+	if got != want {
+		t.Fatalf("paneSlot empty icon\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestPaneSlotStripsFormatChars(t *testing.T) {
+	for _, tc := range []struct{ icon, cmd, want string }{
+		{"I", "foo}bar", "#{p-17:#{=/16/…:#{l:I foobar}}}"},
+		{"I", "a#[bold]b", "#{p-17:#{=/16/…:#{l:I a[bold]b}}}"},
+		{"I", "x{y", "#{p-17:#{=/16/…:#{l:I xy}}}"},
+		{"#{", "sh", "#{p-17:#{=/16/…:#{l: sh}}}"},
+	} {
+		if got := paneSlot(tc.icon, tc.cmd); got != tc.want {
+			t.Errorf("paneSlot(%q, %q)\n got %q\nwant %q", tc.icon, tc.cmd, got, tc.want)
+		}
 	}
 }

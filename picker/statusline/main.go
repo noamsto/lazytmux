@@ -27,12 +27,14 @@ func gitOutput(dir string, args ...string) (string, bool) {
 
 // volatileFields lists the tmux tokens fetched in one display-message call, in
 // output order. Keeping these OUT of the #() argv is what stops line 0 from
-// blinking: tmux keys each #() job's output cache by the fully-expanded command
-// string, so any changing arg (pane_current_command, client_prefix, @issue_*, …)
-// mints a fresh job whose output starts empty — a blank frame that becomes
-// visible once the machine is loaded enough that the recompute spans several
-// redraws. A command string that stays constant across ticks lets tmux reuse
-// the one job and keep the last line painted while this binary recomputes.
+// blinking: tmux keys each #() job by (tag, unexpanded cmd, client), but when the
+// EXPANSION changes (pane_current_command, client_prefix, @issue_*, …) it kills
+// the in-flight job and restarts it (format.c:426-439). A job restarted on every
+// tick never lives long enough to finish once the machine is loaded, so it never
+// reaches the completion callback that publishes its output — and until a first
+// completion that output is empty, which paints line 0 blank. A command string
+// that stays constant across ticks lets tmux reuse the one job and keep the last
+// line painted while this binary recomputes.
 var volatileFields = []string{
 	"#{client_prefix}",
 	"#{@issue_id}", "#{@issue_branch}", "#{@issue_provider}", "#{@issue_title}",
@@ -221,6 +223,47 @@ func paneCmdDisplay(cmd string) string {
 	return cmd
 }
 
+// paneSlotKeep/paneSlotPad pin the trailing "<icon> <command>" unit to a fixed
+// display width. #[align=right] anchors the END of the tail, so any width change
+// here slides the whole right-hand block — including the usage segment —
+// sideways (#260).
+//
+// tmux does the measuring, not Go: #{=/N/…:} truncates to N display cells and
+// appends a 1-cell ellipsis, and #{p-N:} left-pads to N cells with the same
+// utf8_cstrwidth() that computes the right section's width in format-draw.c, so
+// the pad cannot disagree with tmux's own layout. 16 cells fits the longest
+// agent command in use (cursor-agent, 12) plus a 2-cell icon and a space.
+const (
+	paneSlotKeep = 16
+	// Derived, not independent: bumping keep without the pad would let the
+	// truncated value overflow its slot and re-open #260.
+	paneSlotPad = paneSlotKeep + 1 // truncated width + the 1-cell ellipsis
+)
+
+// slotSafe drops the three bytes that would break the slot's fixed width. tmux
+// counts braces, so a `}` in the value closes #{l:} early and leaks the rest out
+// as literal text past the padding (`foo}bar` measured 18 cells, not 17); `#`
+// can open a `#[...]` style run that format_draw strips only AFTER #{p-} has
+// already padded for its width. A process name or icon holds none of them —
+// but pane_current_command is argv[0], which a process picks for itself.
+func slotSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '#', '{', '}':
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// paneSlot renders the icon+command unit at exactly paneSlotPad cells. #{l:} is
+// required, not defensive: a modifier's argument is resolved as a format, so bare
+// literal text would vanish entirely.
+func paneSlot(icon, cmd string) string {
+	return fmt.Sprintf("#{p-%d:#{=/%d/…:#{l:%s %s}}}",
+		paneSlotPad, paneSlotKeep, slotSafe(icon), slotSafe(cmd))
+}
+
 func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, usage string) string {
 	var b strings.Builder
 	b.WriteString("#[align=left,bg=" + a.thmBg + "]")
@@ -233,7 +276,7 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, u
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
 	b.WriteString(usage)
-	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + a.paneIcon + " " + paneCmdDisplay(a.paneCmd) + " ")
+	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + paneSlot(a.paneIcon, paneCmdDisplay(a.paneCmd)) + " ")
 	return b.String()
 }
 
@@ -264,6 +307,21 @@ func main() {
 	flag.IntVar(&a.usageMonthlyThreshold, "agent-usage-monthly-threshold", 0, "")
 	flag.Parse()
 
+	// Land a complete line before the slow work below (display-message, git,
+	// list-panes). tmux publishes a #()'s output only on a newline-terminated
+	// line (format.c:336), and once a job has run >1s with nothing published it
+	// paints <'CMD' not ready> over the segment (format.c:446) — carrying this
+	// job's ~1000-char argv. `echo;` fixes that for the side-effect-only
+	// tickers but cannot be used here: publishing an empty line every tick
+	// would blank line 0. The cached frame keeps the previous content painted,
+	// and tmux keeps only the LAST complete line, so the render below wins.
+	lastGood, hadLastGood := readLastGood(statuslineCacheDir, a.session)
+	if hadLastGood {
+		os.Stdout.WriteString(lastGood + "\n")
+	} else {
+		os.Stdout.WriteString("\n")
+	}
+
 	prefixActive, ok := a.fetchVolatile()
 
 	claudeDir := os.Getenv("CLAUDE_STATUS_DIR")
@@ -271,14 +329,11 @@ func main() {
 		claudeDir = "/tmp/claude-status"
 	}
 
-	// On a failed fetch the volatile fields are empty; re-paint the cached
-	// last-good line so a transient timeout (common under load) doesn't flash a
-	// degraded frame. Cold start has no cache and falls through to render.
-	if !ok {
-		if line, hit := readLastGood(statuslineCacheDir, a.session); hit {
-			os.Stdout.WriteString(line)
-			return
-		}
+	// On a failed fetch the volatile fields are empty; the last-good frame
+	// already on stdout stands, so a transient timeout (common under load)
+	// doesn't flash a degraded one. Cold start has no cache and renders below.
+	if !ok && hadLastGood {
+		return
 	}
 
 	// Usage segment: cheapest gates first — reading the three cache files
@@ -295,9 +350,14 @@ func main() {
 		}
 	}
 
-	line := renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix(), usage)
+	// One job-output line is one status frame, and tmux publishes only the LAST
+	// complete one — so an embedded newline (reachable through a path component)
+	// would leave just the fragment after it on line 0. Collapse before this
+	// escapes to stdout or the cache.
+	line := strings.ReplaceAll(
+		renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix(), usage), "\n", " ")
 	if ok {
 		writeLastGood(statuslineCacheDir, a.session, line)
 	}
-	os.Stdout.WriteString(line)
+	os.Stdout.WriteString(line + "\n")
 }
