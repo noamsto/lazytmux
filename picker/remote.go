@@ -151,8 +151,29 @@ func openRemoteBridge(host, sess string) error {
 	}
 	cmd := exec.Command("lztmux-remote-open", args...)
 	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Captured, not inherited: the picker owns the screen, so a failure has to
+	// come back as a string for the hint line rather than paint over the popup.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := lastNonEmptyLine(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// lastNonEmptyLine picks the launcher's most specific complaint: ssh and
+// systemctl noise comes first, the script's own message last.
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 // collectRemoteItems builds the "Remote" suggestion rows (header + hosts /
@@ -201,44 +222,35 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	})
 
 	for _, r := range results {
-		// The host row is always present: it opens the remote's most-recent
+		// The host row is always selectable: it opens the remote's most-recent
 		// session, and keeps the section alive once every session is bridged.
 		note := ""
-		selectable := true
 		switch r.state {
 		case remoteProbeUnreachable:
-			// Still selectable: the host may be back up by the time it is picked.
+			// The host may be back up by the time it is picked.
 			note = "(unreachable — open default)"
 		case remoteProbeNoServer:
-			// Unselectable because opening it would resolve an empty session name.
-			note = "(no tmux server)"
-			selectable = false
+			// The launcher cold-starts the host's own startup session (#287).
+			note = "(no server — Enter starts one)"
 		default:
 			if len(r.sess) == 0 {
 				note = "(all open)"
 			}
 		}
-		icon := cPeach + iSess + reset
-		if !selectable {
-			icon = cDim + iSess + reset
-		}
-		display := fmt.Sprintf("%s %s", icon, r.host)
+		display := fmt.Sprintf("%s %s", cPeach+iSess+reset, r.host)
 		plain := fmt.Sprintf("%s %s", iSess, r.host)
 		if note != "" {
 			display += "  " + cDim + note + reset
 			plain += "  " + note
 		}
-		row := listItem{
+		items = append(items, listItem{
 			isRemoteRow: true,
+			target:      "remote:" + r.host,
+			remoteHost:  r.host,
 			display:     display,
 			plain:       plain,
 			searchText:  r.host,
-		}
-		if selectable {
-			row.target = "remote:" + r.host
-			row.remoteHost = r.host
-		}
-		items = append(items, row)
+		})
 		for _, sess := range r.sess {
 			items = append(items, listItem{
 				isRemoteRow: true,

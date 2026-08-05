@@ -552,11 +552,14 @@
 
           remote-tests =
             pkgs.runCommand "remote-tests" {
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep];
+              # bash: the cold-start cases run the launcher through an explicit
+              # interpreter (no /usr/bin/env in the sandbox).
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.bash];
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/remote.bats
+              bats tests/remote-cold-start.bats
               touch $out
             '';
 

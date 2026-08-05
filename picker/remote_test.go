@@ -101,7 +101,7 @@ func TestCollectRemoteItems(t *testing.T) {
 }
 
 // A reachable host with no tmux server gets its own row: honest label, and
-// unselectable because lztmux-remote-open would resolve an empty session name.
+// selectable, because the launcher cold-starts the host's startup session (#287).
 func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
 	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
@@ -111,17 +111,35 @@ func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 		t.Fatalf("expected header + one row, got %d: %+v", len(items), items)
 	}
 	row := items[1]
-	if !strings.Contains(row.plain, "no tmux server") {
-		t.Errorf("row should say no tmux server; got %q", row.plain)
+	if !strings.Contains(row.plain, "no server") {
+		t.Errorf("row should say the host has no server; got %q", row.plain)
 	}
 	if strings.Contains(row.plain, "unreachable") {
 		t.Errorf("reachable host must not be labelled unreachable; got %q", row.plain)
 	}
-	if row.target != "" || row.remoteHost != "" {
-		t.Errorf("row must be unselectable (empty target+remoteHost); got target=%q remoteHost=%q", row.target, row.remoteHost)
+	if row.remoteHost != "tp-g6" || row.remoteSess != "" {
+		t.Errorf("row must open the host with no session (cold start); got remoteHost=%q remoteSess=%q", row.remoteHost, row.remoteSess)
+	}
+	if row.target == "" {
+		t.Error("row must be selectable so Enter can start the remote's server")
 	}
 	if row.searchText != "tp-g6" {
 		t.Errorf("row should still be searchable by host; got %q", row.searchText)
+	}
+}
+
+func TestLastNonEmptyLine(t *testing.T) {
+	cases := map[string]string{
+		"":                             "",
+		"\n  \n":                       "",
+		"only":                         "only",
+		"ssh noise\nthe real reason\n": "the real reason",
+		"trailing blanks\n\n   \n":     "trailing blanks",
+	}
+	for in, want := range cases {
+		if got := lastNonEmptyLine(in); got != want {
+			t.Errorf("lastNonEmptyLine(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

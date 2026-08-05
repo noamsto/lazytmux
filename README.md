@@ -191,6 +191,21 @@ session list, tagged with its host in the **Host** column. Live window
 add/close/rename sync through the control-mode daemon; structural keybinds
 inside a mirror window act on the remote.
 
+A host that answers SSH but has **no tmux server** shows as
+`<host>  (no server — Enter starts one)`. Enter starts the remote's own
+`tmux-startup.service`, then re-probes and bridges whatever session that
+produced — so the session name and directory come from the remote's
+`programs.lazytmux.startupSession`, never guessed locally. Two host
+requirements for this to work:
+
+- `programs.lazytmux.startupSession.enable` on the remote, with
+  `startupSession.headless = true` if the host has no graphical session (the
+  unit is otherwise gated on `graphical-session.target`, so a host sitting at
+  the login greeter never starts one).
+- `loginctl enable-linger <user>` on the remote. Without it the systemd user
+  manager — and the tmux server it just started — is tied to the SSH login
+  session, so a cold-started server may not outlive the bridge.
+
 **Known limitations** (documented, not solved here):
 
 - Remote copy-mode / scrollback is not pre-seeded locally yet (M2.4).
