@@ -65,7 +65,9 @@ if ((${#files[@]} == 0)); then
 	exit 0
 fi
 
-printf -v now '%(%s)T' -1
+# NOTIFY_CENTER_NOW lets tests pin "now" so age assertions can't cross a
+# second boundary between seeding and this line.
+printf -v now '%(%s)T' "${NOTIFY_CENTER_NOW:--1}"
 shown=0
 for f in "${files[@]}"; do
 	((shown < cap)) || break
