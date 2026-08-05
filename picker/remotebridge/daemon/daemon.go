@@ -36,6 +36,7 @@ type Config struct {
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
 	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
 	Reflow         func()                     // forces a status-bar reflow of the mirror session (injected; nil = off)
+	LocalPanes     func() map[string]string   // remote pane id -> local pane id, read back from @bridge_pane (injected)
 }
 
 // reflow re-derives the mirror session's window labels. The after-new-window
@@ -272,8 +273,14 @@ func Run(cfg Config) error {
 	// Declared here so teardown can close it; teardown runs exactly once per
 	// Run return path, so a plain close is safe.
 	stopWatch := make(chan struct{})
+	// Assigned once the mirror is up; teardown must drop the status files it
+	// wrote, so it is declared ahead of the closure that captures it.
+	var agents *agentShipper
 	teardown := func() {
 		close(stopWatch)
+		if agents != nil {
+			agents.clear()
+		}
 		listener.Close()
 		os.Remove(cfg.SockPath)
 		os.Remove(pidFile)
@@ -338,6 +345,9 @@ func Run(cfg Config) error {
 	// emits no control-stream event, so poll; teardown closes stopWatch.
 	ticker := time.NewTicker(resizePollInterval)
 	go func() { defer ticker.Stop(); watchResize(cfg.LocalArea, reg, cv, send, stopWatch, ticker.C) }()
+
+	// Ship the remote's agent state into the local claude-status tree.
+	agents = newAgentShipper(cfg.LocalSess, remoteClockSkew(rt))
 
 	// dispatch handles one notification, whether it came straight off the stream
 	// or a reply reader queued it while awaiting a reply. It reports whether the
@@ -439,6 +449,9 @@ func Run(cfg Config) error {
 		if settle() {
 			break
 		}
+		// Same wake-up: an agent that changes state redraws its pane first, so
+		// the output that ended a turn has already brought us here.
+		agents.poll(cfg, rt)
 		// Enable pause-after only now that every window is set up and the loop
 		// is draining the async stream — setup does blocking collectHellos/seed
 		// round-trips without draining, so arming it earlier would let a pane

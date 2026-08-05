@@ -42,6 +42,21 @@ fi
 # empty value would run `detach "" emit …`.
 NOTIFY_BIN="${LZTMUX_NOTIFY_BIN:-@notify@}"
 
+# bridge_stamp OPTION VALUE
+# Mirrors a status write into a pane option, then refreshes — one tmux call for
+# both, replacing the bare refresh each caller used to do. The remote-bridge
+# daemon reads these options over its control connection: a control-mode client
+# renders no status line, so on a host whose only client is the bridge the #()
+# pollers that expose this state locally never run at all.
+bridge_stamp() {
+	[[ -n ${TMUX:-} ]] || return 0
+	if [[ -n ${pane_id:-} ]]; then
+		tmux set -pq -t "$pane_id" "$1" "$2" \; refresh-client -S 2>/dev/null || true
+	else
+		tmux refresh-client -S 2>/dev/null || true
+	fi
+}
+
 # Function to clean up stale pane entries
 # Removes entries only for panes that no longer exist in tmux. A live pane is
 # kept even when its foreground command isn't claude/opencode: Claude shells
@@ -163,9 +178,9 @@ if [[ $state == "issue" ]]; then
 		;;
 	esac
 	log_enabled && log_event claude event issue op "$action" id "${id:-}" pane "%${pane_id#%}"
-	if [[ -n ${TMUX:-} ]]; then
-		tmux refresh-client -S 2>/dev/null || true
-	fi
+	current=""
+	[[ -f $issues_file ]] && IFS= read -r current <"$issues_file" || true
+	bridge_stamp @claude_issues "$current"
 	exit 0
 fi
 
@@ -220,9 +235,9 @@ if [[ $state == "task" ]]; then
 		rm -f "$tasks_file"
 		;;
 	esac
-	if [[ -n ${TMUX:-} ]]; then
-		tmux refresh-client -S 2>/dev/null || true
-	fi
+	task_now=""
+	[[ -f $tasks_file ]] && IFS= read -r task_now <"$tasks_file" || true
+	bridge_stamp @claude_task "$task_now"
 	exit 0
 fi
 
@@ -433,10 +448,7 @@ pane_file="${pane_id#%}"
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
 	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file" "$NAMES_DIR/$pane_file" "$SCREEN_DIR/$pane_file"
-	# Force immediate tmux refresh
-	if [[ -n ${TMUX:-} ]]; then
-		tmux refresh-client -S 2>/dev/null || true
-	fi
+	bridge_stamp @claude_status ""
 	exit 0
 fi
 
@@ -535,6 +547,11 @@ timestamp=$ts
 session=$session_name${unseen_line}${transcript_line}
 EOF
 
+# Space-separated triple (state, epoch, unseen) — all three are token-safe, so a
+# reader can split on whitespace and the '|' row delimiter stays free for the
+# free-form task. See bridge_stamp.
+bridge_stamp @claude_status "$state $ts ${unseen_line:+1}"
+
 # Notify on a real transition into an attention state, and only there. The gate
 # is `prior != new`, not `new ∈ {waiting,error,denied}`, so the repeated
 # `waiting` writes a stalled dialog produces never re-notify. `done` is
@@ -555,9 +572,4 @@ if [[ $prior_state != "$state" && $NOTIFY_BIN != @* ]]; then
 		detach "$NOTIFY_BIN" emit --source claude --level "$notify_level" \
 			--pane "$pane_id" --title "claude: $state" --body "$prior_state → $state"
 	fi
-fi
-
-# Force immediate tmux status bar refresh (if in tmux)
-if [[ -n ${TMUX:-} ]]; then
-	tmux refresh-client -S 2>/dev/null || true
 fi

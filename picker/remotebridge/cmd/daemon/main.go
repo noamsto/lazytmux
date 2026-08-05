@@ -115,6 +115,7 @@ func main() {
 		}
 		runLocalTmux("run-shell", "-b", shellQuote(*reflowBin)+" --force "+shellQuote(*localSess))
 	}
+	panes := func() map[string]string { return localPaneMap(localTmuxArgv, *localSess) }
 
 	cfg := daemon.Config{
 		Ctl:            rwc{stdout, stdin},
@@ -129,6 +130,7 @@ func main() {
 		LocalTmux:      runLocalTmux,
 		LocalArea:      area,
 		Reflow:         reflow,
+		LocalPanes:     panes,
 	}
 
 	if err := daemon.Run(cfg); err != nil {
@@ -151,6 +153,27 @@ func localArea(localTmuxArgv []string, localSess string) (int, int) {
 		return w, h
 	}
 	return 80, 24
+}
+
+// localPaneMap reads the mirror session's panes back as remote pane id -> local
+// pane id. The daemon stamps @bridge_pane when it spawns each renderer, so tmux
+// itself holds the mapping the agent-status shipper needs to re-key the remote's
+// state onto local pane ids.
+func localPaneMap(localTmuxArgv []string, localSess string) map[string]string {
+	out, err := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...),
+		"list-panes", "-s", "-t", localSess, "-F", "#{@bridge_pane} #{pane_id}")...).Output()
+	if err != nil {
+		return nil
+	}
+	m := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		m[fields[0]] = fields[1]
+	}
+	return m
 }
 
 // clientArea is the smallest attached client's content area: its size minus
