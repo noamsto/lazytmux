@@ -27,27 +27,27 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 	}{
 		{
 			name:   "split -h carries the pane cwd and targets the pane by id",
-			argv:   []string{"1", "split-h", "%3"},
+			argv:   []string{wire.CtlProtocolVersion, "split-h", "%3"},
 			want:   []string{"split-window -h -t %3 -c '#{pane_current_path}'"},
 			layout: "@1",
 		},
 		{
 			name:   "split -v",
-			argv:   []string{"1", "split-v", "%3"},
+			argv:   []string{wire.CtlProtocolVersion, "split-v", "%3"},
 			want:   []string{"split-window -v -t %3 -c '#{pane_current_path}'"},
 			layout: "@1",
 		},
 		{
 			// Killing a pane can empty its window, so it needs both reconciles.
 			name:    "kill-pane wants both reconciles",
-			argv:    []string{"1", "kill-pane", "%3"},
+			argv:    []string{wire.CtlProtocolVersion, "kill-pane", "%3"},
 			want:    []string{"kill-pane -t %3"},
 			windows: true,
 			layout:  "@1",
 		},
 		{
 			name:   "resize maps the direction and amount",
-			argv:   []string{"1", "resize", "%3", "U", "5"},
+			argv:   []string{wire.CtlProtocolVersion, "resize", "%3", "U", "5"},
 			want:   []string{"resize-pane -t %3 -U 5"},
 			layout: "@1",
 		},
@@ -55,7 +55,7 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 			// No -d: the remote keeps the same pane active, which is what lets the
 			// local reconcile's -d swap agree with it.
 			name:   "swap sends no -d",
-			argv:   []string{"1", "swap", "%3", "U"},
+			argv:   []string{wire.CtlProtocolVersion, "swap", "%3", "U"},
 			want:   []string{"swap-pane -t %3 -U"},
 			layout: "@1",
 		},
@@ -63,19 +63,19 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 			// A session target with the index unspecified, quoted because the name
 			// has a space — never a bare name in a target-window slot.
 			name:    "new-window targets the session, quoted",
-			argv:    []string{"1", "new-window", "%3"},
+			argv:    []string{wire.CtlProtocolVersion, "new-window", "%3"},
 			want:    []string{"new-window -t 'my proj': -c '#{pane_current_path}'"},
 			windows: true,
 		},
 		{
 			name:    "kill-window resolves the pane's window",
-			argv:    []string{"1", "kill-window", "%3"},
+			argv:    []string{wire.CtlProtocolVersion, "kill-window", "%3"},
 			want:    []string{"kill-window -t @1"},
 			windows: true,
 		},
 		{
 			name:    "rename quotes the new name",
-			argv:    []string{"1", "rename", "%3", "my new name"},
+			argv:    []string{wire.CtlProtocolVersion, "rename", "%3", "my new name"},
 			want:    []string{"rename-window -t @1 -- 'my new name'"},
 			windows: true,
 		},
@@ -83,13 +83,13 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 			// A name that would break the reflow delimiter or a command line is
 			// sanitized before it reaches the remote.
 			name:    "rename strips a pipe and control characters",
-			argv:    []string{"1", "rename", "%3", "a|b\nc"},
+			argv:    []string{wire.CtlProtocolVersion, "rename", "%3", "a|b\nc"},
 			want:    []string{"rename-window -t @1 -- 'abc'"},
 			windows: true,
 		},
 		{
 			name:    "rename escapes an embedded quote",
-			argv:    []string{"1", "rename", "%3", "it's"},
+			argv:    []string{wire.CtlProtocolVersion, "rename", "%3", "it's"},
 			want:    []string{`rename-window -t @1 -- 'it'\''s'`},
 			windows: true,
 		},
@@ -121,18 +121,18 @@ func TestParseCtlRejects(t *testing.T) {
 		argv []string
 		want string
 	}{
-		{"unknown verb", []string{"1", "detach-client", "%3"}, "unknown verb"},
-		{"unmirrored pane", []string{"1", "split-h", "%99"}, "not mirrored"},
-		{"bad resize direction", []string{"1", "resize", "%3", "X", "5"}, "bad direction"},
-		{"bad resize amount", []string{"1", "resize", "%3", "U", "abc"}, "bad amount"},
-		{"resize amount out of range", []string{"1", "resize", "%3", "U", "0"}, "bad amount"},
-		{"bad swap direction", []string{"1", "swap", "%3", "L"}, "bad direction"},
-		{"wrong arity", []string{"1", "resize", "%3", "U"}, "wants 2 argument"},
-		{"empty rename", []string{"1", "rename", "%3", "|||"}, "empty name"},
-		{"truncated frame", []string{"1", "split-h"}, "at least version"},
+		{"unknown verb", []string{wire.CtlProtocolVersion, "detach-client", "%3"}, "unknown verb"},
+		{"unmirrored pane", []string{wire.CtlProtocolVersion, "split-h", "%99"}, "not mirrored"},
+		{"bad resize direction", []string{wire.CtlProtocolVersion, "resize", "%3", "X", "5"}, "bad direction"},
+		{"bad resize amount", []string{wire.CtlProtocolVersion, "resize", "%3", "U", "abc"}, "bad amount"},
+		{"resize amount out of range", []string{wire.CtlProtocolVersion, "resize", "%3", "U", "0"}, "bad amount"},
+		{"bad swap direction", []string{wire.CtlProtocolVersion, "swap", "%3", "L"}, "bad direction"},
+		{"wrong arity", []string{wire.CtlProtocolVersion, "resize", "%3", "U"}, "wants 2 argument"},
+		{"empty rename", []string{wire.CtlProtocolVersion, "rename", "%3", "|||"}, "empty name"},
+		{"truncated frame", []string{wire.CtlProtocolVersion, "split-h"}, "at least version"},
 		// A config reload can hand a new ctl to an old daemon; the mismatch must
 		// be a message, not a silently-ignored gesture.
-		{"version skew", []string{"99", "split-h", "%3"}, "reopen the bridge"},
+		{"version skew", []string{"1", "split-h", "%3"}, "reopen the bridge"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,11 +148,27 @@ func TestParseCtlRejects(t *testing.T) {
 	}
 }
 
+func TestParseCtlPingProbesCompatibilityBeforePaneLookup(t *testing.T) {
+	c := newCtlState()
+	req, err := c.parseCtl([]string{wire.CtlProtocolVersion, "ping", "placeholder"}, "rem")
+	if err != nil {
+		t.Fatalf("parseCtl ping: %v", err)
+	}
+	if len(req.cmds) != 0 || req.wantWindows || req.wantLayout != "" || req.invalidate != "" {
+		t.Errorf("ping request = %+v, want no side effects", req)
+	}
+
+	_, err = c.parseCtl([]string{"1", "ping", "placeholder"}, "rem")
+	if err == nil || !strings.Contains(err.Error(), "reopen the bridge") {
+		t.Fatalf("v1 daemon compatibility rejection = %v, want version mismatch", err)
+	}
+}
+
 // The daemon must build every remote command from the verb table, never forward
 // text a caller supplied.
 func TestParseCtlNeverForwardsRawCommandText(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
-	req, err := c.parseCtl([]string{"1", "rename", "%3", "x; kill-server"}, "rem")
+	req, err := c.parseCtl([]string{wire.CtlProtocolVersion, "rename", "%3", "x; kill-server"}, "rem")
 	if err != nil {
 		t.Fatalf("parseCtl: %v", err)
 	}
@@ -168,7 +184,7 @@ func TestParseCtlNeverForwardsRawCommandText(t *testing.T) {
 // drain that observes the sent command can never miss the intent.
 func TestSubmitRegistersIntentBeforeSending(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
-	req, err := c.parseCtl([]string{"1", "split-h", "%3"}, "rem")
+	req, err := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem")
 	if err != nil {
 		t.Fatalf("parseCtl: %v", err)
 	}
@@ -191,7 +207,7 @@ func TestSubmitRegistersIntentBeforeSending(t *testing.T) {
 // A request that loses the race with teardown must not be acked as accepted.
 func TestSubmitReportsUnwritten(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
-	req, _ := c.parseCtl([]string{"1", "split-h", "%3"}, "rem")
+	req, _ := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem")
 	if c.submit(req, func(string) bool { return false }) {
 		t.Error("submit reported written when send refused")
 	}
@@ -201,10 +217,10 @@ func TestTakeIntentsCoalescesAndDrains(t *testing.T) {
 	c := newCtlStateWith("@1", "%2", "%3")
 	c.setWindowPanes("@2", []string{"%9"})
 	for _, argv := range [][]string{
-		{"1", "split-h", "%2"},
-		{"1", "split-v", "%3"}, // same window: coalesces
-		{"1", "split-h", "%9"}, // different window
-		{"1", "new-window", "%2"},
+		{wire.CtlProtocolVersion, "split-h", "%2"},
+		{wire.CtlProtocolVersion, "split-v", "%3"}, // same window: coalesces
+		{wire.CtlProtocolVersion, "split-h", "%9"}, // different window
+		{wire.CtlProtocolVersion, "new-window", "%2"},
 	} {
 		req, err := c.parseCtl(argv, "rem")
 		if err != nil {
@@ -230,7 +246,7 @@ func TestTakeIntentsCoalescesAndDrains(t *testing.T) {
 // A closed window's focus state and pending intent must not outlive it.
 func TestForgetWindowDropsState(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
-	req, _ := c.parseCtl([]string{"1", "split-h", "%3"}, "rem")
+	req, _ := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem")
 	c.submit(req, func(string) bool { return true })
 
 	c.forgetWindow("@1")
@@ -238,17 +254,17 @@ func TestForgetWindowDropsState(t *testing.T) {
 	if _, layouts := c.takeIntents(); len(layouts) != 0 {
 		t.Errorf("layouts = %v, want none after forgetWindow", layouts)
 	}
-	if _, err := c.parseCtl([]string{"1", "split-h", "%3"}, "rem"); err == nil {
+	if _, err := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem"); err == nil {
 		t.Error("a pane of a forgotten window must no longer resolve")
 	}
 }
 
 func TestCtlArgvRoundTrip(t *testing.T) {
 	tests := [][]string{
-		{"1", "split-h", "%3"},
-		{"1", "rename", "%3", "a name with spaces"},
-		{"1", "rename", "%3", ""}, // an empty argument must survive as one field
-		{"1", "rename", "%3", "quote's and |pipe|"},
+		{wire.CtlProtocolVersion, "split-h", "%3"},
+		{wire.CtlProtocolVersion, "rename", "%3", "a name with spaces"},
+		{wire.CtlProtocolVersion, "rename", "%3", ""}, // an empty argument must survive as one field
+		{wire.CtlProtocolVersion, "rename", "%3", "quote's and |pipe|"},
 	}
 	for _, argv := range tests {
 		if got := wire.DecodeArgv(wire.EncodeArgv(argv)); !reflect.DeepEqual(got, argv) {
@@ -272,7 +288,7 @@ func TestCarouselVerbBuildsRemoteToggle(t *testing.T) {
 	if len(cmds) != 1 {
 		t.Fatalf("want one command, got %v", cmds)
 	}
-	for _, want := range []string{"run-shell", "-t %5", "TMUX_PANE=%5", "AEYE_BRIDGED=1", "tmux-claude-images"} {
+	for _, want := range []string{"run-shell", "-t %5", "exec /bin/sh -c", "display-message -p -t %5", "#{@claude_img_src}", "src=%5", "TMUX_PANE=\"$src\"", "AEYE_BRIDGED=1", "tmux-claude-images"} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
 		}

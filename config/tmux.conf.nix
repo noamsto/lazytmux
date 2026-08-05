@@ -289,7 +289,7 @@
   # else branch — a regression in normal keybind behavior would defeat the whole
   # point of the bridge (zero blast radius on the human's live session).
   bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}";
-  bridgeCtl = "${picker-bridge-ctl-bin} --sock '#{@bridge_sock}'";
+  bridgeCtl = "${picker-bridge-ctl-bin} --display-error '#{client_name}' --sock '#{@bridge_sock}'";
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   # Commands the pipe-pane sweep in tmux-update-icons watches for, derived from

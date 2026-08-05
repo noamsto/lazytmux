@@ -91,11 +91,31 @@ sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 renderer="$(command -v lztmux-remote-bridge-renderer)"
 reflow="$(command -v tmux-reflow-windows)"
 
-# Dedup: if a daemon for this host+session is already running (pidfile present
-# and live), just attach to the existing mirror session — no new SSH connection.
+# Dedup: a live pid alone is not enough. A config reload can leave a daemon
+# that speaks an older ctl protocol behind, so prove its compatibility before
+# reusing the mirror. ctl bounds the probe at two seconds.
 if remote_daemon_alive "${sock}.pid"; then
-	tmux switch-client -t "=$local_sess"
-	exit 0
+	if probe_error="$(lztmux-remote-bridge-ctl --sock "$sock" ping _ 2>&1)"; then
+		tmux switch-client -t "=$local_sess"
+		exit 0
+	fi
+
+	# A stale pidfile can be recycled by an unrelated process. Only the daemon's
+	# deterministic old-protocol replies establish that the PID owns this socket;
+	# an unreachable socket goes straight to cleanup/recreate without signalling.
+	if [[ $probe_error == *'ctl protocol version "2", this daemon speaks "1" — reopen the bridge'* || $probe_error == *'this bridge daemon does not speak the ctl protocol — reopen the bridge'* ]]; then
+		daemon_pid="$(<"${sock}.pid")"
+		if [[ $daemon_pid =~ ^[0-9]+$ ]]; then
+			kill -TERM -- "$daemon_pid" 2>/dev/null || true
+			for _ in {1..20}; do
+				kill -0 "$daemon_pid" 2>/dev/null || break
+				sleep 0.1
+			done
+			if kill -0 "$daemon_pid" 2>/dev/null; then
+				kill -KILL -- "$daemon_pid" 2>/dev/null || true
+			fi
+		fi
+	fi
 fi
 # Stale cleanup: a prior daemon was killed (SIGTERM/SIGKILL) without running
 # teardown, leaving socket + pidfile behind. Remove both so the new daemon can

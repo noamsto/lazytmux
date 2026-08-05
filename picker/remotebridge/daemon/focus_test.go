@@ -1,6 +1,10 @@
 package daemon
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+)
 
 // focusDriver runs the two halves of the echo-suppression machine against each
 // other the way the daemon does: a local report goes through planFocusLocked and,
@@ -210,7 +214,7 @@ func TestSplitInvalidatesRemoteActiveBelief(t *testing.T) {
 		t.Fatalf("remoteActivePane = %q, want %%2", got)
 	}
 
-	req, err := c.parseCtl([]string{"1", "split-h", "%2"}, "rem")
+	req, err := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%2"}, "rem")
 	if err != nil {
 		t.Fatalf("parseCtl: %v", err)
 	}

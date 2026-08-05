@@ -197,11 +197,19 @@ var verbs = map[string]verb{
 	// control client, which has no status line for a message to land on, while a
 	// split mirrors back into the window the human is looking at.
 	"carousel": {layout: true, moves: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
-		return []string{fmt.Sprintf(
-			"run-shell -b -t %s 'command -v tmux-claude-images >/dev/null 2>&1 && "+
-				"exec env TMUX_PANE=%s AEYE_BRIDGED=1 tmux-claude-images; "+
-				`tmux split-window -t %s -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"'`,
-			pane, pane, pane)}, nil
+		script := fmt.Sprintf(
+			"src=$(tmux display-message -p -t %s -F \"#{@claude_img_src}\"); "+
+				"case \"$src\" in %%*) case \"${src#%%}\" in ''|*[!0-9]*) src=%s;; esac;; *) src=%s;; esac; "+
+				"command -v tmux-claude-images >/dev/null 2>&1 && "+
+				"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 tmux-claude-images; "+
+				`tmux split-window -t "$src" -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
+			pane, pane, pane,
+		)
+		// run-shell uses tmux's configured default shell (fish on the normal
+		// host), while this validation is POSIX shell syntax. Quote each layer so
+		// the remote pane id remains data all the way through both parsers.
+		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		return []string{cmd}, nil
 	}},
 }
 
@@ -217,6 +225,15 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 		return ctlRequest{}, fmt.Errorf("ctl protocol version %q, this daemon speaks %q — reopen the bridge", argv[0], wire.CtlProtocolVersion)
 	}
 	name, pane, args := argv[1], argv[2], argv[3:]
+	// This probe deliberately resolves before pane lookup: a new ctl can tell a
+	// live v2 daemon from a pre-carousel v1 daemon without needing a mirrored
+	// pane. The latter rejects its v2 version before reaching this branch.
+	if name == "ping" {
+		if len(args) != 0 {
+			return ctlRequest{}, fmt.Errorf("ping wants no arguments")
+		}
+		return ctlRequest{}, nil
+	}
 
 	c.mu.Lock()
 	win, known := c.paneToWin[pane]
