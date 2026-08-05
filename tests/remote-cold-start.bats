@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031 # bats @test blocks run in subshells; export is intentional
 # Cold-starting a serverless remote (#287). The launcher may only reach for
 # tmux-startup.service when list-sessions came back empty, and must re-probe
 # afterwards instead of assuming the unit produced the session it wanted —
@@ -28,9 +29,17 @@ setup() {
 		echo "$*" >>"$SSH_LOG"
 		case "$*" in
 		*"command -v tmux"*) echo /usr/bin/tmux ;;
+		*"uname -s; id -u"*) printf '%s\n%s\n' "${FAKE_UNAME:-Linux}" 1000 ;;
 		*"systemctl --user start"*)
 			if [ -n "${FAKE_UNIT_MISSING:-}" ]; then
 				echo "Failed to start tmux-startup.service: Unit not found." >&2
+				exit 1
+			fi
+			touch "$REMOTE_SERVER"
+			;;
+		*"launchctl kickstart"*)
+			if [ -n "${FAKE_AGENT_MISSING:-}" ]; then
+				echo "Could not find service \"org.nix-community.home.tmux-startup\" in domain for gui" >&2
 				exit 1
 			fi
 			touch "$REMOTE_SERVER"
@@ -110,4 +119,47 @@ setup() {
 	run grep -cE 'list-sessions|systemctl' "$SSH_LOG"
 	[ "$status" -ne 0 ]
 	grep -q 'switch-client -t =tp-g6-scratch' "$TMUX_LOG"
+}
+
+@test "darwin cold start: kickstarts the launchd agent, re-probes, bridges" {
+	export FAKE_UNAME=Darwin
+	unset LZTMUX_REMOTE_TMPDIR
+
+	run bash "$LAUNCHER" mbp
+	[ "$status" -eq 0 ]
+
+	grep -q 'launchctl kickstart gui/1000/org.nix-community.home.tmux-startup' "$SSH_LOG"
+	# macOS socket dir, never the Linux one.
+	grep -q 'TMUX_TMPDIR=/tmp/tmux-1000' "$SSH_LOG"
+	run grep -c 'TMUX_TMPDIR=/run/user' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	# Two probes: the empty one that triggered the kickstart, and the one after.
+	[ "$(grep -c list-sessions "$SSH_LOG")" -eq 2 ]
+
+	grep -q 'new-session -d -s mbp-workstation' "$TMUX_LOG"
+	grep -q 'switch-client -t =mbp-workstation' "$TMUX_LOG"
+}
+
+@test "darwin cold start: a missing launchd agent fails by name and bridges nothing" {
+	export FAKE_UNAME=Darwin FAKE_AGENT_MISSING=1
+	unset LZTMUX_REMOTE_TMPDIR
+
+	run bash "$LAUNCHER" mbp
+	[ "$status" -eq 1 ]
+	[[ $output == *"no tmux-startup launchd agent"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "darwin host with a live server is never cold-started" {
+	export FAKE_UNAME=Darwin
+	touch "$REMOTE_SERVER"
+
+	run bash "$LAUNCHER" mbp
+	[ "$status" -eq 0 ]
+
+	run grep -cE 'launchctl|systemctl' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	grep -q 'switch-client -t =mbp-workstation' "$TMUX_LOG"
 }

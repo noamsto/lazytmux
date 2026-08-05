@@ -209,6 +209,13 @@ requirements for this to work:
   handles this; set it false only to manage lingering yourself (e.g. NixOS
   `users.users.<name>.linger = true`).
 
+macOS hosts work as bridge targets too: the launcher finds the server at
+tmux's default `/tmp/tmux-<uid>` socket dir, and cold-starts via
+`launchctl kickstart` of the `org.nix-community.home.tmux-startup` agent
+(the launchd mirror of `tmux-startup.service`). Neither `headless` nor
+`linger` applies there — the agent starts at login and launchd keeps it
+alive across SSH sessions.
+
 Agent status crosses the bridge too: a Claude running on the remote shows its
 state icon, task and issue ids on the mirror window, in the session tint and in
 both pickers, exactly as a local one does. It needs lazytmux on the remote as
