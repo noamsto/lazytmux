@@ -21,15 +21,10 @@ type Seq struct {
 //	                     verbatim and move past it
 //	seq == nil, n == 0 — incomplete; hold for more bytes
 //
-// The middle case is the reason this doesn't return a bool: "not complete yet"
-// and "complete, but not mine" both mean "no sequence", but conflating them
-// stalls the pane — a clipboard escape would hold every later byte behind it
-// until the partial cap or Flush.
-//
-// Forwarding that case unchanged is correct, not a fallback: the bytes arrived
-// wrapped for one tmux layer and the renderer pane sits inside the local tmux,
-// so exactly one wrapper reaches it and the escape still does what its sender
-// intended.
+// The middle case is why this returns a length rather than an ok bool. "Not
+// complete yet" and "complete, but not mine" both mean "no sequence here", but
+// conflating them stalls the pane: a clipboard escape would hold every later
+// byte behind it until the partial cap or Flush.
 func decodeSeq(b []byte) (*Seq, int) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)

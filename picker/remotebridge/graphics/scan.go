@@ -51,18 +51,21 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			buf = buf[i:]
 		}
 		seq, n := decodeSeq(buf)
-		if n == 0 {
+		switch {
+		case n == 0:
 			// Incomplete: hold it, unless it has outgrown the cap.
 			if len(buf) > maxPartial {
 				return appendLiteral(out, buf)
 			}
 			s.held = append([]byte(nil), buf...)
 			return out
-		}
-		if seq == nil {
-			// Complete, but not ours — forward it and carry on scanning.
+		case seq == nil:
+			// A complete passthrough carrying something else (OSC 52, …).
+			// Forward it verbatim: it is already wrapped for one tmux layer,
+			// which is exactly what the renderer's local tmux needs, so the
+			// escape reaches the outer terminal and does what its sender meant.
 			out = appendLiteral(out, buf[:n])
-		} else {
+		default:
 			out = append(out, Chunk{Seq: seq})
 		}
 		buf = buf[n:]
