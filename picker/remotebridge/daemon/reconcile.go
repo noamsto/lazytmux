@@ -159,7 +159,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			// Dims come from the pane's cell in the REMOTE order, not from the
 			// temporary local index it was appended at — the swaps below have
 			// not run yet, so the two differ.
-			if seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)]) {
+			if seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)], cfg.graphicsFor(id)) {
 				go pumpInput(c, id, send)
 			} else {
 				delete(w.conns, id)
