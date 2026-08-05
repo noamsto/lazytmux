@@ -50,9 +50,10 @@ thm_surface_1=$(tmux show -gv @thm_surface_1 2>/dev/null | tr -d '"')
 [[ -z $thm_mauve || -z $thm_bg ]] && exit 0
 
 # --- Pane borders ---
-# Nested #{@thm_*} inside #[] don't expand at render time, so we interpolate here
+# Nested #{@thm_*} inside #[] don't expand at render time, so we interpolate here.
+# @pane_label (floating utility panes) → mauve titled border; else multi-pane ● / plain.
 tmux setw -g pane-border-format \
-	"#{?#{&&:#{pane_active},#{&&:#{>:#{window_panes},1},#{==:#{window_zoomed_flag},0}}},#[fg=${thm_mauve}]━━ #[fg=${thm_green}]●#[fg=${thm_mauve}] ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━━━━}"
+	"#{?@pane_label,#{?pane_active,#[fg=${thm_mauve}]━━ #{@pane_label} ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━ #{@pane_label} ━━},#{?#{&&:#{pane_active},#{&&:#{>:#{window_panes},1},#{==:#{window_zoomed_flag},0}}},#[fg=${thm_mauve}]━━ #[fg=${thm_green}]●#[fg=${thm_mauve}] ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━━━━}}"
 
 # --- tmux-fingers hints (requires colourN format, not hex) ---
 tmux set -g @fingers-hint-style "fg=colour$(hex_to_256 "$thm_crust"),bg=colour$(hex_to_256 "$thm_mauve"),bold"
