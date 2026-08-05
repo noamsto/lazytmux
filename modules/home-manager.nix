@@ -771,9 +771,33 @@ in {
 
           Enable this on a host you reach over ssh — with the default graphical
           gating, a machine sitting at its login screen never starts a tmux
-          server, so there is nothing for the remote bridge to attach to. Pair
-          with `loginctl enable-linger <user>` to start at boot rather than on
-          first login.
+          server, so there is nothing for the remote bridge to attach to. See
+          `linger`, which is on by default and makes that server survive logout.
+        '';
+      };
+
+      linger = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Enable systemd lingering for the user so the startup tmux server
+          survives logout. Without it, systemd stops the user manager — and the
+          tmux server with it — when the last login session ends; a session
+          cold-started by the remote bridge (over ssh) then dies the moment the
+          bridge disconnects.
+
+          When on (the default) and `enable` is set, home-manager activation
+          runs `loginctl enable-linger` for the user on Linux. It is idempotent,
+          needs no privilege (systemd's polkit `set-self-linger` allows a user
+          to linger itself), and a failure only warns — it never aborts the
+          switch. Activation never *disables* lingering: turning this off later
+          leaves an already-lingering user alone rather than guessing the user
+          did not want it for some other reason.
+
+          Set to false to manage lingering yourself — e.g. declaratively with
+          NixOS `users.users.<name>.linger = true`, which is revertible. With
+          `enable` on and this off, activation warns that the server will not
+          survive logout.
         '';
       };
 
@@ -914,6 +938,27 @@ in {
         # Run after restoreTheme (which sources the config and sets theme vars).
         # We only need to: ensure config is loaded, then reflow all sessions.
         activation = {
+          # Lingering keeps the startup server alive past logout (see the
+          # startupSession.linger option). enable-linger is idempotent and needs
+          # no privilege for self-linger; a failure only warns. Never disables —
+          # see the option doc for why the asymmetry is deliberate.
+          startupLinger = lib.mkIf (isLinux && cfg.startupSession.enable) (
+            lib.hm.dag.entryAfter ["writeBoundary"] (
+              if cfg.startupSession.linger
+              then ''
+                if ! ${lib.getExe' pkgs.systemd "loginctl"} show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+                  ${lib.getExe' pkgs.systemd "loginctl"} enable-linger "$USER" \
+                    || echo "lazytmux: could not enable lingering for $USER; the startup tmux server will not survive logout" >&2
+                fi
+              ''
+              else ''
+                if ! ${lib.getExe' pkgs.systemd "loginctl"} show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+                  echo "lazytmux: startupSession.enable is on but startupSession.linger is off and $USER is not lingering — the tmux server will die at logout. Enable it declaratively with 'users.users.$USER.linger = true' or set programs.lazytmux.startupSession.linger = true." >&2
+                fi
+              ''
+            )
+          );
+
           reloadTmux = lib.hm.dag.entryAfter ["writeBoundary" "restoreTheme"] ''
             TMUX=${pkgs.tmux}/bin/tmux
             REFLOW=${tmuxConfig.script.tmux-reflow-windows}/bin/tmux-reflow-windows
