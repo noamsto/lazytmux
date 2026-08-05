@@ -246,6 +246,16 @@
               touch $out
             '';
 
+          picker-launcher-tests =
+            pkgs.runCommand "picker-launcher-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.bash];
+            } ''
+              cp -r ${./tests} tests
+              cp -r ${./scripts} scripts
+              bats tests/picker-launcher.bats
+              touch $out
+            '';
+
           cursor-status-hooks-tests =
             pkgs.runCommand "cursor-status-hooks-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.jq];

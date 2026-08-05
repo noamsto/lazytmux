@@ -30,6 +30,8 @@
   zoxideExclude ? "",
   # Percentage of the picker body the list gets; the preview takes the rest.
   pickerListRatio ? 50,
+  # What the pickers open with: "preview" (list + live preview) or "list".
+  pickerLayout ? "preview",
   # Whitespace-separated ssh Host aliases the session picker probes for remote
   # tmux sessions (prefix + s remote section). Empty => no remote section.
   remoteBridgeHosts ? "",
@@ -819,6 +821,7 @@
     set -g @icon_remote "${icons.remote}"
     set -g @picker_zoxide_exclude "${zoxideExclude}"
     set -g @picker_list_ratio "${toString pickerListRatio}"
+    set -g @picker_layout "${pickerLayout}"
     set -g @remote_bridge_hosts "${remoteBridgeHosts}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)

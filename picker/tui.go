@@ -121,6 +121,13 @@ type previewMsg struct {
 
 // --- Entry point ---
 
+// layoutShowsPreview reports whether the picker opens with the preview shown,
+// from @picker_layout. Anything but "list" (including unset) means preview —
+// the historical default. ^/ still toggles at runtime.
+func layoutShowsPreview(opts map[string]string) bool {
+	return envOrMap("PICKER_LAYOUT", opts, "@picker_layout", "preview") != "list"
+}
+
 func runTUI(windowMode, claudeOnly bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
@@ -136,7 +143,7 @@ func runTUI(windowMode, claudeOnly bool) error {
 	m := tuiModel{
 		windowMode:   windowMode,
 		claudeOnly:   claudeOnly,
-		showPreview:  true,
+		showPreview:  layoutShowsPreview(opts),
 		theme:        theme,
 		tmuxOpts:     opts,
 		allItems:     items,

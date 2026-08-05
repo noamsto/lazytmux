@@ -515,3 +515,21 @@ func TestRenderWindowItemsZoomAligned(t *testing.T) {
 		t.Errorf("PR column misaligned: row0 # at cell %d, row1 # at cell %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
 	}
 }
+
+func TestLayoutShowsPreview(t *testing.T) {
+	cases := map[string]bool{
+		"":        true, // unset -> historical default
+		"preview": true,
+		"list":    false,
+		"LIST":    true, // exact match only; not "list"
+	}
+	for v, want := range cases {
+		opts := map[string]string{}
+		if v != "" {
+			opts["@picker_layout"] = v
+		}
+		if got := layoutShowsPreview(opts); got != want {
+			t.Errorf("layoutShowsPreview(@picker_layout=%q) = %v, want %v", v, got, want)
+		}
+	}
+}
