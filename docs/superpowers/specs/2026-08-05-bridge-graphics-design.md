@@ -160,6 +160,14 @@ always precedes the placements referencing it. Serialisation is **per-pane**; ot
 flowing. The hold is bounded (~2s); on timeout the sequence is dropped and the stream resumes,
 because a frozen pane is worse than a missing image.
 
+**How the bound is carried, settled during implementation.** `Localizer.Localize` takes a
+`context.Context` and the proxy wraps each sequence's fetch in `context.WithTimeout`. The context
+must reach the ssh exec (`exec.CommandContext`), not merely the call site: a select-on-a-goroutine
+wrapper abandons the blocked process instead of killing it, leaking one goroutine and one ssh per
+timeout. The first draft of this design named the deadline here but gave `Localizer` no context
+and the fetcher no timeout, so the property existed only on paper — a whole-package review caught
+it. Anything later that wants to bound a fetch differently changes the context, not the interface.
+
 ### D5 — coalesce stores per image id
 
 Where a store for image id N is followed by a newer store for N, only the newest is forwarded.

@@ -868,8 +868,13 @@ import (
 
 // Localizer turns a path on the remote host into a path the local terminal can
 // read. Injected so the policy below is testable without ssh.
+//
+// The context bounds the fetch. Filter holds the pane's byte stream while this
+// runs (spec D4), so an unbounded call freezes the pane — the one outcome D4
+// calls worse than a missing image. It has to reach the ssh exec itself: a
+// select-on-a-goroutine wrapper would abandon the blocked process, not kill it.
 type Localizer interface {
-	Localize(remotePath string) (localPath string, err error)
+	Localize(ctx context.Context, remotePath string) (localPath string, err error)
 }
 
 // Rewrite applies the localisation policy to one sequence.
@@ -877,8 +882,12 @@ type Localizer interface {
 // The governing rule (spec D7) is that a store whose payload could not be
 // localised is DROPPED, never forwarded: a stale local path renders the wrong
 // image, where a missing one renders blank and self-heals on the sender's next
-// repaint.
-func Rewrite(q *Seq, l Localizer) (out *Seq, drop bool, err error) {
+// repaint. A fetch that outruns ctx is just another such failure.
+//
+// Postcondition: out is nil if and only if drop is true. Filter dereferences the
+// result on every non-drop path, so a branch returning (nil, false, …) would
+// panic the pump goroutine rather than fail a test.
+func Rewrite(ctx context.Context, q *Seq, l Localizer) (out *Seq, drop bool, err error) {
 	switch q.Get("t") {
 	case "f", "t":
 		remote, derr := base64.StdEncoding.DecodeString(string(q.Payload))
@@ -1146,21 +1155,29 @@ Create `proxy.go`:
 ```go
 package graphics
 
+// fetchTimeout bounds how long one sequence may hold its pane's byte stream.
+// A frozen pane is worse than a missing image (spec D4), so a fetch that outruns
+// this is dropped down the same path as any other unlocalisable store and the
+// stream resumes.
+const fetchTimeout = 2 * time.Second
+
 // Proxy filters one pane's output stream. It is owned by that pane's output
 // sink and called only from the sink's pump goroutine, so it needs no locking —
-// and it may block there: holding one pane's stream at a sequence boundary is
-// what keeps a store ahead of the placements that reference it (spec D4).
+// and it may block there, bounded by fetchTimeout: holding one pane's stream at
+// a sequence boundary is what keeps a store ahead of the placements that
+// reference it (spec D4).
 type Proxy struct {
-	sc   *Scanner
-	loc  Localizer
-	logf func(format string, args ...any)
+	sc      *Scanner
+	loc     Localizer
+	logf    func(format string, args ...any)
+	timeout time.Duration
 }
 
 func New(loc Localizer, logf func(format string, args ...any)) *Proxy {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Proxy{sc: NewScanner(), loc: loc, logf: logf}
+	return &Proxy{sc: NewScanner(), loc: loc, logf: logf, timeout: fetchTimeout}
 }
 
 // Filter returns the bytes to forward to the renderer. An incomplete trailing
@@ -1173,7 +1190,12 @@ func (p *Proxy) Filter(data []byte) []byte {
 			out = append(out, c.Literal...)
 			continue
 		}
-		q, drop, err := Rewrite(c.Seq, p.loc)
+		// Cancelled per sequence rather than deferred: this loop can run many
+		// sequences in one batch, and a deferred cancel would hold every one of
+		// them until Filter returns.
+		ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+		q, drop, err := Rewrite(ctx, c.Seq, p.loc)
+		cancel()
 		if drop {
 			if err != nil {
 				p.logf("graphics: dropped i=%s: %v", c.Seq.Get("i"), err)
@@ -1405,8 +1427,10 @@ type SSHFetcher struct {
 	CtlSock  string
 	CacheDir string
 	MaxBytes int64
-	// Run executes ssh; injected so tests never touch the network.
-	Run func(args ...string) ([]byte, error)
+	// Run executes ssh; injected so tests never touch the network. It takes the
+	// context so production can use exec.CommandContext — cancellation has to
+	// kill the ssh process, not merely stop waiting on it.
+	Run func(ctx context.Context, args ...string) ([]byte, error)
 
 	mu      sync.Mutex
 	keys    map[string]string // remote path -> last seen "<mtime> <size>"
@@ -1417,13 +1441,15 @@ type SSHFetcher struct {
 // NewSSHFetcher builds the production fetcher.
 func NewSSHFetcher(host, ctlSock, cacheDir string, maxBytes int64) *SSHFetcher {
 	f := &SSHFetcher{Host: host, CtlSock: ctlSock, CacheDir: cacheDir, MaxBytes: maxBytes}
-	f.Run = func(args ...string) ([]byte, error) { return exec.Command("ssh", args...).Output() }
+	f.Run = func(ctx context.Context, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, "ssh", args...).Output()
+	}
 	_ = os.MkdirAll(cacheDir, 0o700)
 	f.prune()
 	return f
 }
 
-func (f *SSHFetcher) Localize(remote string) (string, error) {
+func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.keys == nil {
@@ -1440,7 +1466,7 @@ func (f *SSHFetcher) Localize(remote string) (string, error) {
 	args = append(args, "-T", f.Host, "--", "sh", "-c", shQuote(remoteFetch), "_",
 		shQuote(remote), shQuote(f.keys[remote]), strconv.FormatInt(f.MaxBytes, 10))
 
-	out, err := f.Run(args...)
+	out, err := f.Run(ctx, args...)
 	if err != nil {
 		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}
