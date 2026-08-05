@@ -667,6 +667,21 @@ func TestEncodeWrappedIsAlwaysExactlyOneWrapper(t *testing.T) {
 	}
 }
 
+// HasBody is the only field Encode branches on, and every other fixture here
+// carries a payload — so without this the false path is unexercised. It matters
+// for a=d deletes, which carry no payload and which the proxy re-emits through
+// EncodeWrapped: a spurious ';' would hand the terminal a different sequence.
+func TestEncodePreservesPresenceOfTheSeparator(t *testing.T) {
+	keysOnly := NewScanner().Feed([]byte("\x1b_Ga=d,d=A\x1b\\"))[0].Seq
+	if got := string(keysOnly.Encode()); got != "\x1b_Ga=d,d=A\x1b\\" {
+		t.Fatalf("Encode = %q, want no separator added", got)
+	}
+	emptyBody := NewScanner().Feed([]byte("\x1b_Ga=d,d=A;\x1b\\"))[0].Seq
+	if got := string(emptyBody.Encode()); got != "\x1b_Ga=d,d=A;\x1b\\" {
+		t.Fatalf("Encode = %q, want the separator kept", got)
+	}
+}
+
 func countSub(s, sub string) int {
 	n := 0
 	for i := 0; i+len(sub) <= len(s); i++ {
