@@ -63,10 +63,21 @@ func stampMirrorWindow(cfg Config, localWin, remoteName string) {
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "automatic-rename", "off")
-	if name := sanitizeWindowName(remoteName); name != "" {
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-		cfg.LocalTmux("rename-window", "-t", localWin, name)
+	applyMirrorName(cfg, localWin, remoteName)
+}
+
+// applyMirrorName writes the remote window's name to both places a mirror
+// window carries it: @window_bridge_name (what reflow labels from) and the
+// window name itself. Both, every time — with automatic-rename off nothing else
+// re-derives the name, so a path that wrote only the option would leave the
+// window name frozen at whatever the previous write left behind.
+func applyMirrorName(cfg Config, localWin, remoteName string) {
+	name := sanitizeWindowName(remoteName)
+	if name == "" {
+		return
 	}
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
+	cfg.LocalTmux("rename-window", "-t", localWin, name)
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
@@ -258,7 +269,20 @@ func Run(cfg Config) error {
 	if initWin, ok := localWinForRemoteIndex(remoteWins, reg, cfg.RemoteWindow); ok {
 		cfg.LocalTmux("select-window", "-t", initWin)
 	}
-	cfg.reflow()
+
+	// Re-read the remote once setup is done. Names were captured by the single
+	// enumeration above, but setup spans a spawn/hello/seed round-trip per
+	// window and reads its replies with the plain skip reader — so every
+	// %window-renamed the remote emits in that interval is discarded (B3). A
+	// remote whose windows rename as their shells settle (or, on a real
+	// lazytmux host, on every automatic-rename tick) would otherwise keep the
+	// name it happened to have at attach for the life of the mirror. Reconcile
+	// re-asserts each name from ground truth, and ends in a reflow.
+	reconcileWindows(cfg, reader, send, router, connCh, cst, reg, cv)
+	if reg.empty() {
+		teardown()
+		return nil
+	}
 
 	// Re-converge the remote whenever the local client resizes. A local resize
 	// emits no control-stream event, so poll; teardown closes stopWatch.
@@ -292,12 +316,16 @@ func Run(cfg Config) error {
 					reconcileLayout(cfg, mw, reader, send, router, connCh, cst)
 				}
 			}
-		case controlmode.WindowRenamed, controlmode.SessionWindowChanged:
-			if argv, ok := translateWindowNotification(l, reg); ok {
-				cfg.LocalTmux(argv...)
-				if l.Kind == controlmode.WindowRenamed {
+		case controlmode.WindowRenamed:
+			if len(l.Args) > 0 {
+				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
+					applyMirrorName(cfg, mw.localWin, string(l.Data))
 					cfg.reflow()
 				}
+			}
+		case controlmode.SessionWindowChanged:
+			if argv, ok := translateWindowNotification(l, reg); ok {
+				cfg.LocalTmux(argv...)
 			}
 		case controlmode.WindowAdd:
 			if len(l.Args) > 0 {

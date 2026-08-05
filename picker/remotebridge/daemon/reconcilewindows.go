@@ -54,10 +54,7 @@ func reconcileWindows(cfg Config, reader *controlmode.Reader, send func(string),
 		}
 		// Cheap and idempotent: re-assert the name rather than tracking whether it
 		// changed, since this is also the rename path.
-		if name := sanitizeWindowName(rw.name); name != "" {
-			cfg.LocalTmux("set-option", "-w", "-t", mw.localWin, "@window_bridge_name", name)
-			cfg.LocalTmux("rename-window", "-t", mw.localWin, name)
-		}
+		applyMirrorName(cfg, mw.localWin, rw.name)
 	}
 
 	for _, remoteID := range reg.remoteIDs() {

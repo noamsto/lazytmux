@@ -197,18 +197,27 @@ sorted_dims() {
 		>"$BATS_TEST_TMPDIR/dm.log" 2>&1 &
 	daemon_pid=$!
 
-	# Gate: wait until all 3 windows have a renderer pane.
-	for _ in $(seq 1 60); do
-		wins="$($DST list-windows -t host-sess -F '#{window_id}' 2>/dev/null | wc -l)"
-		[ "$wins" -eq 3 ] && break
+	# Gate on all 3 windows carrying a RENDERER pane, not merely existing: the
+	# windows are created early in the mirror loop, so a count-only gate opens
+	# mid-setup. Names settle last — SRC relabels each window (tmux -> bash) as
+	# its shell execs, and a %window-renamed emitted while setup's plain reply
+	# reader is running is discarded (B3), so it is the daemon's post-setup
+	# reconcile that recovers them.
+	for _ in $(seq 1 100); do
+		rendered="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer || true)"
+		[ "$rendered" -eq 3 ] && break
 		sleep 0.1
+	done
+	for _ in $(seq 1 60); do
+		src_names="$($SRC list-windows -t rem -F '#{window_name}' | sort | tr '\n' ',')"
+		dst_names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' | sort | tr '\n' ',')"
+		[ "$dst_names" = "$src_names" ] && break
+		sleep 0.15
 	done
 
 	# Capture state before killing (SIGTERM triggers teardown → DST session gone).
 	src_wins="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	dst_wins="$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)"
-	src_names="$($SRC list-windows -t rem -F '#{window_name}' | sort | tr '\n' ',')"
-	dst_names="$($DST list-windows -t host-sess -F '#{@window_bridge_name}' | sort | tr '\n' ',')"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true

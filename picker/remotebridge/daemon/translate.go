@@ -6,19 +6,11 @@ import "github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 // single local tmux argv, filtered to the bridged session's registry (B2): a
 // window id outside the registry yields (nil, false). WindowAdd/WindowClose are
 // orchestration (spawn pipeline / teardown), not a single argv, so they return
-// (nil, false) here and are handled in Run's loop. WindowPaneChanged is a
-// deliberate M2.2 no-op (focus routing is M2.3).
+// (nil, false) here and are handled in Run's loop — as is WindowRenamed, which
+// is two argvs (applyMirrorName). WindowPaneChanged is a deliberate M2.2 no-op
+// (focus routing is M2.3).
 func translateWindowNotification(l controlmode.Line, reg *registry) ([]string, bool) {
 	switch l.Kind {
-	case controlmode.WindowRenamed:
-		if len(l.Args) == 0 {
-			return nil, false
-		}
-		w, ok := reg.byRemoteID(l.Args[0])
-		if !ok {
-			return nil, false
-		}
-		return []string{"set-option", "-w", "-t", w.localWin, "@window_bridge_name", sanitizeWindowName(string(l.Data))}, true
 	case controlmode.SessionWindowChanged:
 		if len(l.Args) < 2 {
 			return nil, false
