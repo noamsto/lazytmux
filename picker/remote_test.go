@@ -214,4 +214,10 @@ func TestRemoteListSessionsCmdFishSafe(t *testing.T) {
 	if !strings.Contains(remoteListSessionsCmd, "list-sessions") {
 		t.Fatalf("probe should list sessions: %q", remoteListSessionsCmd)
 	}
+	// macOS remotes keep their server at tmux's default /tmp/tmux-<uid>; the
+	// probe must try that socket dir too or a darwin host always reads as
+	// "no server".
+	if !strings.Contains(remoteListSessionsCmd, "TMUX_TMPDIR=/tmp/tmux-$(id -u)") {
+		t.Fatalf("probe should fall back to the macOS socket dir: %q", remoteListSessionsCmd)
+	}
 }

@@ -17,10 +17,13 @@ import (
 const remoteProbeTimeout = 3 * time.Second
 
 // remoteListSessionsCmd lists remote tmux sessions under the same TMUX_TMPDIR /
-// binary resolution as lztmux-remote-open. Must stay fish-safe: no `var=value`
-// shell assignments — fish login shells reject them and the picker would mark
-// a reachable host unreachable.
-const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+// binary resolution as lztmux-remote-open. The socket dir is OS-dependent:
+// /run/user/<uid> on Linux, tmux's default /tmp/tmux-<uid> on macOS (no
+// $XDG_RUNTIME_DIR) — try Linux first, then macOS; a missing socket dir fails
+// fast, so the wrong guess costs a local stat. Must stay fish-safe: no
+// `var=value` shell assignments — fish login shells reject them and the picker
+// would mark a reachable host unreachable.
+const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null || env TMUX_TMPDIR=/tmp/tmux-$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
 
 const sshConnectFailureExit = 255
 
