@@ -148,8 +148,9 @@
     inherit carousel-toggle;
     inherit prdash;
     extraProcessIcons = cfg.processIcons;
-    zoxideExclude = lib.concatStringsSep "," cfg.sessionPicker.zoxideExclude;
+    zoxideExclude = lib.concatStringsSep "," cfg.picker.zoxideExclude;
     pickerListRatio = cfg.picker.listRatio;
+    pickerLayout = cfg.picker.layout;
     remoteBridgeHosts = lib.concatStringsSep " " cfg.remote.hosts;
     inherit (cfg) prefix defaultShell;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
@@ -236,6 +237,11 @@ in {
     (lib.mkRenamedOptionModule
       ["programs" "lazytmux" "claudeIntegration" "enable"]
       ["programs" "lazytmux" "agentIntegration" "enable"])
+    # zoxideExclude moved from the session-only sessionPicker.* namespace to
+    # picker.* alongside layout/listRatio, which apply to both pickers (#286).
+    (lib.mkRenamedOptionModule
+      ["programs" "lazytmux" "sessionPicker" "zoxideExclude"]
+      ["programs" "lazytmux" "picker" "zoxideExclude"])
     (lib.mkRemovedOptionModule
       ["programs" "lazytmux" "remote" "enable"]
       "The arch-C reverse-socket promotion was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
@@ -726,6 +732,19 @@ in {
     };
 
     picker = {
+      layout = lib.mkOption {
+        type = lib.types.enum ["preview" "list"];
+        default = "preview";
+        example = "list";
+        description = ''
+          What `prefix + s` and `prefix + w` open with. `preview` shows the
+          live pane-content preview below the list (the historical default);
+          `list` opens list-only in a shorter popup, so a full-height list is
+          not mostly blank. `^/` still toggles the preview for the current
+          invocation — this only sets the starting state.
+        '';
+      };
+
       listRatio = lib.mkOption {
         type = lib.types.ints.between 20 80;
         default = 50;
@@ -733,16 +752,11 @@ in {
         description = ''
           Percentage of the picker body the list gets; the pane-content
           preview takes the rest. Lower means a taller preview — 30 gives
-          the preview about two thirds.
-
-          Applies to both `prefix + s` and `prefix + w` (the older
-          `sessionPicker.*` options are session-picker-only). Clamped to
-          20-80 by the picker as well, so neither pane can collapse.
+          the preview about two thirds. Ignored when `layout = "list"`.
+          Clamped to 20-80 by the picker as well, so neither pane can collapse.
         '';
       };
-    };
 
-    sessionPicker = {
       zoxideExclude = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [".ssh" "/tmp/*"];

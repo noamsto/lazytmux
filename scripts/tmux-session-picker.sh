@@ -3,5 +3,9 @@
 set -euo pipefail
 
 BORDER_FG=$(tmux show -gv @thm_overlay_1 2>/dev/null || echo "#7f849c")
-tmux display-popup -E -w 90% -h 85% -b rounded -T " Sessions " \
+# List-only wants a shorter popup so a full-height list isn't mostly blank;
+# a popup can't be resized after creation, so the height is chosen here.
+HEIGHT=85%
+[[ $(tmux show -gv @picker_layout 2>/dev/null) == list ]] && HEIGHT=60%
+tmux display-popup -E -w 90% -h "$HEIGHT" -b rounded -T " Sessions " \
 	-S "fg=$BORDER_FG" "@picker_generate@ --tui"
