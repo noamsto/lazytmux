@@ -167,4 +167,12 @@ func TestScanOversizedPartialFlushesAsLiteral(t *testing.T) {
 	if chunkKinds(cs) != "L" {
 		t.Fatalf("kinds = %q, want L (give up, forward verbatim)", chunkKinds(cs))
 	}
+	// Giving up must not wedge the scanner: nothing stays held going forward,
+	// and the very next Feed decodes an ordinary sequence like nothing happened.
+	if len(s.held) != 0 {
+		t.Fatalf("held %q after overflow, want nothing held", s.held)
+	}
+	if cs := s.Feed([]byte(bareSeq)); chunkKinds(cs) != "S" {
+		t.Fatalf("kinds = %q, want S — scanner did not recover after the overflow", chunkKinds(cs))
+	}
 }

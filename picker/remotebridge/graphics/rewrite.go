@@ -19,6 +19,10 @@ type Localizer interface {
 // is the input pointer in the pass-through case and a fresh copy in the
 // localising case — callers must treat it as read-only either way.
 //
+// Postcondition: out is nil if and only if drop is true. Filter dereferences
+// the result on every non-drop path, so a branch returning (nil, false, …)
+// would panic the pump goroutine rather than fail a test.
+//
 // The governing rule (spec D7) is that a store whose payload could not be
 // localised is DROPPED, never forwarded: a stale local path renders the wrong
 // image, where a missing one renders blank and self-heals on the sender's next
@@ -69,16 +73,3 @@ func setKey(keys []byte, k, v string) []byte {
 	}
 	return bytes.Join(out, []byte{','})
 }
-
-// isStore reports whether q transmits image data under an id — the sequences
-// coalescing may supersede.
-func isStore(q *Seq) bool {
-	switch q.Get("a") {
-	case "T", "t":
-		return q.Get("i") != ""
-	}
-	return false
-}
-
-// isDelete reports whether q deletes an image by id.
-func isDelete(q *Seq) bool { return q.Get("a") == "d" && q.Get("i") != "" }

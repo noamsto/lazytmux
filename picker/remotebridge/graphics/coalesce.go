@@ -10,6 +10,16 @@ package graphics
 //
 // A delete for an id ends the supersede chain: it is a real state transition,
 // not a stale frame, so the store before it must still be forwarded.
+//
+// "Batch" is whatever one Scanner.Feed call returns, not the whole stream. In
+// the daemon's wiring that's exactly one pump iteration's drained burst
+// (drainOutput's whole queued backlog, handed to Filter in one call), so two
+// stores queued at the same moment do land in one batch together. Two stores
+// separated in time instead — the second arriving only after the pump has
+// already drained and gone back to waiting — fall into separate pump
+// iterations and so separate batches: both get fetched. That's a missed
+// optimisation, not a correctness problem, since the older one is still
+// superseded once the newer one lands.
 func Coalesce(in []Chunk) []Chunk {
 	superseded := make([]bool, len(in))
 	seen := map[string]bool{} // image id -> a later store exists

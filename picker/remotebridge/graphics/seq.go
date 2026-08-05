@@ -140,3 +140,16 @@ func (q *Seq) EncodeWrapped() []byte {
 	}
 	return append(out, st...)
 }
+
+// isStore reports whether q transmits image data under an id — the sequences
+// coalescing may supersede.
+func isStore(q *Seq) bool {
+	switch q.Get("a") {
+	case "T", "t":
+		return q.Get("i") != ""
+	}
+	return false
+}
+
+// isDelete reports whether q deletes an image by id.
+func isDelete(q *Seq) bool { return q.Get("a") == "d" && q.Get("i") != "" }

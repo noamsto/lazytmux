@@ -72,7 +72,7 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 		f.keys, f.locals = map[string]string{}, map[string]string{}
 	}
 	if err := os.MkdirAll(f.CacheDir, 0o700); err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}
 
 	args := []string{}
