@@ -899,6 +899,14 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 			} else {
 				v, ok := <-s.ch
 				if !ok {
+					// The pane is gone: flush whatever the proxy was still holding
+					// (a partial sequence cut mid-stream) rather than silently
+					// dropping it — gfx.Close() exists for exactly this exit.
+					if gfx != nil {
+						if tail := gfx.Close(); len(tail) > 0 {
+							wire.WriteFrame(conn, wire.FrameOutput, tail)
+						}
+					}
 					return
 				}
 				f = v

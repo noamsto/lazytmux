@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
@@ -88,7 +89,7 @@ func main() {
 			// won't send TERM itself — it has to ride in this env prefix like
 			// TMUX_TMPDIR does.
 			if *term != "" {
-				args = append(args, "TERM="+*term)
+				args = append(args, "TERM="+shellQuote(*term))
 			}
 			args = append(args, tmuxArgv...)
 			// ssh space-joins the post-host argv into one string run by the
@@ -99,29 +100,50 @@ func main() {
 		}
 		localTmuxArgv = strings.Fields(*localTmux)
 	}
+
+	// ControlPersist=no ties the ControlMaster socket's lifetime to this
+	// process, so nothing but this process will ever unlink it — ssh cleans up
+	// its own ControlPath only when it exits normally or catches a signal, and
+	// a SIGKILL (the old unconditional Process.Kill() below) it can't catch.
+	// Called explicitly at every exit path rather than deferred: fatal() calls
+	// os.Exit(1), which skips deferred functions.
+	cleanup := func() {
+		if ctlSock != "" {
+			os.Remove(ctlSock)
+		}
+	}
+
 	stdin, err := ctl.StdinPipe()
 	if err != nil {
+		cleanup()
 		fatal(err)
 	}
 	stdout, err := ctl.StdoutPipe()
 	if err != nil {
+		cleanup()
 		fatal(err)
 	}
 	if err := ctl.Start(); err != nil {
+		cleanup()
 		fatal(err)
 	}
 
-	// On SIGTERM/SIGINT, kill the control transport so daemon.Run's reader hits
-	// EOF and its teardown runs (removes the socket + pidfile, kills the local
-	// mirror session). Without this, a killed daemon leaves that state behind
-	// and blocks the next launch.
+	// On SIGTERM/SIGINT, ask the control transport to exit so daemon.Run's
+	// reader hits EOF and its teardown runs (removes the socket + pidfile,
+	// kills the local mirror session). SIGTERM first: ssh can catch it and
+	// unlink its own ControlPath itself, which cleanup() above only guarantees
+	// as a backstop. A bounded fallback to SIGKILL covers a wedged ssh —
+	// Process.Kill() on an already-exited process is a harmless no-op error.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigCh
-		if ctl.Process != nil {
-			ctl.Process.Kill()
+		if ctl.Process == nil {
+			return
 		}
+		ctl.Process.Signal(syscall.SIGTERM)
+		time.Sleep(2 * time.Second)
+		ctl.Process.Kill()
 	}()
 
 	runLocalTmux := func(args ...string) error {
@@ -165,7 +187,9 @@ func main() {
 		},
 	}
 
-	if err := daemon.Run(cfg); err != nil {
+	err = daemon.Run(cfg)
+	cleanup()
+	if err != nil {
 		fatal(err)
 	}
 }

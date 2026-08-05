@@ -387,6 +387,29 @@ func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
 	}
 }
 
+// graphics.Proxy.Close() flushes a partial sequence the Scanner was still
+// holding — but it's only reachable if newOutputSink's pump actually calls it
+// on teardown. gfx is a value captured by the pump closure, not a field
+// Close() can reach from another goroutine, so this has to be wired inside
+// the pump's own !ok exit path.
+func TestOutputSinkFlushesTheProxyHeldPartialOnClose(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	s := newOutputSink(remote, p)
+
+	const partial = "\x1b_Gi=1,a=T;abc" // no ST: the scanner holds it, incomplete
+	s.Write([]byte(partial))
+	s.Close()
+
+	got := readAllFrames(t, local, 500*time.Millisecond)
+	if got != partial {
+		t.Fatalf("got = %q, want the held partial %q flushed on close", got, partial)
+	}
+}
+
 type stubLocalizer struct{ local string }
 
 func (s *stubLocalizer) Localize(context.Context, string) (string, error) { return s.local, nil }
