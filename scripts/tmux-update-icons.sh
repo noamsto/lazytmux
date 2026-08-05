@@ -77,8 +77,11 @@ main() {
 	# change-gating: glyphs, #[fg=…] codes, spaces, and hex colors — never '|'.
 	# @crew_name (harness-stamped codename) and @crew_seen (our shadow of it) are
 	# kebab tokens, so they sit safely before the free-form task; @bridge_win is
-	# "1" or empty.
-	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge cur_task; do
+	# "1" or empty and @bridge_proc is a command name, so both do too.
+	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_task; do
+		# A mirror pane runs the bridge renderer; @bridge_proc carries what the
+		# remote pane is actually running, which is what the icons should show.
+		[[ -n $bridge_proc ]] && proc="$bridge_proc"
 		pane_to_win["${pane_id#%}"]="$idx"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
 		# Session options (same on every row) must be copied here: the EOF read
@@ -113,7 +116,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$idx]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@window_task}')
+	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
 
 	arm_agent_detect
 
