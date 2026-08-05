@@ -328,7 +328,7 @@ func Run(cfg Config) error {
 	// lazytmux host, on every automatic-rename tick) would otherwise keep the
 	// name it happened to have at attach for the life of the mirror. Reconcile
 	// re-asserts each name from ground truth, and ends in a reflow.
-	reconcileWindows(cfg, reader, send, router, connCh, cst, reg, cv)
+	reconcileWindows(cfg, send, router, connCh, cst, reg, cv, rt)
 	if reg.empty() {
 		teardown()
 		return nil
