@@ -34,6 +34,50 @@ type Config struct {
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
 	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
+	Reflow         func()                     // forces a status-bar reflow of the mirror session (injected; nil = off)
+}
+
+// reflow re-derives the mirror session's window labels. The after-new-window
+// hook's own reflow races the @bridge_win / @window_bridge_name stamps that
+// follow the create, so it can label a mirror window from the launcher's cwd
+// (#196); and a later rename changes no window count, so reflow's
+// count:width cache would skip it. Every path that stamps a name ends here.
+func (c Config) reflow() {
+	if c.Reflow != nil {
+		c.Reflow()
+	}
+}
+
+// stampMirrorWindow marks localWin as this daemon's mirror of a remote window
+// and gives it that window's name.
+//
+// automatic-rename goes off because the daemon owns the name: tmux only
+// re-derives one when the active pane produces output, and an idle renderer
+// never does — so a name derived once, during setup, would freeze on the
+// launcher's cwd for the life of the window.
+//
+// Panes are addressed 0-based (spawnRenderer/reconcileLayout use index starting
+// at 0); the pane-base-index override keeps that true regardless of the host's
+// global (real hosts set 1).
+func stampMirrorWindow(cfg Config, localWin, remoteName string) {
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "automatic-rename", "off")
+	applyMirrorName(cfg, localWin, remoteName)
+}
+
+// applyMirrorName writes the remote window's name to both places a mirror
+// window carries it: @window_bridge_name (what reflow labels from) and the
+// window name itself. Both, every time — with automatic-rename off nothing else
+// re-derives the name, so a path that wrote only the option would leave the
+// window name frozen at whatever the previous write left behind.
+func applyMirrorName(cfg Config, localWin, remoteName string) {
+	name := sanitizeWindowName(remoteName)
+	if name == "" {
+		return
+	}
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
+	cfg.LocalTmux("rename-window", "-t", localWin, name)
 }
 
 // outputSinkBuf is the per-renderer output buffer depth. Overflow drops the
@@ -211,15 +255,7 @@ func Run(cfg Config) error {
 				return fmt.Errorf("daemon: new-window %s: %w", localWin, err)
 			}
 		}
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
-		// Panes are addressed 0-based (spawnRenderer/reconcileLayout use index
-		// starting at 0); force window-level pane-base-index 0 so that holds
-		// regardless of the host's global pane-base-index (real hosts set 1).
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
-		if name := sanitizeWindowName(rw.name); name != "" {
-			cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-			cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals window_name
-		}
+		stampMirrorWindow(cfg, localWin, rw.name)
 		mw := reg.add(rw.id, localWin)
 		if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, readReply); err != nil {
 			teardown()
@@ -232,6 +268,20 @@ func Run(cfg Config) error {
 	// list; never treat it as id "@<idx>".
 	if initWin, ok := localWinForRemoteIndex(remoteWins, reg, cfg.RemoteWindow); ok {
 		cfg.LocalTmux("select-window", "-t", initWin)
+	}
+
+	// Re-read the remote once setup is done. Names were captured by the single
+	// enumeration above, but setup spans a spawn/hello/seed round-trip per
+	// window and reads its replies with the plain skip reader — so every
+	// %window-renamed the remote emits in that interval is discarded (B3). A
+	// remote whose windows rename as their shells settle (or, on a real
+	// lazytmux host, on every automatic-rename tick) would otherwise keep the
+	// name it happened to have at attach for the life of the mirror. Reconcile
+	// re-asserts each name from ground truth, and ends in a reflow.
+	reconcileWindows(cfg, reader, send, router, connCh, cst, reg, cv)
+	if reg.empty() {
+		teardown()
+		return nil
 	}
 
 	// Re-converge the remote whenever the local client resizes. A local resize
@@ -266,7 +316,14 @@ func Run(cfg Config) error {
 					reconcileLayout(cfg, mw, reader, send, router, connCh, cst)
 				}
 			}
-		case controlmode.WindowRenamed, controlmode.SessionWindowChanged:
+		case controlmode.WindowRenamed:
+			if len(l.Args) > 0 {
+				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
+					applyMirrorName(cfg, mw.localWin, string(l.Data))
+					cfg.reflow()
+				}
+			}
+		case controlmode.SessionWindowChanged:
 			if argv, ok := translateWindowNotification(l, reg); ok {
 				cfg.LocalTmux(argv...)
 			}
@@ -448,12 +505,7 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: new-window %s: %v\n", remoteID, localWin, err)
 		return
 	}
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
-	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
-	if name := sanitizeWindowName(addedName); name != "" {
-		cfg.LocalTmux("set-option", "-w", "-t", localWin, "@window_bridge_name", name)
-		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
-	}
+	stampMirrorWindow(cfg, localWin, addedName)
 	mw := reg.add(remoteID, localWin)
 	if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, reply); err != nil {
 		// Drop the half-created entry + local window so the already-registered
@@ -462,7 +514,9 @@ func addWindow(cfg Config, reader *controlmode.Reader, send func(string), router
 		reg.remove(remoteID)
 		cv.forget(remoteID)
 		cfg.LocalTmux("kill-window", "-t", localWin)
+		return
 	}
+	cfg.reflow()
 }
 
 // closeWindow tears down remoteID's local mirror: unregisters (and thereby
