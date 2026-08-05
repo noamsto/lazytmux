@@ -116,7 +116,7 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 	sum := sha256.Sum256([]byte(ck))
 	local := filepath.Join(f.CacheDir, hex.EncodeToString(sum[:])[:32]+".bin")
 	if err := os.WriteFile(local, body, 0o600); err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}
 	f.locals[ck] = local
 	if f.fetches++; f.fetches%pruneInterval == 0 {
