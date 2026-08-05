@@ -338,6 +338,30 @@ func TestScanLiteralBeforePartialIsEmittedImmediately(t *testing.T) {
 	}
 }
 
+func TestScanForwardsANonGraphicsPassthroughImmediately(t *testing.T) {
+	// A clipboard escape is a passthrough too. Holding it because it isn't ours
+	// would stall every later byte on the pane behind it.
+	in := "\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\tail"
+	cs := NewScanner().Feed([]byte(in))
+	var got string
+	for _, c := range cs {
+		if c.Seq != nil {
+			t.Fatal("OSC 52 decoded as a graphics sequence")
+		}
+		got += string(c.Literal)
+	}
+	if got != in {
+		t.Fatalf("forwarded %q, want the input verbatim", got)
+	}
+}
+
+func TestScanRecoversPositionAfterANonGraphicsPassthrough(t *testing.T) {
+	cs := NewScanner().Feed([]byte("\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\" + bareSeq))
+	if got := chunkKinds(cs); got != "LS" {
+		t.Fatalf("kinds = %q, want LS — the scanner desynced", got)
+	}
+}
+
 func TestScanOversizedPartialFlushesAsLiteral(t *testing.T) {
 	s := NewScanner()
 	s.Feed([]byte("\x1b_Gi=1,a=T;"))
@@ -410,16 +434,24 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			out = appendLiteral(out, buf[:i])
 			buf = buf[i:]
 		}
-		seq, n, ok := decodeSeq(buf)
-		if !ok {
+		seq, n := decodeSeq(buf)
+		switch {
+		case n == 0:
 			// Incomplete: hold it, unless it has outgrown the cap.
 			if len(buf) > maxPartial {
 				return appendLiteral(out, buf)
 			}
 			s.held = append([]byte(nil), buf...)
 			return out
+		case seq == nil:
+			// A complete passthrough carrying something else (OSC 52, …).
+			// Forward it verbatim: it is already wrapped for one tmux layer,
+			// which is exactly what the renderer's local tmux needs, so the
+			// escape reaches the outer terminal and does what its sender meant.
+			out = appendLiteral(out, buf[:n])
+		default:
+			out = append(out, Chunk{Seq: seq})
 		}
-		out = append(out, Chunk{Seq: seq})
 		buf = buf[n:]
 	}
 	return out
@@ -483,22 +515,36 @@ type Seq struct {
 	Wrapped bool
 }
 
-// decodeSeq decodes the sequence at the head of b, returning it and the number
-// of bytes consumed. ok is false when the terminator hasn't arrived yet.
-func decodeSeq(b []byte) (*Seq, int, bool) {
+// decodeSeq decodes the sequence at the head of b:
+//
+//	seq != nil, n > 0  — a graphics sequence; consume n
+//	seq == nil, n > 0  — a COMPLETE sequence that isn't ours (a passthrough
+//	                     carrying something else, e.g. OSC 52); forward b[:n]
+//	                     verbatim and move past it
+//	seq == nil, n == 0 — incomplete; hold for more bytes
+//
+// The middle case is why this returns a length rather than an ok bool. "Not
+// complete yet" and "complete, but not mine" both mean "no sequence here", but
+// conflating them stalls the pane: a clipboard escape would hold every later
+// byte behind it until the partial cap or Close.
+func decodeSeq(b []byte) (*Seq, int) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
-			return nil, 0, false
+			return nil, 0
 		}
 		q, _, ok := decodeBare(inner)
 		if !ok {
-			return nil, 0, false
+			return nil, n
 		}
 		q.Wrapped = true
-		return q, n, true
+		return q, n
 	}
-	return decodeBare(b)
+	q, n, ok := decodeBare(b)
+	if !ok {
+		return nil, 0
+	}
+	return q, n
 }
 
 func decodeBare(b []byte) (*Seq, int, bool) {
@@ -2086,4 +2132,5 @@ gh pr create --assignee @me --title "feat(bridge): render kitty graphics through
 
 - **`AEYE_BRIDGED` only reaches the carousel because the ctl verb sets it** (Task 11). A carousel the human opens by hand on the remote won't have it and will use the raw-RGBA path; the fetcher's 8 MB cap keeps that survivable rather than fast.
 - **Don't add a `t=d` conversion.** Inline payloads are self-contained and pass through; converting `t=f` to `t=d` instead of fetching would push image bytes onto the control stream, which is the option the spec rejected (D3).
+- **`decodeSeq` returns a length, not an `ok` bool** — amended during Task 3, after the first implementer caught the bug. `\ePtmux;` wraps *any* passthrough, not just graphics, so "incomplete" and "complete but not ours" are different answers; the original single bool conflated them and an OSC 52 clipboard escape (which aeye itself emits) would hold every later byte on that pane until the partial cap or Close. Non-graphics passthroughs are forwarded verbatim — already wrapped for exactly one tmux layer, which is what the renderer's local tmux wants.
 - **The proxy runs on the sink's pump goroutine and may block there.** That is deliberate (D4) — it holds one pane's stream so a store lands before the placements referencing it. Do not move it onto `Router.Route`, which runs on the single shared control-stream loop.
