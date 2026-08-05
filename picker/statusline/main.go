@@ -307,6 +307,21 @@ func main() {
 	flag.IntVar(&a.usageMonthlyThreshold, "agent-usage-monthly-threshold", 0, "")
 	flag.Parse()
 
+	// Land a complete line before the slow work below (display-message, git,
+	// list-panes). tmux publishes a #()'s output only on a newline-terminated
+	// line (format.c:336), and once a job has run >1s with nothing published it
+	// paints <'CMD' not ready> over the segment (format.c:446) — carrying this
+	// job's ~1000-char argv. `echo;` fixes that for the side-effect-only
+	// tickers but cannot be used here: publishing an empty line every tick
+	// would blank line 0. The cached frame keeps the previous content painted,
+	// and tmux keeps only the LAST complete line, so the render below wins.
+	lastGood, hadLastGood := readLastGood(statuslineCacheDir, a.session)
+	if hadLastGood {
+		os.Stdout.WriteString(lastGood + "\n")
+	} else {
+		os.Stdout.WriteString("\n")
+	}
+
 	prefixActive, ok := a.fetchVolatile()
 
 	claudeDir := os.Getenv("CLAUDE_STATUS_DIR")
@@ -314,14 +329,11 @@ func main() {
 		claudeDir = "/tmp/claude-status"
 	}
 
-	// On a failed fetch the volatile fields are empty; re-paint the cached
-	// last-good line so a transient timeout (common under load) doesn't flash a
-	// degraded frame. Cold start has no cache and falls through to render.
-	if !ok {
-		if line, hit := readLastGood(statuslineCacheDir, a.session); hit {
-			os.Stdout.WriteString(line)
-			return
-		}
+	// On a failed fetch the volatile fields are empty; the last-good frame
+	// already on stdout stands, so a transient timeout (common under load)
+	// doesn't flash a degraded one. Cold start has no cache and renders below.
+	if !ok && hadLastGood {
+		return
 	}
 
 	// Usage segment: cheapest gates first — reading the three cache files
@@ -347,5 +359,5 @@ func main() {
 	if ok {
 		writeLastGood(statuslineCacheDir, a.session, line)
 	}
-	os.Stdout.WriteString(line)
+	os.Stdout.WriteString(line + "\n")
 }
