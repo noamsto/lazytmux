@@ -65,6 +65,30 @@ func TestRewriteLocalisesTransmitAndDelete(t *testing.T) {
 	}
 }
 
+// The delete-after-read contract of t=t was with the sender's own temp file,
+// which never crosses the bridge — the payload now names our local cache
+// copy, so the output must downgrade to t=f or the local terminal would
+// unlink the cache behind our back.
+func TestRewriteDowngradesTransmitAndDeleteToTransmit(t *testing.T) {
+	f := &fakeLocalizer{local: "/local/cache/abc.bin"}
+	in := seqOf(t, "\x1b_Gi=1,a=T,t=t;L3RtcC94LnBuZw==\x1b\\")
+	inKeys := append([]byte(nil), in.Keys...)
+	q, drop, err := Rewrite(in, f)
+	if err != nil || drop {
+		t.Fatalf("drop=%v err=%v", drop, err)
+	}
+	if q.Get("t") != "f" {
+		t.Fatalf("t = %q, want f", q.Get("t"))
+	}
+	got, _ := base64.StdEncoding.DecodeString(string(q.Payload))
+	if string(got) != "/local/cache/abc.bin" {
+		t.Fatalf("payload = %q", got)
+	}
+	if string(in.Keys) != string(inKeys) {
+		t.Fatalf("input Seq mutated: %q, want %q", in.Keys, inKeys)
+	}
+}
+
 func TestRewritePassesThroughInlineAndDelete(t *testing.T) {
 	for _, raw := range []string{
 		"\x1b_Gi=31,a=T,U=1,f=100,t=d;aGVsbG8=\x1b\\",

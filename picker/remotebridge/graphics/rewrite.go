@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 )
@@ -11,7 +12,9 @@ type Localizer interface {
 	Localize(remotePath string) (localPath string, err error)
 }
 
-// Rewrite applies the localisation policy to one sequence.
+// Rewrite applies the localisation policy to one sequence. The returned *Seq
+// is the input pointer in the pass-through case and a fresh copy in the
+// localising case — callers must treat it as read-only either way.
 //
 // The governing rule (spec D7) is that a store whose payload could not be
 // localised is DROPPED, never forwarded: a stale local path renders the wrong
@@ -30,6 +33,15 @@ func Rewrite(q *Seq, l Localizer) (out *Seq, drop bool, err error) {
 		}
 		cp := *q
 		cp.Payload = []byte(base64.StdEncoding.EncodeToString([]byte(local)))
+		// t=t asks the terminal to delete the file once it has read it. Our
+		// payload now names the LOCAL cache copy, so honouring it would have the
+		// local terminal unlink what the fetcher just wrote — invalidating the
+		// cache behind its back and stranding any later re-emit that still
+		// references it. The delete-after-read contract was with the sender's own
+		// temp file, which never crosses the bridge, so emit t=f.
+		if q.Get("t") == "t" {
+			cp.Keys = setKey(q.Keys, "t", "f")
+		}
 		return &cp, false, nil
 	case "s":
 		// Shared memory is host-local by definition.
@@ -38,6 +50,21 @@ func Rewrite(q *Seq, l Localizer) (out *Seq, drop bool, err error) {
 		// t=d carries its own bytes; a=d and friends carry no payload at all.
 		return q, false, nil
 	}
+}
+
+// setKey returns a copy of keys with k's value replaced. It never edits in
+// place: Rewrite's shallow copy aliases this slice, so an in-place write would
+// reach through into the caller's Seq.
+func setKey(keys []byte, k, v string) []byte {
+	parts := bytes.Split(keys, []byte{','})
+	out := make([][]byte, 0, len(parts))
+	for _, kv := range parts {
+		if i := bytes.IndexByte(kv, '='); i >= 0 && string(kv[:i]) == k {
+			kv = []byte(k + "=" + v)
+		}
+		out = append(out, kv)
+	}
+	return bytes.Join(out, []byte{','})
 }
 
 // isStore reports whether q transmits image data under an id — the sequences
