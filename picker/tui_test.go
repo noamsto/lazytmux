@@ -408,6 +408,79 @@ func TestPreviewToggleResizesViewport(t *testing.T) {
 	}
 }
 
+// A query that matches nothing, or a header row, must not leave the previous
+// target's content in the viewport (#286).
+func TestLoadPreviewClearsWhenNothingSelectable(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: true, theme: "dark"}
+
+	for name, model := range map[string]tuiModel{
+		"empty list":     m,
+		"header at rest": withVisible(m, []listItem{{display: "── Remote ──", isHeader: true}}),
+	} {
+		cmd := model.loadPreviewCmd()
+		if cmd == nil {
+			t.Fatalf("%s: expected a clearing command, got nil", name)
+		}
+		msg, ok := cmd().(previewMsg)
+		if !ok {
+			t.Fatalf("%s: expected previewMsg, got %T", name, cmd())
+		}
+		if msg.content != "" || msg.target != "" {
+			t.Errorf("%s: want an empty preview, got target=%q content=%q", name, msg.target, msg.content)
+		}
+		// The handler's gate must accept it, or nothing would actually clear.
+		if msg.target != model.currentTarget() {
+			t.Errorf("%s: target %q would be rejected by the handler (currentTarget %q)",
+				name, msg.target, model.currentTarget())
+		}
+	}
+}
+
+// Hiding the preview must stop the capture entirely, not just hide its output —
+// that is what makes the faster tick free when it isn't being looked at.
+func TestLoadPreviewSkippedWhenHidden(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, ready: true, showPreview: false, theme: "dark",
+		visible: []listItem{{target: "a", display: "a"}}}
+	if cmd := m.loadPreviewCmd(); cmd != nil {
+		t.Error("preview hidden: expected no capture command")
+	}
+}
+
+func TestListRatio(t *testing.T) {
+	ratio := func(raw string) int {
+		return tuiModel{tmuxOpts: map[string]string{"@picker_list_ratio": raw}}.listRatio()
+	}
+	cases := map[string]int{
+		"":       listRatioDefault, // unset
+		"30":     30,
+		" 70 ":   70,
+		"5":      listRatioMin, // clamped
+		"95":     listRatioMax,
+		"banana": listRatioDefault, // not a number
+	}
+	for raw, want := range cases {
+		if got := ratio(raw); got != want {
+			t.Errorf("listRatio(%q) = %d, want %d", raw, got, want)
+		}
+	}
+
+	// The ratio has to reach the layout, not just parse.
+	m := tuiModel{width: 100, height: 45, ready: true, showPreview: true,
+		tmuxOpts: map[string]string{"@picker_list_ratio": "30"}}
+	if want := m.bodyHeight() * 30 / 100; m.listHeight() != want {
+		t.Errorf("listHeight() = %d, want %d", m.listHeight(), want)
+	}
+	if m.previewHeight() <= m.listHeight() {
+		t.Errorf("ratio 30 should give the preview the larger share; list=%d preview=%d",
+			m.listHeight(), m.previewHeight())
+	}
+}
+
+func withVisible(m tuiModel, items []listItem) tuiModel {
+	m.visible = items
+	return m
+}
+
 func TestRenderWindowItemsZoomAligned(t *testing.T) {
 	// A zoomed row must not push its icon/PR column past a non-zoomed row's.
 	// The id is long enough to overflow identityCap and get truncated flush to
