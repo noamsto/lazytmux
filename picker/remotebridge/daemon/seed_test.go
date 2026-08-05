@@ -2,11 +2,29 @@ package daemon
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
+
+// testRoundTrip wires PaneSeed the way Run does — one stream numbering the
+// commands, one reader answering them — with the wire discarded and the command
+// lines recorded for assertions.
+func testRoundTrip(stream string, sent *[]string) roundTrip {
+	reader := controlmode.NewReader(strings.NewReader(stream))
+	st := newStream(io.Discard)
+	router, async := NewRouter(), &asyncQueue{}
+	return func(cmd string) (controlmode.Line, bool) {
+		*sent = append(*sent, cmd)
+		seq, ok := st.stamp(cmd)
+		if !ok {
+			return controlmode.Line{}, false
+		}
+		return readReplyRouting(reader, router, async, st, seq)
+	}
+}
 
 func TestPaneSeed(t *testing.T) {
 	// Scripted server replies: display-message (cursor/mode) then capture-pane.
@@ -16,11 +34,8 @@ func TestPaneSeed(t *testing.T) {
 		"%begin 2 2 1", "line-one", "line-two", "%end 2 2 1", // capture-pane
 	}, "\n") + "\n"
 
-	reader := controlmode.NewReader(strings.NewReader(stream))
 	var sent []string
-	send := func(s string) { sent = append(sent, s) }
-
-	got, err := PaneSeed(reader, send, "%3", readReply)
+	got, err := PaneSeed(testRoundTrip(stream, &sent), "%3")
 	if err != nil {
 		t.Fatalf("PaneSeed: %v", err)
 	}
@@ -42,10 +57,8 @@ func TestPaneSeedErrorReply(t *testing.T) {
 		"%begin 2 2 1", "%error 2 2 1", // capture-pane: error, no body
 	}, "\n") + "\n"
 
-	reader := controlmode.NewReader(strings.NewReader(stream))
-	send := func(string) {}
-
-	got, err := PaneSeed(reader, send, "%3", readReply)
+	var sent []string
+	got, err := PaneSeed(testRoundTrip(stream, &sent), "%3")
 	if err == nil {
 		t.Fatalf("PaneSeed: want error on %%error reply, got seed %q", got)
 	}
@@ -60,14 +73,31 @@ func TestPaneSeedEmptyCaptureIsValid(t *testing.T) {
 		"%begin 2 2 1", "%end 2 2 1", // capture-pane: success, empty body
 	}, "\n") + "\n"
 
-	reader := controlmode.NewReader(strings.NewReader(stream))
-	send := func(string) {}
-
-	got, err := PaneSeed(reader, send, "%3", readReply)
+	var sent []string
+	got, err := PaneSeed(testRoundTrip(stream, &sent), "%3")
 	if err != nil {
 		t.Fatalf("PaneSeed: want nil error for a blank pane, got %v", err)
 	}
 	if got == nil {
 		t.Errorf("PaneSeed: want a non-nil seed for a blank pane, got nil")
+	}
+}
+
+// TestPaneSeedSurvivesHookBlocks: a remote hook's own %begin..%end (flagged 0)
+// landing between our two commands must not be mistaken for either reply.
+func TestPaneSeedSurvivesHookBlocks(t *testing.T) {
+	stream := strings.Join([]string{
+		"%begin 1 1 1", "5 2 0 0", "%end 1 1 1", // display-message
+		"%begin 1 2 0", "%end 1 2 0", // a hook's command, not ours
+		"%begin 2 3 1", "line-one", "%end 2 3 1", // capture-pane
+	}, "\n") + "\n"
+
+	var sent []string
+	got, err := PaneSeed(testRoundTrip(stream, &sent), "%3")
+	if err != nil {
+		t.Fatalf("PaneSeed: %v", err)
+	}
+	if !bytes.Contains(got, []byte("line-one")) {
+		t.Errorf("seed %q lost the capture to a hook block", got)
 	}
 }

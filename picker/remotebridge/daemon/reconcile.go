@@ -15,23 +15,18 @@ const maxReconcilePasses = 5
 // pane diff (planPaneOps) so the local mirror renders the remote's panes in the
 // remote's order, then re-fits geometry.
 //
-// Round-trips here use the routing-aware reply reader (B3): sibling windows are
-// streaming during a live reconcile, so any %output seen while awaiting a reply
-// is routed rather than dropped. The remote window is targeted by its id (@N)
-// directly, never by a bare index.
+// The remote window is targeted by its id (@N) directly, never by a bare index.
 //
 // Loops on a trailing re-read after applying: a second remote layout change
-// landing back-to-back with the first can have its own %layout-change swallowed
-// while this function is mid-flight (readReplyRouting still returns on the reply
-// block, not on the async notification). Re-reading once more right after
-// applying catches this: the round-trips above give the remote plenty of time to
-// settle, so a still-different layout means something changed underneath us and
-// needs its own pass.
-func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState) {
-	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
+// landing back-to-back with the first is queued for the main loop rather than
+// acted on here, so this pass would otherwise finish against a layout that is
+// already stale. Re-reading once more right after applying catches it: the
+// round-trips above give the remote plenty of time to settle, so a still-
+// different layout means something changed underneath us and needs its own pass.
+func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, connCh chan helloConn, cst *ctlState, rt roundTrip) {
 	target := remoteWinTarget(cfg, w.remoteID)
 
-	L, remoteActive, err := readLayout(reader, send, target, reply)
+	L, remoteActive, err := readLayout(rt, target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 		return
@@ -45,7 +40,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 
 		switch {
 		case ops.Reset:
-			if err := resetWindow(cfg, w, reader, send, router, connCh, cst, reply); err != nil {
+			if err := resetWindow(cfg, w, send, router, connCh, cst, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 				w.remotePanes = remote
 				return
@@ -60,7 +55,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 			// sized for the new geometry painted into a pane that is still the old
 			// size leaves the mirror blank.
 		default:
-			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, reader, send, router, connCh, reply); err != nil {
+			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, connCh, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 				w.remotePanes = remote
 				return
@@ -90,7 +85,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 				if s == nil {
 					continue
 				}
-				if seed, err := PaneSeed(reader, send, id, reply); err == nil {
+				if seed, err := PaneSeed(rt, id); err == nil {
 					s.enqueue(wire.FrameSeed, seed)
 				} else {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
@@ -108,7 +103,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 		w.remotePanes = remote
 		cst.setWindowPanes(w.remoteID, remote)
 
-		fresh, freshActive, err := readLayout(reader, send, target, reply)
+		fresh, freshActive, err := readLayout(rt, target)
 		if err != nil || fresh.Raw == L.Raw {
 			return
 		}
@@ -121,7 +116,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, reader *controlmode.Reader, se
 // applyPaneOps performs the local pane surgery ops describes: kill the panes
 // whose remote pane is gone, split new ones off the tail and wire a renderer to
 // each, then swap the local panes into the remote's order.
-func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, reply replyFn) error {
+func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, send func(string), router *Router, connCh chan helloConn, rt roundTrip) error {
 	for _, i := range ops.Remove {
 		removed := remote[i]
 		router.Unregister(removed)
@@ -164,7 +159,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			// Dims come from the pane's cell in the REMOTE order, not from the
 			// temporary local index it was appended at — the swaps below have
 			// not run yet, so the two differ.
-			if seedRenderer(reader, send, router, c, id, reply, L.Panes[indexOf(newRemote, id)]) {
+			if seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)]) {
 				go pumpInput(c, id, send)
 			} else {
 				delete(w.conns, id)
@@ -188,7 +183,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // resetWindow rebuilds w from scratch, for the case where no current pane
 // survives (planPaneOps.Reset). Killing every pane instead would make tmux
 // destroy the mirror window and leave a registry entry pointing at nothing.
-func resetWindow(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reply replyFn) error {
+func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, connCh chan helloConn, cst *ctlState, rt roundTrip) error {
 	for _, id := range w.remotePanes {
 		router.Unregister(id)
 		if c := w.conns[id]; c != nil {
@@ -203,7 +198,7 @@ func resetWindow(cfg Config, w *mirrorWindow, reader *controlmode.Reader, send f
 		}
 	}
 	w.remotePanes = nil
-	return setupWindow(cfg, reader, send, router, connCh, cst, w, newConverger(), reply)
+	return setupWindow(cfg, send, router, connCh, cst, w, newConverger(), rt)
 }
 
 // focusLocalPane points local focus at whichever local pane renders the

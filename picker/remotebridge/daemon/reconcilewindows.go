@@ -11,20 +11,13 @@ import (
 // mirror match: mirror any remote window that has appeared, tear down any that
 // has gone, and re-assert the remote name on the ones that stayed.
 //
-// It exists because a structural gesture performed locally cannot be driven by
-// the remote's own notification: tmux emits a notification caused by a control
-// client's own command inside that command's %begin/%end block, and the reply
-// reader folds a block's body into the reply's Data — so our own %window-add /
-// %window-close / %window-renamed never surfaces. Re-reading ground truth covers
-// all three with one round-trip, and it self-heals a notification the reply
-// reader dropped for any other reason.
-//
-// Round-trips are routing-aware: sibling windows are streaming throughout.
-func reconcileWindows(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger) {
-	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
-
-	send(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
-	lw, ok := reply(reader)
+// A local structural gesture does get its remote notification (tmux emits it
+// inside the causing command's %begin/%end block, which the reader surfaces),
+// but that notification arrives with the mirror mid-gesture. Re-reading ground
+// truth covers add, close and rename with one round-trip, and self-heals a
+// notification lost for any other reason.
+func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	lw, ok := rt(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: reconcile-windows: list-windows failed\n")
 		return
@@ -47,7 +40,7 @@ func reconcileWindows(cfg Config, reader *controlmode.Reader, send func(string),
 		}
 		mw, known := reg.byRemoteID(rw.id)
 		if !known {
-			if mirrorNewWindow(cfg, reader, send, router, connCh, cst, reg, cv, rw) {
+			if mirrorNewWindow(cfg, send, router, connCh, cst, reg, cv, rt, rw) {
 				added = true
 			}
 			continue
@@ -79,7 +72,7 @@ func reconcileWindows(cfg Config, reader *controlmode.Reader, send func(string),
 
 // mirrorNewWindow creates and wires the local mirror for one remote window,
 // reporting whether it succeeded. Shared by reconcileWindows and addWindow.
-func mirrorNewWindow(cfg Config, reader *controlmode.Reader, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rw remoteWindow) bool {
+func mirrorNewWindow(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip, rw remoteWindow) bool {
 	localWin := reg.allocLocalWin(cfg.LocalSess)
 	if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: mirror %s: new-window %s: %v\n", rw.id, localWin, err)
@@ -92,8 +85,7 @@ func mirrorNewWindow(cfg Config, reader *controlmode.Reader, send func(string), 
 		cfg.LocalTmux("rename-window", "-t", localWin, name) // instant floor; reflow self-heals
 	}
 	mw := reg.add(rw.id, localWin)
-	reply := func(r *controlmode.Reader) (controlmode.Line, bool) { return readReplyRouting(r, router) }
-	if err := setupWindow(cfg, reader, send, router, connCh, cst, mw, cv, reply); err != nil {
+	if err := setupWindow(cfg, send, router, connCh, cst, mw, cv, rt); err != nil {
 		// Drop the half-created entry + local window so a later retry for this id
 		// is not blocked by the already-registered guard.
 		fmt.Fprintf(os.Stderr, "daemon: mirror %s: %v\n", rw.id, err)
