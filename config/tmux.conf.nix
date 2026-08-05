@@ -538,10 +538,11 @@
   # switches when the pane closes.
   #
   # -X/-Y are required: without them tmux cascades each new float down-right,
-  # and the cascade counter survives kill-pane. @pane_label → mauve border title.
+  # and the cascade counter survives kill-pane. -B none: rounded chrome is drawn
+  # by prdash (PRDASH_FRAME=1), since pane-border-lines has no rounded style.
   prdashBind =
     lib.optionalString (prdash != null)
-    "bind-key p new-pane -c '#{pane_current_path}' -x 95% -y 90% -X 2% -Y 5% -B heavy ${prdash}/bin/prdash \\; set -p @pane_label prdash";
+    "bind-key p new-pane -c '#{pane_current_path}' -x 95% -y 90% -X 2% -Y 5% -B none -e PRDASH_FRAME=1 ${prdash}/bin/prdash";
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
