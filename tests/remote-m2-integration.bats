@@ -1044,6 +1044,50 @@ remote_pane_of() {
 	[ "$dst_panes" -eq 2 ]
 }
 
+@test "ctl carousel runs the toggle on the REMOTE pane with TMUX_PANE and AEYE_BRIDGED" {
+	# Must be exported BEFORE the first $SRC command: the "remote" tmux server
+	# inherits this environment when it starts.
+	stub="$BATS_TEST_TMPDIR/bin"
+	mkdir -p "$stub"
+	# /bin/sh, not /usr/bin/env bash: the Linux nix build sandbox has no
+	# /usr/bin/env, so an env shebang leaves the stub unexecutable there and the
+	# assertion below fails with an empty capture rather than a wrong one.
+	cat >"$stub/tmux-claude-images" <<-EOF
+		#!/bin/sh
+		printf '%s %s\n' "\$TMUX_PANE" "\$AEYE_BRIDGED" >"$BATS_TEST_TMPDIR/toggled"
+	EOF
+	chmod +x "$stub/tmux-claude-images"
+	export PATH="$stub:$PATH"
+
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c9
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+
+	run "$CTL" --sock "$sock" carousel "$pane"
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		[ -f "$BATS_TEST_TMPDIR/toggled" ] && break
+		sleep 0.15
+	done
+	got="$(cat "$BATS_TEST_TMPDIR/toggled" 2>/dev/null || true)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	# The verb reached the REMOTE pane, carrying the exact pairing the viewer's
+	# network-frame-policy switch depends on. Reported rather than bare-asserted:
+	# an empty capture (stub never ran) and a wrong one (env not forwarded) fail
+	# identically otherwise, and they have completely different causes.
+	if [ "$got" != "$pane 1" ]; then
+		echo "stub captured '$got', want '$pane 1'" >&2
+		false
+	fi
+}
+
 # The queue-safety guarantee: a gated keypress against a dead daemon must fail
 # fast and non-zero, never stall tmux's command queue on a dial that hangs.
 @test "ctl against a dead socket fails fast and non-zero" {

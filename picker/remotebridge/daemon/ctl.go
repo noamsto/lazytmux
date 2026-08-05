@@ -185,6 +185,24 @@ var verbs = map[string]verb{
 		}
 		return []string{fmt.Sprintf("rename-window -t %s -- %s", win, tmuxQuote(name))}, nil
 	}},
+	// The carousel toggle opens its own split on the remote, so this verb only
+	// launches it. TMUX_PANE is injected explicitly because run-shell does not
+	// export it (the local bind this replaces does the same via #{pane_id}), and
+	// AEYE_BRIDGED tells the viewer its frames cross a network, not a disk.
+	// Backgrounded (-b) so a slow launch never blocks the remote command queue;
+	// the split arrives as a %layout-change like any other structural event.
+	//
+	// A missing binary surfaces as a short remote split rather than a
+	// display-message: the only client attached to this remote is the daemon's
+	// control client, which has no status line for a message to land on, while a
+	// split mirrors back into the window the human is looking at.
+	"carousel": {layout: true, moves: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
+		return []string{fmt.Sprintf(
+			"run-shell -b -t %s 'command -v tmux-claude-images >/dev/null 2>&1 && "+
+				"exec env TMUX_PANE=%s AEYE_BRIDGED=1 tmux-claude-images; "+
+				`tmux split-window -t %s -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"'`,
+			pane, pane, pane)}, nil
+	}},
 }
 
 // parseCtl validates a FrameCtl argv and resolves it against the current

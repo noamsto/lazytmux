@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -201,7 +203,7 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 	defer onePeer.Close()
 
 	router := NewRouter()
-	router.Register("%1", newOutputSink(oneLocal))
+	router.Register("%1", newOutputSink(oneLocal, nil))
 	var two capBuf
 	router.Register("%2", &two)
 
@@ -357,5 +359,74 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)
+	}
+}
+
+func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	s := newOutputSink(remote, p)
+	defer s.Close()
+
+	// Two stores for the same id, queued before the pump can drain them.
+	seq := func(payload string) []byte {
+		return []byte("\x1b_Gi=7,a=T,U=1,f=100,t=f;" + payload + "\x1b\\")
+	}
+	s.Write(seq("L3RtcC9hLnBuZw==")) // /tmp/a.png
+	s.Write(seq("L3RtcC9iLnBuZw==")) // /tmp/b.png
+
+	got := readAllFrames(t, local, 500*time.Millisecond)
+	if n := strings.Count(got, "\x1bPtmux;"); n != 1 {
+		t.Fatalf("forwarded %d stores, want 1 (the newest); got %q", n, got)
+	}
+	if !strings.Contains(got, "L2xvY2FsL2EuYmlu") {
+		t.Fatalf("payload not localised: %q", got)
+	}
+}
+
+// graphics.Proxy.Close() flushes a partial sequence the Scanner was still
+// holding — but it's only reachable if newOutputSink's pump actually calls it
+// on teardown. gfx is a value captured by the pump closure, not a field
+// Close() can reach from another goroutine, so this has to be wired inside
+// the pump's own !ok exit path.
+func TestOutputSinkFlushesTheProxyHeldPartialOnClose(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	s := newOutputSink(remote, p)
+
+	const partial = "\x1b_Gi=1,a=T;abc" // no ST: the scanner holds it, incomplete
+	s.Write([]byte(partial))
+	s.Close()
+
+	got := readAllFrames(t, local, 500*time.Millisecond)
+	if got != partial {
+		t.Fatalf("got = %q, want the held partial %q flushed on close", got, partial)
+	}
+}
+
+type stubLocalizer struct{ local string }
+
+func (s *stubLocalizer) Localize(context.Context, string) (string, error) { return s.local, nil }
+
+// readAllFrames reads frames off conn until it goes quiet for the deadline and
+// returns their concatenated payloads.
+func readAllFrames(t *testing.T, conn net.Conn, quiet time.Duration) string {
+	t.Helper()
+	var out []byte
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(quiet)); err != nil {
+			t.Fatal(err)
+		}
+		f, err := wire.ReadFrame(conn)
+		if err != nil {
+			return string(out)
+		}
+		out = append(out, f.Payload...)
 	}
 }

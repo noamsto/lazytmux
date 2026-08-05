@@ -220,6 +220,41 @@ status line 0. Enabled by default via `programs.lazytmux.agentUsage.enable`.
   plus `percentOfBurstUsed` (rendered as a `burst` window when nonzero).
   Fully pooled plans sit at 0% and stay hidden below the monthly threshold.
 
+### Bridge Graphics
+
+Kitty graphics crossing the remote bridge are localised by
+`picker/remotebridge/graphics`, in each pane's output-sink pump. Active
+whenever both the remote bridge (`programs.lazytmux.remote.hosts`) and the
+agent-carousel toggle (the `aeye` flake input) are wired in — no separate
+option.
+
+- **Placements need nothing.** Kitty unicode placeholders are ordinary grid
+  text, so they cross the bridge (and survive `capture-pane` reseeds) on the
+  normal text path. Only the store's `t=f`/`t=t` payload — a path on the
+  remote filesystem — is host-bound.
+- **The proxy** scans kitty APCs out of the stream (bare and `\ePtmux;`-wrapped),
+  rewrites `t=f`/`t=t` payloads to a locally-fetched copy, drops `t=s` and any
+  fetch it cannot satisfy (a stale path renders the *wrong* image; a blank one
+  self-heals), and re-wraps exactly once for the local tmux. `t=t` ("transmit,
+  then delete") is downgraded to `t=f` on localisation — the payload now names
+  our local cache copy, and honouring the sender's delete-after-read would
+  have the local terminal unlink what the fetcher just wrote.
+- **Fetches** ride the daemon's own ssh `ControlMaster` socket, so they never
+  share the control stream with live terminal output. Cache key is
+  `(path, mtime, size)` — mtime matters, since viewers rewrite scratch frames
+  at a stable path while panning. Each fetch is bounded by a 2s
+  `context.WithTimeout` reaching all the way to `exec.CommandContext`, so a
+  hung socket or a stalled remote `stat`/`cat` kills the ssh process and drops
+  that store instead of freezing the pane's whole stream.
+- **Coalescing** drops a store a later one in the same batch supersedes — a
+  batch is whatever one `Scanner.Feed` call returns, which in the daemon's
+  wiring is one pump-drain's worth (every queued `FrameOutput` handed to the
+  proxy in one call). Never coalesced across an `a=d` delete for the same id.
+- **`prefix + I`** is gated on `bridgeGate`: inside a mirror window it runs the
+  toggle on the remote (ctl verb `carousel`), so the carousel is a remote
+  split mirrored back like any other structural change.
+- Remote host needs `tmux-claude-images` and `resvg` on PATH.
+
 ### Welcome Buffer (splash)
 
 `tmux-splash` (a bubbletea binary, second main package in the `picker/` Go

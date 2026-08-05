@@ -617,6 +617,20 @@
               bats tests/remote-m2-integration.bats
               touch $out
             '';
+
+          # The gate itself, not a keypress: remote-m2-integration-tests above
+          # drives vanilla -L servers with no lazytmux keybindings for a gate to
+          # intercept (comment on that check), so it can only exercise the
+          # `carousel` ctl verb directly. Proving both bind I branches exist in
+          # the REAL generated config is what actually covers carouselBind.
+          bridge-carousel-bind-assertions =
+            pkgs.runCommand "bridge-carousel-bind-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              grep -qE 'bind I if-shell -F .*@bridge_win' "$CONF"
+              touch $out
+            '';
         };
 
         packages = {

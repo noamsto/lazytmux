@@ -110,6 +110,13 @@ export LZTMUX_DAEMON_SOCK="$sock"
 export LZTMUX_DAEMON_RENDERER="$renderer"
 export LZTMUX_DAEMON_REFLOW="$reflow"
 
+# The remote viewer picks its graphics backend from #{client_termname}, which is
+# whatever the daemon's ssh advertises — so hand it the termname of the terminal
+# that will actually paint the pixels. Empty (no client) is fine: the remote then
+# falls back to block art, which renders anywhere.
+term="$(tmux display-message -p '#{client_termname}')"
+export LZTMUX_BRIDGE_TERM="$term"
+
 # Launch the daemon DETACHED, outside the panes it manages (I4): it is not the
 # window's command — it respawns the local panes into renderers. setsid is
 # Linux-only (not on macOS base), so fall back to plain backgrounding + disown

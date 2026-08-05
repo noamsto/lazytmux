@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -37,6 +38,17 @@ type Config struct {
 	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
 	Reflow         func()                     // forces a status-bar reflow of the mirror session (injected; nil = off)
 	LocalPanes     func() map[string]string   // remote pane id -> local pane id, read back from @bridge_pane (injected)
+	// NewGraphics builds the per-pane kitty-graphics proxy that localises image
+	// payloads crossing the bridge. nil disables proxying entirely (tests, and
+	// any transport where there is no remote filesystem to fetch from).
+	NewGraphics func(paneID string) *graphics.Proxy
+}
+
+func (c Config) graphicsFor(paneID string) *graphics.Proxy {
+	if c.NewGraphics == nil {
+		return nil
+	}
+	return c.NewGraphics(paneID)
 }
 
 // reflow re-derives the mirror session's window labels. The after-new-window
@@ -534,7 +546,7 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 		if conn == nil {
 			continue // didn't connect; already logged by collectHellos caller
 		}
-		if !seedRenderer(rt, router, conn, remotePane, L.Panes[i]) {
+		if !seedRenderer(rt, router, conn, remotePane, L.Panes[i], cfg.graphicsFor(remotePane)) {
 			if len(mw.remotePanes) == 1 {
 				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
 			}
@@ -833,14 +845,14 @@ func closeConns(conns map[string]net.Conn) {
 // (frozen wire invariant). Returns false — logging to stderr rather than
 // crashing — if the pane closed between listing and seeding: the caller decides
 // whether that's fatal (sole pane) or just leaves that pane unwired.
-func seedRenderer(rt roundTrip, router *Router, conn net.Conn, remotePane string, dims controlmode.PaneCell) bool {
+func seedRenderer(rt roundTrip, router *Router, conn net.Conn, remotePane string, dims controlmode.PaneCell, gfx *graphics.Proxy) bool {
 	seed, err := PaneSeed(rt, remotePane)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (skipping renderer)\n", remotePane, err)
 		conn.Close()
 		return false
 	}
-	sink := newOutputSink(conn)
+	sink := newOutputSink(conn, gfx)
 	router.Register(remotePane, sink)
 	sink.enqueue(wire.FrameSeed, seed)
 	sink.enqueue(wire.FrameResize, wire.EncodeResize(dims.W, dims.H))
@@ -869,16 +881,72 @@ type outputSink struct {
 	paused bool
 }
 
-func newOutputSink(conn net.Conn) *outputSink {
+// newOutputSink's pump batch-drains queued FrameOutput frames before handing
+// them to gfx: coalescing can only drop a store a later one supersedes if it
+// can see that later store, and with the proxy on this goroutine, fetches are
+// serial per pane, so there's never a second store arriving mid-fetch — the
+// only way it sees a burst is by draining what's already queued behind the
+// frame it woke on. gfx == nil skips filtering entirely (tests, and any
+// transport with no remote filesystem to localise from).
+func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
 	go func() {
-		for f := range s.ch {
+		var pending *sinkFrame
+		for {
+			var f sinkFrame
+			if pending != nil {
+				f, pending = *pending, nil
+			} else {
+				v, ok := <-s.ch
+				if !ok {
+					// The pane is gone: flush whatever the proxy was still holding
+					// (a partial sequence cut mid-stream) rather than silently
+					// dropping it — gfx.Close() exists for exactly this exit.
+					if gfx != nil {
+						if tail := gfx.Close(); len(tail) > 0 {
+							wire.WriteFrame(conn, wire.FrameOutput, tail)
+						}
+					}
+					return
+				}
+				f = v
+			}
+			if gfx != nil && f.typ == wire.FrameOutput {
+				buf := append([]byte(nil), f.payload...)
+				buf, pending = drainOutput(s.ch, buf)
+				f.payload = gfx.Filter(buf)
+				if len(f.payload) == 0 {
+					continue
+				}
+			}
 			if err := wire.WriteFrame(conn, f.typ, f.payload); err != nil {
 				return
 			}
 		}
 	}()
 	return s
+}
+
+// drainOutput appends every FrameOutput already queued on ch to buf, so the
+// proxy sees a whole burst at once and can drop stores a later frame
+// supersedes. It stops at the first non-output frame and hands it back to be
+// written next: reordering a seed or resize past output would break the
+// frozen wire invariant (sinkFrame's doc above).
+func drainOutput(ch chan sinkFrame, buf []byte) ([]byte, *sinkFrame) {
+	for {
+		select {
+		case v, ok := <-ch:
+			if !ok {
+				return buf, nil
+			}
+			if v.typ != wire.FrameOutput {
+				return buf, &v
+			}
+			buf = append(buf, v.payload...)
+		default:
+			return buf, nil
+		}
+	}
 }
 
 // Write is the router-facing io.Writer path: it enqueues a FrameOutput. While
