@@ -1072,3 +1072,48 @@ remote_pane_of() {
 	[ "$status_seen" -ne 0 ]
 	[[ $output_seen == *"not mirrored"* ]]
 }
+
+# Agent status: a control-mode client renders no status line, so the remote's
+# own #() pollers never run for a bridged session — claude-status-update stamps
+# the state on the pane instead, and the daemon re-keys it onto the LOCAL pane
+# id, which is what every local consumer reads.
+@test "daemon ships the remote's agent status into the local claude-status tree" {
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
+
+	$SRC new-session -d -s rem -x 120 -y 34
+	$DST new-session -d -s host-sess -x 120 -y 34
+
+	remote_pane="$($SRC list-panes -t rem -F '#{pane_id}')"
+	$SRC set -p -t "$remote_pane" @claude_status "waiting $(date +%s) 1"
+	$SRC set -p -t "$remote_pane" @claude_task "ship it"
+
+	bridge_up 1 cst
+
+	local_pane="$($DST list-panes -t host-sess:1 -F '#{pane_id}')"
+	pane_file="$CLAUDE_STATUS_DIR/panes/${local_pane#%}"
+	# The poll rides the main loop's drain, so it needs the stream to wake:
+	# keep producing remote output until the file lands.
+	for _ in $(seq 1 40); do
+		[ -f "$pane_file" ] && break
+		$SRC send-keys -t rem "printf 'tick\\n'" Enter
+		sleep 0.2
+	done
+	body="$(cat "$pane_file" 2>/dev/null || true)"
+	task="$(cat "$CLAUDE_STATUS_DIR/tasks/${local_pane#%}" 2>/dev/null || true)"
+	# The mirror pane runs a renderer, so its own command says nothing;
+	# @bridge_proc carries the remote's, which is what the icons are built from.
+	remote_proc="$($SRC list-panes -t rem -F '#{pane_current_command}')"
+	bridge_proc="$($DST show-options -p -t "$local_pane" -qv @bridge_proc)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[[ $body == *"state=waiting"* ]]
+	[[ $body == *"session=host-sess"* ]]
+	[[ $body == *"unseen=1"* ]]
+	[ "$task" = "ship it" ]
+	[ -n "$remote_proc" ]
+	[ "$bridge_proc" = "$remote_proc" ]
+	# The bridge owns what it wrote: SIGTERM teardown takes it away again.
+	[ ! -f "$pane_file" ]
+}

@@ -209,6 +209,12 @@ requirements for this to work:
   handles this; set it false only to manage lingering yourself (e.g. NixOS
   `users.users.<name>.linger = true`).
 
+Agent status crosses the bridge too: a Claude running on the remote shows its
+state icon, task and issue ids on the mirror window, in the session tint and in
+both pickers, exactly as a local one does. It needs lazytmux on the remote as
+well — that side stamps the state on the pane, since a control-mode client
+renders no status line for the usual pollers to run in.
+
 **Known limitations** (documented, not solved here):
 
 - Remote copy-mode / scrollback is not pre-seeded locally yet (M2.4).
