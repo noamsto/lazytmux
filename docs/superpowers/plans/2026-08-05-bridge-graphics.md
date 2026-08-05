@@ -891,6 +891,15 @@ func Rewrite(q *Seq, l Localizer) (out *Seq, drop bool, err error) {
 		}
 		cp := *q
 		cp.Payload = []byte(base64.StdEncoding.EncodeToString([]byte(local)))
+		// t=t asks the terminal to delete the file once it has read it. Our
+		// payload now names the LOCAL cache copy, so honouring it would have the
+		// local terminal unlink what the fetcher just wrote — invalidating the
+		// cache behind its back and stranding any later re-emit that still
+		// references it. The delete-after-read contract was with the sender's own
+		// temp file, which never crosses the bridge, so emit t=f.
+		if q.Get("t") == "t" {
+			cp.Keys = setKey(q.Keys, "t", "f")
+		}
 		return &cp, false, nil
 	case "s":
 		// Shared memory is host-local by definition.
@@ -913,6 +922,21 @@ func isStore(q *Seq) bool {
 
 // isDelete reports whether q deletes an image by id.
 func isDelete(q *Seq) bool { return q.Get("a") == "d" && q.Get("i") != "" }
+
+// setKey returns a copy of keys with k's value replaced. It never edits in
+// place: Rewrite's shallow copy aliases this slice, so an in-place write would
+// reach through into the caller's Seq.
+func setKey(keys []byte, k, v string) []byte {
+	parts := bytes.Split(keys, []byte{','})
+	out := make([][]byte, 0, len(parts))
+	for _, kv := range parts {
+		if i := bytes.IndexByte(kv, '='); i >= 0 && string(kv[:i]) == k {
+			kv = []byte(k + "=" + v)
+		}
+		out = append(out, kv)
+	}
+	return bytes.Join(out, []byte{','})
+}
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -2158,6 +2182,7 @@ gh pr create --assignee @me --title "feat(bridge): render kitty graphics through
 
 - **`AEYE_BRIDGED` only reaches the carousel because the ctl verb sets it** (Task 11). A carousel the human opens by hand on the remote won't have it and will use the raw-RGBA path; the fetcher's 8 MB cap keeps that survivable rather than fast.
 - **…and because aeye's toggle forwards it.** `tmux-claude-images` launches the viewer with `tmux split-window -e`, forwarding a fixed list of variables; setting `AEYE_BRIDGED` on the toggle does *not* put it in the viewer's environment. aeye's side of this ships in noamsto/aeye#177. Found during Task 2 rather than by testing, because the failure is silent and plausible: the policy simply never engages and pan looks like an ordinary slow network. Any future variable the bridge wants the viewer to see (a cell-pixel-size hint is the known candidate) hits the same trap.
+- **A `t=t` store leaks its remote temp file, deliberately.** We localise the payload and downgrade the key to `t=f`, so nothing deletes the sender's original on the remote host. The faithful reading of the protocol — our proxy stands in for the terminal, so delete-after-read should apply to the remote file — was rejected on blast radius: it would need `Localizer` to grow a method for a case aeye cannot produce, and it would make the proxy delete files on the remote as a consequence of parsing a byte stream, where a misparse destroys user data. `kitten icat` does emit `t=t`, so the leak is reachable; it accumulates one temp file per store in a temp dir the remote's own cleanup reaps. A slow `/tmp` fill is recoverable, deleting the wrong file is not.
 - **Don't add a `t=d` conversion.** Inline payloads are self-contained and pass through; converting `t=f` to `t=d` instead of fetching would push image bytes onto the control stream, which is the option the spec rejected (D3).
 - **`decodeSeq` returns a length, not an `ok` bool** — amended during Task 3, after the first implementer caught the bug. `\ePtmux;` wraps *any* passthrough, not just graphics, so "incomplete" and "complete but not ours" are different answers; the original single bool conflated them and an OSC 52 clipboard escape (which aeye itself emits) would hold every later byte on that pane until the partial cap or `Flush`. Non-graphics passthroughs are forwarded verbatim — already wrapped for exactly one tmux layer, which is what the renderer's local tmux wants. The same branch requires the decoded sequence to fill its wrapper exactly: a wrapper carrying trailing bytes is forwarded whole rather than decoded, because decoding only the first sequence would silently drop the remainder, and losing relayed bytes is worse than leaving one store unlocalised.
 - **The proxy runs on the sink's pump goroutine and may block there.** That is deliberate (D4) — it holds one pane's stream so a store lands before the placements referencing it. Do not move it onto `Router.Route`, which runs on the single shared control-stream loop.

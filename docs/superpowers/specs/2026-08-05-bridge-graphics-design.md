@@ -218,7 +218,8 @@ wrapped   \ePtmux;\e\e_G<keys>;<payload>\e\e\\\e\\
 
 | Form | Action |
 |------|--------|
-| `t=f`, `t=t` | base64-decode payload as a remote path → fetch → re-encode the **local** path |
+| `t=f` | base64-decode payload as a remote path → fetch → re-encode the **local** path |
+| `t=t` | as `t=f`, **and downgrade the key to `t=f`**. Amended 2026-08-05 during Task 5: `t=t` means delete-after-read, and once the payload names our local cache copy, honouring it would have the local terminal unlink what the fetcher just wrote — invalidating the cache behind its back. The sender's own temp file is left on the remote (see Known limitations) |
 | `t=d` | pass through unchanged — the payload is self-contained |
 | `a=d` (delete), any sequence with no payload | pass through unchanged |
 | `t=s` (shared memory) | drop + log — cannot cross a host boundary; aeye never emits it |
@@ -245,6 +246,8 @@ drops and logs, which is what guards the raw-RGBA path if `AEYE_BRIDGED` is ever
 | `t=s` | Drop + log |
 | Bridge reseed | Free — placements are grid text (G2); the store persists in the long-lived local kitty |
 | Local kitty store lost (terminal restart) | Pre-existing aeye condition, handled by its repaint path; the bridge changes nothing |
+
+**Known limitation — a `t=t` store leaks its remote temp file.** We downgrade the key rather than delete anything, so the sender's original stays on the remote host. Deleting it would be the faithful reading — the proxy stands in for the terminal — but it would make the proxy destroy remote files as a consequence of parsing a byte stream, and a misparse then takes user data with it. `kitten icat` emits `t=t`, so this is reachable rather than theoretical; the cost is one temp file per store in a directory the remote's own cleanup reaps.
 
 **Known limitation — rasterisation resolution.** `queryCellPx` (`aeye/cellsize.go:41`, CSI 16 t)
 has no terminal to answer it through the bridge, so it times out and falls back to estimates.
