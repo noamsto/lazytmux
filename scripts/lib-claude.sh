@@ -109,7 +109,10 @@ claude_prune_stale_state() {
 # old, which would fake a dead pane.
 claude_live_epoch() {
 	local line
-	IFS= read -r line <"$1" 2>/dev/null || return 1
+	# 2> before <: redirections apply left to right, so a stderr redirect placed
+	# after the input one is not in effect yet when the open fails, and the
+	# "No such file" lands on the tmux server's stderr for every unstamped pane.
+	IFS= read -r line 2>/dev/null <"$1" || return 1
 	[[ $line =~ ^[0-9]+$ ]] || return 1
 	REPLY=$line
 }

@@ -271,6 +271,24 @@ setup_sweep() {
 	[ -e "$BATS_TEST_TMPDIR/live/3" ]
 }
 
+@test "sweep: a failed list-panes writes no .sweep" {
+	# The reader treats a fresh .sweep as proof the pass observed every agent
+	# pane. A failed list-panes yields an empty stream, indistinguishable from
+	# "no agent panes" — stamping .sweep after one would assert a pass that saw
+	# nothing, and every live pane's lagging stamp would then read as dead.
+	setup_sweep 60
+	cat >"$FAKEBIN/tmux" <<-'EOF'
+		#!/bin/sh
+		case "$*" in
+		*"list-panes"*) exit 1 ;;
+		esac
+	EOF
+	chmod +x "$FAKEBIN/tmux"
+	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
+	[ "$status" -eq 0 ]
+	[ ! -e "$BATS_TEST_TMPDIR/live/.sweep" ]
+}
+
 @test "sweep: the every-5th-tick throttle gates the stamps too" {
 	setup_sweep 60
 	run bash -c 'export CLAUDE_NOW=101; source scripts/tmux-update-icons.sh; arm_agent_detect'
