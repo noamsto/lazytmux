@@ -221,3 +221,66 @@ func TestRemoteListSessionsCmdFishSafe(t *testing.T) {
 		t.Fatalf("probe should fall back to the macOS socket dir: %q", remoteListSessionsCmd)
 	}
 }
+
+func TestPendingRemoteItems(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	items := pendingRemoteItems(opts)
+	if len(items) != 3 {
+		t.Fatalf("expected header + 2 host rows, got %d: %+v", len(items), items)
+	}
+	if !items[0].isRemoteHeader {
+		t.Fatalf("first row should be remote header")
+	}
+	for i, host := range []string{"lab", "dead"} {
+		row := items[i+1]
+		if row.remoteHost != host || row.remoteSess != "" {
+			t.Errorf("row %d: got remoteHost=%q remoteSess=%q, want host=%q", i, row.remoteHost, row.remoteSess, host)
+		}
+		if row.target == "" {
+			t.Errorf("row %d: must be selectable before the probe returns", i)
+		}
+		if !row.isRemoteRow {
+			t.Errorf("row %d: must be flagged isRemoteRow so claude/scratch toggles can't hide it", i)
+		}
+		if row.searchText != host {
+			t.Errorf("row %d: searchText=%q, want %q", i, row.searchText, host)
+		}
+		if !strings.Contains(row.plain, remotePendingNote) {
+			t.Errorf("row %d: plain=%q missing pending note %q", i, row.plain, remotePendingNote)
+		}
+	}
+}
+
+func TestPendingRemoteItemsNoHosts(t *testing.T) {
+	if items := pendingRemoteItems(nil); items != nil {
+		t.Fatalf("no hosts => nil, got %v", items)
+	}
+}
+
+// The row count for a host with nothing new to report must not change
+// between the pending render and the resolved one — that stability is what
+// stops the whole section from reflowing under the user (#312). A host that
+// turns out to have unbridged sessions still gains those child rows once the
+// probe returns (Task 4 makes that growth cursor-safe); this covers the
+// common, reflow-causing case the bug report measured.
+func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	pending := pendingRemoteItems(opts)
+
+	probe := func(host string) ([]string, error) {
+		if host == "dead" {
+			return nil, errors.New("unreachable")
+		}
+		return nil, nil // lab: reachable, nothing new to show
+	}
+	resolved := collectRemoteItems(opts, nil, probe)
+
+	if len(pending) != len(resolved) {
+		t.Fatalf("row count changed: pending=%d resolved=%d", len(pending), len(resolved))
+	}
+	for i := range pending {
+		if pending[i].remoteHost != resolved[i].remoteHost || pending[i].remoteSess != resolved[i].remoteSess {
+			t.Errorf("row %d identity changed: pending=%+v resolved=%+v", i, pending[i], resolved[i])
+		}
+	}
+}
