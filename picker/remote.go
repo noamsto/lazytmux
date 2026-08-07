@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -314,4 +316,52 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		}
 	}
 	return items
+}
+
+// bridgePIDFromFile parses a bridge daemon pidfile's raw contents into a
+// validated PID. Pure logic split out for unit testing; malformed or empty
+// content returns ok=false rather than erroring, matching how
+// scripts/lib-remote.sh's remote_daemon_alive treats an unreadable pidfile.
+func bridgePIDFromFile(raw string) (pid int, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// stopBridgeDaemon best-effort SIGTERMs the remote-bridge daemon mirroring
+// sess, found via the @bridge_sock session option the daemon stamps on
+// itself. All failures are swallowed: this is opportunistic cleanup, not a
+// required step — lztmux-remote-open.sh's stale-daemon check self-heals on
+// the next reopen regardless of whether this signal lands. The daemon's own
+// SIGTERM handler already tears itself down (removes its socket/pidfile,
+// exits), so this only needs to deliver the signal.
+func stopBridgeDaemon(sess string) {
+	logEvent("picker", "event", "stop_bridge_daemon", "target", sess)
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", sess, "#{@bridge_sock}").Output()
+	if err != nil {
+		return
+	}
+	sock := strings.TrimSpace(string(out))
+	if sock == "" {
+		return
+	}
+	raw, err := os.ReadFile(sock + ".pid")
+	if err != nil {
+		return
+	}
+	pid, ok := bridgePIDFromFile(string(raw))
+	if !ok {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	proc.Signal(syscall.SIGTERM) //nolint:errcheck
 }

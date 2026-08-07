@@ -263,6 +263,33 @@ func TestPendingRemoteItemsNoHosts(t *testing.T) {
 // turns out to have unbridged sessions still gains those child rows once the
 // probe returns; restoreCursor (tui.go) keeps that growth from moving the
 // selection.
+func TestBridgePIDFromFile(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantPID int
+		wantOK  bool
+	}{
+		{"valid", "12345\n", 12345, true},
+		{"empty", "", 0, false},
+		{"whitespace only", "   \n", 0, false},
+		{"non-numeric", "abc", 0, false},
+		{"zero", "0", 0, false},
+		{"negative", "-5", 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pid, ok := bridgePIDFromFile(c.raw)
+			if ok != c.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if ok && pid != c.wantPID {
+				t.Errorf("pid = %d, want %d", pid, c.wantPID)
+			}
+		})
+	}
+}
+
 func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	pending := pendingRemoteItems(opts)
