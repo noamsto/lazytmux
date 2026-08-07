@@ -30,6 +30,14 @@ func TestPaneAliveRealTmux(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not on PATH")
 	}
+	// Isolates this test's tmux server on its own default socket (no -L
+	// needed on either side: tmux resolves the default socket under
+	// TMUX_TMPDIR) so it can never reach the developer's real interactive
+	// server or its panes, and paneAlive — which always shells out to plain
+	// "tmux" — talks to the same isolated server without needing its own
+	// socket flag.
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+
 	session := "agentdetect-test-" + strconv.Itoa(os.Getpid())
 	if err := exec.Command("tmux", "new-session", "-d", "-s", session, "-x", "80", "-y", "24").Run(); err != nil {
 		t.Skipf("could not start a scratch tmux session: %v", err)

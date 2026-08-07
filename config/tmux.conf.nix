@@ -951,7 +951,7 @@
     set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus '#{@bridge_pane}'\" }"
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
-    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id}"'
+    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id} /tmp/claude-status/watchers/#{s/%%//:pane_id}"'
 
     # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
     set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'

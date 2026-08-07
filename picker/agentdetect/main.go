@@ -103,8 +103,13 @@ func main() {
 			// its own next stillOwner check and self-evict. Stale entries
 			// from any exit path (this one and EOF) are swept later by
 			// claude_prune_stale_state instead.
+			//
+			// Also deliberately does not emit here: a live successor already
+			// exists and already reported current state at its own startup
+			// (main's initial emit). statefile.Writer's temp file isn't
+			// pid-namespaced, so this stale write racing the successor's own
+			// write could revert the displayed state or clobber its rename.
 			if !stillOwner(watcherRegDir, paneID, myPID) {
-				emit(scr, m, w)
 				return
 			}
 			if deb.Due(time.Now()) {
