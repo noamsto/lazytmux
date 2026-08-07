@@ -19,13 +19,10 @@ func TestAliveFromProbe(t *testing.T) {
 }
 
 // TestPaneAliveRealTmux exercises paneAlive's actual shell-out, not just the
-// pure aliveFromProbe decision it wraps. This is deliberate: an earlier draft
-// of paneAlive shelled out to `tmux display -t %pane`, whose target lookup is
-// CMD_FIND_CANFAIL in tmux's own source (cmd-display-message.c) — it resolves
-// a missing pane silently and still exits 0, so aliveFromProbe(nil) reads a
-// dead pane as alive and the whole liveness backstop this task exists to add
-// would never fire on ordinary pane death. aliveFromProbe alone can't catch
-// that class of bug; only actually invoking the tmux command can.
+// pure aliveFromProbe decision it wraps: a tmux subcommand whose target
+// resolution silently tolerates a missing target would pass aliveFromProbe
+// fine while never actually detecting a dead pane, so only invoking the real
+// command catches that class of bug.
 func TestPaneAliveRealTmux(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not on PATH")
@@ -59,7 +56,7 @@ func TestPaneAliveRealTmux(t *testing.T) {
 	}
 
 	if paneAlive(paneID) {
-		t.Fatalf("paneAlive(%q) = true for a pane whose session was just killed (this is exactly the CANFAIL false-positive #239's review caught — paneAlive must not shell out to a tmux subcommand whose target resolution silently tolerates a missing target)", paneID)
+		t.Fatalf("paneAlive(%q) = true for a pane whose session was just killed", paneID)
 	}
 }
 

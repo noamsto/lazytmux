@@ -55,8 +55,6 @@ func main() {
 
 	myPID := os.Getpid()
 	if !registerWatcher(watcherRegDir, paneID, myPID) {
-		// Can't guarantee we're the sole watcher for this pane, so don't
-		// become a long-lived process that might duplicate one (#239).
 		return
 	}
 
@@ -93,22 +91,14 @@ func main() {
 				return
 			}
 		case <-ticker.C:
-			// Cheap (a local file read, no fork) so it rides the existing
-			// hot ticker: catches a re-arm within one tick instead of
-			// waiting on the coarse liveness probe below (#239).
-			//
-			// Deliberately does not remove the registry file on this exit:
-			// by the time we're here it's the new watcher's registration,
-			// not ours, and deleting it would make the new watcher fail
-			// its own next stillOwner check and self-evict. Stale entries
-			// from any exit path (this one and EOF) are swept later by
-			// claude_prune_stale_state instead.
-			//
-			// Also deliberately does not emit here: a live successor already
-			// exists and already reported current state at its own startup
-			// (main's initial emit). statefile.Writer's temp file isn't
-			// pid-namespaced, so this stale write racing the successor's own
-			// write could revert the displayed state or clobber its rename.
+			// A local file read, no fork, so this rides the existing hot
+			// ticker rather than waiting on the coarse liveness probe below.
+			// Neither removes the registry file (by now it's the new
+			// watcher's, not ours — deleting it would make the new watcher
+			// self-evict on its own next check) nor emits (the new watcher
+			// already reported current state at its own startup, and
+			// statefile.Writer's temp file isn't pid-namespaced, so a stale
+			// write here could race and clobber the new watcher's write).
 			if !stillOwner(watcherRegDir, paneID, myPID) {
 				return
 			}
@@ -116,10 +106,8 @@ func main() {
 				emit(scr, m, w)
 			}
 		case <-liveness.C:
-			// Forking `tmux capture-pane` isn't free, so this stays on its own
-			// coarse ticker — a leak reaper, not a liveness signal. This is
-			// the backstop for the case EOF never arrives at all (#239):
-			// dead pane, or the tmux server gone outright.
+			// Backstop for the case EOF never arrives: dead pane, or the
+			// tmux server gone outright.
 			if !paneAlive(paneID) {
 				emit(scr, m, w)
 				return
