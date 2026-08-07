@@ -615,7 +615,11 @@
 
     # === Main Config ===
     set -g mouse on
-    set -g focus-follows-mouse ${if focusFollowsMouse then "on" else "off"}
+    set -g focus-follows-mouse ${
+      if focusFollowsMouse
+      then "on"
+      else "off"
+    }
     set -g window-size latest
     set -g aggressive-resize on
     set-option -g renumber-window on
