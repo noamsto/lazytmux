@@ -368,15 +368,19 @@ func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
 	defer remote.Close()
 
 	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
-	s := newOutputSink(remote, p)
-	defer s.Close()
 
-	// Two stores for the same id, queued before the pump can drain them.
+	// Construct the sink without starting its pump, write both stores onto
+	// s.ch directly, then start the pump: its first receive is guaranteed to
+	// see both frames already queued, so drainOutput's batch is deterministic
+	// instead of racing the goroutine's startup against these writes.
+	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
 	seq := func(payload string) []byte {
 		return []byte("\x1b_Gi=7,a=T,U=1,f=100,t=f;" + payload + "\x1b\\")
 	}
 	s.Write(seq("L3RtcC9hLnBuZw==")) // /tmp/a.png
 	s.Write(seq("L3RtcC9iLnBuZw==")) // /tmp/b.png
+	s.start(remote, p)
+	defer s.Close()
 
 	got := readAllFrames(t, local, 500*time.Millisecond)
 	if n := strings.Count(got, "\x1bPtmux;"); n != 1 {
