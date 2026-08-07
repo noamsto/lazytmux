@@ -881,15 +881,28 @@ type outputSink struct {
 	paused bool
 }
 
-// newOutputSink's pump batch-drains queued FrameOutput frames before handing
-// them to gfx: coalescing can only drop a store a later one supersedes if it
-// can see that later store, and with the proxy on this goroutine, fetches are
-// serial per pane, so there's never a second store arriving mid-fetch — the
-// only way it sees a burst is by draining what's already queued behind the
-// frame it woke on. gfx == nil skips filtering entirely (tests, and any
-// transport with no remote filesystem to localise from).
+// newOutputSink constructs the sink and starts its pump immediately; see
+// start's doc for what the pump does and why it's a separate method.
 func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
+	s.start(conn, gfx)
+	return s
+}
+
+// start launches the pump goroutine, which batch-drains queued FrameOutput
+// frames before handing them to gfx: coalescing can only drop a store a later
+// one supersedes if it can see that later store, and with the proxy on this
+// goroutine, fetches are serial per pane, so there's never a second store
+// arriving mid-fetch — the only way it sees a burst is by draining what's
+// already queued behind the frame it woke on. gfx == nil skips filtering
+// entirely (tests, and any transport with no remote filesystem to localise
+// from).
+//
+// start is split from newOutputSink so a test can construct the sink,
+// enqueue frames directly onto s.ch, and only then call start —
+// guaranteeing the pump's first receive sees the whole burst instead of
+// racing its startup against the writer.
+func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 	go func() {
 		var pending *sinkFrame
 		for {
@@ -924,7 +937,6 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 			}
 		}
 	}()
-	return s
 }
 
 // drainOutput appends every FrameOutput already queued on ch to buf, so the
