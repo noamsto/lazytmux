@@ -26,6 +26,14 @@ var captureSeq atomic.Uint64
 
 type captureRunner func(args ...string) ([]byte, error)
 
+// defaultCaptureRunner is the real tmux invocation captureTargets and sendKeys
+// fall back to when a caller passes no runner.
+func defaultCaptureRunner(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "tmux", args...).Output()
+}
+
 // captureErr names the target whose capture aborted the batch.
 type captureErr struct {
 	Target string
@@ -57,11 +65,7 @@ func captureTargets(targets []string, run captureRunner) (map[string]string, err
 		return out, nil
 	}
 	if run == nil {
-		run = func(args ...string) ([]byte, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
-			defer cancel()
-			return exec.CommandContext(ctx, "tmux", args...).Output()
-		}
+		run = defaultCaptureRunner
 	}
 
 	// One capture per distinct target; the deduped set is the requested key
@@ -188,4 +192,45 @@ func joinCaptureRows(rows []string) string {
 		return ""
 	}
 	return strings.Join(rows, captureBGReset+"\n") + captureBGReset
+}
+
+// --- Keystroke relay (#316 stage 4) ---
+
+// relayKeyArgs is the tmux send-keys argv (after "-t <target>") for key, or
+// ok=false when key is outside the relay's deliberately small scope: printable
+// characters, Enter, Escape and Backspace. Arrows, C-* and function keys are
+// never relayed — a mapping table for the full key space is never complete,
+// and a half-working relay is worse than none; ↵ already jumps to the real
+// pane, which is full fidelity by definition, for anything richer.
+//
+// Escape maps here for the table's own completeness, but in practice a
+// focused esc always unfocuses (see applyWallEsc in tui.go) before this
+// mapping is ever consulted for it — a literal Escape can never reach the
+// pane through the wall.
+func relayKeyArgs(key string) (args []string, ok bool) {
+	switch key {
+	case "enter":
+		return []string{"Enter"}, true
+	case "esc":
+		return []string{"Escape"}, true
+	case "backspace":
+		return []string{"BSpace"}, true
+	}
+	if printableKey(key) {
+		// -l -- sends the byte literally; without it a single-character key like
+		// "0" or ";" would be read as a key name instead of typed text.
+		return []string{"-l", "--", key}, true
+	}
+	return nil, false
+}
+
+// sendKeys relays one keystroke to target via tmux send-keys, with the exec
+// function injectable for tests — the same seam captureTargets uses.
+func sendKeys(target string, args []string, run captureRunner) error {
+	if run == nil {
+		run = defaultCaptureRunner
+	}
+	full := append([]string{"send-keys", "-t", target}, args...)
+	_, err := run(full...)
+	return err
 }

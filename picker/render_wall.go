@@ -83,7 +83,8 @@ func (m tuiModel) renderWall() string {
 			var tile []string
 			if i := start + r*len(colWidths) + c; i < len(tiles) {
 				idx := tiles[i]
-				tile = m.renderTile(m.visible[idx], idx == m.cursor, outerW, outerH)
+				selected := idx == m.cursor
+				tile = m.renderTile(m.visible[idx], selected, selected && m.focused, outerW, outerH)
 			} else {
 				tile = blankRows(outerW, outerH)
 			}
@@ -105,10 +106,16 @@ func (m tuiModel) renderWall() string {
 // the same reason), and lipgloss measures with uniseg while this picker measures
 // nerd-font PUA itself — the two disagree on real agent output, which would
 // leave the right border ragged.
-func (m tuiModel) renderTile(item listItem, selected bool, outerW, outerH int) []string {
+//
+// focused implies selected (only the cursor's tile can be focused) and gets
+// its own border color, distinct from plain selection.
+func (m tuiModel) renderTile(item listItem, selected, focused bool, outerW, outerH int) []string {
 	innerW, innerH := outerW-wallTileFrame, outerH-wallTileFrame
 	border := ansiFg(m.thmColorHex("@thm_surface_1", "#45475a", "#9ca0b0"))
-	if selected {
+	switch {
+	case focused:
+		border = ansiFg(m.thmColorHex("@thm_peach", "#fab387", "#fe640b"))
+	case selected:
 		border = ansiFg(m.thmColorHex("@thm_mauve", "#cba6f7", "#8839ef"))
 	}
 	reset := "\033[0m"
@@ -197,6 +204,18 @@ func (m tuiModel) renderWallHints() string {
 		return fitVisibleWidth("  "+dim.Render(note)+"  "+hint("^/", "list")+"  "+hint("q", "quit"), m.width)
 	}
 
+	// Focused takes over the whole bar — the hint's job here is naming what is
+	// about to eat the next keystroke, not advertising bindings that a relayed
+	// printable key would swallow before they ever ran.
+	if m.focused {
+		label := "…"
+		if item, ok := m.currentItem(); ok {
+			label = stripTreePrefix(item.plain)
+		}
+		return fitVisibleWidth("  "+dim.Render("focused: ")+key.Render(label)+
+			dim.Render(" — typing relays to the pane")+"  "+hint("esc", "unfocus"), m.width)
+	}
+
 	highlight := lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b"))
 	claudeLabel := "claude"
 	if m.claudeOnly {
@@ -218,6 +237,7 @@ func (m tuiModel) renderWallHints() string {
 		hint("hjkl", "tiles"),
 		hint("[]", "page"),
 		hint("enter", "open"),
+		hint("tab", "focus"),
 		hint("^x", "kill"),
 		filterHint,
 		hint("^a", claudeLabel),

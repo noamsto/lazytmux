@@ -71,6 +71,9 @@ type tuiModel struct {
 	wallPage    int
 	wallContent map[string]string // target -> last capture
 	wallBad     map[string]bool   // targets capture-pane refused, skipped next batch
+	// focused is set by tab and cleared by esc: while true, in-scope keystrokes
+	// relay to the tile under the cursor instead of navigating the grid (#316).
+	focused bool
 
 	// Search
 	query string
@@ -396,8 +399,18 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The wall's keymap runs first: letters navigate the grid there, so a shared
 	// branch must never see a key the wall (or its filter prompt) owns.
 	if m.mode == modeWall {
+		// esc's meaning depends on focused/querying/query together, so it is
+		// resolved once here rather than duplicated in the branches below.
+		if key == "esc" {
+			return m.applyWallEsc()
+		}
 		if m.querying {
 			return m.handleWallQueryKey(key)
+		}
+		if m.focused {
+			if wm, cmd, handled := m.handleFocusedKey(key); handled {
+				return wm, cmd
+			}
 		}
 		if wm, cmd, handled := m.handleWallKey(key); handled {
 			return wm, cmd
@@ -540,7 +553,8 @@ func (m tuiModel) toggleScratchOnly() tuiModel {
 // --- Wall keys ---
 
 // handleWallKey runs the wall's own bindings, returning handled=false for the
-// keys the shared switch already gets right (enter, ^x, ^c, …).
+// keys the shared switch already gets right (enter, ^x, ^c, …). esc is not
+// among them — applyWallEsc claims it before this is ever called.
 func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 	cols, _ := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems()))
 	switch key {
@@ -565,10 +579,22 @@ func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 	case "/":
 		m.querying = true
 		return m, nil, true
+	case "tab":
+		// Only a tile the relay can reach is worth focusing, and only when the
+		// wall actually drew a grid to focus into (the too-small fallback draws
+		// the list instead, per renderWallHints).
+		gridCols, gridRows := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems()))
+		if item, ok := m.currentItem(); ok && relayable(item) && gridCols > 0 && gridRows > 0 {
+			m.focused = true
+		}
+		return m, nil, true
 	case "ctrl+/", "ctrl+_":
 		// Back to list+preview inside the popup the wall already has; a tmux
-		// popup can't be resized, so nothing is resized here.
+		// popup can't be resized, so nothing is resized here. Focus is a wall
+		// concept — leaving it drops the flag so a later ^/ back in starts
+		// unfocused rather than silently relaying the next keystroke.
 		m.mode = modeList
+		m.focused = false
 		return m, m.loadPreviewCmd(), true
 	case "ctrl+a":
 		m = m.toggleClaudeOnly().snapWall()
@@ -576,7 +602,15 @@ func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 	case "ctrl+s":
 		m = m.toggleScratchOnly().snapWall()
 		return m, m.captureWallCmd(), true
-	case "q", "esc":
+	case "ctrl+x":
+		if m.focused {
+			// ctrl+x is the wall's kill binding, but also an ordinary chord to
+			// type (readline cut, nano save) — must not reach the shared
+			// switch's unconfirmed kill while a pane is being typed into.
+			return m, nil, true
+		}
+		return m, nil, false
+	case "q":
 		if m.query == "" {
 			return m, tea.Quit, true
 		}
@@ -591,12 +625,13 @@ func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 }
 
 // handleWallQueryKey runs the wall's filter prompt. Every key belongs to the
-// prompt until esc/enter closes it; only ^c still quits.
+// prompt until esc/enter closes it; only ^c still quits. esc itself is
+// resolved by applyWallEsc before this is called — never reaches here.
 func (m tuiModel) handleWallQueryKey(key string) (tea.Model, tea.Cmd) {
 	switch {
 	case key == "ctrl+c":
 		return m, tea.Quit
-	case key == "esc" || key == "enter":
+	case key == "enter":
 		m.querying = false
 		return m, nil
 	case key == "backspace":
@@ -614,15 +649,95 @@ func (m tuiModel) handleWallQueryKey(key string) (tea.Model, tea.Cmd) {
 	return m, m.captureWallCmd()
 }
 
+// handleFocusedKey relays an in-scope keystroke (see relayKeyArgs) to the
+// focused tile's target, returning handled=false for anything outside the
+// relay's scope so it falls through to handleWallKey's own bindings — that is
+// how arrows keep moving the wall selection, and ctrl+a/ctrl+s keep toggling
+// filters, even while a tile is focused.
+func (m tuiModel) handleFocusedKey(key string) (tuiModel, tea.Cmd, bool) {
+	item, ok := m.currentItem()
+	if !ok || !relayable(item) {
+		return m, nil, false
+	}
+	args, ok := relayKeyArgs(key)
+	if !ok {
+		return m, nil, false
+	}
+	target := item.target
+	return m, func() tea.Msg {
+		sendKeys(target, args, nil) //nolint:errcheck
+		return nil
+	}, true
+}
+
+// escAction is what esc does in the wall, chosen by which of its modal states
+// is active.
+type escAction int8
+
+const (
+	escQuit escAction = iota
+	escClearQuery
+	escCloseQuery
+	escUnfocus
+)
+
+// wallEscAction is esc's precedence in the wall (#316): unfocus a focused tile
+// before closing the filter prompt before clearing typed filter text before
+// quitting. focused and querying can never both be true — a focused "/" is a
+// relayed printable key, so it can never open the prompt, and the prompt's own
+// switch has no case for tab, so it can never set focused — so exactly one
+// rung is ever live; the two flags are still both taken so each rung has its
+// own test rather than one inferred from the others.
+func wallEscAction(focused, querying bool, query string) escAction {
+	switch {
+	case focused:
+		return escUnfocus
+	case querying:
+		return escCloseQuery
+	case query != "":
+		return escClearQuery
+	default:
+		return escQuit
+	}
+}
+
+// applyWallEsc runs wallEscAction's verdict. Escape is also one of the relay's
+// in-scope keys (relayKeyArgs), but a focused esc always unfocuses rather than
+// reaching the pane — a literal Escape can never reach the target through the
+// wall (see relayKeyArgs for why that's accepted).
+func (m tuiModel) applyWallEsc() (tea.Model, tea.Cmd) {
+	switch wallEscAction(m.focused, m.querying, m.query) {
+	case escUnfocus:
+		m.focused = false
+		return m, nil
+	case escCloseQuery:
+		m.querying = false
+		return m, nil
+	case escClearQuery:
+		m.query = ""
+		m = m.withFilter().snapWall()
+		return m, m.captureWallCmd()
+	default:
+		return m, tea.Quit
+	}
+}
+
 // --- Wall model ---
 
-// tileItems returns the indices into visible that capture-pane can actually
-// read: a real local pane target, not a header, a zoxide suggestion or a remote
-// bridge row.
+// relayable reports whether item is a real local pane — not a header, a
+// zoxide suggestion, or a remote bridge row — the only shape capture-pane can
+// read and send-keys can write. tileItems and the keystroke relay both stop at
+// exactly this boundary, so both are defined off the one predicate rather than
+// two copies of the same list of exclusions drifting apart.
+func relayable(item listItem) bool {
+	return item.target != "" && !item.isHeader && item.createPath == "" && !item.isRemoteRow && item.remoteHost == ""
+}
+
+// tileItems returns the indices into visible that are relayable.
 func (m tuiModel) tileItems() []int {
 	var out []int
 	for i, item := range m.visible {
-		if item.target == "" || item.isHeader || item.createPath != "" || item.isRemoteRow || item.remoteHost != "" {
+		if !relayable(item) {
 			continue
 		}
 		out = append(out, i)
