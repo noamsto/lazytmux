@@ -15,21 +15,30 @@ type Seq struct {
 
 // decodeSeq decodes the sequence at the head of b:
 //
-//	seq != nil, n > 0  — a graphics sequence; consume n
-//	seq == nil, n > 0  — a COMPLETE sequence that isn't ours (a passthrough
-//	                     carrying something else, e.g. OSC 52); forward b[:n]
-//	                     verbatim and move past it
-//	seq == nil, n == 0 — incomplete; hold for more bytes
+//	seq != nil, n > 0, drop false  — a graphics sequence; consume n
+//	seq == nil, n > 0, drop false  — a COMPLETE sequence that isn't ours (a
+//	                                 passthrough carrying something else, e.g.
+//	                                 OSC 52); forward b[:n] verbatim
+//	seq == nil, n > 0, drop true   — a complete sixel DCS (bare or wrapped);
+//	                                 consume n and emit nothing
+//	seq == nil, n == 0             — incomplete; hold for more bytes
 //
-// The middle case is why this returns a length rather than an ok bool. "Not
-// complete yet" and "complete, but not mine" both mean "no sequence here", but
-// conflating them stalls the pane: a clipboard escape would hold every later
-// byte behind it until the partial cap or Flush.
-func decodeSeq(b []byte) (*Seq, int) {
+// The forward-verbatim case is why this returns a length rather than an ok
+// bool. "Not complete yet" and "complete, but not mine" both mean "no sequence
+// here", but conflating them stalls the pane: a clipboard escape would hold
+// every later byte behind it until the partial cap or Flush.
+func decodeSeq(b []byte) (*Seq, int, bool) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
-			return nil, 0
+			return nil, 0, false
+		}
+		// Sixel through the bridge is an explicit non-goal: drop a
+		// passthrough whose undoubled payload is a bare sixel DCS rather
+		// than forwarding it (which would paint a SIXEL IMAGE placeholder
+		// or garble mid-sequence text into the mirrored pane).
+		if isConfirmedSixelHead(inner) {
+			return nil, n, true
 		}
 		q, m, ok := decodeBare(inner)
 		// The sequence must fill the wrapper exactly. A wrapper carrying anything
@@ -39,18 +48,26 @@ func decodeSeq(b []byte) (*Seq, int) {
 		// goes unlocalised (blank image, per D7) — a case aeye cannot produce,
 		// since tmuxPassthrough wraps exactly one sequence.
 		if !ok || m != len(inner) {
-			return nil, n
+			return nil, n, false
 		}
 		q.Wrapped = true
-		return q, n
+		return q, n, false
+	}
+	if isSixelPrefix(b) {
+		n, complete := consumeBareSixel(b)
+		if !complete {
+			return nil, 0, false
+		}
+		return nil, n, true
 	}
 	// Feed only calls this at an indexSeqStart hit, so a head that isn't a
-	// passthrough is an apcStart: decodeBare can only fail for want of the ST.
+	// passthrough or sixel is an apcStart: decodeBare can only fail for want
+	// of the ST.
 	q, n, ok := decodeBare(b)
 	if !ok {
-		return nil, 0
+		return nil, 0, false
 	}
-	return q, n
+	return q, n, false
 }
 
 func decodeBare(b []byte) (*Seq, int, bool) {
@@ -98,6 +115,103 @@ func unwrapPassthrough(b []byte) ([]byte, int, bool) {
 		i++
 	}
 	return nil, 0, false
+}
+
+// isConfirmedSixelHead reports whether b begins with a sixel DCS introducer
+// `\eP[0-9;]*q`. Used after unwrap to decide drop-vs-forward on a complete
+// passthrough, and does not treat an incomplete `\eP[0-9;]*` prefix as sixel.
+func isConfirmedSixelHead(b []byte) bool {
+	if !bytes.HasPrefix(b, []byte(dcsStart)) {
+		return false
+	}
+	j := len(dcsStart)
+	for j < len(b) && isSixelParam(b[j]) {
+		j++
+	}
+	return j < len(b) && b[j] == 'q'
+}
+
+// isSixelPrefix reports whether b begins with a confirmed sixel introducer or
+// an incomplete `\eP[0-9;]*` that has not yet been ruled out — the scanner must
+// hold the latter rather than emit it as literal.
+func isSixelPrefix(b []byte) bool {
+	if !bytes.HasPrefix(b, []byte(dcsStart)) {
+		return false
+	}
+	// `\ePtmux;` shares the `\eP` prefix; passthrough is handled first in
+	// decodeSeq, but keep the prefix helper honest for held-byte checks.
+	if bytes.HasPrefix(b, []byte(passStart)) {
+		return false
+	}
+	j := len(dcsStart)
+	for j < len(b) && isSixelParam(b[j]) {
+		j++
+	}
+	if j >= len(b) {
+		return true
+	}
+	return b[j] == 'q'
+}
+
+// consumeBareSixel returns the length of a complete bare sixel DCS at the head
+// of b. complete is false when the ST has not arrived yet (caller holds).
+func consumeBareSixel(b []byte) (n int, complete bool) {
+	if !isConfirmedSixelHead(b) {
+		// Incomplete header (`\eP` / `\eP0;1`) — still a sixel prefix, hold.
+		return 0, false
+	}
+	j := len(dcsStart)
+	for j < len(b) && isSixelParam(b[j]) {
+		j++
+	}
+	// j points at 'q'.
+	end := bytes.Index(b[j+1:], []byte(st))
+	if end < 0 {
+		return 0, false
+	}
+	return j + 1 + end + len(st), true
+}
+
+// isPartialSixel reports whether held/overflow bytes are a sixel in progress
+// (bare, or a passthrough whose undoubled payload so far is sixel-headed).
+// Those must be dropped on Flush / maxPartial rather than forwarded.
+func isPartialSixel(b []byte) bool {
+	if isSixelPrefix(b) {
+		return true
+	}
+	if !bytes.HasPrefix(b, []byte(passStart)) {
+		return false
+	}
+	return isSixelPrefix(peekPassthroughInner(b))
+}
+
+// peekPassthroughInner undoubles ESC pairs inside a `\ePtmux;…` wrapper, like
+// unwrapPassthrough, but returns whatever has been seen so far when the outer
+// ST is missing — enough to classify a partial wrapped sixel for drop-on-cap.
+func peekPassthroughInner(b []byte) []byte {
+	if !bytes.HasPrefix(b, []byte(passStart)) {
+		return nil
+	}
+	i := len(passStart)
+	var inner []byte
+	for i < len(b) {
+		if b[i] == 0x1b {
+			if i+1 >= len(b) {
+				return inner
+			}
+			if b[i+1] == 0x1b {
+				inner = append(inner, 0x1b)
+				i += 2
+				continue
+			}
+			if b[i+1] == '\\' {
+				return inner
+			}
+		}
+		inner = append(inner, b[i])
+		i++
+	}
+	return inner
 }
 
 // Get returns the value of a comma-separated control key ("t", "i", "a", …),

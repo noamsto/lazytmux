@@ -176,3 +176,170 @@ func TestScanOversizedPartialFlushesAsLiteral(t *testing.T) {
 		t.Fatalf("kinds = %q, want S — scanner did not recover after the overflow", chunkKinds(cs))
 	}
 }
+
+// tmuxPassthrough wraps inner the way EncodeWrapped / tmux's passthrough does:
+// every ESC doubled, then a final ST.
+func tmuxPassthrough(inner string) string {
+	var b bytes.Buffer
+	b.WriteString(passStart)
+	for i := 0; i < len(inner); i++ {
+		if inner[i] == 0x1b {
+			b.WriteByte(0x1b)
+		}
+		b.WriteByte(inner[i])
+	}
+	b.WriteString(st)
+	return b.String()
+}
+
+func concatLiterals(cs []Chunk) string {
+	var b bytes.Buffer
+	for _, c := range cs {
+		if c.Seq != nil {
+			continue
+		}
+		b.Write(c.Literal)
+	}
+	return b.String()
+}
+
+func TestScanDropsSixel(t *testing.T) {
+	const (
+		bareSixel    = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+		chafaSixel   = "\x1bP0;1;0q\"1;1;40;40#0;2;100;0;0@@@@@@\x1b\\"
+		decrqss      = "\x1bP$q\"q\x1b\\"
+		osc52pass    = "\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\"
+		sixelPayload = "SIXELPAYLOAD"
+	)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "bare sixel mid-literal",
+			run: func(t *testing.T) {
+				cs := NewScanner().Feed([]byte("before" + bareSixel + "after"))
+				if got := concatLiterals(cs); got != "beforeafter" {
+					t.Fatalf("literals = %q, want beforeafter", got)
+				}
+				if chunkKinds(cs) != "LL" {
+					t.Fatalf("kinds = %q, want LL (no Seq, no sixel bytes)", chunkKinds(cs))
+				}
+			},
+		},
+		{
+			name: "parametrized bare sixel (chafa)",
+			run: func(t *testing.T) {
+				cs := NewScanner().Feed([]byte("x" + chafaSixel + "y"))
+				if got := concatLiterals(cs); got != "xy" {
+					t.Fatalf("literals = %q, want xy", got)
+				}
+			},
+		},
+		{
+			name: "passthrough-wrapped sixel",
+			run: func(t *testing.T) {
+				in := "pre" + tmuxPassthrough(bareSixel) + "post"
+				cs := NewScanner().Feed([]byte(in))
+				if got := concatLiterals(cs); got != "prepost" {
+					t.Fatalf("literals = %q, want prepost", got)
+				}
+			},
+		},
+		{
+			name: "sixel split across feeds",
+			run: func(t *testing.T) {
+				s := NewScanner()
+				// Mid-header: `\eP0;1` held, then `0q…ST` completes and drops.
+				if cs := s.Feed([]byte("a\x1bP0;1")); concatLiterals(cs) != "a" || len(s.held) == 0 {
+					t.Fatalf("mid-header: literals=%q held=%q", concatLiterals(cs), s.held)
+				}
+				if cs := s.Feed([]byte("0q" + sixelPayload + st)); concatLiterals(cs) != "" || len(s.held) != 0 {
+					t.Fatalf("after header complete: literals=%q held=%q, want drop", concatLiterals(cs), s.held)
+				}
+				// Mid-payload: header+partial body held, rest completes and drops.
+				partial := "\x1bPq" + sixelPayload[:4]
+				if cs := s.Feed([]byte("b" + partial)); concatLiterals(cs) != "b" || len(s.held) == 0 {
+					t.Fatalf("mid-payload: literals=%q held=%q", concatLiterals(cs), s.held)
+				}
+				if cs := s.Feed([]byte(sixelPayload[4:] + st + "c")); concatLiterals(cs) != "c" {
+					t.Fatalf("after payload complete: literals=%q, want c", concatLiterals(cs))
+				}
+			},
+		},
+		{
+			name: "truncated sixel over maxPartial drops payload",
+			run: func(t *testing.T) {
+				s := NewScanner()
+				s.Feed([]byte("\x1bPq"))
+				cs := s.Feed(bytes.Repeat([]byte("Z"), maxPartial+1))
+				got := concatLiterals(cs)
+				if bytes.Contains([]byte(got), []byte("Z")) {
+					t.Fatalf("overflow forwarded sixel payload: %q", got)
+				}
+				if len(s.held) != 0 {
+					t.Fatalf("held %q after sixel overflow, want nothing", s.held)
+				}
+				if cs := s.Feed([]byte("ok" + bareSeq)); concatLiterals(cs) != "ok" || chunkKinds(cs) != "LS" {
+					t.Fatalf("kinds=%q literals=%q, want LS / ok — scanner did not recover", chunkKinds(cs), concatLiterals(cs))
+				}
+			},
+		},
+		{
+			name: "Flush drops held partial sixel",
+			run: func(t *testing.T) {
+				s := NewScanner()
+				if cs := s.Feed([]byte("\x1bP0;1;0q" + sixelPayload)); chunkKinds(cs) != "" {
+					t.Fatalf("partial sixel emitted early: %q", chunkKinds(cs))
+				}
+				if cs := s.Flush(); cs != nil {
+					t.Fatalf("Flush = %v, want nil (drop partial sixel)", cs)
+				}
+				if got := s.Flush(); got != nil {
+					t.Fatalf("second Flush = %v, want nil", got)
+				}
+			},
+		},
+		{
+			name: "non-sixel DCS (DECRQSS) forwarded verbatim",
+			run: func(t *testing.T) {
+				in := "a" + decrqss + "b"
+				cs := NewScanner().Feed([]byte(in))
+				if got := concatLiterals(cs); got != in {
+					t.Fatalf("forwarded %q, want byte-identical %q", got, in)
+				}
+			},
+		},
+		{
+			name: "non-sixel passthrough (OSC 52) forwarded verbatim",
+			run: func(t *testing.T) {
+				cs := NewScanner().Feed([]byte(osc52pass + "tail"))
+				if got := concatLiterals(cs); got != osc52pass+"tail" {
+					t.Fatalf("forwarded %q, want OSC 52 + tail", got)
+				}
+				for _, c := range cs {
+					if c.Seq != nil {
+						t.Fatal("OSC 52 decoded as graphics Seq")
+					}
+				}
+			},
+		},
+		{
+			name: "kitty APC bare and wrapped still decoded",
+			run: func(t *testing.T) {
+				cs := NewScanner().Feed([]byte(bareSeq + wrappedSeq))
+				if chunkKinds(cs) != "SS" {
+					t.Fatalf("kinds = %q, want SS", chunkKinds(cs))
+				}
+				if cs[0].Seq.Wrapped || !cs[1].Seq.Wrapped {
+					t.Fatalf("wrapped flags = %v/%v, want false/true", cs[0].Seq.Wrapped, cs[1].Seq.Wrapped)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.run)
+	}
+}

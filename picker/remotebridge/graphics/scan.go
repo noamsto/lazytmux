@@ -11,12 +11,14 @@ import "bytes"
 // dropped by the sink's bounded buffer can truncate a sequence mid-flight, and
 // without a cap the scanner would swallow the pane's stream forever waiting for
 // an ST that was already discarded. On overflow the held bytes are forwarded
-// verbatim: a garbled escape beats a dead pane.
+// verbatim: a garbled escape beats a dead pane — except a partial sixel, whose
+// printable payload is the damaging part, so that is dropped instead.
 const maxPartial = 64 << 10
 
 const (
 	apcStart  = "\x1b_G"
 	passStart = "\x1bPtmux;"
+	dcsStart  = "\x1bP"
 	st        = "\x1b\\"
 )
 
@@ -55,15 +57,23 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			out = appendLiteral(out, buf[:i])
 			buf = buf[i:]
 		}
-		seq, n := decodeSeq(buf)
+		seq, n, drop := decodeSeq(buf)
 		switch {
 		case n == 0:
 			// Incomplete: hold it, unless it has outgrown the cap.
 			if len(buf) > maxPartial {
+				if isPartialSixel(buf) {
+					// Sixel through the bridge is a non-goal; the printable
+					// payload is what garbles the mirrored pane, so drop it
+					// rather than forwarding a truncated escape.
+					return out
+				}
 				return appendLiteral(out, buf)
 			}
 			s.held = append([]byte(nil), buf...)
 			return out
+		case drop:
+			// Complete sixel (bare or passthrough-wrapped): consume, emit nothing.
 		case seq == nil:
 			// A complete passthrough carrying something else (OSC 52, …).
 			// Forward it verbatim: it is already wrapped for one tmux layer,
@@ -79,14 +89,18 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 }
 
 // Flush emits any held partial sequence as a literal. Called when a pane's sink
-// closes, so held bytes are never silently swallowed.
+// closes, so held bytes are never silently swallowed — except a partial sixel,
+// which is dropped for the same reason as a maxPartial overflow of one.
 func (s *Scanner) Flush() []Chunk {
 	if len(s.held) == 0 {
 		return nil
 	}
-	out := []Chunk{{Literal: s.held}}
+	held := s.held
 	s.held = nil
-	return out
+	if isPartialSixel(held) {
+		return nil
+	}
+	return []Chunk{{Literal: held}}
 }
 
 func appendLiteral(out []Chunk, b []byte) []Chunk {
@@ -96,8 +110,11 @@ func appendLiteral(out []Chunk, b []byte) []Chunk {
 	return append(out, Chunk{Literal: append([]byte(nil), b...)})
 }
 
-// indexSeqStart returns the offset of the next graphics sequence start (bare or
-// passthrough-wrapped), or -1.
+// indexSeqStart returns the offset of the next sequence start (kitty APC bare
+// or passthrough-wrapped, or a sixel DCS), or -1. Passthrough (`\ePtmux;`) is
+// matched as its own pattern so it wins over the bare-sixel `\eP` prefix —
+// `t` is not a sixel param byte, so the sixel scan also skips it, but keeping
+// the dedicated match makes the priority explicit.
 func indexSeqStart(b []byte) int {
 	best := -1
 	for _, pat := range []string{apcStart, passStart} {
@@ -105,5 +122,33 @@ func indexSeqStart(b []byte) int {
 			best = i
 		}
 	}
+	if i := indexSixelStart(b); i >= 0 && (best < 0 || i < best) {
+		best = i
+	}
 	return best
+}
+
+// indexSixelStart finds a bare sixel DCS introducer `\eP[0-9;]*q`, or an
+// incomplete `\eP[0-9;]*` still open at the end of b (must hold — emitting it
+// as literal would miss the `q` on the next Feed). A `\eP` followed by any
+// other byte (e.g. `$` of DECRQSS, `t` of tmux passthrough) is not sixel.
+func indexSixelStart(b []byte) int {
+	for i := 0; i+1 < len(b); i++ {
+		if b[i] != 0x1b || b[i+1] != 'P' {
+			continue
+		}
+		j := i + 2
+		for j < len(b) && isSixelParam(b[j]) {
+			j++
+		}
+		if j >= len(b) || b[j] == 'q' {
+			return i
+		}
+	}
+	// A trailing ESC with no following byte can't be `\eP` yet.
+	return -1
+}
+
+func isSixelParam(c byte) bool {
+	return c >= '0' && c <= '9' || c == ';'
 }
