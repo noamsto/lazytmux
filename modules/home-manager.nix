@@ -538,10 +538,16 @@ in {
         default = 0;
         description = ''
           Seconds a pane may go without running a coding agent before a stale
-          agent state on it is withdrawn from the status bar instead of just
-          fading. Closes the "agent exited, pane went back to a shell" gap: no
-          hook fires on that transition, so the last state written otherwise
-          lives until the tmux server restarts.
+          agent state on it is withdrawn instead of just fading. Closes the
+          "agent exited, pane went back to a shell" gap: no hook fires on that
+          transition, so the last state written otherwise lives until the tmux
+          server restarts.
+
+          Reaches the shell consumers of `read_pane_state` only: the per-window
+          and active-pane agent icons, `claude-status`, and the kill-pane guard.
+          The session pill on status line 0 and the `prefix + s`/`prefix + w`
+          pickers are rendered by the Go binaries, which read the state files
+          directly and still show the withdrawn state.
 
           0 (the default) disables it — no presence stamps are written and the
           check never runs. Values below 15 are clamped to 15, three sweeps of
