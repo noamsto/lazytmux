@@ -40,6 +40,11 @@
   # Absolute path to the shell tmux spawns in new panes (default-shell).
   # Null => tmux uses $SHELL / the account shell.
   defaultShell ? null,
+  # tmux focus-follows-mouse: whether moving the mouse into a pane selects it,
+  # without clicking. Off by default, matching tmux's own default.
+  focusFollowsMouse ? false,
+  # tmux copy-mode-line-numbers mode (tmux 3.7+): off/default/absolute/relative/hybrid.
+  copyModeLineNumbers ? "off",
   # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
   # prdash PR dashboard package (threaded from the flake input; used by the prefix+p popup).
@@ -610,6 +615,7 @@
 
     # === Main Config ===
     set -g mouse on
+    set -g focus-follows-mouse ${if focusFollowsMouse then "on" else "off"}
     set -g window-size latest
     set -g aggressive-resize on
     set-option -g renumber-window on
@@ -655,6 +661,11 @@
     # Config reload
     bind r source-file ~/.config/tmux/tmux.conf \; display "Config reloaded!"
 
+    # Sorted, table-labeled keybinding list (tmux 3.7+ list-keys -O/-F). Adds
+    # the key table name (crew/enrich/splash/... this repo defines many) next
+    # to tmux's default prefix+key+note popup, sorted by key code.
+    bind-key ? list-keys -N -O key -F "#{key_table}: #{key_prefix}#{key_string} #{?key_note,#{key_note},#{key_command}}"
+
     # Vi copy mode
     setw -g mode-keys vi
     set -g status-keys vi
@@ -666,6 +677,8 @@
     # Copy mode styling (tmux 3.6+)
     set -g copy-mode-position-style "bg=#{@thm_surface_0},fg=#{@thm_mauve}"
     set -g copy-mode-selection-style "bg=#{@thm_mauve},fg=#{@thm_bg}"
+    # Line numbers in copy mode (tmux 3.7+). Configurable — matter of taste.
+    set -g copy-mode-line-numbers ${copyModeLineNumbers}
 
     # Clear screen
     bind -n M-l send-keys 'C-l'
@@ -863,7 +876,7 @@
     # last so its state color only runs into the separator, which sets its own
     # color. tmux-reflow-windows mirrors this layout for the multi-line
     # variants with column-padded segments.
-    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
+    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
     set -g status-format[2] ""
     set -g status-format[3] ""
     set -g status-format[4] ""
