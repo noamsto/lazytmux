@@ -53,6 +53,13 @@ func main() {
 		return // pane isn't running a known agent; nothing to watch
 	}
 
+	myPID := os.Getpid()
+	if !registerWatcher(watcherRegDir, paneID, myPID) {
+		// Can't guarantee we're the sole watcher for this pane, so don't
+		// become a long-lived process that might duplicate one (#239).
+		return
+	}
+
 	scr := seededScreen(paneID, cols, rows)
 	deb := debounce.New(debounceWindow, sampleCeiling)
 	w := statefile.New(stateDir, paneID)
@@ -63,6 +70,8 @@ func main() {
 
 	ticker := time.NewTicker(debounceWindow / 2)
 	defer ticker.Stop()
+	liveness := time.NewTicker(livenessInterval)
+	defer liveness.Stop()
 
 	for {
 		select {
@@ -84,8 +93,31 @@ func main() {
 				return
 			}
 		case <-ticker.C:
+			// Cheap (a local file read, no fork) so it rides the existing
+			// hot ticker: catches a re-arm within one tick instead of
+			// waiting on the coarse liveness probe below (#239).
+			//
+			// Deliberately does not remove the registry file on this exit:
+			// by the time we're here it's the new watcher's registration,
+			// not ours, and deleting it would make the new watcher fail
+			// its own next stillOwner check and self-evict. Stale entries
+			// from any exit path (this one and EOF) are swept later by
+			// claude_prune_stale_state instead.
+			if !stillOwner(watcherRegDir, paneID, myPID) {
+				emit(scr, m, w)
+				return
+			}
 			if deb.Due(time.Now()) {
 				emit(scr, m, w)
+			}
+		case <-liveness.C:
+			// Forking `tmux capture-pane` isn't free, so this stays on its own
+			// coarse ticker — a leak reaper, not a liveness signal. This is
+			// the backstop for the case EOF never arrives at all (#239):
+			// dead pane, or the tmux server gone outright.
+			if !paneAlive(paneID) {
+				emit(scr, m, w)
+				return
 			}
 		}
 	}
