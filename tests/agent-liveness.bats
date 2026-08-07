@@ -272,10 +272,8 @@ setup_sweep() {
 }
 
 @test "sweep: a failed list-panes writes no .sweep" {
-	# The reader treats a fresh .sweep as proof the pass observed every agent
-	# pane. A failed list-panes yields an empty stream, indistinguishable from
-	# "no agent panes" — stamping .sweep after one would assert a pass that saw
-	# nothing, and every live pane's lagging stamp would then read as dead.
+	# Without the bail this stamped .sweep anyway, and a transient tmux failure
+	# withdrew a running agent's state.
 	setup_sweep 60
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
@@ -290,10 +288,8 @@ setup_sweep() {
 }
 
 @test "sweep: a pass that succeeds with no panes still completes" {
-	# The other half of the bail above: a successful call that lists nothing is
-	# a real (if degenerate) pass, so it still stamps .sweep — "the call failed"
-	# and "the call found nothing" must not look alike. Also pins that the blank
-	# line a here-string makes of an empty result never becomes a pane stamp.
+	# The other half of the bail: "the call failed" and "the call found nothing"
+	# must not look alike.
 	setup_sweep 60
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
