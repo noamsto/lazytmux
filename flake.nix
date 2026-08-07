@@ -508,6 +508,16 @@
               touch $out
             '';
 
+          agent-liveness-tests =
+            pkgs.runCommand "agent-liveness-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-liveness.bats
+              touch $out
+            '';
+
           agent-detect-merge-tests =
             pkgs.runCommand "agent-detect-merge-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

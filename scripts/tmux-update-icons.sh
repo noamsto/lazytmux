@@ -22,23 +22,40 @@ AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
 # lets tests inject a real path via env.
 ISSUE_STAMP_BIN="${ISSUE_STAMP_BIN:-@issue_stamp@}"
 
-# Arms `agent-detect` on agent panes that don't already have a live pipe.
-# Using #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe
-# 0) self-heals on a later tick.
+# Arms `agent-detect` on agent panes that don't already have a live pipe, and
+# stamps each agent pane's presence for lib-claude's dead-agent floor. Using
+# #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe 0)
+# self-heals on a later tick. The two jobs gate independently — either one alone
+# still earns the list-panes.
 arm_agent_detect() {
-	[[ $AGENT_DETECT_BIN == @* ]] && return 0
+	local arm=1 stamp=0
+	[[ $AGENT_DETECT_BIN == @* ]] && arm=0
+	[[ -n ${CLAUDE_LIVE_DIR:-} && ${CLAUDE_ASSUME_DEAD_AFTER:-0} =~ ^[1-9][0-9]*$ ]] && stamp=1
+	((arm || stamp)) || return 0
 	# The sweep is a full-server list-panes — a second tmux roundtrip per tick,
 	# multiplied by attached sessions. Arming (new pane, dead pipe) only needs
 	# seconds-level latency, so run every 5th tick (CLAUDE_NOW = this tick's
 	# epoch second).
 	((CLAUDE_NOW % 5)) && return 0
 
+	if ((stamp)) && [[ ! -d $CLAUDE_LIVE_DIR ]]; then
+		mkdir -p "$CLAUDE_LIVE_DIR"
+	fi
+
 	local pid cmd piped
 	while IFS=$'\t' read -r pid cmd piped; do
-		[[ $piped == 0 ]] || continue
 		case " $AGENT_COMMANDS " in *" $cmd "*) ;; *) continue ;; esac
-		tmux pipe-pane -o -t "$pid" "$AGENT_DETECT_BIN ${pid#%}"
+		((stamp)) && printf '%s\n' "$CLAUDE_NOW" >"$CLAUDE_LIVE_DIR/${pid#%}"
+		[[ $piped == 0 ]] || continue
+		((arm)) && tmux pipe-pane -o -t "$pid" "$AGENT_DETECT_BIN ${pid#%}"
 	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_pipe}' 2>/dev/null || true)
+
+	# Strictly after the last per-pane stamp, and written nowhere else: the
+	# reader takes a fresh .sweep as proof that every agent pane of that pass was
+	# stamped, so a lagging per-pane stamp means "no agent here" with no grace
+	# window to wait out after a resume.
+	((stamp)) && printf '%s\n' "$CLAUDE_NOW" >"$CLAUDE_LIVE_DIR/.sweep"
+	return 0
 }
 
 main() {
