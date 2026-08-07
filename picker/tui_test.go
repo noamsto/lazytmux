@@ -608,11 +608,11 @@ func TestFirstPaintIncludesRemoteRows(t *testing.T) {
 	}
 }
 
-// The row a host contributes can grow once its probe returns (a host that
-// turns out to have unbridged sessions gains tree-child rows — Design
-// Decision 4). That growth must not silently move the cursor onto a
-// different row: this is the actual user-visible half of #312 ("anything
-// the human did in that window ... gets re-laid-out underneath them").
+// The row a host contributes can grow once its probe returns (a host with
+// unbridged sessions gains tree-child rows). That growth must not silently
+// move the cursor onto a different row — the actual user-visible half of
+// #312 ("anything the human did in that window ... gets re-laid-out
+// underneath them").
 func TestRemoteMsgPreservesCursor(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	m := tuiModel{
@@ -713,8 +713,7 @@ func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 // Pending rows (before any probe resolves) must be exempt from the
 // claude/scratch toggles exactly like resolved rows — itemVisible checks
 // isRemoteRow before either toggle, and pendingRemoteItems sets it via the
-// same remoteHostRowItem helper collectRemoteItems uses, but this pins that
-// down as a regression guard rather than relying on shared code alone.
+// same remoteHostRowItem helper collectRemoteItems uses.
 func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	for _, c := range []struct {

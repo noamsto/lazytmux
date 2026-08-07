@@ -223,7 +223,7 @@ func remoteHostRowItem(tmuxOpts map[string]string, host, note string) listItem {
 
 // remotePendingNote is the placeholder annotation on a host row before its
 // ssh probe returns — a dim ellipsis, since no state (unreachable / no
-// server / session list) is known yet (#312 design decision 1).
+// server / session list) is known yet (#312).
 const remotePendingNote = "…"
 
 // pendingRemoteItems builds the Remote section synchronously from

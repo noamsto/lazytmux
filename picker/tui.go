@@ -918,12 +918,10 @@ func (m tuiModel) currentItem() (listItem, bool) {
 }
 
 // restoreCursor re-finds keep (the target selected before a rebuild) in the
-// new visible list, so a row's growing (new tree-child rows once its probe
-// resolves) or shrinking never moves the selection out from under the user.
-// Falls back to the first selectable row whenever keep is set but no longer
-// present — never aliases onto whatever unrelated row now sits at the stale
-// index — and also when keep was never set and the stale index is now out of
-// range.
+// new visible list so a row growing or shrinking never moves the selection
+// off it — index-based restore has regressed this list three times before
+// (#173, #198, #234), most recently by aliasing onto whatever row now sits
+// at a stale index.
 func (m tuiModel) restoreCursor(keep string) tuiModel {
 	if keep != "" {
 		for i, item := range m.visible {

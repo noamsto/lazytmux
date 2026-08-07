@@ -261,8 +261,8 @@ func TestPendingRemoteItemsNoHosts(t *testing.T) {
 // between the pending render and the resolved one — that stability is what
 // stops the whole section from reflowing under the user (#312). A host that
 // turns out to have unbridged sessions still gains those child rows once the
-// probe returns (Task 4 makes that growth cursor-safe); this covers the
-// common, reflow-causing case the bug report measured.
+// probe returns; restoreCursor (tui.go) keeps that growth from moving the
+// selection.
 func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	pending := pendingRemoteItems(opts)
