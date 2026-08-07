@@ -73,7 +73,7 @@ func (m tuiModel) renderHints() string {
 
 	if m.statusMsg != "" {
 		red := lipgloss.NewStyle().Foreground(m.thmColor("@thm_red", "#f38ba8", "#d20f39"))
-		return red.Width(m.width).Render("  " + m.statusMsg)
+		return fitVisibleWidth(red.Render("  "+m.statusMsg), m.width)
 	}
 
 	hint := func(k, desc string) string {
@@ -96,16 +96,26 @@ func (m tuiModel) renderHints() string {
 		killLabel = "forget"
 	}
 
+	// ^/ goes back to the wall in a wall-launched popup, and toggles the preview
+	// in every other one — the label has to say which.
+	toggleLabel := "preview"
+	if m.wallLaunched {
+		toggleLabel = "wall"
+	}
+
 	parts := []string{
 		hint("^jk/↑↓", "nav"),
 		hint("enter", "open"),
 		hint("^x", killLabel),
 		hint("^a", claudeLabel),
 		hint("^s", scratchLabel),
-		hint("^/", "preview"),
+		hint("^/", toggleLabel),
 		hint("M-hjkl", "scroll"),
 		hint("q", "quit"),
 	}
 
-	return dim.Width(m.width).Render("  " + strings.Join(parts, "  "))
+	// Clipped, not width-styled: a lipgloss Width() wraps this keymap onto a
+	// second line at a narrow width, and bodyHeight has reserved exactly one
+	// (renderWallHints clips for the same reason).
+	return fitVisibleWidth("  "+strings.Join(parts, "  "), m.width)
 }

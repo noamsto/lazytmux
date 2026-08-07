@@ -456,6 +456,43 @@ func TestLoadPreviewSkippedInWallMode(t *testing.T) {
 	}
 }
 
+// Every shape sizes itself against bodyHeight, so the View has to come out at
+// exactly the terminal height — one row short costs the wall a whole tile row.
+func TestViewFillsHeightExactly(t *testing.T) {
+	shapes := map[string]func(tuiModel) tuiModel{
+		"wall": func(m tuiModel) tuiModel { return m },
+		"list+preview": func(m tuiModel) tuiModel {
+			m.mode, m.showPreview = modeList, true
+			return m
+		},
+		"list only": func(m tuiModel) tuiModel {
+			m.mode, m.showPreview = modeList, false
+			return m
+		},
+	}
+	sizes := []struct{ w, h int }{{80, 24}, {80, 25}, {120, 30}, {200, 50}}
+
+	for name, shape := range shapes {
+		for _, size := range sizes {
+			base := shape(wallFixture())
+			base.ready = false // let the size message build the viewport
+			sized, _ := base.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+			m := sized.(tuiModel)
+
+			lines := strings.Split(m.View().Content, "\n")
+			if len(lines) != size.h {
+				t.Errorf("%s at %dx%d: View is %d lines, want the full %d",
+					name, size.w, size.h, len(lines), size.h)
+			}
+			hints := m.renderHints()
+			if m.mode == modeList && strings.Contains(hints, "\n") {
+				t.Errorf("%s at %dx%d: hints wrapped onto %d lines: %q",
+					name, size.w, size.h, strings.Count(hints, "\n")+1, stripANSI(hints))
+			}
+		}
+	}
+}
+
 func TestListRatio(t *testing.T) {
 	ratio := func(raw string) int {
 		return tuiModel{tmuxOpts: map[string]string{"@picker_list_ratio": raw}}.listRatio()

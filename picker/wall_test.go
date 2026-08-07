@@ -175,7 +175,7 @@ func TestRenderWallFallsBackToListWhenTooSmall(t *testing.T) {
 // Sized by listHeight() it drew half the rows at 90x14 and left the rest blank.
 func TestRenderWallFallbackFillsBody(t *testing.T) {
 	m := wallFixture()
-	m.width, m.height = 90, 14 // two tiles wide, not one tall
+	m.width, m.height = 90, 13 // two tiles wide, not one tall
 	m.showPreview = true
 	if _, rows := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems())); rows != 0 {
 		t.Fatalf("fixture is not too small to tile: rows = %d", rows)
@@ -498,6 +498,111 @@ func TestMergeWallKeepsUnreachedTiles(t *testing.T) {
 	}
 	if m.wallBad["gone:9"] {
 		t.Error("bad flag for a target no longer tileable should be pruned")
+	}
+}
+
+// bodyHeight over-reserved a row, which is a whole tile row's worth at the
+// smallest size that affords two: 24 rows of terminal fit 2x10-row tiles.
+func TestWallGeometryUsesTheWholeBody(t *testing.T) {
+	m := wallFixture()
+	m.width, m.height = 80, 24
+	if got := m.bodyHeight(); got != 20 {
+		t.Errorf("bodyHeight at 80x24 = %d, want 20 (search 2 + rule 1 + hints 1)", got)
+	}
+	if _, rows := wallGeometry(m.width, m.bodyHeight(), len(m.tileItems())); rows != 2 {
+		t.Errorf("80x24 affords %d tile rows, want 2", rows)
+	}
+}
+
+// wallPageTargets never retries a blacklisted target, so a failure tmux did not
+// pin on a specific target must not blacklist one.
+func TestUnattributedFailureRetriesTheTarget(t *testing.T) {
+	m := wallFixture()
+	m = m.mergeWall(wallMsg{content: map[string]string{"s:1": "alpha"}})
+
+	if len(m.wallBad) != 0 {
+		t.Errorf("wallBad = %v, want nothing blacklisted", m.wallBad)
+	}
+	if !slices.Contains(m.wallPageTargets(), "s:2") {
+		t.Errorf("s:2 was dropped from the next batch: %v", m.wallPageTargets())
+	}
+}
+
+// zoxideMsg and remoteMsg rebuild visible the same way refreshMsg does, so they
+// have to re-snap the wall too — otherwise the indices shift under the cursor and
+// the selection lands on a row that cannot be tiled.
+func TestAsyncRowsResnapWall(t *testing.T) {
+	for name, msg := range map[string]tea.Msg{
+		"zoxide": zoxideMsg{items: []listItem{
+			{target: "/tmp/a", createPath: "/tmp/a", createName: "a", display: "a", plain: "a"},
+			{target: "/tmp/b", createPath: "/tmp/b", createName: "b", display: "b", plain: "b"},
+		}},
+		"remote": remoteMsg{items: []listItem{
+			{target: "g6", remoteHost: "g6", isRemoteRow: true, display: "g6", plain: "g6"},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := wallFixture()
+			m.sessionItems = m.visible
+			m.cursor = 5
+			want := m.visible[m.cursor].target
+
+			got, _ := m.Update(msg)
+			gm := got.(tuiModel)
+
+			if !slices.Contains(gm.tileItems(), gm.cursor) {
+				t.Errorf("cursor %d is not a tileable row after the rebuild", gm.cursor)
+			}
+			if gm.visible[gm.cursor].target != want {
+				t.Errorf("selection moved to %q, want it still on %q", gm.visible[gm.cursor].target, want)
+			}
+			if pos := tilePos(gm.tileItems(), gm.cursor); gm.wallPage != pos/gm.wallPerPage() {
+				t.Errorf("page %d does not show the selected tile at position %d", gm.wallPage, pos)
+			}
+		})
+	}
+}
+
+// ^/ out of the wall used to be one-way — nothing set modeWall back — while the
+// hint bar advertised it as a toggle.
+func TestWallToggleRoundTrip(t *testing.T) {
+	m := wallFixture()
+	m.wallLaunched = true
+
+	list, _ := m.handleKey(wallKey("ctrl+/"))
+	lm := list.(tuiModel)
+	if lm.mode != modeList {
+		t.Fatalf("^/ in the wall should show the list, mode = %v", lm.mode)
+	}
+	if hints := stripANSI(lm.renderHints()); !strings.Contains(hints, "^/:wall") {
+		t.Errorf("a wall-launched popup's list hints should offer ^/:wall, got %q", hints)
+	}
+
+	back, cmd := lm.handleKey(wallKey("ctrl+/"))
+	bm := back.(tuiModel)
+	if bm.mode != modeWall {
+		t.Errorf("^/ in a wall-launched list should return to the wall, mode = %v", bm.mode)
+	}
+	if !slices.Contains(bm.tileItems(), bm.cursor) {
+		t.Errorf("returning to the wall left the cursor at %d, which is not tileable", bm.cursor)
+	}
+	if cmd == nil {
+		t.Error("returning to the wall must capture now, not in 500ms")
+	}
+}
+
+// A popup that was never a wall keeps ^/ as the preview toggle it has always been.
+func TestPreviewToggleUnchangedWithoutWall(t *testing.T) {
+	m := wallFixture()
+	m.mode, m.wallLaunched, m.showPreview = modeList, false, false
+
+	got, _ := m.handleKey(wallKey("ctrl+/"))
+	gm := got.(tuiModel)
+	if gm.mode != modeList || !gm.showPreview {
+		t.Errorf("^/ should toggle the preview; mode = %v showPreview = %v", gm.mode, gm.showPreview)
+	}
+	if hints := stripANSI(gm.renderHints()); !strings.Contains(hints, "^/:preview") {
+		t.Errorf("hints should still offer ^/:preview, got %q", hints)
 	}
 }
 

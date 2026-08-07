@@ -59,10 +59,13 @@ type tuiModel struct {
 	cursor       int
 
 	// Modes
-	mode        pickerMode
-	windowMode  bool
-	claudeOnly  bool
-	scratchOnly bool
+	mode pickerMode
+	// wallLaunched records that --wall opened this popup, which is what makes ^/
+	// a toggle rather than a one-way trip out of the wall.
+	wallLaunched bool
+	windowMode   bool
+	claudeOnly   bool
+	scratchOnly  bool
 
 	// Wall
 	wallPage    int
@@ -180,6 +183,7 @@ func runTUI(windowMode, claudeOnly, wall bool) error {
 
 	m := tuiModel{
 		mode:         wallMode(wall),
+		wallLaunched: wall,
 		windowMode:   windowMode,
 		claudeOnly:   claudeOnly,
 		showPreview:  layoutShowsPreview(opts),
@@ -277,17 +281,28 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// Both of these rebuild visible, so the wall re-snaps for the same reason
+	// refreshMsg does: an index does not survive a rebuild, and the wall has no
+	// non-tileable selection to land on.
 	case zoxideMsg:
+		keep := m.currentTarget()
 		m.zoxideItems = msg.items
 		m = m.recombine().withFilter()
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
 		}
+		if m.mode == modeWall {
+			m = m.snapWallTo(keep)
+		}
 		return m, nil
 
 	case remoteMsg:
+		keep := m.currentTarget()
 		m.remoteItems = msg.items
 		m = m.recombine().withFilter()
+		if m.mode == modeWall {
+			m = m.snapWallTo(keep)
+		}
 		return m, nil
 
 	case previewMsg:
@@ -430,6 +445,13 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreviewCmd()
 
 	case "ctrl+/", "ctrl+_":
+		// In a wall-launched popup this is the return leg of the wall toggle, and
+		// the new page needs its captures now rather than at the next tick.
+		if m.wallLaunched {
+			m.mode = modeWall
+			m = m.snapWall()
+			return m, m.captureWallCmd()
+		}
 		m.showPreview = !m.showPreview
 		if m.ready {
 			m.preview.SetWidth(m.previewWidth())
@@ -752,8 +774,12 @@ func (m tuiModel) View() tea.View {
 // --- Layout ---
 
 // bodyHeight is the total height available for list + preview (excludes search/hints/borders).
+//
+// The search bar is measured, not assumed: it borders only its bottom, so it is
+// 2 rows, and 3 when a long query wraps. The other two rows are the body's
+// bottom rule and the one-line hint bar.
 func (m tuiModel) bodyHeight() int {
-	h := m.height - 5 // search (3 with border) + bottom border (1) + hints (1)
+	h := m.height - lipgloss.Height(m.renderSearch()) - 2
 	if h < 5 {
 		return 5
 	}
@@ -1277,7 +1303,8 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 		if err != nil {
 			return previewMsg{content: "(no preview available)", target: t}
 		}
-		content := strings.TrimRight(string(out), "\n ")
+		// Same untrusted content as the wall's captures, through a different path.
+		content := stripStringEscapes(strings.TrimRight(string(out), "\n "))
 		// Reset background at end of each line to prevent ANSI color bleeding
 		// into empty viewport padding cells (e.g. opencode's black input area).
 		content = strings.ReplaceAll(content, "\n", "\033[49m\n") + "\033[49m"
