@@ -169,6 +169,37 @@ func wallMode(wall bool) pickerMode {
 	return modeList
 }
 
+// newPickerModel assembles the picker's initial model from already-gathered
+// inputs — no tmux/ssh/proc calls of its own — so the first-paint wiring
+// (including the Remote section, #312) is exercised by a real unit test
+// instead of only by a manual tmux check.
+func newPickerModel(windowMode, claudeOnly, wall bool, opts map[string]string, theme string, items []listItem) tuiModel {
+	m := tuiModel{
+		mode:         wallMode(wall),
+		wallLaunched: wall,
+		windowMode:   windowMode,
+		claudeOnly:   claudeOnly,
+		showPreview:  layoutShowsPreview(opts),
+		theme:        theme,
+		tmuxOpts:     opts,
+		sessionItems: items,
+		wallContent:  map[string]string{},
+		wallBad:      map[string]bool{},
+	}
+	if !windowMode {
+		// Host rows are static config — render them now so the Remote section
+		// exists from the first paint. remoteCmd's probe (kicked from Init)
+		// fills in each row's annotation in place via remoteMsg (#312).
+		m.remoteItems = pendingRemoteItems(opts)
+	}
+	m = m.recombine().withFilter()
+	m.cursor = m.firstSelectable(0)
+	if m.mode == modeWall {
+		m = m.snapWall()
+	}
+	return m
+}
+
 func runTUI(windowMode, claudeOnly, wall bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
@@ -181,24 +212,7 @@ func runTUI(windowMode, claudeOnly, wall bool) error {
 		items = buildSessionItems(opts, panes, theme, false)
 	}
 
-	m := tuiModel{
-		mode:         wallMode(wall),
-		wallLaunched: wall,
-		windowMode:   windowMode,
-		claudeOnly:   claudeOnly,
-		showPreview:  layoutShowsPreview(opts),
-		theme:        theme,
-		tmuxOpts:     opts,
-		allItems:     items,
-		sessionItems: items,
-		wallContent:  map[string]string{},
-		wallBad:      map[string]bool{},
-	}
-	m = m.withFilter()
-	m.cursor = m.firstSelectable(0)
-	if m.mode == modeWall {
-		m = m.snapWall()
-	}
+	m := newPickerModel(windowMode, claudeOnly, wall, opts, theme, items)
 
 	p := tea.NewProgram(m)
 	_, err := p.Run()
@@ -300,6 +314,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keep := m.currentTarget()
 		m.remoteItems = msg.items
 		m = m.recombine().withFilter()
+		m = m.restoreCursor(keep)
 		if m.mode == modeWall {
 			m = m.snapWallTo(keep)
 		}
@@ -900,6 +915,28 @@ func (m tuiModel) currentItem() (listItem, bool) {
 		return listItem{}, false
 	}
 	return m.visible[m.cursor], true
+}
+
+// restoreCursor re-finds keep (the target selected before a rebuild) in the
+// new visible list so a row growing or shrinking never moves the selection
+// off it — index-based restore has regressed this list three times before
+// (#173, #198, #234), most recently by aliasing onto whatever row now sits
+// at a stale index.
+func (m tuiModel) restoreCursor(keep string) tuiModel {
+	if keep != "" {
+		for i, item := range m.visible {
+			if item.target == keep {
+				m.cursor = i
+				return m
+			}
+		}
+		m.cursor = m.firstSelectable(0)
+		return m
+	}
+	if m.cursor >= len(m.visible) {
+		m.cursor = m.firstSelectable(0)
+	}
+	return m
 }
 
 // activateCurrent switches to (or creates) the highlighted target and quits.

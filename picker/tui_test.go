@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -578,5 +579,161 @@ func TestLayoutShowsPreview(t *testing.T) {
 		if got := layoutShowsPreview(opts); got != want {
 			t.Errorf("layoutShowsPreview(@picker_layout=%q) = %v, want %v", v, got, want)
 		}
+	}
+}
+
+// The Remote section (header + one row per host) must exist before any
+// probe has run — this is what stops the section from landing mid-session
+// and reflowing the list under the user (#312). Calls newPickerModel
+// directly so this test exercises the real runTUI wiring, not a
+// hand-assembled stand-in for it.
+func TestFirstPaintIncludesRemoteRows(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	items := []listItem{{target: "lazytmux", searchText: "lazytmux"}}
+	m := newPickerModel(false, false, false, opts, "dark", items)
+
+	var sawHeader, sawLab, sawDead bool
+	for _, item := range m.visible {
+		switch {
+		case item.isRemoteHeader:
+			sawHeader = true
+		case item.remoteHost == "lab" && item.remoteSess == "":
+			sawLab = true
+		case item.remoteHost == "dead" && item.remoteSess == "":
+			sawDead = true
+		}
+	}
+	if !sawHeader || !sawLab || !sawDead {
+		t.Fatalf("first paint missing remote rows: header=%v lab=%v dead=%v, visible=%+v", sawHeader, sawLab, sawDead, m.visible)
+	}
+}
+
+// The row a host contributes can grow once its probe returns (a host with
+// unbridged sessions gains tree-child rows). That growth must not silently
+// move the cursor onto a different row — the actual user-visible half of
+// #312 ("anything the human did in that window ... gets re-laid-out
+// underneath them").
+func TestRemoteMsgPreservesCursor(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	m := tuiModel{
+		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		remoteItems:  pendingRemoteItems(opts),
+	}
+	m = m.recombine().withFilter()
+
+	found := false
+	for i, item := range m.visible {
+		if item.remoteHost == "dead" && item.remoteSess == "" {
+			m.cursor = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("setup: no dead host row in %+v", m.visible)
+	}
+
+	// "lab" resolves with two unbridged sessions — its row grows by two tree
+	// rows, shifting everything that came after "lab" in the old list,
+	// including "dead"'s row.
+	probe := func(host string) ([]string, error) {
+		if host == "dead" {
+			return nil, errors.New("unreachable")
+		}
+		return []string{"mono", "other"}, nil
+	}
+	resolved := collectRemoteItems(opts, nil, probe)
+
+	next, _ := m.Update(remoteMsg{items: resolved})
+	nm, ok := next.(tuiModel)
+	if !ok {
+		t.Fatalf("Update did not return a tuiModel")
+	}
+
+	if nm.cursor < 0 || nm.cursor >= len(nm.visible) {
+		t.Fatalf("cursor out of range: %d (len %d)", nm.cursor, len(nm.visible))
+	}
+	got := nm.visible[nm.cursor]
+	if got.remoteHost != "dead" || got.remoteSess != "" {
+		t.Fatalf("cursor moved off the dead host row: %+v", got)
+	}
+}
+
+// A filter query the user is mid-typing must not be reset by an unrelated
+// background message landing.
+func TestRemoteMsgPreservesQuery(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab"}
+	m := tuiModel{
+		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		remoteItems:  pendingRemoteItems(opts),
+		query:        "laz",
+	}
+	m = m.recombine().withFilter()
+
+	probe := func(string) ([]string, error) { return nil, nil }
+	resolved := collectRemoteItems(opts, nil, probe)
+
+	next, _ := m.Update(remoteMsg{items: resolved})
+	nm, ok := next.(tuiModel)
+	if !ok {
+		t.Fatalf("Update did not return a tuiModel")
+	}
+	if nm.query != "laz" {
+		t.Fatalf("query was reset: got %q", nm.query)
+	}
+}
+
+// A filter query active when remoteMsg lands must still apply to the rows it
+// adds — a newly-revealed child session that doesn't match the query must
+// not bypass it just because it arrived asynchronously.
+func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab"}
+	m := tuiModel{
+		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		remoteItems:  pendingRemoteItems(opts),
+		query:        "lazytmux",
+	}
+	m = m.recombine().withFilter()
+
+	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
+	resolved := collectRemoteItems(opts, nil, probe)
+
+	next, _ := m.Update(remoteMsg{items: resolved})
+	nm, ok := next.(tuiModel)
+	if !ok {
+		t.Fatalf("Update did not return a tuiModel")
+	}
+	for _, item := range nm.visible {
+		if item.remoteSess == "mono" {
+			t.Fatalf("child row bypassed the active query: %+v", item)
+		}
+	}
+}
+
+// Pending rows (before any probe resolves) must be exempt from the
+// claude/scratch toggles exactly like resolved rows — itemVisible checks
+// isRemoteRow before either toggle, and pendingRemoteItems sets it via the
+// same remoteHostRowItem helper collectRemoteItems uses.
+func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	for _, c := range []struct {
+		name string
+		m    tuiModel
+	}{
+		{"claude only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), claudeOnly: true}},
+		{"scratch only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), scratchOnly: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out := c.m.recombine().withFilter().visible
+			remotes := 0
+			for _, it := range out {
+				if it.isRemoteRow {
+					remotes++
+				}
+			}
+			if remotes != 2 {
+				t.Errorf("got %d pending remote rows, want 2 (visible: %+v)", remotes, out)
+			}
+		})
 	}
 }

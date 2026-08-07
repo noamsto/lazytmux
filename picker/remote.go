@@ -179,8 +179,76 @@ func lastNonEmptyLine(s string) string {
 	return ""
 }
 
+// remoteHeaderItem is the "── Remote ──" divider row. Shared by the
+// synchronous pending render (Task 2) and the probed result so both agree on
+// layout — a pending header must look identical to a resolved one.
+func remoteHeaderItem(tmuxOpts map[string]string) listItem {
+	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
+	reset := "\033[0m"
+	rule := "── Remote " + strings.Repeat("─", 220)
+	return listItem{
+		display:        cDim + rule + reset,
+		plain:          rule,
+		isHeader:       true,
+		isRemoteHeader: true,
+	}
+}
+
+// remoteHostRowItem renders one host's row with the given trailing note —
+// either a resolved annotation ("(no server — Enter starts one)", …) or
+// remotePendingNote before the probe has run. The host row is always
+// selectable: it opens the remote's most-recent session and keeps the
+// section alive once every session is bridged.
+func remoteHostRowItem(tmuxOpts map[string]string, host, note string) listItem {
+	cPeach := ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387"))
+	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
+	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
+	reset := "\033[0m"
+
+	display := fmt.Sprintf("%s %s", cPeach+iSess+reset, host)
+	plain := fmt.Sprintf("%s %s", iSess, host)
+	if note != "" {
+		display += "  " + cDim + note + reset
+		plain += "  " + note
+	}
+	return listItem{
+		isRemoteRow: true,
+		target:      "remote:" + host,
+		remoteHost:  host,
+		display:     display,
+		plain:       plain,
+		searchText:  host,
+	}
+}
+
+// remotePendingNote is the placeholder annotation on a host row before its
+// ssh probe returns — a dim ellipsis, since no state (unreachable / no
+// server / session list) is known yet (#312).
+const remotePendingNote = "…"
+
+// pendingRemoteItems builds the Remote section synchronously from
+// @remote_bridge_hosts alone — no ssh, so it belongs on the first-paint
+// path. Each host gets exactly the row collectRemoteItems would give it,
+// with remotePendingNote standing in for whatever annotation the probe will
+// resolve. remoteMsg (collectRemoteItems's result) replaces this slice
+// wholesale once every host's probe returns.
+func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
+	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
+	if len(hosts) == 0 {
+		return nil
+	}
+	items := make([]listItem, 0, len(hosts)+1)
+	items = append(items, remoteHeaderItem(tmuxOpts))
+	for _, h := range hosts {
+		items = append(items, remoteHostRowItem(tmuxOpts, h, remotePendingNote))
+	}
+	return items
+}
+
 // collectRemoteItems builds the "Remote" suggestion rows (header + hosts /
-// sessions). Runs off the first-paint path; merges via remoteMsg.
+// sessions) by probing every configured host over ssh. Runs off the
+// first-paint path; the result merges via remoteMsg, replacing
+// pendingRemoteItems's synchronous placeholder (#312).
 func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) ([]string, error)) []listItem {
 	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
 	if len(hosts) == 0 {
@@ -193,9 +261,7 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		localSessionNames = map[string]bool{}
 	}
 
-	cPeach := ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387"))
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
-	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
 	reset := "\033[0m"
 
 	type hostResult struct {
@@ -216,17 +282,9 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	wg.Wait()
 
 	items := make([]listItem, 0, len(hosts)+1)
-	rule := "── Remote " + strings.Repeat("─", 220)
-	items = append(items, listItem{
-		display:        cDim + rule + reset,
-		plain:          rule,
-		isHeader:       true,
-		isRemoteHeader: true,
-	})
+	items = append(items, remoteHeaderItem(tmuxOpts))
 
 	for _, r := range results {
-		// The host row is always selectable: it opens the remote's most-recent
-		// session, and keeps the section alive once every session is bridged.
 		note := ""
 		switch r.state {
 		case remoteProbeUnreachable:
@@ -240,20 +298,7 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				note = "(all open)"
 			}
 		}
-		display := fmt.Sprintf("%s %s", cPeach+iSess+reset, r.host)
-		plain := fmt.Sprintf("%s %s", iSess, r.host)
-		if note != "" {
-			display += "  " + cDim + note + reset
-			plain += "  " + note
-		}
-		items = append(items, listItem{
-			isRemoteRow: true,
-			target:      "remote:" + r.host,
-			remoteHost:  r.host,
-			display:     display,
-			plain:       plain,
-			searchText:  r.host,
-		})
+		items = append(items, remoteHostRowItem(tmuxOpts, r.host, note))
 		for _, sess := range r.sess {
 			items = append(items, listItem{
 				isRemoteRow: true,
