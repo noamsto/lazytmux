@@ -289,6 +289,26 @@ setup_sweep() {
 	[ ! -e "$BATS_TEST_TMPDIR/live/.sweep" ]
 }
 
+@test "sweep: a pass that succeeds with no panes still completes" {
+	# The other half of the bail above: a successful call that lists nothing is
+	# a real (if degenerate) pass, so it still stamps .sweep — "the call failed"
+	# and "the call found nothing" must not look alike. Also pins that the blank
+	# line a here-string makes of an empty result never becomes a pane stamp.
+	setup_sweep 60
+	cat >"$FAKEBIN/tmux" <<-'EOF'
+		#!/bin/sh
+		case "$*" in
+		*"list-panes"*) : ;;
+		esac
+	EOF
+	chmod +x "$FAKEBIN/tmux"
+	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
+	[ "$status" -eq 0 ]
+	[ -e "$BATS_TEST_TMPDIR/live/.sweep" ]
+	# The blank row must not have been stamped as a pane.
+	[ "$(find "$BATS_TEST_TMPDIR/live" -type f -not -name .sweep | wc -l)" -eq 0 ]
+}
+
 @test "sweep: the every-5th-tick throttle gates the stamps too" {
 	setup_sweep 60
 	run bash -c 'export CLAUDE_NOW=101; source scripts/tmux-update-icons.sh; arm_agent_detect'
