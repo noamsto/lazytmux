@@ -7,6 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/noamsto/lazytmux/picker/agentdetect/manifest"
+	"github.com/noamsto/lazytmux/picker/agentdetect/screen"
+	"github.com/noamsto/lazytmux/picker/agentdetect/statefile"
 )
 
 func TestAliveFromProbe(t *testing.T) {
@@ -112,5 +116,84 @@ func TestStillOwnerMissingRegistry(t *testing.T) {
 	dir := t.TempDir()
 	if stillOwner(dir, "no-such-pane", 100) {
 		t.Error("a pane with no registry entry must not read as owned")
+	}
+}
+
+// TestEmitIfOwnerSkipsWhenSuperseded reproduces the #326 interaction hazard:
+// a superseded watcher reaching an exit path (EOF or the liveness backstop)
+// must not clobber the state the new watcher already wrote for the same
+// pane. Without the emitIfOwner guard, this fails because emit() overwrites
+// the file unconditionally with the superseded watcher's stale screen
+// content.
+func TestEmitIfOwnerSkipsWhenSuperseded(t *testing.T) {
+	regDir := t.TempDir()
+	stateDir := t.TempDir()
+	paneID := "42"
+
+	m := manifest.Manifest{Rules: []manifest.Rule{
+		{State: "busy", Priority: 1, Contains: []string{"OLD-SCREEN"}},
+		{State: "done", Priority: 1, Contains: []string{"NEW-SCREEN"}},
+	}}
+
+	if !registerWatcher(regDir, paneID, 100) {
+		t.Fatal("registerWatcher should succeed for the old watcher")
+	}
+
+	// Re-arm supersedes the old watcher before it exits — the exact race
+	// #239/#324 target: old pid 100 is still running when pid 200 takes over.
+	if !registerWatcher(regDir, paneID, 200) {
+		t.Fatal("registerWatcher should succeed for the new watcher")
+	}
+
+	// The new watcher reports its own current state, as it does at startup.
+	newScr := screen.New(80, 24)
+	newScr.Feed([]byte("NEW-SCREEN"))
+	emit(newScr, m, statefile.New(stateDir, paneID))
+
+	before, err := os.ReadFile(stateDir + "/" + paneID)
+	if err != nil {
+		t.Fatalf("reading state file written by the new watcher: %v", err)
+	}
+
+	// The superseded old watcher (pid 100) now reaches an exit path with a
+	// different screen. It must not write, since it is no longer the owner.
+	oldScr := screen.New(80, 24)
+	oldScr.Feed([]byte("OLD-SCREEN"))
+	emitIfOwner(regDir, paneID, 100, oldScr, m, statefile.New(stateDir, paneID))
+
+	after, err := os.ReadFile(stateDir + "/" + paneID)
+	if err != nil {
+		t.Fatalf("reading state file after superseded watcher's exit: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("superseded watcher clobbered the new watcher's state: before=%q after=%q", before, after)
+	}
+}
+
+// TestEmitIfOwnerEmitsWhenStillOwner is the mirror case: an ordinary
+// (non-superseded) exit must still emit its final snapshot.
+func TestEmitIfOwnerEmitsWhenStillOwner(t *testing.T) {
+	regDir := t.TempDir()
+	stateDir := t.TempDir()
+	paneID := "42"
+
+	m := manifest.Manifest{Rules: []manifest.Rule{
+		{State: "busy", Priority: 1, Contains: []string{"SCREEN"}},
+	}}
+
+	if !registerWatcher(regDir, paneID, 100) {
+		t.Fatal("registerWatcher should succeed")
+	}
+
+	scr := screen.New(80, 24)
+	scr.Feed([]byte("SCREEN"))
+	emitIfOwner(regDir, paneID, 100, scr, m, statefile.New(stateDir, paneID))
+
+	content, err := os.ReadFile(stateDir + "/" + paneID)
+	if err != nil {
+		t.Fatalf("still-owner exit should have written a final snapshot: %v", err)
+	}
+	if !strings.Contains(string(content), "state=busy") {
+		t.Errorf("state file = %q, want it to contain state=busy", content)
 	}
 }

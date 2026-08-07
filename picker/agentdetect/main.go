@@ -87,7 +87,7 @@ func main() {
 				deb.Mark(time.Now())
 			}
 			if closed {
-				emit(scr, m, w) // final snapshot on EOF
+				emitIfOwner(watcherRegDir, paneID, myPID, scr, m, w) // final snapshot on EOF
 				return
 			}
 		case <-ticker.C:
@@ -95,10 +95,7 @@ func main() {
 			// ticker rather than waiting on the coarse liveness probe below.
 			// Neither removes the registry file (by now it's the new
 			// watcher's, not ours — deleting it would make the new watcher
-			// self-evict on its own next check) nor emits (the new watcher
-			// already reported current state at its own startup, and
-			// statefile.Writer's temp file isn't pid-namespaced, so a stale
-			// write here could race and clobber the new watcher's write).
+			// self-evict on its own next check) nor emits (see emitIfOwner).
 			if !stillOwner(watcherRegDir, paneID, myPID) {
 				return
 			}
@@ -109,7 +106,7 @@ func main() {
 			// Backstop for the case EOF never arrives: dead pane, or the
 			// tmux server gone outright.
 			if !paneAlive(paneID) {
-				emit(scr, m, w)
+				emitIfOwner(watcherRegDir, paneID, myPID, scr, m, w)
 				return
 			}
 		}
@@ -133,6 +130,16 @@ func seededScreen(paneID string, cols, rows int) screen.Screen {
 func emit(scr screen.Screen, m manifest.Manifest, w *statefile.Writer) {
 	state, _ := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
 	_, _ = w.Update(state, time.Now())
+}
+
+// emitIfOwner skips emit() once superseded by a re-arm — the new watcher
+// already reported current state at its own startup, and statefile.Writer's
+// temp file isn't pid-namespaced, so a stale write here could race and
+// clobber the new watcher's write.
+func emitIfOwner(dir, paneID string, pid int, scr screen.Screen, m manifest.Manifest, w *statefile.Writer) {
+	if stillOwner(dir, paneID, pid) {
+		emit(scr, m, w)
+	}
 }
 
 func readStdin(buf *drainbuf.Buffer) {
