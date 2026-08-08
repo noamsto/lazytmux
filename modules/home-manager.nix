@@ -152,7 +152,7 @@
     pickerListRatio = cfg.picker.listRatio;
     pickerLayout = cfg.picker.layout;
     remoteBridgeHosts = lib.concatStringsSep " " cfg.remote.hosts;
-    inherit (cfg) prefix defaultShell;
+    inherit (cfg) prefix defaultShell focusFollowsMouse copyModeLineNumbers;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
     terminalTerm =
@@ -304,6 +304,26 @@ in {
         this when the login shell isn't reliably propagated to the tmux server
         — e.g. launchd-started servers on macOS capture a stale $SHELL, so
         panes open in /bin/zsh even after the account shell is changed.
+      '';
+    };
+
+    focusFollowsMouse = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        tmux focus-follows-mouse: whether moving the mouse into a pane
+        selects it, without clicking. Off by default, matching tmux's own
+        default — some terminals/multiplexer stacks interact awkwardly with
+        it.
+      '';
+    };
+
+    copyModeLineNumbers = lib.mkOption {
+      type = lib.types.enum ["off" "default" "absolute" "relative" "hybrid"];
+      default = "off";
+      description = ''
+        tmux copy-mode-line-numbers mode (tmux 3.7+): line-number display in
+        copy mode. "off" preserves lazytmux's previous behavior.
       '';
     };
 

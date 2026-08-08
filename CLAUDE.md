@@ -83,6 +83,8 @@ tmux treats session-level `status-format` as all-or-nothing: setting any index a
 
 tmux renders at most 5 status lines, so the window grid is capped at 4 rows — and reflow only unlocks the 4th above `TALL_CLIENT_ROWS` (40) of `client_height`, since a 5-line status bar is only affordable on a tall client. Row 3 is bounded by `@window_split3`, which stays 999 at the baseline 3-row cap so row 4 renders empty.
 
+Per-row trailing `│` separators derive from the loop-native `next_window_index` (tmux 3.8's `W:` loop next/previous vars, #104): a separator renders only when `next_window_index` is non-empty (a next window exists in the loop) and, for rows bounded by `@window_split*`, that next window's index still falls within the row. Row-level `├─`/`╰─` prefix selection stays driven by `@window_split*` vs `session_windows` — that's row-structural data from `reflow_fit_columns`'s column-width math, not a per-iteration loop fact, so it's still stamped rather than derived in-loop.
+
 ### Grid Column Widths
 
 Columns are sized independently, one width per column rather than one `colw` for the whole grid: alignment only requires a width to match *down* a column, never across, so charging every column the widest window's width overflowed the row (#271). `reflow_fit_columns` (in `lib-reflow.sh`) takes two per-window widths — a **floor** (issue id + agent badge + zoom marker, none of which the renderer can shrink) and a **want** (floor + branch/title) — gives each column its floor, then hands the remaining slack out in proportion to unmet demand.
