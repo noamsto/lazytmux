@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +27,14 @@ const remoteProbeTimeout = 3 * time.Second
 // `var=value` shell assignments — fish login shells reject them and the picker
 // would mark a reachable host unreachable.
 const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null || env TMUX_TMPDIR=/tmp/tmux-$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+
+// remoteRestorableCmd emits the remote host's own hostname (line 1, used to
+// verify a fetched snapshot really belongs to this host) followed by
+// tmux-remux's event log as newline-delimited JSON. No tmux server is
+// required — tmux-remux reads state.db directly — so this only runs once a
+// host has already probed as remoteProbeNoServer. Must stay fish-safe like
+// remoteListSessionsCmd: no `var=value` shell assignments.
+const remoteRestorableCmd = `hostname; $(command -v tmux-remux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux-remux) list --json 2>/dev/null`
 
 const sshConnectFailureExit = 255
 
@@ -147,14 +156,163 @@ func sshListRemoteSessions(host string) ([]string, error) {
 	return out, nil
 }
 
+// remuxManifestSession is the subset of a tmux-remux snapshot session the
+// picker needs to render a restorable row.
+type remuxManifestSession struct {
+	Name         string `json:"name"`
+	LastAttached int64  `json:"last_attached"`
+}
+
+// remuxManifest mirrors tmux-remux's snapshot.Manifest (internal/snapshot/manifest.go
+// in noamsto/tmux-remux) — only the fields the picker reads.
+type remuxManifest struct {
+	Host     string                 `json:"host"`
+	SavedAt  int64                  `json:"saved_at"`
+	Sessions []remuxManifestSession `json:"sessions"`
+}
+
+// remuxEvent mirrors the fields of tmux-remux's store.Event this package
+// needs, as emitted (one JSON object per line) by `tmux-remux list --json`.
+// The upstream type carries no json tags, so field names must match Go's
+// default (capitalized) encoding exactly.
+type remuxEvent struct {
+	Ts           int64
+	Kind         string
+	ManifestJSON string
+}
+
+// newestSnapshotManifest scans newline-delimited tmux-remux events for the
+// snapshot with the highest timestamp and decodes its manifest. A snapshot is
+// a point-in-time dump of every session on the server at save time, not an
+// append-only session list, so only the single newest one is ever consulted —
+// unioning across snapshots would resurrect sessions closed since. Malformed
+// lines are skipped: this reads over an ssh pipe, where truncated output is a
+// real failure mode, not a programming error.
+func newestSnapshotManifest(ndjson string) (remuxManifest, bool) {
+	var best remuxEvent
+	found := false
+	for _, line := range strings.Split(ndjson, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev remuxEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Kind != "snapshot" {
+			continue
+		}
+		if !found || ev.Ts > best.Ts {
+			best, found = ev, true
+		}
+	}
+	if !found {
+		return remuxManifest{}, false
+	}
+	var m remuxManifest
+	if err := json.Unmarshal([]byte(best.ManifestJSON), &m); err != nil {
+		return remuxManifest{}, false
+	}
+	return m, true
+}
+
+// filterThrowawaySessions drops sessions tmux reports as never attached
+// (session_last_attached == 0) — the exact signature of an ephemeral session
+// like probe-verify (seeded and killed by TestSSHListRemoteSessionsLive)
+// rather than one a person was actually using. This is a principled signal,
+// not a name denylist: any detached-and-abandoned session is caught the same
+// way.
+func filterThrowawaySessions(sessions []remuxManifestSession) []remuxManifestSession {
+	out := make([]remuxManifestSession, 0, len(sessions))
+	for _, s := range sessions {
+		if s.LastAttached == 0 {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// formatSnapshotAge renders how long ago a snapshot was saved, coarsening
+// units the further back it is (mirrors usageResetSuffix's granularity in
+// picker/statusline/usage.go). A stale manifest is worse than no row, so its
+// age has to be legible at a glance, not buried in a tooltip.
+func formatSnapshotAge(savedAtMillis int64, now time.Time) string {
+	age := now.Sub(time.UnixMilli(savedAtMillis))
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm ago", int(age/time.Minute))
+	case age < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(age/time.Hour))
+	default:
+		return fmt.Sprintf("%dd ago", int(age/(24*time.Hour)))
+	}
+}
+
+// restorableFromProbeOutput parses remoteRestorableCmd's stdout (the remote's
+// own hostname, then tmux-remux's ndjson event log), verifies the snapshot's
+// Host field against the hostname that actually answered ssh, and drops
+// throwaway sessions. Split out from sshListRestorableSessions so the host
+// check — the one security-relevant rule here, guarding against a stale or
+// wrong-host state.db producing rows — is testable without a real ssh.
+func restorableFromProbeOutput(stdout string) (remuxManifest, error) {
+	remoteHostname, ndjson, ok := strings.Cut(stdout, "\n")
+	if !ok {
+		return remuxManifest{}, errors.New("no manifest data")
+	}
+	m, found := newestSnapshotManifest(ndjson)
+	if !found {
+		return remuxManifest{}, errors.New("no snapshot to restore")
+	}
+	if m.Host != strings.TrimSpace(remoteHostname) {
+		return remuxManifest{}, fmt.Errorf("snapshot host %q does not match %q", m.Host, remoteHostname)
+	}
+	m.Sessions = filterThrowawaySessions(m.Sessions)
+	return m, nil
+}
+
+// sshListRestorableSessions fetches the newest tmux-remux snapshot from a
+// serverless host and returns its sessions, verified and filtered by
+// restorableFromProbeOutput. Only meaningful once a host has already probed
+// as remoteProbeNoServer — a live server's sessions come from
+// sshListRemoteSessions instead.
+func sshListRestorableSessions(host string) (remuxManifest, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteProbeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=2",
+		"-T",
+		host,
+		"--",
+		remoteRestorableCmd,
+	)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return remuxManifest{}, err
+	}
+	return restorableFromProbeOutput(stdout.String())
+}
+
 // openRemoteBridge launches lztmux-remote-open for host[/sess] and returns any
-// start error (the script switches the client itself on success).
-func openRemoteBridge(host, sess string) error {
+// start error (the script switches the client itself on success). restore
+// signals a row built from a tmux-remux snapshot rather than a live probe
+// (#268): the session doesn't exist on the remote yet, so the launcher must
+// restore it before there's anything to bridge into.
+func openRemoteBridge(host, sess string, restore bool) error {
 	args := []string{host}
 	if sess != "" {
 		args = append(args, sess)
 	}
 	cmd := exec.Command("lztmux-remote-open", args...)
+	if restore {
+		cmd.Env = append(os.Environ(), "LZTMUX_REMOTE_RESTORE=1")
+	}
 	cmd.Stdout = os.Stderr
 	// Captured, not inherited: the picker owns the screen, so a failure has to
 	// come back as a string for the hint line rather than paint over the popup.
@@ -251,13 +409,16 @@ func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
 // sessions) by probing every configured host over ssh. Runs off the
 // first-paint path; the result merges via remoteMsg, replacing
 // pendingRemoteItems's synchronous placeholder (#312).
-func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) ([]string, error)) []listItem {
+func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) ([]string, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
 	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
 	if len(hosts) == 0 {
 		return nil
 	}
 	if probe == nil {
 		probe = sshListRemoteSessions
+	}
+	if restoreProbe == nil {
+		restoreProbe = sshListRestorableSessions
 	}
 	if localSessionNames == nil {
 		localSessionNames = map[string]bool{}
@@ -267,9 +428,11 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	reset := "\033[0m"
 
 	type hostResult struct {
-		host  string
-		sess  []string
-		state remoteProbeState
+		host            string
+		sess            []string
+		state           remoteProbeState
+		restorable      []remuxManifestSession
+		manifestSavedAt int64
 	}
 	results := make([]hostResult, len(hosts))
 	var wg sync.WaitGroup
@@ -278,7 +441,14 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		go func(i int, h string) {
 			defer wg.Done()
 			sess, state := remoteSessionsForHost(h, localSessionNames, probe)
-			results[i] = hostResult{host: h, sess: sess, state: state}
+			res := hostResult{host: h, sess: sess, state: state}
+			if state == remoteProbeNoServer {
+				if m, err := restoreProbe(h); err == nil && len(m.Sessions) > 0 {
+					res.restorable = m.Sessions
+					res.manifestSavedAt = m.SavedAt
+				}
+			}
+			results[i] = res
 		}(i, h)
 	}
 	wg.Wait()
@@ -294,6 +464,10 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 			note = "(unreachable — open default)"
 		case remoteProbeNoServer:
 			// The launcher cold-starts the host's own startup session (#287).
+			// The host row itself never restores — it carries no
+			// remoteSess/remoteRestore either way — so its note doesn't
+			// change when restorable child rows exist below it; those rows
+			// carry their own "(restore — saved …)" suffix instead.
 			note = "(no server — Enter starts one)"
 		default:
 			if len(r.sess) == 0 {
@@ -312,6 +486,21 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				plain:       remoteTreeMid + " " + sess,
 				plainEnd:    remoteTreeEnd + " " + sess,
 				searchText:  r.host + "/" + sess + " " + r.host + " " + sess,
+			})
+		}
+		for _, s := range r.restorable {
+			suffix := "  (restore — saved " + formatSnapshotAge(r.manifestSavedAt, time.Now()) + ")"
+			items = append(items, listItem{
+				isRemoteRow:   true,
+				target:        "remote:" + r.host + ":" + s.Name,
+				remoteHost:    r.host,
+				remoteSess:    s.Name,
+				remoteRestore: true,
+				display:       cDim + remoteTreeMid + reset + " " + s.Name + cDim + suffix + reset,
+				displayEnd:    cDim + remoteTreeEnd + reset + " " + s.Name + cDim + suffix + reset,
+				plain:         remoteTreeMid + " " + s.Name + suffix,
+				plainEnd:      remoteTreeEnd + " " + s.Name + suffix,
+				searchText:    r.host + "/" + s.Name + " " + r.host + " " + s.Name,
 			})
 		}
 	}
