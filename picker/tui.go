@@ -28,6 +28,8 @@ type listItem struct {
 	isZoxideHeader  bool   // the "── New session ──" divider
 	isRemoteHeader  bool   // the "── Remote ──" divider
 	session         string // owning session name (for kill)
+	groupKey        string // window-mode header key this row re-attaches to
+	                       // when filtering: session name, or claude state
 	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
@@ -65,6 +67,7 @@ type tuiModel struct {
 	// a toggle rather than a one-way trip out of the wall.
 	wallLaunched bool
 	windowMode   bool
+	stateGrouped bool // window mode: group by claude state instead of session (#229)
 	claudeOnly   bool
 	scratchOnly  bool
 
@@ -211,7 +214,7 @@ func runTUI(windowMode, claudeOnly, wall bool) error {
 
 	var items []listItem
 	if windowMode {
-		items = buildWindowItems(opts, panes, theme, 0)
+		items = buildWindowItems(opts, panes, theme, 0, false)
 	} else {
 		items = buildSessionItems(opts, panes, theme, false)
 	}
@@ -1376,6 +1379,7 @@ func (m tuiModel) wallPageTargets() []string {
 
 func (m tuiModel) refreshDataCmd() tea.Cmd {
 	wm := m.windowMode
+	sg := m.stateGrouped
 	opts := m.tmuxOpts
 	theme := m.theme
 	lw := m.listWidth() // capture the value; the closure runs off-thread
@@ -1383,7 +1387,7 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 		panes := collectClaudePanes()
 		var items []listItem
 		if wm {
-			items = buildWindowItems(opts, panes, theme, lw)
+			items = buildWindowItems(opts, panes, theme, lw, sg)
 		} else {
 			items = buildSessionItems(opts, panes, theme, true)
 		}
@@ -1699,8 +1703,8 @@ func collectZoxideItems(tmuxOpts map[string]string) []listItem {
 	return items
 }
 
-func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int) []listItem {
-	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme, width)
+func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int, stateGrouped bool) []listItem {
+	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme, width, stateGrouped)
 }
 
 const (
@@ -1816,7 +1820,7 @@ func groupWindowsByState(windows []windowData, sessActivity map[string]int64) []
 // renderWindowItems is the pure rendering half of buildWindowItems, split out so
 // the enriched row layout can be unit-tested with synthetic windows. width is
 // the list width in cells (0 = unknown → default identity cap).
-func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int) []listItem {
+func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int, stateGrouped bool) []listItem {
 	claudeByWin := aggregateClaudeByWindow(claudePanes)
 	mergeClaudeWindows(windows, claudeByWin)
 
@@ -1836,59 +1840,33 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	// Peach for pending mirrors the status bar (tmux-reflow-windows PRCOLOR);
-	// closed = overlay0 (dim), matching the dead/superseded-PR treatment there.
 	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), reset: reset}
 
-	type sessGroup struct {
-		name     string
-		activity int64
-		windows  []*windowData
-	}
-	groupMap := make(map[string]*sessGroup)
-	for i := range windows {
-		w := &windows[i]
-		g, ok := groupMap[w.session]
-		if !ok {
-			g = &sessGroup{name: w.session}
-			groupMap[w.session] = g
-		}
-		g.windows = append(g.windows, w)
-	}
-
 	sessActivity := collectSessionActivity()
-	groups := make([]*sessGroup, 0, len(groupMap))
-	for _, g := range groupMap {
-		g.activity = sessActivity[g.name]
-		groups = append(groups, g)
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].activity != groups[j].activity {
-			return groups[i].activity > groups[j].activity
-		}
-		return groups[i].name < groups[j].name
-	})
-	for _, g := range groups {
-		sort.Slice(g.windows, func(i, j int) bool {
-			return g.windows[i].index < g.windows[j].index
-		})
+	var groups []windowGroup
+	if stateGrouped {
+		groups = groupWindowsByState(windows, sessActivity)
+	} else {
+		groups = groupWindowsBySession(windows, sessActivity)
 	}
 
 	// Pass A builds every fixed-width piece and the raw identity parts, and
 	// tracks the column maxima (lead prefix, icons, PR). The identity cap is
 	// then derived from the terminal width, and pass B truncates + aligns.
+	// Keyed by "session:index" (not by group) so pass B can look a window's
+	// pieces up the same way regardless of which grouping mode built groups.
 	type rawIdentity struct {
-		kind      int    // 0 none/name, 1 issue, 2 branch
-		id, rest  string // issue: id (accent) + rest (dim)
-		text      string // branch/name plain text
-		leadGlyph string // branch icon, already includes trailing space, or ""
+		kind      int
+		id, rest  string
+		text      string
+		leadGlyph string
 	}
 	type renderedWin struct {
 		win         *windowData
-		name        string // clean window name, for search
+		name        string
 		icons       string
 		iconDW      int
-		leadPlain   string // "N: " + crew + " "  (uncolored, for width)
+		leadPlain   string
 		leadColored string
 		leadDW      int
 		ident       rawIdentity
@@ -1897,88 +1875,81 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 		prPlain     string
 		crewName    string
 	}
-	winRows := make(map[string][]renderedWin)
+	winRows := make(map[string]renderedWin, len(windows))
 	maxLeadDW, maxIconDW, maxPrDW, maxZoomDW := 0, 0, 0, 0
-	for _, g := range groups {
-		for _, w := range g.windows {
-			icons, dw := buildProcIcons(w.procs, maxIconsPicker)
-			icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
-			icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
+	for i := range windows {
+		w := &windows[i]
+		icons, dw := buildProcIcons(w.procs, maxIconsPicker)
+		icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
+		icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
 
-			name := truncateCells(w.name, 40)
+		name := truncateCells(w.name, 40)
 
-			// Lead: "N: " then the crew codename (after the index), only when
-			// tagged — no reserved gap otherwise.
-			leadPlain := fmt.Sprintf("%d: ", w.index)
-			leadColored := leadPlain
-			if w.crewName != "" {
-				leadPlain += w.crewName + " "
-				crew := w.crewName
-				if c := ansiFgTmux(w.crewColor); c != "" {
-					crew = c + w.crewName + reset
-				}
-				leadColored += crew + " "
+		leadPlain := fmt.Sprintf("%d: ", w.index)
+		leadColored := leadPlain
+		if w.crewName != "" {
+			leadPlain += w.crewName + " "
+			crew := w.crewName
+			if c := ansiFgTmux(w.crewColor); c != "" {
+				crew = c + w.crewName + reset
 			}
-			leadDW := iconCellWidth(leadPlain)
+			leadColored += crew + " "
+		}
+		leadDW := iconCellWidth(leadPlain)
 
-			// Inline identity (the name): issue id+title → non-default branch →
-			// remote bridge name → repo basename. Mirrors the status bar's
-			// build_window_label priority.
-			var ri rawIdentity
-			var idSearch string
-			if w.labelID != "" {
-				ri = rawIdentity{kind: 1, id: w.labelID, rest: w.labelRest}
-				idSearch = w.labelID + w.labelRest
-			} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
-				ri = rawIdentity{kind: 2, text: w.branch, leadGlyph: ""}
-				if iBranch != "" {
-					ri.leadGlyph = iBranch + " "
-				}
-				idSearch = w.branch
-			} else if w.bridgeName != "" {
-				ri = rawIdentity{kind: 0, text: truncateCells(w.bridgeName, 40)}
-				idSearch = w.bridgeName
-			} else {
-				ri = rawIdentity{kind: 0, text: name}
-				idSearch = name
+		var ri rawIdentity
+		var idSearch string
+		if w.labelID != "" {
+			ri = rawIdentity{kind: 1, id: w.labelID, rest: w.labelRest}
+			idSearch = w.labelID + w.labelRest
+		} else if w.branch != "" && !branchEchoesName(w.branch, w.name) && w.branch != "main" && w.branch != "master" {
+			ri = rawIdentity{kind: 2, text: w.branch, leadGlyph: ""}
+			if iBranch != "" {
+				ri.leadGlyph = iBranch + " "
 			}
+			idSearch = w.branch
+		} else if w.bridgeName != "" {
+			ri = rawIdentity{kind: 0, text: truncateCells(w.bridgeName, 40)}
+			idSearch = w.bridgeName
+		} else {
+			ri = rawIdentity{kind: 0, text: name}
+			idSearch = name
+		}
 
-			prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
-			prPlain := strings.TrimSpace(w.prPlain)
-			prDW := iconCellWidth(prPlain)
+		prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
+		prPlain := strings.TrimSpace(w.prPlain)
+		prDW := iconCellWidth(prPlain)
 
-			winRows[g.name] = append(winRows[g.name], renderedWin{
-				win: w, name: name, icons: icons, iconDW: dw,
-				leadPlain: leadPlain, leadColored: leadColored, leadDW: leadDW,
-				ident: ri, identSearch: idSearch,
-				prBadge: prBadge, prPlain: prPlain, crewName: w.crewName,
-			})
-			maxLeadDW = max(maxLeadDW, leadDW)
-			maxIconDW = max(maxIconDW, dw)
-			maxPrDW = max(maxPrDW, prDW)
-			if w.zoomed {
-				maxZoomDW = max(maxZoomDW, iconCellWidth(" 󰁌"))
-			}
+		winRows[fmt.Sprintf("%s:%d", w.session, w.index)] = renderedWin{
+			win: w, name: name, icons: icons, iconDW: dw,
+			leadPlain: leadPlain, leadColored: leadColored, leadDW: leadDW,
+			ident: ri, identSearch: idSearch,
+			prBadge: prBadge, prPlain: prPlain, crewName: w.crewName,
+		}
+		maxLeadDW = max(maxLeadDW, leadDW)
+		maxIconDW = max(maxIconDW, dw)
+		maxPrDW = max(maxPrDW, prDW)
+		if w.zoomed {
+			maxZoomDW = max(maxZoomDW, iconCellWidth(" 󰁌"))
 		}
 	}
 	iconCol := max(maxIconDW+1, 3)
 	identityCap := identityCapFor(width, maxLeadDW+maxZoomDW, iconCol, maxPrDW)
-	// Uniform label column so the icon column lines up across every row.
 	labelCol := maxLeadDW + identityCap + maxZoomDW
 
-	// truncID renders a rawIdentity to (colored, plain) within identityCap cells.
-	truncID := func(ri rawIdentity) (string, string) {
+	// truncID renders a rawIdentity to (colored, plain) within budget cells.
+	truncID := func(ri rawIdentity, budget int) (string, string) {
 		switch ri.kind {
 		case 1: // issue: id accent + dim title
 			id := ri.id
 			idW := iconCellWidth(id)
 			rest := ri.rest
-			if idW >= identityCap {
-				id = truncateCells(id, identityCap)
+			if idW >= budget {
+				id = truncateCells(id, budget)
 				rest = ""
 				idW = iconCellWidth(id)
-			} else if idW+iconCellWidth(rest) > identityCap {
-				rest = truncateCells(rest, identityCap-idW)
+			} else if idW+iconCellWidth(rest) > budget {
+				rest = truncateCells(rest, budget-idW)
 			}
 			plain := id + rest
 			colored := cMauve + id + reset
@@ -1987,45 +1958,50 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			}
 			return colored, plain
 		case 2: // branch: faint, optional glyph
-			br := truncateCells(ri.text, max(identityCap-iconCellWidth(ri.leadGlyph), 1))
+			br := truncateCells(ri.text, max(budget-iconCellWidth(ri.leadGlyph), 1))
 			plain := ri.leadGlyph + br
 			return cFaint + plain + reset, plain
 		default: // name: plain
-			nm := truncateCells(ri.text, identityCap)
+			nm := truncateCells(ri.text, budget)
 			return nm, nm
 		}
 	}
 
 	var items []listItem
 	for _, g := range groups {
-		rows := winRows[g.name]
-
-		sessHasClaude := false
-		for _, r := range rows {
-			key := fmt.Sprintf("%s:%d", r.win.session, r.win.index)
-			if cc, ok := claudeByWin[key]; ok && isActiveState(claudePriority(*cc)) {
-				sessHasClaude = true
-				break
+		var headerDisplay, headerPlain, headerSession string
+		var headerHasClaude bool
+		if stateGrouped {
+			headerDisplay, headerPlain = stateGroupHeader(g.key, theme, cFaint)
+			headerHasClaude = isActiveState(g.key)
+		} else {
+			sessHasClaude := false
+			for _, w := range g.windows {
+				key := fmt.Sprintf("%s:%d", w.session, w.index)
+				if cc, ok := claudeByWin[key]; ok && isActiveState(claudePriority(*cc)) {
+					sessHasClaude = true
+					break
+				}
 			}
+			headerDisplay = fmt.Sprintf("%s %s", cMauve+iSess+reset, cMauve+g.key+reset)
+			headerPlain = fmt.Sprintf("%s %s", iSess, g.key)
+			headerSession = g.key
+			headerHasClaude = sessHasClaude
 		}
-
-		headerDisplay := fmt.Sprintf("%s %s",
-			cMauve+iSess+reset,
-			cMauve+g.name+reset,
-		)
 		items = append(items, listItem{
-			target:          g.name,
+			target:          g.key,
 			display:         headerDisplay,
-			plain:           fmt.Sprintf("%s %s", iSess, g.name),
-			searchText:      g.name,
+			plain:           headerPlain,
+			searchText:      g.key,
 			isHeader:        true,
-			session:         g.name,
-			hasActiveClaude: sessHasClaude,
+			session:         headerSession,
+			groupKey:        g.key,
+			hasActiveClaude: headerHasClaude,
 		})
 
-		multiWin := len(rows) > 1
-		for wi, r := range rows {
-			w := r.win
+		multiWin := len(g.windows) > 1
+		for wi, w := range g.windows {
+			r := winRows[fmt.Sprintf("%s:%d", w.session, w.index)]
 
 			activeMarker := " "
 			if w.active && multiWin {
@@ -2040,14 +2016,22 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			}
 
 			tree := "├─"
-			if wi == len(rows)-1 {
+			if wi == len(g.windows)-1 {
 				tree = "╰─"
 			}
 
-			idColored, idPlain := truncID(r.ident)
+			identCap := identityCap
+			prefixColored, prefixPlain := "", ""
+			if stateGrouped {
+				prefixColored, prefixPlain, identCap = foldSessionPrefix(w.session, cDim, reset, identityCap)
+			}
+			idColored, idPlain := truncID(r.ident, identCap)
+			idColored = prefixColored + idColored
+			idPlain = prefixPlain + idPlain
+
 			zoom := ""
 			if w.zoomed {
-				zoom = " 󰁌" // width budgeted into labelCol via maxZoomDW
+				zoom = " 󰁌"
 			}
 			lead := padToWidth(r.leadColored, r.leadDW, maxLeadDW)
 			leadPlainPadded := padToWidth(r.leadPlain, r.leadDW, maxLeadDW)
@@ -2067,7 +2051,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 			display = strings.TrimRight(display, " ")
 			plain = strings.TrimRight(plain, " ")
 
-			search := g.name + " " + r.name
+			search := w.session + " " + r.name
 			if r.identSearch != "" {
 				search += " " + r.identSearch
 			}
@@ -2078,16 +2062,59 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				search += " " + r.crewName
 			}
 			items = append(items, listItem{
-				target:          fmt.Sprintf("%s:%d", g.name, w.index),
+				target:          fmt.Sprintf("%s:%d", w.session, w.index),
 				display:         display,
 				plain:           plain,
 				searchText:      search,
-				session:         g.name,
+				session:         w.session,
+				groupKey:        g.key,
 				hasActiveClaude: isActiveState(claudePriority(w.claude)),
 			})
 		}
 	}
 	return items
+}
+
+// sessionFoldFrac caps how much of the identity budget a state-grouped row's
+// session-name prefix may take: at most identityCap/sessionFoldFrac, so the
+// row's own identity (branch/issue/name) keeps the majority of the column.
+const sessionFoldFrac = 3
+
+// foldSessionPrefix renders the owning session as a dim prefix for
+// state-grouped rows (#229) — they have no session header to carry it. It
+// reserves at most identityCap/sessionFoldFrac cells for the session name,
+// carved OUT of identityCap (never added to it), and returns the cap left
+// over for the row's own identity.
+func foldSessionPrefix(session, cDim, reset string, identityCap int) (prefix, plain string, remainingCap int) {
+	const sep = " / "
+	sessCap := max(identityCap/sessionFoldFrac, 1)
+	name := truncateCells(session, sessCap)
+	plain = name + sep
+	prefix = cDim + name + reset + sep
+	remainingCap = identityCap - iconCellWidth(plain)
+	if remainingCap < 1 {
+		remainingCap = 1
+	}
+	return prefix, plain, remainingCap
+}
+
+// stateGroupHeader renders a state-grouped mode header for a claude priority
+// state key ("" = the trailing no-agent group), using the same icon/color a
+// window row in that state gets (claudeStateIcon, claudeColors) so the
+// header reads as the same state at a glance. cNoAgent colors the trailing
+// group, which has no entry in claudeColors.
+func stateGroupHeader(key, theme, cNoAgent string) (display, plain string) {
+	label := claudeStateLabel[key]
+	icon := claudeStateIcon(key)
+	color := cNoAgent
+	if hex, ok := claudeColors[theme][key]; ok {
+		color = ansiFg(hex)
+	}
+	reset := "\033[0m"
+	if icon == "" {
+		return color + label + reset, label
+	}
+	return color + icon + " " + label + reset, icon + " " + label
 }
 
 // --- Utilities ---
