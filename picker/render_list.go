@@ -109,10 +109,19 @@ func (m tuiModel) renderHints() string {
 		hint("^x", killLabel),
 		hint("^a", claudeLabel),
 		hint("^s", scratchLabel),
+	}
+	if m.windowMode {
+		groupLabel := "group"
+		if m.stateGrouped {
+			groupLabel = highlight.Render(groupLabel)
+		}
+		parts = append(parts, hint("^g", groupLabel))
+	}
+	parts = append(parts,
 		hint("^/", toggleLabel),
 		hint("M-hjkl", "scroll"),
 		hint("q", "quit"),
-	}
+	)
 
 	// Clipped, not width-styled: a lipgloss Width() wraps this keymap onto a
 	// second line at a narrow width, and bodyHeight has reserved exactly one

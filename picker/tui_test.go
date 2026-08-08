@@ -917,3 +917,33 @@ func TestRenderWindowItemsSessionGroupedUnaffected(t *testing.T) {
 		t.Errorf("identity columns misaligned: row0 ENG at %d, row1 ENG at %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
 	}
 }
+
+func TestToggleStateGrouped(t *testing.T) {
+	m := tuiModel{windowMode: true, theme: "dark", tmuxOpts: map[string]string{},
+		visible: []listItem{{isHeader: true, display: "h"}, {target: "s:1", display: "row"}}}
+
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	mm := m2.(tuiModel)
+	if !mm.stateGrouped {
+		t.Fatal("ctrl+g should toggle stateGrouped on")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+g should trigger a data refresh so the new grouping renders")
+	}
+
+	m3, _ := mm.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m3.(tuiModel).stateGrouped {
+		t.Fatal("a second ctrl+g should toggle stateGrouped back off")
+	}
+}
+
+func TestToggleStateGroupedNoopOutsideWindowMode(t *testing.T) {
+	m := tuiModel{windowMode: false, theme: "dark"}
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m2.(tuiModel).stateGrouped {
+		t.Fatal("ctrl+g should be a no-op in session mode (prefix + s)")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+g should not trigger a refresh in session mode")
+	}
+}

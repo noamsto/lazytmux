@@ -514,6 +514,14 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.applyPreviewXOffset()
 
+	case "ctrl+g":
+		if !m.windowMode {
+			return m, nil
+		}
+		m.stateGrouped = !m.stateGrouped
+		m.cursor = m.firstSelectable(0)
+		return m, m.refreshDataCmd()
+
 	case "backspace":
 		if len(m.query) > 0 {
 			runes := []rune(m.query)
