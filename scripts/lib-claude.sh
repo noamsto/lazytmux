@@ -10,6 +10,7 @@ CLAUDE_ISSUES_DIR="$CLAUDE_STATUS_DIR/issues"
 CLAUDE_TASKS_DIR="$CLAUDE_STATUS_DIR/tasks"
 CLAUDE_NAMES_DIR="$CLAUDE_STATUS_DIR/names"
 CLAUDE_INTERRUPT_DIR="$CLAUDE_STATUS_DIR/interrupt"
+CLAUDE_WATCHERS_DIR="$CLAUDE_STATUS_DIR/watchers"
 CLAUDE_SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
@@ -63,7 +64,7 @@ claude_prune_stale_state() {
 	local marker="$CLAUDE_STATUS_DIR/.server_start"
 	[[ -r $marker && $(<"$marker") == "$server_start" ]] && return 0
 	local dir f mt
-	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR" "$CLAUDE_INTERRUPT_DIR"; do
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
 		[[ -d $dir ]] || continue
 		for f in "$dir"/*; do
 			[[ -f $f ]] || continue
