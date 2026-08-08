@@ -6,12 +6,14 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$FAKEBIN"
 
-	# Fake tmux: list-panes reports a codex pane (%3, no pipe) and a fish pane
-	# (%5, no pipe); pipe-pane calls are recorded so we can assert on them.
+	# Fake tmux: list-panes reports a codex pane (%3, no pipe), a fish pane
+	# (%5, no pipe), a nix-wrapped claude pane (%7, no pipe, as makeWrapper
+	# names it on a nix host), and a nix-wrapped non-agent pane (%9, no
+	# pipe); pipe-pane calls are recorded so we can assert on them.
 	cat >"$FAKEBIN/tmux" <<-EOF
 		#!/bin/sh
 		case "\$*" in
-		*"list-panes"*) printf '%%3\tcodex\t0\n%%5\tfish\t0\n' ;;
+		*"list-panes"*) printf '%%3\tcodex\t0\n%%5\tfish\t0\n%%7\t.claude-wrapped\t0\n%%9\t.nvim-wrapped\t0\n' ;;
 		*"pipe-pane"*) echo "\$@" >>"$BATS_TEST_TMPDIR/pipe.log" ;;
 		esac
 	EOF
@@ -35,6 +37,19 @@ setup() {
 	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
 	[ "$status" -eq 0 ]
 	run grep -q '%5' "$BATS_TEST_TMPDIR/pipe.log"
+	[ "$status" -ne 0 ]
+}
+
+@test "arms pipe-pane for a nix-wrapped agent pane (.foo-wrapped)" {
+	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
+	[ "$status" -eq 0 ]
+	grep -q 'pipe-pane.*%7.*agent-detect 7' "$BATS_TEST_TMPDIR/pipe.log"
+}
+
+@test "does not arm a nix-wrapped non-agent pane" {
+	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
+	[ "$status" -eq 0 ]
+	run grep -q '%9' "$BATS_TEST_TMPDIR/pipe.log"
 	[ "$status" -ne 0 ]
 }
 
