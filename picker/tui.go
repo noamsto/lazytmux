@@ -38,6 +38,7 @@ type listItem struct {
 	remoteSess      string // remote bridge row: optional remote session name
 	displayEnd      string // remote session row: display with the closing tree glyph
 	plainEnd        string // remote session row: plain with the closing tree glyph
+	remoteRestore   bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
 }
 
 // pickerMode selects which renderer draws the body. One model, three
@@ -1068,7 +1069,7 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if item.remoteHost != "" {
-		if err := openRemoteBridge(item.remoteHost, item.remoteSess); err != nil {
+		if err := openRemoteBridge(item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
 			m.statusMsg = err.Error()
 			return m, nil
 		}
@@ -1411,7 +1412,7 @@ func (m tuiModel) remoteCmd() tea.Cmd {
 		for _, s := range collectSessions() {
 			local[s.name] = true
 		}
-		return remoteMsg{items: collectRemoteItems(opts, local, nil)}
+		return remoteMsg{items: collectRemoteItems(opts, local, nil, nil)}
 	}
 }
 

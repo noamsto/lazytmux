@@ -642,7 +642,7 @@ func TestRemoteMsgPreservesCursor(t *testing.T) {
 		}
 		return []string{"mono", "other"}, nil
 	}
-	resolved := collectRemoteItems(opts, nil, probe)
+	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	next, _ := m.Update(remoteMsg{items: resolved})
 	nm, ok := next.(tuiModel)
@@ -671,7 +671,7 @@ func TestRemoteMsgPreservesQuery(t *testing.T) {
 	m = m.recombine().withFilter()
 
 	probe := func(string) ([]string, error) { return nil, nil }
-	resolved := collectRemoteItems(opts, nil, probe)
+	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	next, _ := m.Update(remoteMsg{items: resolved})
 	nm, ok := next.(tuiModel)
@@ -696,7 +696,7 @@ func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 	m = m.recombine().withFilter()
 
 	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
-	resolved := collectRemoteItems(opts, nil, probe)
+	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	next, _ := m.Update(remoteMsg{items: resolved})
 	nm, ok := next.(tuiModel)
