@@ -28,6 +28,7 @@ type listItem struct {
 	isZoxideHeader  bool   // the "── New session ──" divider
 	isRemoteHeader  bool   // the "── Remote ──" divider
 	session         string // owning session name (for kill)
+	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
 	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
@@ -446,6 +447,12 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
 			} else {
 				logEvent("picker", "event", "kill_session", "target", item.target)
+				// Must run before kill-session: it reads @bridge_sock off the
+				// still-live session to find the daemon to signal — once the
+				// session is gone, so is the option.
+				if item.bridgeHost != "" {
+					stopBridgeDaemon(item.target)
+				}
 				exec.Command("tmux", "kill-session", "-t", item.target).Run() //nolint:errcheck
 			}
 			return m, m.refreshDataCmd()
@@ -1526,6 +1533,7 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			plain:           plain,
 			searchText:      r.sess.name,
 			session:         r.sess.name,
+			bridgeHost:      r.sess.bridgeHost,
 			hasActiveClaude: isActiveState(claudePriority(r.sess.claude)),
 			isScratch:       strings.HasPrefix(r.sess.name, "scratch-"),
 		})

@@ -55,6 +55,11 @@ setup() {
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>"$TMUX_LOG"
+		case "$*" in
+		has-session*)
+			[ -n "${FAKE_SESSION_GONE:-}" ] && exit 1
+			;;
+		esac
 		exit 0
 	EOF
 
@@ -143,6 +148,24 @@ teardown() {
 	run grep -c new-session "$TMUX_LOG"
 	[ "$status" -ne 0 ]
 	kill -0 "$DAEMON_PID"
+}
+
+@test "live daemon is reaped and the mirror recreated when its session is gone" {
+	touch "$REMOTE_SERVER"
+	export FAKE_SESSION_GONE=1
+	sleep 30 &
+	DAEMON_PID=$!
+	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q -- "--sock $sock ping _" "$CTL_LOG"
+	run kill -0 "$DAEMON_PID"
+	[ "$status" -ne 0 ]
+	grep -q 'new-session -d -s tp-g6-workstation' "$TMUX_LOG"
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }
 
 @test "live incompatible daemon is terminated and replaced" {

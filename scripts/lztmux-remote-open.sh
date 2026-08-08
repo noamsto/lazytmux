@@ -13,6 +13,19 @@ set -euo pipefail
 # mirroring shellQuote in the daemon — remote-derived names must not break out.
 shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
+# reap_daemon SIGTERMs pid, waits up to 2s, then SIGKILLs if it's still
+# alive. Used whenever a live daemon has been proven stale so its socket +
+# pidfile can be safely removed and a fresh one started.
+reap_daemon() {
+	local pid="$1"
+	kill -TERM -- "$pid" 2>/dev/null || true
+	for _ in {1..20}; do
+		kill -0 "$pid" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	kill -KILL -- "$pid" 2>/dev/null || true
+}
+
 host="$1"
 sess="${2:-}"
 win="${3:-}"
@@ -96,25 +109,23 @@ reflow="$(command -v tmux-reflow-windows)"
 # reusing the mirror. ctl bounds the probe at two seconds.
 if remote_daemon_alive "${sock}.pid"; then
 	if probe_error="$(lztmux-remote-bridge-ctl --sock "$sock" ping _ 2>&1)"; then
-		tmux switch-client -t "=$local_sess"
-		exit 0
-	fi
-
+		if tmux has-session -t "=$local_sess" 2>/dev/null; then
+			tmux switch-client -t "=$local_sess"
+			exit 0
+		fi
+		# The daemon is alive and speaks the protocol, but the mirror session it
+		# was serving is gone — killed from the picker, by hand, or a crash.
+		# switch-client above would otherwise fail against a session
+		# that no longer exists, so reap the orphan daemon and fall through to
+		# recreate.
+		daemon_pid="$(<"${sock}.pid")"
+		[[ $daemon_pid =~ ^[0-9]+$ ]] && reap_daemon "$daemon_pid"
 	# A stale pidfile can be recycled by an unrelated process. Only the daemon's
 	# deterministic old-protocol replies establish that the PID owns this socket;
 	# an unreachable socket goes straight to cleanup/recreate without signalling.
-	if [[ $probe_error == *'ctl protocol version "2", this daemon speaks "1" — reopen the bridge'* || $probe_error == *'this bridge daemon does not speak the ctl protocol — reopen the bridge'* ]]; then
+	elif [[ $probe_error == *'ctl protocol version "2", this daemon speaks "1" — reopen the bridge'* || $probe_error == *'this bridge daemon does not speak the ctl protocol — reopen the bridge'* ]]; then
 		daemon_pid="$(<"${sock}.pid")"
-		if [[ $daemon_pid =~ ^[0-9]+$ ]]; then
-			kill -TERM -- "$daemon_pid" 2>/dev/null || true
-			for _ in {1..20}; do
-				kill -0 "$daemon_pid" 2>/dev/null || break
-				sleep 0.1
-			done
-			if kill -0 "$daemon_pid" 2>/dev/null; then
-				kill -KILL -- "$daemon_pid" 2>/dev/null || true
-			fi
-		fi
+		[[ $daemon_pid =~ ^[0-9]+$ ]] && reap_daemon "$daemon_pid"
 	fi
 fi
 # Stale cleanup: a prior daemon was killed (SIGTERM/SIGKILL) without running
