@@ -20,16 +20,16 @@ import (
 
 // listItem is one row in the picker list.
 type listItem struct {
-	target          string // tmux target; "" = unselectable (unless remoteHost set)
-	display         string // ANSI-rendered display line
-	plain           string // display stripped of ANSI (cached for width)
-	searchText      string // filterable text (name, branch — no paths/icons)
-	isHeader        bool   // session header row
-	isZoxideHeader  bool   // the "── New session ──" divider
-	isRemoteHeader  bool   // the "── Remote ──" divider
-	session         string // owning session name (for kill)
-	groupKey        string // window-mode header key this row re-attaches to
-	                       // when filtering: session name, or claude state
+	target         string // tmux target; "" = unselectable (unless remoteHost set)
+	display        string // ANSI-rendered display line
+	plain          string // display stripped of ANSI (cached for width)
+	searchText     string // filterable text (name, branch — no paths/icons)
+	isHeader       bool   // session header row
+	isZoxideHeader bool   // the "── New session ──" divider
+	isRemoteHeader bool   // the "── Remote ──" divider
+	session        string // owning session name (for kill)
+	groupKey       string // window-mode header key this row re-attaches to
+	// when filtering: session name, or claude state
 	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
 	hasActiveClaude bool   // used for --claude filter
 	isScratch       bool   // scratch-* session
@@ -515,7 +515,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.applyPreviewXOffset()
 
 	case "ctrl+g":
-		if !m.windowMode {
+		if !m.windowMode || m.mode == modeWall {
 			return m, nil
 		}
 		m.stateGrouped = !m.stateGrouped

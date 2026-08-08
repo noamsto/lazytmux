@@ -968,3 +968,17 @@ func TestToggleStateGroupedNoopOutsideWindowMode(t *testing.T) {
 		t.Fatal("ctrl+g should not trigger a refresh in session mode")
 	}
 }
+
+func TestToggleStateGroupedNoopInWallMode(t *testing.T) {
+	// windowMode is also true in the tiled wall (prefix + W, --tui --windows
+	// --wall), which has no group headers or hint to explain a reorder — ctrl+g
+	// must stay a no-op there, not just in session mode.
+	m := tuiModel{windowMode: true, mode: modeWall, theme: "dark"}
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m2.(tuiModel).stateGrouped {
+		t.Fatal("ctrl+g should be a no-op in the wall (prefix + W)")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+g should not trigger a refresh in the wall")
+	}
+}
