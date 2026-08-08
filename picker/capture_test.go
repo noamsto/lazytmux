@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -307,5 +308,67 @@ func TestCaptureTargetsNoTargets(t *testing.T) {
 	}
 	if f.calls != 0 {
 		t.Errorf("runner called %d times, want 0", f.calls)
+	}
+}
+
+func TestRelayKeyArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want []string
+		ok   bool
+	}{
+		{"lowercase letter", "a", []string{"-l", "--", "a"}, true},
+		{"digit", "5", []string{"-l", "--", "5"}, true},
+		{"space", " ", []string{"-l", "--", " "}, true},
+		{"punctuation", ";", []string{"-l", "--", ";"}, true},
+		{"enter", "enter", []string{"Enter"}, true},
+		{"escape", "esc", []string{"Escape"}, true},
+		{"backspace", "backspace", []string{"BSpace"}, true},
+		{"left arrow", "left", nil, false},
+		{"up arrow", "up", nil, false},
+		{"ctrl+c", "ctrl+c", nil, false},
+		{"ctrl+a", "ctrl+a", nil, false},
+		{"function key", "f1", nil, false},
+		{"tab", "tab", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args, ok := relayKeyArgs(c.key)
+			if ok != c.ok {
+				t.Fatalf("relayKeyArgs(%q) ok = %v, want %v", c.key, ok, c.ok)
+			}
+			if ok && !slices.Equal(args, c.want) {
+				t.Errorf("relayKeyArgs(%q) = %v, want %v", c.key, args, c.want)
+			}
+		})
+	}
+}
+
+func TestSendKeys(t *testing.T) {
+	f := &fakeCapture{}
+	if err := sendKeys("%3", []string{"Enter"}, f.run); err != nil {
+		t.Fatalf("sendKeys: %v", err)
+	}
+	want := []string{"send-keys", "-t", "%3", "Enter"}
+	if !slices.Equal(f.argv, want) {
+		t.Errorf("argv = %v, want %v", f.argv, want)
+	}
+
+	f = &fakeCapture{}
+	if err := sendKeys("%3", []string{"-l", "--", "q"}, f.run); err != nil {
+		t.Fatalf("sendKeys: %v", err)
+	}
+	want = []string{"send-keys", "-t", "%3", "-l", "--", "q"}
+	if !slices.Equal(f.argv, want) {
+		t.Errorf("argv = %v, want %v", f.argv, want)
+	}
+}
+
+func TestSendKeysPropagatesError(t *testing.T) {
+	wantErr := errors.New("boom")
+	f := &fakeCapture{err: wantErr}
+	if err := sendKeys("%3", []string{"Enter"}, f.run); !errors.Is(err, wantErr) {
+		t.Errorf("sendKeys err = %v, want %v", err, wantErr)
 	}
 }
