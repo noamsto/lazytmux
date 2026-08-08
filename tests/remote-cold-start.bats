@@ -17,6 +17,7 @@ setup() {
 	# Presence of this file is the fake remote's "a tmux server is running".
 	export REMOTE_SERVER="$BATS_TEST_TMPDIR/remote-server"
 	export REMOTE_SESSION="workstation"
+	export RESTORE_MARKER="$BATS_TEST_TMPDIR/restored"
 	: >"$SSH_LOG"
 	: >"$TMUX_LOG"
 	: >"$CTL_LOG"
@@ -30,6 +31,24 @@ setup() {
 		#!/bin/sh
 		echo "$*" >>"$SSH_LOG"
 		case "$*" in
+		*"command -v tmux-remux"*) echo /usr/bin/tmux-remux ;;
+		*"tmux-remux restore"*)
+			if [ -n "${FAKE_RESTORE_FAILS:-}" ]; then
+				echo "restore: boom" >&2
+				exit 1
+			fi
+			if [ -z "${RESTORE_TARGET_MISMATCH:-}" ]; then
+				touch "$RESTORE_MARKER"
+			fi
+			;;
+		*"has-session -t '=workstation'"*)
+			[ -f "$REMOTE_SERVER" ] && exit 0
+			exit 1
+			;;
+		*"has-session -t '=work'"*)
+			[ -f "$RESTORE_MARKER" ] && exit 0
+			exit 1
+			;;
 		*"command -v tmux"*) echo /usr/bin/tmux ;;
 		*"uname -s; id -u"*) printf '%s\n%s\n' "${FAKE_UNAME:-Linux}" 1000 ;;
 		*"systemctl --user start"*)
@@ -250,4 +269,73 @@ teardown() {
 	run grep -cE 'launchctl|systemctl' "$SSH_LOG"
 	[ "$status" -ne 0 ]
 	grep -q 'switch-client -t =mbp-workstation' "$TMUX_LOG"
+}
+
+@test "restore: requested session isn't live -> cold starts, restores, bridges" {
+	export LZTMUX_REMOTE_RESTORE=1
+
+	run bash "$LAUNCHER" tp-g6 work
+	[ "$status" -eq 0 ]
+
+	grep -q 'systemctl --user start tmux-startup.service' "$SSH_LOG"
+	grep -q "has-session -t '=work'" "$SSH_LOG"
+	grep -q 'tmux-remux restore' "$SSH_LOG"
+	# Guards against dropping the PATH= that lets tmux-remux find the bare
+	# `tmux` binary it execs — the fake `command -v tmux` above resolves to
+	# /usr/bin/tmux, so the restore command must carry /usr/bin on PATH.
+	grep -q 'PATH=/usr/bin:.*tmux-remux restore' "$SSH_LOG"
+	grep -q 'new-session -d -s tp-g6-work' "$TMUX_LOG"
+	grep -q 'switch-client -t =tp-g6-work' "$TMUX_LOG"
+}
+
+@test "restore: server already running but session missing -> restores without a cold start" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_RESTORE=1
+
+	run bash "$LAUNCHER" tp-g6 work
+	[ "$status" -eq 0 ]
+
+	run grep -c systemctl "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	grep -q "has-session -t '=work'" "$SSH_LOG"
+	grep -q 'tmux-remux restore' "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-work' "$TMUX_LOG"
+}
+
+@test "restore: tmux-remux restore failing surfaces an error and bridges nothing" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_RESTORE=1
+	export FAKE_RESTORE_FAILS=1
+
+	run bash "$LAUNCHER" tp-g6 work
+	[ "$status" -eq 1 ]
+	[[ $output == *"restore failed"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "restore: session absent even after a successful restore fails loudly" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_RESTORE=1
+	export RESTORE_TARGET_MISMATCH=1
+
+	run bash "$LAUNCHER" tp-g6 work
+	[ "$status" -eq 1 ]
+	[[ $output == *"tmux-remux's restore filter may have skipped it"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "restore: a live session attach with the flag unset is unaffected" {
+	touch "$REMOTE_SERVER"
+	# LZTMUX_REMOTE_RESTORE intentionally unset.
+
+	run bash "$LAUNCHER" tp-g6 workstation
+	[ "$status" -eq 0 ]
+
+	run grep -cE 'has-session|tmux-remux' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }

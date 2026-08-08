@@ -56,18 +56,16 @@ first_remote_session() {
 	ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1"
 }
 
-if [[ -z $sess ]]; then
-	sess="$(first_remote_session)"
-fi
-
-# Nothing to bridge: start the host's OWN startup session rather than inventing
-# a name here — the remote's tmux-startup unit carries its configured session
-# name and directory. Starting it blind is safe: the systemd unit is
-# Type=forking with RemainAfterExit, the launchd agent is RunAtLoad, and both
-# scripts exact-match `has-session` before creating anything. Then re-probe,
-# because unit state is not server state — a live server can sit behind an
-# `inactive` unit (#287).
-if [[ -z $sess ]]; then
+# Starts the host's OWN startup session — the remote's tmux-startup unit
+# carries its configured session name and directory, so nothing is invented
+# here. Starting it blind is safe: the systemd unit is Type=forking with
+# RemainAfterExit, the launchd agent is RunAtLoad, and both scripts
+# exact-match `has-session` before creating anything. Callers must always
+# re-probe with first_remote_session afterwards rather than trust this
+# returning cleanly — unit state is not server state, a live server can sit
+# behind an `inactive` unit (#287). Exits the whole script on failure: a cold
+# start is a fatal precondition for every caller.
+start_remote_server() {
 	if [[ $remote_os == Darwin ]]; then
 		# The launchd agent mirrors tmux-startup.service on macOS; kickstart
 		# runs a RunAtLoad agent on demand.
@@ -81,10 +79,54 @@ if [[ -z $sess ]]; then
 		echo "lztmux-remote-open: $host has no tmux server, and no $start_desc to start one" >&2
 		exit 1
 	fi
+}
+
+if [[ -z $sess ]]; then
+	sess="$(first_remote_session)"
+fi
+
+if [[ -z $sess ]]; then
+	start_remote_server
 	sess="$(first_remote_session)"
 	if [[ -z $sess ]]; then
 		echo "lztmux-remote-open: started $start_desc on $host but no session appeared" >&2
 		exit 1
+	fi
+fi
+
+# The picker's row came from a tmux-remux snapshot, not a live probe (#268):
+# the named session may not exist on the remote yet. Only entered when the
+# caller explicitly asked for a restore — a plain live-session attach (the
+# common case) takes none of these extra round trips.
+if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
+	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+	if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
+		if [[ -z "$(first_remote_session)" ]]; then
+			start_remote_server
+		fi
+		remote_remux="$(ssh "$host" 'command -v tmux-remux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux-remux')"
+		# Bypasses the remote's own restoreMode=off gate (config/tmux.conf.nix's
+		# `restore --auto`) on purpose: the user directly asked for this
+		# session, not merely for the server to start.
+		# tmux-remux shells out to the bare `tmux` binary name (it doesn't know
+		# the store path we just resolved), so it needs that directory on its
+		# PATH — the same non-interactive-ssh-PATH problem $remote_tmux above
+		# already had to work around.
+		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir PATH=$(dirname "$remote_tmux"):\$PATH $remote_remux restore"; then
+			echo "lztmux-remote-open: tmux-remux restore failed on $host" >&2
+			exit 1
+		fi
+		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
+			# tmux-remux restore can exit 0 having restored nothing: its own
+			# smart filter (idle-shells-only sessions, or sessions/snapshots
+			# past its age ceiling) runs regardless of what the picker listed
+			# (see the design doc's "Restore filter mismatch" section) — name
+			# that as the likely cause instead of a bare "not found".
+			echo "lztmux-remote-open: session '$sess' was not restored on $host — tmux-remux's restore filter may have skipped it (idle shells / stale age)" >&2
+			exit 1
+		fi
 	fi
 fi
 
