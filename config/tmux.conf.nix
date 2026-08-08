@@ -76,6 +76,10 @@
   agentUsageEnable ? true,
   agentUsageRefreshSeconds ? 120,
   agentUsageMonthlyThreshold ? 50,
+  # Seconds a pane may go without looking like an agent before a stale agent
+  # state on it is withdrawn instead of faded (0 = off). Baked into lib-claude as
+  # CLAUDE_ASSUME_DEAD_AFTER, which also gates the presence sweep that feeds it.
+  claudeStatusAssumeDeadAfter ? 0,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -167,8 +171,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@ICON_MAP@" "@FALLBACK_ICON@"]
-      [iconMapBash fallbackIcon]
+      ["@ICON_MAP@" "@FALLBACK_ICON@" "@assume_dead_after@"]
+      [iconMapBash fallbackIcon (toString claudeStatusAssumeDeadAfter)]
       raw;
   in
     pkgs.writeShellScript name patched;

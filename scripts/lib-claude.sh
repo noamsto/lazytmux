@@ -11,6 +11,7 @@ CLAUDE_TASKS_DIR="$CLAUDE_STATUS_DIR/tasks"
 CLAUDE_NAMES_DIR="$CLAUDE_STATUS_DIR/names"
 CLAUDE_INTERRUPT_DIR="$CLAUDE_STATUS_DIR/interrupt"
 CLAUDE_WATCHERS_DIR="$CLAUDE_STATUS_DIR/watchers"
+CLAUDE_LIVE_DIR="$CLAUDE_STATUS_DIR/live"
 CLAUDE_SPINNER_FRAMES=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
 CLAUDE_ICON_WAITING="󰔟"
 CLAUDE_ICON_COMPACTING="󰡍"
@@ -50,6 +51,29 @@ CLAUDE_FADE_DURATION=45
 CLAUDE_INTERRUPT_CHECK_AGE=8
 CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 
+# Dead-agent floor. An agent that exits back to a shell leaves its last state
+# behind: claude_prune_stale_state reaps only a previous tmux server's files and
+# claude-status-update reaps only on pane death, so a pane running a plain shell
+# keeps reporting an agent state and merely fades. The presence sweep in
+# tmux-update-icons stamps live/<id> for every pane whose foreground command is
+# an agent, and live/.sweep once that pass completes; read_pane_state withdraws
+# a state that has gone stale on a pane the sweep stopped stamping.
+#
+# Positive evidence only — a *missing* live/<id> never vetoes. Absence is
+# ambiguous (pane never swept, feature just switched on, sweep never ran), while
+# a stamp that has stopped advancing is a live sweep reporting "no agent here".
+# An agent that shells out (Claude does, constantly) only skips a stamp or two,
+# and the veto also needs the state itself stale past its CLAUDE_STALE_* mark.
+#
+# 0 disables both halves; so does an unsubstituted placeholder. The env override
+# is the test seam, same shape as AGENT_DETECT_BIN in tmux-update-icons.
+CLAUDE_ASSUME_DEAD_AFTER="${CLAUDE_ASSUME_DEAD_AFTER:-@assume_dead_after@}"
+[[ $CLAUDE_ASSUME_DEAD_AFTER =~ ^[0-9]+$ ]] || CLAUDE_ASSUME_DEAD_AFTER=0
+# How long .sweep stays fresh, and the floor under the threshold above: three
+# missed sweeps of the 5s cadence. A stale .sweep means nobody is publishing
+# presence (client detached, feature off), which deactivates the veto entirely.
+CLAUDE_LIVE_SWEEP_FRESH=15
+
 # claude_prune_stale_state SERVER_START
 # Drops pane-id-keyed status files left behind by a previous tmux server. tmux
 # restarts pane ids at %0 on server (re)start, so a restored pane can reuse a
@@ -64,7 +88,7 @@ claude_prune_stale_state() {
 	local marker="$CLAUDE_STATUS_DIR/.server_start"
 	[[ -r $marker && $(<"$marker") == "$server_start" ]] && return 0
 	local dir f mt
-	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_ISSUES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_NAMES_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR" "$CLAUDE_LIVE_DIR"; do
 		[[ -d $dir ]] || continue
 		for f in "$dir"/*; do
 			[[ -f $f ]] || continue
@@ -75,6 +99,54 @@ claude_prune_stale_state() {
 	done
 	mkdir -p "$CLAUDE_STATUS_DIR"
 	printf '%s\n' "$server_start" >"$marker"
+}
+
+# claude_live_epoch PATH
+# Sets REPLY to the epoch second a presence stamp holds; returns 1 for anything
+# that isn't one complete decimal line. `read`'s exit status is the completeness
+# check (0 only once it reaches the newline) because the writer truncates in
+# place: a prefix caught mid-write still matches ^[0-9]+$ and reads as decades
+# old, which would fake a dead pane.
+claude_live_epoch() {
+	local line
+	# 2> before <, not after: redirections apply left to right, so a trailing
+	# stderr redirect is not yet in effect when the open fails — an unstamped
+	# pane would log to the tmux server once per tick.
+	IFS= read -r line 2>/dev/null <"$1" || return 1
+	[[ $line =~ ^[0-9]+$ ]] || return 1
+	REPLY=$line
+}
+
+# claude_agent_gone STATE TIMESTAMP PANE_ID
+# True when STATE should be withdrawn because the presence sweep says PANE_ID
+# stopped running an agent (see CLAUDE_ASSUME_DEAD_AFTER above).
+claude_agent_gone() {
+	local state="$1" timestamp="$2" id="$3"
+	[[ -n $timestamp ]] || return 1
+
+	# The screen override's correctable set, and for its reasons: `waiting`/
+	# `error`/`denied` block a human and are hook-only, `interrupted` is pinned
+	# bright on purpose, `idle` has no staleness threshold to be past.
+	local stale_after=0
+	case "$state" in
+	compacting) stale_after=$CLAUDE_STALE_COMPACTING ;;
+	processing) stale_after=$CLAUDE_STALE_PROCESSING ;;
+	done) stale_after=$CLAUDE_STALE_DONE ;;
+	*) return 1 ;;
+	esac
+	((CLAUDE_NOW - timestamp > stale_after)) || return 1
+
+	# Publisher liveness: a stale .sweep means no sweep is running, so no
+	# per-pane stamp can be read as evidence of anything.
+	claude_live_epoch "$CLAUDE_LIVE_DIR/.sweep" || return 1
+	((CLAUDE_NOW - REPLY <= CLAUDE_LIVE_SWEEP_FRESH)) || return 1
+
+	# The floor keeps a misconfigured tiny threshold from vetoing a live agent
+	# in the gap between two sweeps.
+	local dead_after=$CLAUDE_ASSUME_DEAD_AFTER
+	((dead_after < CLAUDE_LIVE_SWEEP_FRESH)) && dead_after=$CLAUDE_LIVE_SWEEP_FRESH
+	claude_live_epoch "$CLAUDE_LIVE_DIR/$id" || return 1
+	((CLAUDE_NOW - REPLY > dead_after))
 }
 
 # read_pane_state PANE_FILE_PATH
@@ -93,7 +165,9 @@ claude_prune_stale_state() {
 # (past its CLAUDE_STALE_* threshold) with no fresher signal of its own. The
 # interrupt reclassifier below only makes sense for a stale *hook* reading
 # with no screen fallback, so it's gated to that path.
-# Returns 1 if neither source has a state.
+# Returns 1 if neither source has a state, or if claude_agent_gone withdraws the
+# one they resolved — a derived verdict, like `interrupted`: nothing on disk is
+# rewritten or deleted.
 read_pane_state() {
 	local pane_file="$1"
 
@@ -180,6 +254,10 @@ read_pane_state() {
 		state="$screen_state"
 		timestamp="$screen_timestamp"
 	else
+		return 1
+	fi
+
+	if ((CLAUDE_ASSUME_DEAD_AFTER > 0)) && claude_agent_gone "$state" "$timestamp" "${pane_file##*/}"; then
 		return 1
 	fi
 
