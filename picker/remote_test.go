@@ -171,7 +171,7 @@ func TestCollectRemoteItemsRestorableSessions(t *testing.T) {
 	// The host row itself stays a plain cold-start row — it carries no
 	// remoteSess/remoteRestore, so activating it takes #287's cold-start path,
 	// not a restore. Only the child row(s) built from restorable sessions
-	// restore; see Task 7.
+	// restore.
 	if !strings.Contains(items[1].plain, "no server") || strings.Contains(items[1].plain, "restores") {
 		t.Errorf("host row must keep the plain no-server note even when restorable rows exist; got %q", items[1].plain)
 	}
