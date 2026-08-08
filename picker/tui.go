@@ -1224,19 +1224,21 @@ func (m tuiModel) withFilter() tuiModel {
 	})
 
 	if m.windowMode {
-		// Re-group under session headers, ordered by best child score
+		// Re-group under headers, ordered by best child score. groupKey is
+		// the session name (session-grouped) or claude state (state-grouped,
+		// #229) — whichever the current render built headers on.
 		headerMap := make(map[string]listItem)
 		for _, item := range m.allItems {
 			if item.isHeader {
-				headerMap[item.session] = item
+				headerMap[item.groupKey] = item
 			}
 		}
 		seen := make(map[string]bool)
 		var out []listItem
 		for _, match := range matches {
-			if !seen[match.item.session] {
-				seen[match.item.session] = true
-				if h, ok := headerMap[match.item.session]; ok {
+			if !seen[match.item.groupKey] {
+				seen[match.item.groupKey] = true
+				if h, ok := headerMap[match.item.groupKey]; ok {
 					out = append(out, h)
 				}
 			}

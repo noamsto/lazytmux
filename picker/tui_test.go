@@ -140,6 +140,27 @@ func TestWithFilterRemoteTree(t *testing.T) {
 	}
 }
 
+func TestWithFilterStateGroupedKeepsGrouping(t *testing.T) {
+	allItems := []listItem{
+		{display: "Waiting", isHeader: true, groupKey: "waiting", searchText: "waiting"},
+		{target: "a:1", session: "a", groupKey: "waiting", searchText: "a alpha"},
+		{display: "Done", isHeader: true, groupKey: "done", searchText: "done"},
+		{target: "b:1", session: "b", groupKey: "done", searchText: "b alpha"},
+	}
+	m := tuiModel{allItems: allItems, windowMode: true, stateGrouped: true, query: "alpha"}
+	out := m.withFilter().visible
+
+	if len(out) != 4 {
+		t.Fatalf("want 2 headers + 2 matching rows, got %d: %+v", len(out), out)
+	}
+	for i := 0; i < len(out); i += 2 {
+		if !out[i].isHeader || out[i].groupKey != out[i+1].groupKey {
+			t.Errorf("row %d is not attached to its own state header: header=%+v row=%+v",
+				i, out[i], out[i+1])
+		}
+	}
+}
+
 func TestFuzzyScore(t *testing.T) {
 	if got := fuzzyScore("lazytmux", ""); got != 0 {
 		t.Errorf("empty pattern = %d, want 0", got)
