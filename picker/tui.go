@@ -1729,6 +1729,90 @@ func identityCapFor(width, leadDW, iconDW, prDW int) int {
 	return identCap
 }
 
+// windowGroup is one header's worth of window rows, in render order. key is
+// either an owning session name (session-grouped mode) or a claude priority
+// state ("" = no agent, state-grouped mode).
+type windowGroup struct {
+	key     string
+	windows []*windowData
+}
+
+// groupWindowsBySession buckets windows under their owning session, ordered
+// by session activity (busiest first) then name — window mode's default
+// grouping, unchanged from before #229.
+func groupWindowsBySession(windows []windowData, sessActivity map[string]int64) []windowGroup {
+	order := []string{}
+	byName := map[string]*windowGroup{}
+	for i := range windows {
+		w := &windows[i]
+		g, ok := byName[w.session]
+		if !ok {
+			g = &windowGroup{key: w.session}
+			byName[w.session] = g
+			order = append(order, w.session)
+		}
+		g.windows = append(g.windows, w)
+	}
+	groups := make([]windowGroup, len(order))
+	for i, name := range order {
+		groups[i] = *byName[name]
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		ai, aj := sessActivity[groups[i].key], sessActivity[groups[j].key]
+		if ai != aj {
+			return ai > aj
+		}
+		return groups[i].key < groups[j].key
+	})
+	for i := range groups {
+		sort.Slice(groups[i].windows, func(a, b int) bool {
+			return groups[i].windows[a].index < groups[i].windows[b].index
+		})
+	}
+	return groups
+}
+
+// groupWindowsByState buckets windows by claude_priority_state, in
+// claudeStateOrder — the same priority the status bar and pane pollers use
+// (#229). Windows with no claude state at all collapse into one trailing
+// group (key ""), never one group per stateless window. Within a group,
+// windows keep session-activity order so the busiest session's windows still
+// lead — the same tiebreak groupWindowsBySession uses.
+func groupWindowsByState(windows []windowData, sessActivity map[string]int64) []windowGroup {
+	byKey := map[string]*windowGroup{}
+	for i := range windows {
+		w := &windows[i]
+		key := claudePriority(w.claude)
+		g, ok := byKey[key]
+		if !ok {
+			g = &windowGroup{key: key}
+			byKey[key] = g
+		}
+		g.windows = append(g.windows, w)
+	}
+	order := append(append([]string{}, claudeStateOrder...), "")
+	groups := make([]windowGroup, 0, len(order))
+	for _, key := range order {
+		if g, ok := byKey[key]; ok {
+			groups = append(groups, *g)
+		}
+	}
+	for i := range groups {
+		gw := groups[i].windows
+		sort.Slice(gw, func(a, b int) bool {
+			wa, wb := gw[a], gw[b]
+			if sessActivity[wa.session] != sessActivity[wb.session] {
+				return sessActivity[wa.session] > sessActivity[wb.session]
+			}
+			if wa.session != wb.session {
+				return wa.session < wb.session
+			}
+			return wa.index < wb.index
+		})
+	}
+	return groups
+}
+
 // renderWindowItems is the pure rendering half of buildWindowItems, split out so
 // the enriched row layout can be unit-tested with synthetic windows. width is
 // the list width in cells (0 = unknown → default identity cap).

@@ -737,3 +737,66 @@ func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
 		})
 	}
 }
+
+func TestGroupWindowsBySessionUnchanged(t *testing.T) {
+	windows := []windowData{
+		{session: "busy", index: 2},
+		{session: "busy", index: 1},
+		{session: "quiet", index: 1},
+	}
+	activity := map[string]int64{"busy": 100, "quiet": 1}
+	groups := groupWindowsBySession(windows, activity)
+
+	if len(groups) != 2 || groups[0].key != "busy" || groups[1].key != "quiet" {
+		t.Fatalf("groups = %+v, want busy then quiet (by activity)", groups)
+	}
+	if groups[0].windows[0].index != 1 || groups[0].windows[1].index != 2 {
+		t.Fatalf("windows within a session should stay index-ordered, got %+v", groups[0].windows)
+	}
+}
+
+func TestGroupWindowsByStatePriorityOrder(t *testing.T) {
+	windows := []windowData{
+		{session: "a", index: 1, claude: claudeCounts{done: 1}},
+		{session: "b", index: 1, claude: claudeCounts{errorCnt: 1}},
+		{session: "c", index: 1}, // no claude state
+		{session: "d", index: 1, claude: claudeCounts{waiting: 1}},
+		{session: "e", index: 1}, // no claude state
+	}
+	groups := groupWindowsByState(windows, map[string]int64{})
+
+	var gotKeys []string
+	for _, g := range groups {
+		gotKeys = append(gotKeys, g.key)
+	}
+	wantKeys := []string{"error", "waiting", "done", ""}
+	if len(gotKeys) != len(wantKeys) {
+		t.Fatalf("group keys = %v, want %v", gotKeys, wantKeys)
+	}
+	for i, k := range wantKeys {
+		if gotKeys[i] != k {
+			t.Errorf("group %d key = %q, want %q (full: %v)", i, gotKeys[i], k, gotKeys)
+		}
+	}
+
+	// Stateless windows collapse into exactly one trailing group, not one
+	// group per window.
+	last := groups[len(groups)-1]
+	if last.key != "" || len(last.windows) != 2 {
+		t.Fatalf("trailing group = key %q with %d windows, want key \"\" with 2 windows",
+			last.key, len(last.windows))
+	}
+}
+
+func TestGroupWindowsByStateEmptyGroupsOmitted(t *testing.T) {
+	// Only "processing" and "" are present — every other state in
+	// claudeStateOrder must be absent from the output, not present-but-empty.
+	windows := []windowData{
+		{session: "a", index: 1, claude: claudeCounts{processing: 1}},
+		{session: "b", index: 1},
+	}
+	groups := groupWindowsByState(windows, map[string]int64{})
+	if len(groups) != 2 {
+		t.Fatalf("want 2 groups (processing, no-agent), got %d: %+v", len(groups), groups)
+	}
+}
