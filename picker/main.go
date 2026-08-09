@@ -751,27 +751,49 @@ func mergeClaudeWindows(windows []windowData, claude map[string]*claudeCounts) {
 	}
 }
 
+// claudeStateOrder mirrors lib-claude.sh's claude_priority_state, minus
+// "interrupted" — a shell-only state derived from a transcript-tail scrape
+// the Go picker never does (see CLAUDE.md's Remote Agent Status section).
+// Single source of truth for both claudePriority (per-window state) and
+// window mode's state-grouped header order (#229) — a second, hand-copied
+// list here would silently diverge from this one.
+var claudeStateOrder = []string{
+	"error", "waiting", "denied", "compacting", "processing", "done", "idle",
+}
+
+// claudeStateLabel is the header text for each state in window mode's
+// state-grouped view; "" (no claude state at all) is the trailing group.
+var claudeStateLabel = map[string]string{
+	"error": "Error", "waiting": "Waiting", "denied": "Denied",
+	"compacting": "Compacting", "processing": "Processing", "done": "Done",
+	"idle": "Idle", "": "No agent",
+}
+
+func claudeStateCount(c claudeCounts, state string) int {
+	switch state {
+	case "error":
+		return c.errorCnt
+	case "waiting":
+		return c.waiting
+	case "denied":
+		return c.denied
+	case "compacting":
+		return c.compacting
+	case "processing":
+		return c.processing
+	case "done":
+		return c.done
+	case "idle":
+		return c.idle
+	}
+	return 0
+}
+
 func claudePriority(c claudeCounts) string {
-	if c.errorCnt > 0 {
-		return "error"
-	}
-	if c.waiting > 0 {
-		return "waiting"
-	}
-	if c.denied > 0 {
-		return "denied"
-	}
-	if c.compacting > 0 {
-		return "compacting"
-	}
-	if c.processing > 0 {
-		return "processing"
-	}
-	if c.done > 0 {
-		return "done"
-	}
-	if c.idle > 0 {
-		return "idle"
+	for _, state := range claudeStateOrder {
+		if claudeStateCount(c, state) > 0 {
+			return state
+		}
 	}
 	return ""
 }

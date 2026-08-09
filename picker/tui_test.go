@@ -140,6 +140,27 @@ func TestWithFilterRemoteTree(t *testing.T) {
 	}
 }
 
+func TestWithFilterStateGroupedKeepsGrouping(t *testing.T) {
+	allItems := []listItem{
+		{display: "Waiting", isHeader: true, groupKey: "waiting", searchText: "waiting"},
+		{target: "a:1", session: "a", groupKey: "waiting", searchText: "a alpha"},
+		{display: "Done", isHeader: true, groupKey: "done", searchText: "done"},
+		{target: "b:1", session: "b", groupKey: "done", searchText: "b alpha"},
+	}
+	m := tuiModel{allItems: allItems, windowMode: true, stateGrouped: true, query: "alpha"}
+	out := m.withFilter().visible
+
+	if len(out) != 4 {
+		t.Fatalf("want 2 headers + 2 matching rows, got %d: %+v", len(out), out)
+	}
+	for i := 0; i < len(out); i += 2 {
+		if !out[i].isHeader || out[i].groupKey != out[i+1].groupKey {
+			t.Errorf("row %d is not attached to its own state header: header=%+v row=%+v",
+				i, out[i], out[i+1])
+		}
+	}
+}
+
 func TestFuzzyScore(t *testing.T) {
 	if got := fuzzyScore("lazytmux", ""); got != 0 {
 		t.Errorf("empty pattern = %d, want 0", got)
@@ -259,7 +280,7 @@ func TestRenderWindowItemsAlignment(t *testing.T) {
 		{session: "s", index: 1, name: "a", labelID: "L ENG-1", labelRest: " first"},
 		{session: "s", index: 2, name: "b", labelID: "L ENG-2", labelRest: " second", crewName: "rust", crewColor: "colour210"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
 	var rows []string
 	for _, it := range items {
 		if !it.isHeader {
@@ -287,7 +308,7 @@ func TestRenderWindowItemsLayout(t *testing.T) {
 			labelID: "L ENG-7290", labelRest: " fix and lock it confirmation modal",
 			crewName: "rust", crewColor: "colour210"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
 
 	var plains []string
 	for _, it := range items {
@@ -328,7 +349,7 @@ func TestRenderWindowItemsLongIDClamped(t *testing.T) {
 	windows := []windowData{
 		{session: "s", index: 1, name: "x", labelID: "L PROJECT-123456", labelRest: " some title"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 20)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 20, false)
 	var row string
 	for _, it := range items {
 		if !it.isHeader {
@@ -349,7 +370,7 @@ func TestRenderWindowItemsBridgeName(t *testing.T) {
 	windows := []windowData{
 		{session: "s", index: 1, name: "noams", bridgeName: "ZULU"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
 	var row string
 	for _, it := range items {
 		if !it.isHeader {
@@ -372,7 +393,7 @@ func TestRenderWindowItemsBridgeNameOutrankedByIssueAndBranch(t *testing.T) {
 		{session: "s", index: 1, name: "noams", bridgeName: "ZULU", labelID: "L ENG-1", labelRest: " title"},
 		{session: "s", index: 2, name: "other", bridgeName: "ZULU", branch: "feat/foo"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
 	var rows []string
 	for _, it := range items {
 		if !it.isHeader {
@@ -541,7 +562,7 @@ func TestRenderWindowItemsZoomAligned(t *testing.T) {
 		{session: "s", index: 2, name: "b", labelID: longID, labelRest: " two", zoomed: true,
 			prPlain: " #20", prState: "open", prCheck: "success"},
 	}
-	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 100)
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 100, false)
 	var rows []string
 	for _, it := range items {
 		if !it.isHeader {
@@ -735,5 +756,229 @@ func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
 				t.Errorf("got %d pending remote rows, want 2 (visible: %+v)", remotes, out)
 			}
 		})
+	}
+}
+
+func TestGroupWindowsBySessionUnchanged(t *testing.T) {
+	windows := []windowData{
+		{session: "busy", index: 2},
+		{session: "busy", index: 1},
+		{session: "quiet", index: 1},
+	}
+	activity := map[string]int64{"busy": 100, "quiet": 1}
+	groups := groupWindowsBySession(windows, activity)
+
+	if len(groups) != 2 || groups[0].key != "busy" || groups[1].key != "quiet" {
+		t.Fatalf("groups = %+v, want busy then quiet (by activity)", groups)
+	}
+	if groups[0].windows[0].index != 1 || groups[0].windows[1].index != 2 {
+		t.Fatalf("windows within a session should stay index-ordered, got %+v", groups[0].windows)
+	}
+}
+
+func TestGroupWindowsByStatePriorityOrder(t *testing.T) {
+	windows := []windowData{
+		{session: "a", index: 1, claude: claudeCounts{done: 1}},
+		{session: "b", index: 1, claude: claudeCounts{errorCnt: 1}},
+		{session: "c", index: 1}, // no claude state
+		{session: "d", index: 1, claude: claudeCounts{waiting: 1}},
+		{session: "e", index: 1}, // no claude state
+	}
+	groups := groupWindowsByState(windows, map[string]int64{})
+
+	var gotKeys []string
+	for _, g := range groups {
+		gotKeys = append(gotKeys, g.key)
+	}
+	wantKeys := []string{"error", "waiting", "done", ""}
+	if len(gotKeys) != len(wantKeys) {
+		t.Fatalf("group keys = %v, want %v", gotKeys, wantKeys)
+	}
+	for i, k := range wantKeys {
+		if gotKeys[i] != k {
+			t.Errorf("group %d key = %q, want %q (full: %v)", i, gotKeys[i], k, gotKeys)
+		}
+	}
+
+	// Stateless windows collapse into exactly one trailing group, not one
+	// group per window.
+	last := groups[len(groups)-1]
+	if last.key != "" || len(last.windows) != 2 {
+		t.Fatalf("trailing group = key %q with %d windows, want key \"\" with 2 windows",
+			last.key, len(last.windows))
+	}
+}
+
+func TestGroupWindowsByStateEmptyGroupsOmitted(t *testing.T) {
+	// Only "processing" and "" are present — every other state in
+	// claudeStateOrder must be absent from the output, not present-but-empty.
+	windows := []windowData{
+		{session: "a", index: 1, claude: claudeCounts{processing: 1}},
+		{session: "b", index: 1},
+	}
+	groups := groupWindowsByState(windows, map[string]int64{})
+	if len(groups) != 2 {
+		t.Fatalf("want 2 groups (processing, no-agent), got %d: %+v", len(groups), groups)
+	}
+}
+
+func TestRenderWindowItemsStateGroupedHeaderOrder(t *testing.T) {
+	windows := []windowData{
+		{session: "a", index: 1, name: "a"},
+		{session: "b", index: 1, name: "b"},
+		{session: "c", index: 1, name: "c", claude: claudeCounts{errorCnt: 1}},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, true)
+
+	var headerKeys []string
+	for _, it := range items {
+		if it.isHeader {
+			headerKeys = append(headerKeys, it.groupKey)
+		}
+	}
+	if len(headerKeys) != 2 || headerKeys[0] != "error" || headerKeys[1] != "" {
+		t.Fatalf("headers = %v, want [error \"\"] (error first, one trailing no-agent group)", headerKeys)
+	}
+}
+
+func TestRenderWindowItemsStateGroupedFoldsSession(t *testing.T) {
+	// Identities deliberately differ from their session names — if folding
+	// were silently skipped, the row's plain text would never contain
+	// "alpha"/"beta" at all, so this fixture can actually fail.
+	windows := []windowData{
+		{session: "alpha", index: 1, name: "win-one", claude: claudeCounts{waiting: 1}},
+		{session: "beta", index: 1, name: "win-two", claude: claudeCounts{done: 1}},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, true)
+
+	var rows []listItem
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(rows))
+	}
+	if !strings.Contains(rows[0].plain, "alpha / win-one") {
+		t.Errorf("waiting row should fold the session name into its identity; got %q", rows[0].plain)
+	}
+	if !strings.Contains(rows[1].plain, "beta / win-two") {
+		t.Errorf("done row should fold the session name into its identity; got %q", rows[1].plain)
+	}
+
+	// Negative control: the same fixtures session-grouped must NOT fold the
+	// session into the row — it already has a header for that job.
+	sessionGrouped := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
+	var sgRows []listItem
+	for _, it := range sessionGrouped {
+		if !it.isHeader {
+			sgRows = append(sgRows, it)
+		}
+	}
+	if len(sgRows) != 2 {
+		t.Fatalf("want 2 session-grouped rows, got %d", len(sgRows))
+	}
+	if strings.Contains(sgRows[0].plain, "alpha") || strings.Contains(sgRows[1].plain, "beta") {
+		t.Errorf("session-grouped rows should not carry the session name (it's in the header); got %q, %q",
+			sgRows[0].plain, sgRows[1].plain)
+	}
+}
+
+func TestRenderWindowItemsStateGroupedRespectsColumnBudget(t *testing.T) {
+	// A long session name must not push the row wider than the shared
+	// labelCol budget every other row (session-grouped or not) is aligned to.
+	windows := []windowData{
+		{session: "a-very-long-worktree-session-name-indeed", index: 1, name: "x",
+			claude: claudeCounts{waiting: 1}, labelID: "L PROJECT-123456", labelRest: " a fairly long issue title here"},
+	}
+	narrow := renderWindowItems(windows, map[string]string{}, nil, "dark", 40, true)
+	wide := renderWindowItems(windows, map[string]string{}, nil, "dark", 40, false)
+
+	var narrowRow, wideRow listItem
+	for _, it := range narrow {
+		if !it.isHeader {
+			narrowRow = it
+		}
+	}
+	for _, it := range wide {
+		if !it.isHeader {
+			wideRow = it
+		}
+	}
+	// Same width input -> same identityCap -> same overall label column width,
+	// regardless of grouping mode (folding carves the session name OUT of the
+	// budget, never adds to it).
+	if visibleWidth(narrowRow.plain) != visibleWidth(wideRow.plain) {
+		t.Errorf("state-grouped row width %d != session-grouped row width %d at the same terminal width\nstate: %q\nsession: %q",
+			visibleWidth(narrowRow.plain), visibleWidth(wideRow.plain), narrowRow.plain, wideRow.plain)
+	}
+}
+
+func TestRenderWindowItemsSessionGroupedUnaffected(t *testing.T) {
+	// Passing stateGrouped=false must reproduce exactly today's output —
+	// this is the regression net for the Pass A/B rewrite.
+	windows := []windowData{
+		{session: "s", index: 1, name: "a", labelID: "L ENG-1", labelRest: " first"},
+		{session: "s", index: 2, name: "b", labelID: "L ENG-2", labelRest: " second", crewName: "rust", crewColor: "colour210"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
+	var rows []string
+	for _, it := range items {
+		if !it.isHeader {
+			rows = append(rows, it.plain)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 window rows, got %d", len(rows))
+	}
+	col0 := strings.Index(rows[0], "ENG-1")
+	col1 := strings.Index(rows[1], "ENG-2")
+	if col0 <= 0 || col0 != col1 {
+		t.Errorf("identity columns misaligned: row0 ENG at %d, row1 ENG at %d\nrow0=%q\nrow1=%q", col0, col1, rows[0], rows[1])
+	}
+}
+
+func TestToggleStateGrouped(t *testing.T) {
+	m := tuiModel{windowMode: true, theme: "dark", tmuxOpts: map[string]string{},
+		visible: []listItem{{isHeader: true, display: "h"}, {target: "s:1", display: "row"}}}
+
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	mm := m2.(tuiModel)
+	if !mm.stateGrouped {
+		t.Fatal("ctrl+g should toggle stateGrouped on")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+g should trigger a data refresh so the new grouping renders")
+	}
+
+	m3, _ := mm.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m3.(tuiModel).stateGrouped {
+		t.Fatal("a second ctrl+g should toggle stateGrouped back off")
+	}
+}
+
+func TestToggleStateGroupedNoopOutsideWindowMode(t *testing.T) {
+	m := tuiModel{windowMode: false, theme: "dark"}
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m2.(tuiModel).stateGrouped {
+		t.Fatal("ctrl+g should be a no-op in session mode (prefix + s)")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+g should not trigger a refresh in session mode")
+	}
+}
+
+func TestToggleStateGroupedNoopInWallMode(t *testing.T) {
+	// windowMode is also true in the tiled wall (prefix + W, --tui --windows
+	// --wall), which has no group headers or hint to explain a reorder — ctrl+g
+	// must stay a no-op there, not just in session mode.
+	m := tuiModel{windowMode: true, mode: modeWall, theme: "dark"}
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m2.(tuiModel).stateGrouped {
+		t.Fatal("ctrl+g should be a no-op in the wall (prefix + W)")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+g should not trigger a refresh in the wall")
 	}
 }
