@@ -63,7 +63,8 @@ setup() {
 		exit 0
 	EOF
 
-	# The launcher resolves these with `command -v` and hands them to the daemon.
+	# The launcher's PATH fallback for an unsubstituted placeholder. The shipped
+	# script takes the pinned store paths instead — see the pinning case below.
 	for stub in lztmux-remote-bridge-renderer tmux-reflow-windows lztmux-remote-bridge-daemon; do
 		printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/$stub"
 	done
@@ -183,6 +184,64 @@ teardown() {
 	grep -q 'new-session -d -s tp-g6-workstation' "$TMUX_LOG"
 	run kill -0 "$DAEMON_PID"
 	[ "$status" -ne 0 ]
+}
+
+@test "substituted bridge binaries win over the ones on PATH" {
+	touch "$REMOTE_SERVER"
+
+	# Pinned copies stand in for the store paths Nix substitutes. The PATH stubs
+	# from setup() stay in place and are what a stale tmux server would reach —
+	# the launcher must not touch them (#336).
+	local pinned="$BATS_TEST_TMPDIR/pinned"
+	mkdir -p "$pinned"
+	export PINNED_CTL_LOG="$BATS_TEST_TMPDIR/pinned-ctl.log"
+	export PINNED_DAEMON_ENV="$BATS_TEST_TMPDIR/pinned-daemon.env"
+	cat >"$pinned/ctl" <<-'EOF'
+		#!/bin/sh
+		echo "$*" >>"$PINNED_CTL_LOG"
+		exit 1
+	EOF
+	cat >"$pinned/daemon" <<-'EOF'
+		#!/bin/sh
+		printf '%s\n%s\n' "$LZTMUX_DAEMON_RENDERER" "$LZTMUX_DAEMON_REFLOW" >"$PINNED_DAEMON_ENV"
+	EOF
+	printf '#!/bin/sh\nexit 0\n' >"$pinned/renderer"
+	printf '#!/bin/sh\nexit 0\n' >"$pinned/reflow"
+	chmod +x "$pinned"/*
+
+	# Same substitution Nix does at build time, for all five placeholders.
+	local launcher="$BATS_TEST_TMPDIR/lztmux-remote-open-pinned"
+	sed -e "s|@lib_remote@|$PWD/scripts/lib-remote.sh|g" \
+		-e "s|@bridge_ctl@|$pinned/ctl|g" \
+		-e "s|@bridge_daemon@|$pinned/daemon|g" \
+		-e "s|@bridge_renderer@|$pinned/renderer|g" \
+		-e "s|@reflow@|$pinned/reflow|g" \
+		scripts/lztmux-remote-open.sh >"$launcher"
+
+	# A live pid forces the probe; the pinned ctl fails it, so the launcher also
+	# has to reach the recreate path with the pinned daemon.
+	sleep 30 &
+	DAEMON_PID=$!
+	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
+
+	run bash "$launcher" tp-g6
+	[ "$status" -eq 0 ]
+
+	# The probe went to the pinned ctl, and the PATH one was never consulted.
+	grep -q -- "--sock $sock ping _" "$PINNED_CTL_LOG"
+	[ ! -s "$CTL_LOG" ]
+
+	# The daemon the launcher spawned is the pinned one, and the renderer/reflow
+	# it was handed are pinned too — those are what mirror panes respawn into.
+	local waited=0
+	while [[ ! -s $PINNED_DAEMON_ENV && $waited -lt 50 ]]; do
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	run cat "$PINNED_DAEMON_ENV"
+	[ "${lines[0]}" = "$pinned/renderer" ]
+	[ "${lines[1]}" = "$pinned/reflow" ]
 }
 
 @test "unreachable bridge socket never signals a recycled live pid" {

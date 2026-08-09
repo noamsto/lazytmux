@@ -283,6 +283,8 @@
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
   picker-bridge-ctl-bin = "${picker-generate}/bin/lztmux-remote-bridge-ctl";
+  picker-bridge-daemon-bin = "${picker-generate}/bin/lztmux-remote-bridge-daemon";
+  picker-bridge-renderer-bin = "${picker-generate}/bin/lztmux-remote-bridge-renderer";
 
   # === Remote bridge: structural input gate (M2.3) ===
   # Inside a mirror window a structural gesture must act on the REMOTE, not on
@@ -440,11 +442,24 @@
       (builtins.readFile ../scripts/${name}.sh)
     );
 
-  # Scripts that source lib-remote get its store path substituted
+  # Scripts that source lib-remote get its store path substituted, plus the
+  # bridge binaries the launcher probes and spawns. Those are pinned for the
+  # same reason as @reflow@ above: the launcher runs from the tmux server, whose
+  # PATH is frozen until a restart, while the keybinds that reach the daemon
+  # repoint on a config reload — a bare name straddled the two and stranded a
+  # daemon speaking an older ctl protocol than the ctl probing it (#336).
   scriptsWithRemote = ["lztmux-remote-open"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
-      builtins.replaceStrings ["@lib_remote@"] ["${lib-remote}"]
+      builtins.replaceStrings
+      ["@lib_remote@" "@bridge_ctl@" "@bridge_daemon@" "@bridge_renderer@" "@reflow@"]
+      [
+        "${lib-remote}"
+        picker-bridge-ctl-bin
+        picker-bridge-daemon-bin
+        picker-bridge-renderer-bin
+        "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+      ]
       (builtins.readFile ../scripts/${name}.sh)
     );
 

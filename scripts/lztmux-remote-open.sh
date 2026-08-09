@@ -99,16 +99,26 @@ local_sess="${host}-${sess}"
 sock_dir="${TMUX_TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
 sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
 sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
-# Absolute store path: pane PATH is stale until server restart, and the daemon
-# respawns panes into this binary, so resolve it now on the (fresh) caller PATH.
-renderer="$(command -v lztmux-remote-bridge-renderer)"
-reflow="$(command -v tmux-reflow-windows)"
+# Store paths, substituted at build time. This script runs from the tmux server,
+# whose PATH is frozen until a server restart, while the keybinds that reach the
+# daemon repoint on a config reload alone — resolving these by bare name
+# straddled the two generations and left a daemon speaking an older ctl protocol
+# than the ctl probing it, which also silenced the mismatch branch below (#336).
+# Unsubstituted placeholders keep their leading '@' and fall back to PATH (bats).
+ctl="@bridge_ctl@"
+daemon="@bridge_daemon@"
+renderer="@bridge_renderer@"
+reflow="@reflow@"
+[[ $ctl == @* ]] && ctl="$(command -v lztmux-remote-bridge-ctl)"
+[[ $daemon == @* ]] && daemon="$(command -v lztmux-remote-bridge-daemon)"
+[[ $renderer == @* ]] && renderer="$(command -v lztmux-remote-bridge-renderer)"
+[[ $reflow == @* ]] && reflow="$(command -v tmux-reflow-windows)"
 
 # Dedup: a live pid alone is not enough. A config reload can leave a daemon
 # that speaks an older ctl protocol behind, so prove its compatibility before
 # reusing the mirror. ctl bounds the probe at two seconds.
 if remote_daemon_alive "${sock}.pid"; then
-	if probe_error="$(lztmux-remote-bridge-ctl --sock "$sock" ping _ 2>&1)"; then
+	if probe_error="$("$ctl" --sock "$sock" ping _ 2>&1)"; then
 		if tmux has-session -t "=$local_sess" 2>/dev/null; then
 			tmux switch-client -t "=$local_sess"
 			exit 0
@@ -171,10 +181,10 @@ export LZTMUX_BRIDGE_TERM="$term"
 # window's command — it respawns the local panes into renderers. setsid is
 # Linux-only (not on macOS base), so fall back to plain backgrounding + disown
 # where it's unavailable; either way the daemon is fully detached from this shell.
-if command -v setsid >/dev/null 2>&1; then                       # portable-ok: guard, verified fallback below
-	setsid lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" & # portable-ok: guarded above; else branch is the verified macOS fallback
+if command -v setsid >/dev/null 2>&1; then     # portable-ok: guard, verified fallback below
+	setsid "$daemon" >/dev/null 2>"${sock}.log" & # portable-ok: guarded above; else branch is the verified macOS fallback
 else
-	nohup lztmux-remote-bridge-daemon >/dev/null 2>"${sock}.log" &
+	nohup "$daemon" >/dev/null 2>"${sock}.log" &
 	disown
 fi
 
