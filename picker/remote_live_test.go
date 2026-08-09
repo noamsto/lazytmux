@@ -40,3 +40,19 @@ func TestSSHListRemoteSessionsLive(t *testing.T) {
 	}
 	t.Logf("sessions: %s", strings.Join(names, ", "))
 }
+
+// Live check: real sshListRestorableSessions against a host with tmux-remux
+// installed and at least one snapshot on disk (no tmux server required).
+// Run: LIVE_REMOTE_RESTORE=tp-g6 go test -count=1 -run TestSSHListRestorableSessionsLive .
+func TestSSHListRestorableSessionsLive(t *testing.T) {
+	host := os.Getenv("LIVE_REMOTE_RESTORE")
+	if host == "" {
+		t.Skip("set LIVE_REMOTE_RESTORE=<ssh-host> (must have tmux-remux + a snapshot, no live server)")
+	}
+
+	m, err := sshListRestorableSessions(host)
+	if err != nil {
+		t.Fatalf("sshListRestorableSessions(%q): %v", host, err)
+	}
+	t.Logf("host=%q saved_at=%d sessions=%v", m.Host, m.SavedAt, m.Sessions)
+}

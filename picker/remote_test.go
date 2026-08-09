@@ -6,7 +6,16 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
+
+// noRestore is a stub restoreProbe for tests that don't exercise the
+// tmux-remux-snapshot listing. Every collectRemoteItems call needs an
+// explicit one — passing nil would fall back to the real ssh implementation
+// and either hang or flake in CI.
+func noRestore(string) (remuxManifest, error) {
+	return remuxManifest{}, errors.New("no snapshot")
+}
 
 func TestParseRemoteHosts(t *testing.T) {
 	got := parseRemoteHosts("  tp-g6   lab\ttp-g6 ")
@@ -70,7 +79,7 @@ func TestCollectRemoteItems(t *testing.T) {
 	}
 	local := map[string]bool{"lab-mono": true}
 
-	items := collectRemoteItems(opts, local, probe)
+	items := collectRemoteItems(opts, local, probe, noRestore)
 	if len(items) != 4 {
 		t.Fatalf("expected header + lab + lab's other + dead, got %d: %+v", len(items), items)
 	}
@@ -106,7 +115,7 @@ func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
 	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
 
-	items := collectRemoteItems(opts, nil, probe)
+	items := collectRemoteItems(opts, nil, probe, noRestore)
 	if len(items) != 2 {
 		t.Fatalf("expected header + one row, got %d: %+v", len(items), items)
 	}
@@ -125,6 +134,59 @@ func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 	}
 	if row.searchText != "tp-g6" {
 		t.Errorf("row should still be searchable by host; got %q", row.searchText)
+	}
+}
+
+func TestCollectRemoteItemsRestorableSessions(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
+	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
+	savedAt := time.Now().Add(-2 * time.Hour).UnixMilli()
+	restoreProbe := func(host string) (remuxManifest, error) {
+		if host != "tp-g6" {
+			return remuxManifest{}, errors.New("wrong host")
+		}
+		return remuxManifest{
+			Host:    "tp-g6",
+			SavedAt: savedAt,
+			Sessions: []remuxManifestSession{
+				{Name: "work", LastAttached: 123},
+			},
+		}, nil
+	}
+
+	items := collectRemoteItems(opts, nil, probe, restoreProbe)
+	if len(items) != 3 {
+		t.Fatalf("expected header + host row + one restorable row, got %d: %+v", len(items), items)
+	}
+	row := items[2]
+	if row.remoteHost != "tp-g6" || row.remoteSess != "work" {
+		t.Fatalf("got %+v", row)
+	}
+	if !row.remoteRestore {
+		t.Errorf("row must be flagged remoteRestore so activation knows to restore first")
+	}
+	if !strings.Contains(row.plain, "ago") {
+		t.Errorf("row should surface snapshot age; got %q", row.plain)
+	}
+	// The host row itself stays a plain cold-start row — it carries no
+	// remoteSess/remoteRestore, so activating it takes #287's cold-start path,
+	// not a restore. Only the child row(s) built from restorable sessions
+	// restore.
+	if !strings.Contains(items[1].plain, "no server") || strings.Contains(items[1].plain, "restores") {
+		t.Errorf("host row must keep the plain no-server note even when restorable rows exist; got %q", items[1].plain)
+	}
+}
+
+func TestCollectRemoteItemsNoServerRowUnchangedWhenNoManifest(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
+	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if len(items) != 2 {
+		t.Fatalf("expected header + bare host row, got %d: %+v", len(items), items)
+	}
+	if !strings.Contains(items[1].plain, "no server") || strings.Contains(items[1].plain, "restores") {
+		t.Errorf("host row should keep the plain no-server note; got %q", items[1].plain)
 	}
 }
 
@@ -177,7 +239,7 @@ func TestCollectRemoteItemsAllBridged(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
 
-	items := collectRemoteItems(opts, map[string]bool{"lab-mono": true}, probe)
+	items := collectRemoteItems(opts, map[string]bool{"lab-mono": true}, probe, noRestore)
 	if len(items) != 2 {
 		t.Fatalf("expected header + lab host row, got %d: %+v", len(items), items)
 	}
@@ -190,7 +252,7 @@ func TestCollectRemoteItemsAllBridged(t *testing.T) {
 }
 
 func TestCollectRemoteItemsEmptyHosts(t *testing.T) {
-	if items := collectRemoteItems(nil, nil, nil); items != nil {
+	if items := collectRemoteItems(nil, nil, nil, nil); items != nil {
 		t.Fatalf("no hosts => nil, got %v", items)
 	}
 }
@@ -300,7 +362,7 @@ func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 		}
 		return nil, nil // lab: reachable, nothing new to show
 	}
-	resolved := collectRemoteItems(opts, nil, probe)
+	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	if len(pending) != len(resolved) {
 		t.Fatalf("row count changed: pending=%d resolved=%d", len(pending), len(resolved))
@@ -309,5 +371,117 @@ func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 		if pending[i].remoteHost != resolved[i].remoteHost || pending[i].remoteSess != resolved[i].remoteSess {
 			t.Errorf("row %d identity changed: pending=%+v resolved=%+v", i, pending[i], resolved[i])
 		}
+	}
+}
+
+func TestNewestSnapshotManifest(t *testing.T) {
+	ndjson := strings.Join([]string{
+		`{"Ts":100,"Kind":"snapshot","ManifestJSON":"{\"host\":\"tp-g6\",\"saved_at\":100,\"sessions\":[{\"name\":\"old\",\"last_attached\":5}]}"}`,
+		`{"Ts":200,"Kind":"close","ManifestJSON":"{}"}`,
+		`{"Ts":300,"Kind":"snapshot","ManifestJSON":"{\"host\":\"tp-g6\",\"saved_at\":300,\"sessions\":[{\"name\":\"work\",\"last_attached\":10}]}"}`,
+	}, "\n")
+
+	m, ok := newestSnapshotManifest(ndjson)
+	if !ok {
+		t.Fatal("expected a snapshot")
+	}
+	if m.SavedAt != 300 || len(m.Sessions) != 1 || m.Sessions[0].Name != "work" {
+		t.Fatalf("got %+v, want the newer (Ts=300) snapshot's manifest", m)
+	}
+}
+
+func TestNewestSnapshotManifestNoneFound(t *testing.T) {
+	if _, ok := newestSnapshotManifest(`{"Ts":1,"Kind":"close","ManifestJSON":"{}"}`); ok {
+		t.Fatal("a log with no snapshot event should yield ok=false")
+	}
+	if _, ok := newestSnapshotManifest(""); ok {
+		t.Fatal("empty input => ok=false")
+	}
+	if _, ok := newestSnapshotManifest("not json at all"); ok {
+		t.Fatal("garbage line => ok=false, not a panic")
+	}
+}
+
+func TestFilterThrowawaySessions(t *testing.T) {
+	in := []remuxManifestSession{
+		{Name: "probe-verify", LastAttached: 0},
+		{Name: "work", LastAttached: 1745700000},
+	}
+	got := filterThrowawaySessions(in)
+	if len(got) != 1 || got[0].Name != "work" {
+		t.Fatalf("got %+v, want only the attached session", got)
+	}
+}
+
+func TestFilterThrowawaySessionsAllThrowaway(t *testing.T) {
+	in := []remuxManifestSession{{Name: "probe-verify", LastAttached: 0}}
+	if got := filterThrowawaySessions(in); len(got) != 0 {
+		t.Fatalf("got %+v, want empty", got)
+	}
+}
+
+func TestFormatSnapshotAge(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		savedAt int64
+		want    string
+	}{
+		{now.Add(-30 * time.Second).UnixMilli(), "just now"},
+		{now.Add(-5 * time.Minute).UnixMilli(), "5m ago"},
+		{now.Add(-3 * time.Hour).UnixMilli(), "3h ago"},
+		{now.Add(-72 * time.Hour).UnixMilli(), "3d ago"},
+	}
+	for _, c := range cases {
+		if got := formatSnapshotAge(c.savedAt, now); got != c.want {
+			t.Errorf("formatSnapshotAge(%d) = %q, want %q", c.savedAt, got, c.want)
+		}
+	}
+}
+
+func TestRemoteRestorableCmdFishSafe(t *testing.T) {
+	if strings.Contains(remoteRestorableCmd, "td=") {
+		t.Fatalf("probe must not use shell assignments (fish-incompatible): %q", remoteRestorableCmd)
+	}
+	if !strings.Contains(remoteRestorableCmd, "hostname") {
+		t.Fatalf("probe should print the remote hostname first: %q", remoteRestorableCmd)
+	}
+	if !strings.Contains(remoteRestorableCmd, "tmux-remux") {
+		t.Fatalf("probe should call tmux-remux: %q", remoteRestorableCmd)
+	}
+}
+
+func TestRestorableFromProbeOutput(t *testing.T) {
+	snapshotLine := `{"Ts":100,"Kind":"snapshot","ManifestJSON":"{\"host\":\"tp-g6\",\"saved_at\":100,\"sessions\":[{\"name\":\"work\",\"last_attached\":10}]}"}`
+	closeOnlyLine := `{"Ts":1,"Kind":"close","ManifestJSON":"{}"}`
+
+	cases := []struct {
+		name    string
+		stdout  string
+		wantErr bool
+	}{
+		{"matching host", "tp-g6\n" + snapshotLine, false},
+		{"mismatched host", "wrong-host\n" + snapshotLine, true},
+		{"no newline in output", "tp-g6", true},
+		{"snapshot-free log", "tp-g6\n" + closeOnlyLine, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m, err := restorableFromProbeOutput(c.stdout)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got manifest %+v", m)
+				}
+				if len(m.Sessions) != 0 {
+					t.Fatalf("error path must not return sessions, got %+v", m.Sessions)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(m.Sessions) != 1 || m.Sessions[0].Name != "work" {
+				t.Fatalf("got %+v, want the one attached session", m.Sessions)
+			}
+		})
 	}
 }
