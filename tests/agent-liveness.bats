@@ -255,6 +255,20 @@ setup_sweep() {
 	[ ! -e "$BATS_TEST_TMPDIR/live/5" ]
 }
 
+@test "sweep: stamps a nix-wrapped agent pane" {
+	setup_sweep 60
+	cat >"$FAKEBIN/tmux" <<-EOF
+		#!/bin/sh
+		case "\$*" in
+		*"list-panes"*) printf '%%3\t.codex-wrapped\t0\n' ;;
+		esac
+	EOF
+	chmod +x "$FAKEBIN/tmux"
+	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/live/3")" = "100" ]
+}
+
 @test "sweep: .sweep is written after the per-pane stamps" {
 	setup_sweep 60
 	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'

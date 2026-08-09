@@ -22,6 +22,15 @@ AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
 # lets tests inject a real path via env.
 ISSUE_STAMP_BIN="${ISSUE_STAMP_BIN:-@issue_stamp@}"
 
+# normalize_wrapped_cmd CMD
+# Strips nix makeWrapper's `.foo-wrapped` shape down to `foo` (what
+# pane_current_command reports for every agent CLI on a nix host); passes
+# unwrapped names through unchanged. Sets REPLY.
+normalize_wrapped_cmd() {
+	REPLY="$1"
+	[[ $REPLY == .*-wrapped ]] && REPLY="${REPLY#.}" && REPLY="${REPLY%-wrapped}"
+}
+
 # Arms `agent-detect` on agent panes that don't already have a live pipe, and
 # stamps each agent pane's presence for lib-claude's dead-agent floor. Using
 # #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe 0)
@@ -54,7 +63,8 @@ arm_agent_detect() {
 	while IFS=$'\t' read -r pid cmd piped; do
 		# A here-string of an empty result still yields one blank line.
 		[[ -n $pid ]] || continue
-		case " $AGENT_COMMANDS " in *" $cmd "*) ;; *) continue ;; esac
+		normalize_wrapped_cmd "$cmd"
+		case " $AGENT_COMMANDS " in *" $REPLY "*) ;; *) continue ;; esac
 		((stamp)) && printf '%s\n' "$CLAUDE_NOW" >"$CLAUDE_LIVE_DIR/${pid#%}"
 		[[ $piped == 0 ]] || continue
 		((arm)) && tmux pipe-pane -o -t "$pid" "$AGENT_DETECT_BIN ${pid#%}"
@@ -358,8 +368,8 @@ main() {
 
 	# Set active pane icon for top-right display (from batched data)
 	active_icon=""
-	# Normalize nix makeWrapper's `.foo-wrapped` to `foo` (see lib-icons).
-	[[ $active_pane_proc == .*-wrapped ]] && active_pane_proc="${active_pane_proc#.}" && active_pane_proc="${active_pane_proc%-wrapped}"
+	normalize_wrapped_cmd "$active_pane_proc"
+	active_pane_proc="$REPLY"
 	[[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
 	if [[ $active_icon != "$cur_active_icon" ]]; then
 		tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
