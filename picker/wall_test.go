@@ -228,7 +228,7 @@ func TestRenderTileCropsCapture(t *testing.T) {
 	rows[len(rows)-1] = "\033[32mlast row\033[0m"
 	m.wallContent = map[string]string{"s:1": strings.Join(rows, "\n")}
 
-	tile := m.renderTile(m.visible[m.tileItems()[0]], true, outerW, outerH)
+	tile := m.renderTile(m.visible[m.tileItems()[0]], true, false, outerW, outerH)
 	if len(tile) != outerH {
 		t.Fatalf("tile has %d rows, want %d", len(tile), outerH)
 	}
@@ -606,6 +606,282 @@ func TestPreviewToggleUnchangedWithoutWall(t *testing.T) {
 	}
 }
 
+// --- Focus and the keystroke relay (#316 stage 4) ---
+
+func TestRelayable(t *testing.T) {
+	cases := []struct {
+		name string
+		item listItem
+		want bool
+	}{
+		{"local pane", listItem{target: "s:1"}, true},
+		{"header row", listItem{target: "", isHeader: true}, false},
+		{"zoxide suggestion", listItem{target: "/tmp/dir", createPath: "/tmp/dir"}, false},
+		{"remote bridge row", listItem{target: "g5", remoteHost: "g5", isRemoteRow: true}, false},
+		{"remote host set without the row flag", listItem{target: "g5:sess", remoteHost: "g5", remoteSess: "sess"}, false},
+		{"empty target", listItem{}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := relayable(c.item); got != c.want {
+				t.Errorf("relayable(%+v) = %v, want %v", c.item, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTabFocusesRelayableTile(t *testing.T) {
+	m := wallFixture()
+	got, cmd := m.handleKey(wallKey("tab"))
+	gm := got.(tuiModel)
+	if !gm.focused {
+		t.Error("tab should focus the tile under the cursor")
+	}
+	if cmd != nil {
+		t.Error("focusing is a local state change, not a command")
+	}
+}
+
+// The too-small fallback draws the list, not tiles, so there is nothing to
+// focus into.
+func TestTabNoopWhenTooSmallToTile(t *testing.T) {
+	m := wallFixture()
+	m.width, m.height = 30, 12
+	got, _ := m.handleKey(wallKey("tab"))
+	if gm := got.(tuiModel); gm.focused {
+		t.Error("tab should not focus when the wall cannot draw a tile grid")
+	}
+}
+
+// Defensive: tileItems already keeps the cursor off a non-tileable row in
+// practice, but the relay checks relayable itself rather than trusting that
+// invariant to hold forever.
+func TestFocusedKeyRefusesNonLocalTarget(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	m.cursor = 8 // the remote bridge row in wallFixture
+
+	_, cmd, handled := m.handleFocusedKey("a")
+	if handled {
+		t.Error("a remote row must never be relayed to")
+	}
+	if cmd != nil {
+		t.Error("a refused relay must not return a command")
+	}
+}
+
+// In-scope keys relay without moving the cursor; out-of-scope keys (arrows)
+// fall through to the wall's ordinary navigation instead — this is the
+// manual-test claim from #316 made mechanical.
+func TestFocusedRelaysInScopeKeysOnly(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	startCursor := m.cursor
+
+	relayed, cmd := m.handleKey(wallKey("a"))
+	rm := relayed.(tuiModel)
+	if !rm.focused {
+		t.Error("relaying a printable key should not unfocus")
+	}
+	if rm.cursor != startCursor {
+		t.Error("relaying a printable key should not move the cursor")
+	}
+	if cmd == nil {
+		t.Error("an in-scope key should return the send-keys command")
+	}
+
+	moved, _ := m.handleKey(wallKey("right"))
+	mm := moved.(tuiModel)
+	if mm.cursor == startCursor {
+		t.Error("an out-of-scope key (arrow) should still move the wall selection while focused")
+	}
+	if !mm.focused {
+		t.Error("moving with an arrow should not unfocus")
+	}
+}
+
+// q quits when unfocused, but it is also a printable character — while
+// focused it must relay as a literal "q" rather than quitting the picker out
+// from under the pane the user is typing into.
+func TestFocusedQRelaysRatherThanQuitting(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+
+	got, cmd := m.handleKey(wallKey("q"))
+	gm := got.(tuiModel)
+	if !gm.focused {
+		t.Error("q while focused should relay, not quit")
+	}
+	if cmd == nil {
+		t.Error("q while focused should return the send-keys command")
+	}
+}
+
+// ctrl+x is the wall's own kill binding, but it is also an ordinary chord to
+// type (readline cut, nano save) — while focused it must be swallowed rather
+// than falling through to the shared switch's unconfirmed kill-window/session.
+func TestFocusedCtrlXDoesNotKill(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	target := m.visible[m.cursor].target
+
+	got, cmd := m.handleKey(wallKey("ctrl+x"))
+	gm := got.(tuiModel)
+	if !gm.focused {
+		t.Error("ctrl+x while focused should not unfocus")
+	}
+	if cmd != nil {
+		t.Error("ctrl+x while focused must not run a command (no kill, no relay)")
+	}
+	if gm.visible[gm.cursor].target != target {
+		t.Errorf("ctrl+x while focused moved off the target %q", target)
+	}
+}
+
+// Unfocused, ctrl+x still kills — this is the wall's pre-existing binding
+// (hint("^x","kill")) and stage 4 must not change it.
+func TestUnfocusedCtrlXStillHandledByTheSharedSwitch(t *testing.T) {
+	m := wallFixture()
+	if _, _, handled := m.handleWallKey("ctrl+x"); handled {
+		t.Error("unfocused ctrl+x should fall through to the shared switch's kill binding")
+	}
+}
+
+// Ctrl-bindings are out of the relay's scope too, so they keep working while
+// focused — #316's "C-* stays the picker's own".
+func TestFocusedKeepsCtrlBindings(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+
+	got, _ := m.handleKey(wallKey("ctrl+a"))
+	gm := got.(tuiModel)
+	if !gm.claudeOnly {
+		t.Error("ctrl+a should still toggle the claude filter while focused")
+	}
+	if !gm.focused {
+		t.Error("toggling a filter should not unfocus")
+	}
+}
+
+func TestWallEscAction(t *testing.T) {
+	cases := []struct {
+		name              string
+		focused, querying bool
+		query             string
+		want              escAction
+	}{
+		{"focused wins over everything, even an open prompt", true, true, "abc", escUnfocus},
+		{"querying closes the prompt", false, true, "abc", escCloseQuery},
+		{"typed filter clears once the prompt is closed", false, false, "abc", escClearQuery},
+		{"nothing active quits", false, false, "", escQuit},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := wallEscAction(c.focused, c.querying, c.query); got != c.want {
+				t.Errorf("wallEscAction(%v,%v,%q) = %v, want %v", c.focused, c.querying, c.query, got, c.want)
+			}
+		})
+	}
+}
+
+// Escape is in the relay's own scope table (relayKeyArgs), but a focused esc
+// always unfocuses instead of reaching the pane — this is the live wiring the
+// pure wallEscAction case above describes.
+func TestEscUnfocusesInsteadOfRelaying(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+
+	got, cmd := m.handleKey(wallKey("esc"))
+	gm := got.(tuiModel)
+	if gm.focused {
+		t.Error("esc should unfocus")
+	}
+	if gm.mode != modeWall {
+		t.Error("esc while focused should not quit the picker")
+	}
+	if cmd != nil {
+		t.Error("unfocusing is a local state change, not a send-keys command")
+	}
+}
+
+func TestEscClosesQueryBeforeClearingFilterText(t *testing.T) {
+	m := wallFixture()
+	m.querying = true
+	m.query = "alpha"
+
+	closed, _ := m.handleKey(wallKey("esc"))
+	cm := closed.(tuiModel)
+	if cm.querying {
+		t.Error("esc should close the prompt first")
+	}
+	if cm.query != "alpha" {
+		t.Errorf("esc closing the prompt should keep the typed filter, got %q", cm.query)
+	}
+
+	cleared, cmd := cm.handleKey(wallKey("esc"))
+	clm := cleared.(tuiModel)
+	if clm.query != "" {
+		t.Errorf("esc with the prompt already closed should clear the filter, got %q", clm.query)
+	}
+	if cmd == nil {
+		t.Error("clearing the filter re-snaps the wall and must capture now")
+	}
+}
+
+func TestFocusedAndQueryingAreMutuallyExclusive(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	got, _ := m.handleKey(wallKey("/"))
+	if gm := got.(tuiModel); gm.querying {
+		t.Error("/ while focused should relay a literal slash, not open the filter prompt")
+	}
+
+	m2 := wallFixture()
+	m2.querying = true
+	got2, _ := m2.handleKey(wallKey("tab"))
+	if gm2 := got2.(tuiModel); gm2.focused {
+		t.Error("tab while querying should be swallowed by the prompt, not focus a tile")
+	}
+}
+
+func TestRenderTileFocusedBorderDiffersFromSelected(t *testing.T) {
+	m := wallFixture()
+	selectedOnly := m.renderTile(m.visible[1], true, false, 40, 12)
+	focused := m.renderTile(m.visible[1], true, true, 40, 12)
+	if selectedOnly[0] == focused[0] {
+		t.Error("a focused tile's border should render differently from a merely selected one")
+	}
+}
+
+func TestRenderWallHintsAdvertiseTab(t *testing.T) {
+	m := wallFixture()
+	if hints := stripANSI(m.renderWallHints()); !strings.Contains(hints, "tab:focus") {
+		t.Errorf("hints should advertise tab:focus, got %q", hints)
+	}
+}
+
+func TestRenderWallHintsShowFocusedTarget(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	label := stripTreePrefix(m.visible[m.cursor].plain)
+	hints := stripANSI(m.renderWallHints())
+	if !strings.Contains(hints, "focused:") {
+		t.Errorf("focused hints should say what is focused, got %q", hints)
+	}
+	if !strings.Contains(hints, label) {
+		t.Errorf("focused hints should name the target %q, got %q", label, hints)
+	}
+	if !strings.Contains(hints, "esc:unfocus") {
+		t.Errorf("focused hints should offer esc:unfocus, got %q", hints)
+	}
+	if strings.Contains(hints, "hjkl") {
+		t.Errorf("focused hints should not advertise the normal keymap, got %q", hints)
+	}
+	if got := visibleWidth(m.renderWallHints()); got != m.width {
+		t.Errorf("focused hints are %d cells, want %d", got, m.width)
+	}
+}
+
 // wallFixture is a 2x2 wall over 6 tileable rows, with the three untileable row
 // kinds mixed in.
 func wallFixture() tuiModel {
@@ -649,6 +925,8 @@ func wallKey(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "backspace":
 		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	}
 	if ctrl, ok := strings.CutPrefix(s, "ctrl+"); ok {
 		return tea.KeyPressMsg{Code: rune(ctrl[0]), Mod: tea.ModCtrl}

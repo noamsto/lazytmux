@@ -506,7 +506,7 @@ elif ((current_line == 0)); then
 	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
 	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?window_end_flag,,${SEP}}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:${ENTRY}#{?next_window_index,${SEP},}}"
 	tmux set -t "$SESSION" status-format[2] ""
 	tmux set -t "$SESSION" status-format[3] ""
 	tmux set -t "$SESSION" status-format[4] ""
@@ -515,21 +515,21 @@ else
 	[[ -n $FMT0 ]] && tmux set -t "$SESSION" status-format[0] "$FMT0"
 	PREFIX1="#{?#{e|>|:#{session_windows},#{@window_split}},├,╰}─"
 	tmux set -t "$SESSION" status-format[1] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split}},,${SEP}}},}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX1} #{W:#{?#{e|<=|:#{window_index},#{@window_split}},${ENTRY}#{?next_window_index,#{?#{e|<=|:#{next_window_index},#{@window_split}},${SEP},},},}}"
 
 	PREFIX2="#{?#{e|>|:#{session_windows},#{@window_split2}},├,╰}─"
 	tmux set -t "$SESSION" status-format[2] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split2}},,${SEP}}},},}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX2} #{W:#{?#{e|>|:#{window_index},#{@window_split}},#{?#{e|<=|:#{window_index},#{@window_split2}},${ENTRY}#{?next_window_index,#{?#{e|<=|:#{next_window_index},#{@window_split2}},${SEP},},},},}}"
 
 	PREFIX3="#{?#{e|>|:#{session_windows},#{@window_split3}},├,╰}─"
 	tmux set -t "$SESSION" status-format[3] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX3} #{W:#{?#{e|>|:#{window_index},#{@window_split2}},#{?#{e|<=|:#{window_index},#{@window_split3}},${ENTRY}#{?window_end_flag,,#{?#{e|==|:#{window_index},#{@window_split3}},,${SEP}}},},}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ${PREFIX3} #{W:#{?#{e|>|:#{window_index},#{@window_split2}},#{?#{e|<=|:#{window_index},#{@window_split3}},${ENTRY}#{?next_window_index,#{?#{e|<=|:#{next_window_index},#{@window_split3}},${SEP},},},},}}"
 
 	# Row 4 only ever holds windows when MAX_WIN_LINES rose to 4 on a tall
 	# client; at 3 rows @window_split3 stays 999 so this renders empty and tmux
 	# is left at `status 4`, which never asks for index 4 anyway.
 	tmux set -t "$SESSION" status-format[4] \
-		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split3}},${ENTRY}#{?window_end_flag,,${SEP}},}}"
+		"#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#{?#{e|>|:#{window_index},#{@window_split3}},${ENTRY}#{?next_window_index,${SEP},},}}"
 fi
 
 # Force immediate status bar redraw

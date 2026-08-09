@@ -31,7 +31,11 @@ setup_lib_icons() {
 }
 
 setup_lib_claude() {
-	# lib-claude.sh has no Nix placeholders; source directly.
+	# lib-claude.sh's only placeholder (@assume_dead_after@) is a quoted
+	# assignment RHS that the file itself normalizes to 0 — see the
+	# "unsubstituted placeholder parses as 0" case in agent-liveness.bats — so
+	# raw sourcing is safe. A NEW placeholder here needs a sed stub, as
+	# setup_lib_icons does.
 	# shellcheck source=/dev/null
 	source scripts/lib-claude.sh
 }

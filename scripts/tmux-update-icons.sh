@@ -31,24 +31,51 @@ normalize_wrapped_cmd() {
 	[[ $REPLY == .*-wrapped ]] && REPLY="${REPLY#.}" && REPLY="${REPLY%-wrapped}"
 }
 
-# Arms `agent-detect` on agent panes that don't already have a live pipe.
-# Using #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe
-# 0) self-heals on a later tick.
+# Arms `agent-detect` on agent panes that don't already have a live pipe, and
+# stamps each agent pane's presence for lib-claude's dead-agent floor. Using
+# #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe 0)
+# self-heals on a later tick. The two jobs gate independently — either one alone
+# still earns the list-panes.
 arm_agent_detect() {
-	[[ $AGENT_DETECT_BIN == @* ]] && return 0
+	local arm=1 stamp=0
+	[[ $AGENT_DETECT_BIN == @* ]] && arm=0
+	[[ -n ${CLAUDE_LIVE_DIR:-} && ${CLAUDE_ASSUME_DEAD_AFTER:-0} =~ ^[0-9]+$ ]] &&
+		((CLAUDE_ASSUME_DEAD_AFTER > 0)) && stamp=1
+	((arm || stamp)) || return 0
 	# The sweep is a full-server list-panes — a second tmux roundtrip per tick,
 	# multiplied by attached sessions. Arming (new pane, dead pipe) only needs
 	# seconds-level latency, so run every 5th tick (CLAUDE_NOW = this tick's
 	# epoch second).
 	((CLAUDE_NOW % 5)) && return 0
 
+	# Bail on a failed list-panes rather than reading an empty stream: an empty
+	# result is indistinguishable from "no agent panes", and stamping .sweep
+	# after one would assert a pass that never observed anything — the reader
+	# would then read every live pane's lagging stamp as a dead agent.
+	local rows
+	rows=$(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_pipe}' 2>/dev/null) || return 0
+
+	if ((stamp)) && [[ ! -d $CLAUDE_LIVE_DIR ]]; then
+		mkdir -p "$CLAUDE_LIVE_DIR"
+	fi
+
 	local pid cmd piped
 	while IFS=$'\t' read -r pid cmd piped; do
-		[[ $piped == 0 ]] || continue
+		# A here-string of an empty result still yields one blank line.
+		[[ -n $pid ]] || continue
 		normalize_wrapped_cmd "$cmd"
 		case " $AGENT_COMMANDS " in *" $REPLY "*) ;; *) continue ;; esac
-		tmux pipe-pane -o -t "$pid" "$AGENT_DETECT_BIN ${pid#%}"
-	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_pipe}' 2>/dev/null || true)
+		((stamp)) && printf '%s\n' "$CLAUDE_NOW" >"$CLAUDE_LIVE_DIR/${pid#%}"
+		[[ $piped == 0 ]] || continue
+		((arm)) && tmux pipe-pane -o -t "$pid" "$AGENT_DETECT_BIN ${pid#%}"
+	done <<<"$rows"
+
+	# Strictly after the last per-pane stamp, and written nowhere else: the
+	# reader takes a fresh .sweep as proof that every agent pane of that pass was
+	# stamped, so a lagging per-pane stamp means "no agent here" with no grace
+	# window to wait out after a resume.
+	((stamp)) && printf '%s\n' "$CLAUDE_NOW" >"$CLAUDE_LIVE_DIR/.sweep"
+	return 0
 }
 
 main() {

@@ -330,3 +330,75 @@ wait_for_client() {
 	# The clear that makes that true has to be in the config, not incidental.
 	grep -q 'set-hook -gu after-select-pane' "$(store_conf)"
 }
+
+@test "single-row separator omits only after the last window (next_window_index-driven)" {
+	for _ in 1 2 3; do
+		t new-window -t s -c "$PWD"
+	done
+
+	# No client ever attaches in this test, so tmux-reflow-windows's width probe
+	# stays empty and it skips (see its own early-exit); status-format[1] stays
+	# the global, un-reflowed fallback from config/tmux.conf.nix — the pure
+	# "last iteration of the W: loop" case, no @window_split filtering involved.
+	fmt="$(t show -gv status-format[1])"
+	line="$(t display-message -p -F "$fmt" | strip_styles)"
+
+	sep_count="$(grep -o '│' <<<"$line" | wc -l)"
+	[ "$sep_count" -eq 3 ]
+	[[ $line == *"4:"* ]]
+}
+
+@test "multi-row separators respect row boundaries and omit only at each row's last window" {
+	t set-option -t s:1 -w @branch "feat/next38-one"
+	for idx in 2 3 4 5 6 7 8 9 10; do
+		t new-window -t s -c "$PWD"
+		t set-option -t "s:$idx" -w @branch "feat/next38-window-$idx-with-extra-label-width"
+	done
+
+	make_tmux_shim
+	reflow="$(store_path '/nix/store/[[:alnum:]]*-tmux-reflow-windows/bin/tmux-reflow-windows')"
+	coproc REFLOW_CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
+	wait_for_client
+	PATH="$SHIM_DIR:$PATH" "$reflow" s 36 --force
+	wait_for_option @reflow_key "10:36:0"
+	printf 'detach-client\n' >&"${REFLOW_CTL[1]}" || true
+	kill "$REFLOW_CTL_PID" 2>/dev/null || true
+
+	split1="$(t show-options -t s -qv @window_split)"
+	split2="$(t show-options -t s -qv @window_split2)"
+	split3="$(t show-options -t s -qv @window_split3)"
+
+	total_windows=10
+	prev_split=0
+	for idx in 1 2 3; do
+		case $idx in
+		1) split=$split1 ;;
+		2) split=$split2 ;;
+		3) split=$split3 ;;
+		esac
+		[ "$split" = 999 ] && split=$total_windows
+		row_windows=$((split > prev_split ? split - prev_split : 0))
+		if ((row_windows == 0)); then
+			prev_split=$split
+			continue
+		fi
+		line="$(t display-message -p -F "$(t show-options -t s -qv "status-format[$idx]")" | strip_styles)"
+		row_sep="$(grep -o '│' <<<"$line" | wc -l)"
+		[ "$row_sep" -eq "$((row_windows - 1))" ]
+		prev_split=$split
+	done
+	[ "$prev_split" -eq "$total_windows" ]
+}
+
+@test "focus-follows-mouse, copy-mode-line-numbers, and the ? list-keys rebind are wired" {
+	[ "$(t show-options -g -qv focus-follows-mouse)" = "off" ]
+	[ "$(t show-options -g -qv copy-mode-line-numbers)" = "off" ]
+
+	run t list-keys -T prefix '?'
+	[ "$status" -eq 0 ]
+	# tmux normalizes flag order in its own list-keys echo (-N -F "..." -O key),
+	# so check each flag/value independently rather than the literal source order.
+	[[ $output == *'list-keys -N'* ]]
+	[[ $output == *'-F "#{key_table}: #{key_prefix}#{key_string}'* ]]
+	[[ $output == *'-O key'* ]]
+}

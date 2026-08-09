@@ -40,6 +40,11 @@
   # Absolute path to the shell tmux spawns in new panes (default-shell).
   # Null => tmux uses $SHELL / the account shell.
   defaultShell ? null,
+  # tmux focus-follows-mouse: whether moving the mouse into a pane selects it,
+  # without clicking. Off by default, matching tmux's own default.
+  focusFollowsMouse ? false,
+  # tmux copy-mode-line-numbers mode (tmux 3.7+): off/default/absolute/relative/hybrid.
+  copyModeLineNumbers ? "off",
   # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
   # prdash PR dashboard package (threaded from the flake input; used by the prefix+p popup).
@@ -71,6 +76,10 @@
   agentUsageEnable ? true,
   agentUsageRefreshSeconds ? 120,
   agentUsageMonthlyThreshold ? 50,
+  # Seconds a pane may go without looking like an agent before a stale agent
+  # state on it is withdrawn instead of faded (0 = off). Baked into lib-claude as
+  # CLAUDE_ASSUME_DEAD_AFTER, which also gates the presence sweep that feeds it.
+  claudeStatusAssumeDeadAfter ? 0,
 }: let
   # --- Nerd font icons (edit these if they don't render in your terminal) ---
   icons = {
@@ -162,8 +171,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@ICON_MAP@" "@FALLBACK_ICON@"]
-      [iconMapBash fallbackIcon]
+      ["@ICON_MAP@" "@FALLBACK_ICON@" "@assume_dead_after@"]
+      [iconMapBash fallbackIcon (toString claudeStatusAssumeDeadAfter)]
       raw;
   in
     pkgs.writeShellScript name patched;
@@ -610,6 +619,11 @@
 
     # === Main Config ===
     set -g mouse on
+    set -g focus-follows-mouse ${
+      if focusFollowsMouse
+      then "on"
+      else "off"
+    }
     set -g window-size latest
     set -g aggressive-resize on
     set-option -g renumber-window on
@@ -655,6 +669,11 @@
     # Config reload
     bind r source-file ~/.config/tmux/tmux.conf \; display "Config reloaded!"
 
+    # Sorted, table-labeled keybinding list (tmux 3.7+ list-keys -O/-F). Adds
+    # the key table name (crew/enrich/splash/... this repo defines many) next
+    # to tmux's default prefix+key+note popup, sorted by key code.
+    bind-key ? list-keys -N -O key -F "#{key_table}: #{key_prefix}#{key_string} #{?key_note,#{key_note},#{key_command}}"
+
     # Vi copy mode
     setw -g mode-keys vi
     set -g status-keys vi
@@ -666,6 +685,8 @@
     # Copy mode styling (tmux 3.6+)
     set -g copy-mode-position-style "bg=#{@thm_surface_0},fg=#{@thm_mauve}"
     set -g copy-mode-selection-style "bg=#{@thm_mauve},fg=#{@thm_bg}"
+    # Line numbers in copy mode (tmux 3.7+). Configurable — matter of taste.
+    set -g copy-mode-line-numbers ${copyModeLineNumbers}
 
     # Clear screen
     bind -n M-l send-keys 'C-l'
@@ -863,7 +884,7 @@
     # last so its state color only runs into the separator, which sets its own
     # color. tmux-reflow-windows mirrors this layout for the multi-line
     # variants with column-padded segments.
-    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?window_end_flag,, #[fg=#{@thm_subtext_0}#,nobold]│ }}"
+    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
     set -g status-format[2] ""
     set -g status-format[3] ""
     set -g status-format[4] ""
@@ -951,7 +972,7 @@
     set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus '#{@bridge_pane}'\" }"
 
     # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
-    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id}"'
+    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id} /tmp/claude-status/watchers/#{s/%%//:pane_id}"'
 
     # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
     set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'
