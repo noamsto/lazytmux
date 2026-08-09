@@ -189,9 +189,8 @@ teardown() {
 @test "substituted bridge binaries win over the ones on PATH" {
 	touch "$REMOTE_SERVER"
 
-	# Pinned copies stand in for the store paths Nix substitutes. The PATH stubs
-	# from setup() stay in place and are what a stale tmux server would reach —
-	# the launcher must not touch them (#336).
+	# Pinned copies stand in for the store paths Nix substitutes; setup()'s PATH
+	# stubs stay in place as what a stale tmux server would reach instead.
 	local pinned="$BATS_TEST_TMPDIR/pinned"
 	mkdir -p "$pinned"
 	export PINNED_CTL_LOG="$BATS_TEST_TMPDIR/pinned-ctl.log"
@@ -228,12 +227,11 @@ teardown() {
 	run bash "$launcher" tp-g6
 	[ "$status" -eq 0 ]
 
-	# The probe went to the pinned ctl, and the PATH one was never consulted.
 	grep -q -- "--sock $sock ping _" "$PINNED_CTL_LOG"
-	[ ! -s "$CTL_LOG" ]
+	[ ! -s "$CTL_LOG" ] # the PATH ctl was never consulted
 
-	# The daemon the launcher spawned is the pinned one, and the renderer/reflow
-	# it was handed are pinned too — those are what mirror panes respawn into.
+	# The renderer/reflow the spawned daemon was handed are pinned too — those
+	# are what mirror panes respawn into.
 	local waited=0
 	while [[ ! -s $PINNED_DAEMON_ENV && $waited -lt 50 ]]; do
 		sleep 0.1

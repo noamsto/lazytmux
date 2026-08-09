@@ -101,9 +101,8 @@ sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
 sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
 # Store paths, substituted at build time. This script runs from the tmux server,
 # whose PATH is frozen until a server restart, while the keybinds that reach the
-# daemon repoint on a config reload alone — resolving these by bare name
-# straddled the two generations and left a daemon speaking an older ctl protocol
-# than the ctl probing it, which also silenced the mismatch branch below (#336).
+# daemon repoint on a config reload alone — a bare name straddles the two, so
+# the daemon can end up older than the ctl talking to it (#336).
 # Unsubstituted placeholders keep their leading '@' and fall back to PATH (bats).
 ctl="@bridge_ctl@"
 daemon="@bridge_daemon@"

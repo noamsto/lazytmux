@@ -443,11 +443,8 @@
     );
 
   # Scripts that source lib-remote get its store path substituted, plus the
-  # bridge binaries the launcher probes and spawns. Those are pinned for the
-  # same reason as @reflow@ above: the launcher runs from the tmux server, whose
-  # PATH is frozen until a restart, while the keybinds that reach the daemon
-  # repoint on a config reload — a bare name straddled the two and stranded a
-  # daemon speaking an older ctl protocol than the ctl probing it (#336).
+  # bridge binaries the launcher probes and spawns — pinned for the same reason
+  # as @reflow@ above, which the launcher spells out.
   scriptsWithRemote = ["lztmux-remote-open"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
