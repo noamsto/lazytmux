@@ -922,11 +922,12 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 				if !ok {
 					// The pane is gone: flush whatever the proxies were
 					// still holding (a partial sequence cut mid-stream)
-					// rather than silently dropping it. kn's leftover is
-					// run through gfx — same as the steady-state order —
-					// before gfx's own Close, not written ahead of it: kn
-					// only ever holds back the newest unprocessed tail, so
-					// anything gfx is already holding is strictly older.
+					// rather than silently dropping it. kn only ever holds
+					// the newest unprocessed tail, so its leftover is
+					// chronologically after anything gfx is already
+					// holding — route it through gfx.Filter first, same as
+					// the steady-state order, so the tail comes out in the
+					// original byte order.
 					tail := kn.Flush()
 					if gfx != nil {
 						tail = append(gfx.Filter(tail), gfx.Close()...)
@@ -939,11 +940,10 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 				f = v
 			}
 			if f.typ == wire.FrameOutput {
-				// Drain before kn.Feed, not after: drainOutput can append
-				// more queued FrameOutput frames' raw payload onto buf, and
-				// any of those — not just f's own — can carry a negotiation
-				// sequence that needs stripping before gfx (or the wire)
-				// ever sees it.
+				// drainOutput can append more queued FrameOutput frames'
+				// raw payload onto buf, and any of those can carry a
+				// negotiation sequence too, so kn.Feed runs on the fully
+				// drained batch.
 				buf := append([]byte(nil), f.payload...)
 				buf, pending = drainOutput(s.ch, buf)
 				buf = kn.Feed(buf)

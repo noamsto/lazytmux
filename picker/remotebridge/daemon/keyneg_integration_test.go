@@ -9,11 +9,10 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 )
 
-// TestKeyNegStrippedEndToEndThroughASink pins #338: a modifyOtherKeys
-// negotiation sequence a remote pane's occupant wrote for itself (Claude
-// Code and other agent CLIs request mode 2) must never reach the local
-// mirror pane's pty, or local tmux re-encodes future keystrokes — including
-// Ctrl+R — for that pane as if the renderer itself had requested it.
+// TestKeyNegStrippedEndToEndThroughASink: a modifyOtherKeys negotiation
+// sequence must never reach a mirror pane's pty, or local tmux re-encodes
+// future keystrokes for it — including Ctrl+R — as if the renderer itself
+// had requested it (#338).
 func TestKeyNegStrippedEndToEndThroughASink(t *testing.T) {
 	local, remote := net.Pipe()
 	defer local.Close()
@@ -51,11 +50,10 @@ func TestKeyNegSplitAcrossWritesEndToEnd(t *testing.T) {
 	}
 }
 
-// TestKeyNegAndGraphicsFlushOrderOnClose pins the flush-order bug found in
-// review: kn only ever holds back the newest unprocessed tail of the stream,
-// so on close its leftover must be threaded through gfx (same as the
-// steady-state order) before gfx's own held bytes are flushed — not written
-// ahead of them, which would scramble the tail of the stream.
+// TestKeyNegAndGraphicsFlushOrderOnClose: kn only ever holds back the
+// newest unprocessed tail of the stream, so on close its leftover must be
+// threaded through gfx before gfx's own held bytes are flushed, preserving
+// the original byte order of the stream's tail.
 func TestKeyNegAndGraphicsFlushOrderOnClose(t *testing.T) {
 	local, remote := net.Pipe()
 	defer local.Close()
