@@ -18,6 +18,7 @@ import (
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/lazytmux/picker/remotebridge/keyneg"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -904,6 +905,13 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 // racing its startup against the writer.
 func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 	go func() {
+		// kn strips modifyOtherKeys negotiation sequences a remote pane's
+		// occupant wrote for itself before they reach the local mirror
+		// pane's pty, where local tmux would otherwise treat them as a
+		// request from the renderer and re-encode future keystrokes —
+		// including Ctrl+R — accordingly (#338). Unconditional: unlike gfx,
+		// this runs regardless of whether graphics localisation is wired in.
+		kn := keyneg.NewFilter()
 		var pending *sinkFrame
 		for {
 			var f sinkFrame
@@ -912,9 +920,12 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 			} else {
 				v, ok := <-s.ch
 				if !ok {
-					// The pane is gone: flush whatever the proxy was still holding
-					// (a partial sequence cut mid-stream) rather than silently
-					// dropping it — gfx.Close() exists for exactly this exit.
+					// The pane is gone: flush whatever the proxies were
+					// still holding (a partial sequence cut mid-stream)
+					// rather than silently dropping it.
+					if tail := kn.Flush(); len(tail) > 0 {
+						wire.WriteFrame(conn, wire.FrameOutput, tail)
+					}
 					if gfx != nil {
 						if tail := gfx.Close(); len(tail) > 0 {
 							wire.WriteFrame(conn, wire.FrameOutput, tail)
@@ -924,10 +935,19 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 				}
 				f = v
 			}
-			if gfx != nil && f.typ == wire.FrameOutput {
+			if f.typ == wire.FrameOutput {
+				// Drain before kn.Feed, not after: drainOutput can append
+				// more queued FrameOutput frames' raw payload onto buf, and
+				// any of those — not just f's own — can carry a negotiation
+				// sequence that needs stripping before gfx (or the wire)
+				// ever sees it.
 				buf := append([]byte(nil), f.payload...)
 				buf, pending = drainOutput(s.ch, buf)
-				f.payload = gfx.Filter(buf)
+				buf = kn.Feed(buf)
+				if gfx != nil {
+					buf = gfx.Filter(buf)
+				}
+				f.payload = buf
 				if len(f.payload) == 0 {
 					continue
 				}
