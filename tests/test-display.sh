@@ -18,10 +18,12 @@ SOCKET="enrichtest-$$"
 SHIM_DIR="$(mktemp -d)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED="$SCRIPT_DIR/fixtures/window-list.expected"
+CLAUDE_STATUS_DIR="$(mktemp -d)"
+export CLAUDE_STATUS_DIR
 
 cleanup() {
 	"$TMUX_BIN" -L "$SOCKET" kill-server 2>/dev/null || true
-	rm -rf "$SHIM_DIR"
+	rm -rf "$SHIM_DIR" "$CLAUDE_STATUS_DIR"
 }
 trap cleanup EXIT
 

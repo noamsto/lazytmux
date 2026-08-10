@@ -7,7 +7,8 @@ setup() {
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
 	unset TMUX TMUX_PANE
 	setup_lib_claude
-	mkdir -p "$CLAUDE_NAMES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_PANES_DIR" "$CLAUDE_INTERRUPT_DIR"
+	mkdir -p "$CLAUDE_NAMES_DIR" "$CLAUDE_TASKS_DIR" "$CLAUDE_PANES_DIR" "$CLAUDE_INTERRUPT_DIR" \
+		"$CLAUDE_SCREEN_DIR" "$CLAUDE_WATCHERS_DIR" "$CLAUDE_LIVE_DIR"
 }
 
 # A server that booted mid-2017 — after the fixed "old" mtime below, before now.
@@ -66,4 +67,41 @@ stamp() {
 	claude_prune_stale_state ""
 	[ -e "$CLAUDE_NAMES_DIR/8" ]
 	[ ! -e "$CLAUDE_STATUS_DIR/.server_start" ]
+}
+
+@test "reap drops dead pane files across panes/screen/interrupt/watchers, keeps live ones" {
+	local rows
+	rows="$(printf '%%3\tcodex\t0\n%%5\tfish\t0\n')"
+	local dir id
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
+		for id in 3 5 8; do
+			printf 'x' >"$dir/$id"
+		done
+	done
+	claude_reap_dead_panes "$rows"
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
+		[ ! -e "$dir/8" ]
+		[ -e "$dir/3" ]
+		[ -e "$dir/5" ]
+	done
+}
+
+@test "reap never touches CLAUDE_LIVE_DIR" {
+	local rows
+	rows="$(printf '%%3\tcodex\t0\n')"
+	printf 'x' >"$CLAUDE_LIVE_DIR/8"
+	claude_reap_dead_panes "$rows"
+	[ -e "$CLAUDE_LIVE_DIR/8" ]
+}
+
+@test "reap with empty rows is a no-op" {
+	printf 'x' >"$CLAUDE_PANES_DIR/8"
+	claude_reap_dead_panes ""
+	[ -e "$CLAUDE_PANES_DIR/8" ]
+}
+
+@test "reap with a live pane id that has no files is a no-op" {
+	local rows
+	rows="$(printf '%%3\tcodex\t0\n')"
+	claude_reap_dead_panes "$rows"
 }

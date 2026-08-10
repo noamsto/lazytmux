@@ -52,12 +52,13 @@ CLAUDE_INTERRUPT_CHECK_AGE=8
 CLAUDE_INTERRUPT_MARKER="Request interrupted by user"
 
 # Dead-agent floor. An agent that exits back to a shell leaves its last state
-# behind: claude_prune_stale_state reaps only a previous tmux server's files and
-# claude-status-update reaps only on pane death, so a pane running a plain shell
-# keeps reporting an agent state and merely fades. The presence sweep in
-# tmux-update-icons stamps live/<id> for every pane whose foreground command is
-# an agent, and live/.sweep once that pass completes; read_pane_state withdraws
-# a state that has gone stale on a pane the sweep stopped stamping.
+# behind: claude_prune_stale_state reaps only a previous tmux server's files
+# and claude_reap_dead_panes reaps only a pane list-panes -a no longer
+# reports, so a pane running a plain shell keeps reporting an agent state and
+# merely fades. The presence sweep in tmux-update-icons stamps live/<id> for
+# every pane whose foreground command is an agent, and live/.sweep once that
+# pass completes; read_pane_state withdraws a state that has gone stale on a
+# pane the sweep stopped stamping.
 #
 # Positive evidence only — a *missing* live/<id> never vetoes. Absence is
 # ambiguous (pane never swept, feature just switched on, sweep never ran), while
@@ -99,6 +100,35 @@ claude_prune_stale_state() {
 	done
 	mkdir -p "$CLAUDE_STATUS_DIR"
 	printf '%s\n' "$server_start" >"$marker"
+}
+
+# claude_reap_dead_panes ROWS
+# ROWS is tmux list-panes -a output: "%N<TAB>..." per line, extra columns
+# ignored. Removes panes/screen/interrupt/watchers state for any pane id not
+# present in ROWS. Full-server positive evidence: the caller must only pass
+# ROWS from a list-panes call that is known to have succeeded and returned
+# real data (see tmux-update-icons.sh) — an empty/failed ROWS is a no-op here,
+# never reaping anything, so a bad call site can only under-reap, not wipe.
+claude_reap_dead_panes() {
+	local rows="$1"
+	[[ -n $rows ]] || return 0
+
+	local -A live=()
+	local pid rest
+	while IFS=$'\t' read -r pid rest; do
+		[[ -n $pid ]] || continue
+		live["${pid#%}"]=1
+	done <<<"$rows"
+
+	local dir f id
+	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
+		[[ -d $dir ]] || continue
+		for f in "$dir"/*; do
+			[[ -f $f ]] || continue
+			id="${f##*/}"
+			[[ -n ${live[$id]:-} ]] || rm -f "$f"
+		done
+	done
 }
 
 # claude_live_epoch PATH

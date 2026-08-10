@@ -31,17 +31,19 @@ normalize_wrapped_cmd() {
 	[[ $REPLY == .*-wrapped ]] && REPLY="${REPLY#.}" && REPLY="${REPLY%-wrapped}"
 }
 
-# Arms `agent-detect` on agent panes that don't already have a live pipe, and
-# stamps each agent pane's presence for lib-claude's dead-agent floor. Using
-# #{pane_pipe} as the gate means a dead parser (pipe closes -> pane_pipe 0)
-# self-heals on a later tick. The two jobs gate independently — either one alone
-# still earns the list-panes.
+# Arms `agent-detect` on agent panes that don't already have a live pipe,
+# stamps each agent pane's presence for lib-claude's dead-agent floor, and reaps
+# claude-status state for panes list-panes -a no longer reports (issue #341) —
+# a third job riding the same list-panes roundtrip. Using #{pane_pipe} as the
+# gate means a dead parser (pipe closes -> pane_pipe 0) self-heals on a later
+# tick. The three jobs gate independently — reaping runs whenever the
+# roundtrip happens at all, since (unlike arm/stamp) it must not depend on
+# agent-detect or the dead-agent floor being enabled.
 arm_agent_detect() {
 	local arm=1 stamp=0
 	[[ $AGENT_DETECT_BIN == @* ]] && arm=0
 	[[ -n ${CLAUDE_LIVE_DIR:-} && ${CLAUDE_ASSUME_DEAD_AFTER:-0} =~ ^[0-9]+$ ]] &&
 		((CLAUDE_ASSUME_DEAD_AFTER > 0)) && stamp=1
-	((arm || stamp)) || return 0
 	# The sweep is a full-server list-panes — a second tmux roundtrip per tick,
 	# multiplied by attached sessions. Arming (new pane, dead pipe) only needs
 	# seconds-level latency, so run every 5th tick (CLAUDE_NOW = this tick's
@@ -54,6 +56,9 @@ arm_agent_detect() {
 	# would then read every live pane's lagging stamp as a dead agent.
 	local rows
 	rows=$(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_pipe}' 2>/dev/null) || return 0
+	claude_reap_dead_panes "$rows"
+
+	((arm || stamp)) || return 0
 
 	if ((stamp)) && [[ ! -d $CLAUDE_LIVE_DIR ]]; then
 		mkdir -p "$CLAUDE_LIVE_DIR"
