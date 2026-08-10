@@ -18,6 +18,7 @@ import (
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/lazytmux/picker/remotebridge/keyneg"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -904,6 +905,13 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 // racing its startup against the writer.
 func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 	go func() {
+		// kn strips modifyOtherKeys negotiation sequences a remote pane's
+		// occupant wrote for itself before they reach the local mirror
+		// pane's pty, where local tmux would otherwise treat them as a
+		// request from the renderer and re-encode future keystrokes —
+		// including Ctrl+R — accordingly (#338). Unconditional: unlike gfx,
+		// this runs regardless of whether graphics localisation is wired in.
+		kn := keyneg.NewFilter()
 		var pending *sinkFrame
 		for {
 			var f sinkFrame
@@ -912,22 +920,37 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 			} else {
 				v, ok := <-s.ch
 				if !ok {
-					// The pane is gone: flush whatever the proxy was still holding
-					// (a partial sequence cut mid-stream) rather than silently
-					// dropping it — gfx.Close() exists for exactly this exit.
+					// The pane is gone: flush whatever the proxies were
+					// still holding (a partial sequence cut mid-stream)
+					// rather than silently dropping it. kn only ever holds
+					// the newest unprocessed tail, so its leftover is
+					// chronologically after anything gfx is already
+					// holding — route it through gfx.Filter first, same as
+					// the steady-state order, so the tail comes out in the
+					// original byte order.
+					tail := kn.Flush()
 					if gfx != nil {
-						if tail := gfx.Close(); len(tail) > 0 {
-							wire.WriteFrame(conn, wire.FrameOutput, tail)
-						}
+						tail = append(gfx.Filter(tail), gfx.Close()...)
+					}
+					if len(tail) > 0 {
+						wire.WriteFrame(conn, wire.FrameOutput, tail)
 					}
 					return
 				}
 				f = v
 			}
-			if gfx != nil && f.typ == wire.FrameOutput {
+			if f.typ == wire.FrameOutput {
+				// drainOutput can append more queued FrameOutput frames'
+				// raw payload onto buf, and any of those can carry a
+				// negotiation sequence too, so kn.Feed runs on the fully
+				// drained batch.
 				buf := append([]byte(nil), f.payload...)
 				buf, pending = drainOutput(s.ch, buf)
-				f.payload = gfx.Filter(buf)
+				buf = kn.Feed(buf)
+				if gfx != nil {
+					buf = gfx.Filter(buf)
+				}
+				f.payload = buf
 				if len(f.payload) == 0 {
 					continue
 				}
