@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Show the welcome splash once, only on a fresh, empty session.
 # Fired (backgrounded) from client-attached / client-session-changed hooks.
-# $1 = target session name (#{hook_session}); falls back to the current one.
+# $1 = target session name (#{hook_session_name}); falls back to the current
+# one. $2 = invoking client name (#{hook_client}).
 set -euo pipefail
 
 session="${1:-}"
@@ -10,6 +11,18 @@ session="${1:-}"
 # Once per tmux server — a global flag, so only the first fresh session after
 # server start shows it (not every new session, nor on session switch).
 if [ "$(tmux show-option -gqv @splash_shown)" = "1" ]; then exit 0; fi
+
+# The remote bridge attaches a -CC control-mode client. It has no tty, so a
+# second popup on it dereferences NULL inside tmux and takes the whole server
+# down (#346) — and a mirror has no business showing a splash. Deliberately
+# without setting @splash_shown: a later real attach must still get it.
+client="${2:-}"
+control=""
+while read -r mode name; do
+	[ "$name" = "$client" ] && control="$mode" || true
+done < <(tmux list-clients -t "$session" -F '#{client_control_mode} #{client_name}' 2>/dev/null)
+[ -n "$control" ] || exit 1
+[ "$control" = 1 ] && exit 0
 
 # Only a brand-new, single-pane session.
 [ "$(tmux display-message -t "$session" -p '#{session_windows}')" = "1" ] || exit 0
@@ -53,11 +66,11 @@ if is_remote_attach; then
 		;;
 	static)
 		tmux set-option -g @splash_shown 1
-		tmux display-popup -E -B -w 100% -h 100% -t "$session" @tmux_splash@ --static
+		tmux display-popup -E -B -w 100% -h 100% -t "$session" -c "$client" @tmux_splash@ --static
 		exit 0
 		;;
 	esac
 fi
 
 tmux set-option -g @splash_shown 1
-tmux display-popup -E -B -w 100% -h 100% -t "$session" @tmux_splash@
+tmux display-popup -E -B -w 100% -h 100% -t "$session" -c "$client" @tmux_splash@
