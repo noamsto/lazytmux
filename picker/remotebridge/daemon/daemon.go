@@ -922,14 +922,17 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 				if !ok {
 					// The pane is gone: flush whatever the proxies were
 					// still holding (a partial sequence cut mid-stream)
-					// rather than silently dropping it.
-					if tail := kn.Flush(); len(tail) > 0 {
-						wire.WriteFrame(conn, wire.FrameOutput, tail)
-					}
+					// rather than silently dropping it. kn's leftover is
+					// run through gfx — same as the steady-state order —
+					// before gfx's own Close, not written ahead of it: kn
+					// only ever holds back the newest unprocessed tail, so
+					// anything gfx is already holding is strictly older.
+					tail := kn.Flush()
 					if gfx != nil {
-						if tail := gfx.Close(); len(tail) > 0 {
-							wire.WriteFrame(conn, wire.FrameOutput, tail)
-						}
+						tail = append(gfx.Filter(tail), gfx.Close()...)
+					}
+					if len(tail) > 0 {
+						wire.WriteFrame(conn, wire.FrameOutput, tail)
 					}
 					return
 				}

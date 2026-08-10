@@ -102,8 +102,8 @@ func scanParams(p []byte) (length int, final byte, complete bool) {
 // partialPrefixTail returns the longest suffix of p that could be the start
 // of prefix, so a prefix split across Feed calls is still recognized.
 func partialPrefixTail(p []byte) []byte {
-	max := min(len(p), len(prefix)-1)
-	for n := max; n > 0; n-- {
+	limit := min(len(p), len(prefix)-1)
+	for n := limit; n > 0; n-- {
 		if bytes.Equal(p[len(p)-n:], []byte(prefix[:n])) {
 			return p[len(p)-n:]
 		}

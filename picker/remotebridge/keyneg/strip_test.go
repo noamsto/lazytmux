@@ -1,6 +1,9 @@
 package keyneg
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFeedStripsModifyOtherKeysSet(t *testing.T) {
 	got := NewFilter().Feed([]byte("before\x1b[>4;2mafter"))
@@ -72,8 +75,11 @@ func TestFlushReleasesHeldPartial(t *testing.T) {
 }
 
 func TestFeedOverlongPendingReleasedAsLiteral(t *testing.T) {
-	got := NewFilter().Feed([]byte("\x1b[>" + string(make([]byte, maxPending+1))))
-	if len(got) == 0 {
-		t.Fatal("overlong unterminated sequence should be forwarded, not swallowed")
+	// Digits keep scanParams genuinely unterminated (a NUL byte would end
+	// the params scan immediately, never reaching the maxPending check).
+	in := "\x1b[>" + strings.Repeat("9", maxPending+1)
+	got := NewFilter().Feed([]byte(in))
+	if string(got) != in {
+		t.Fatalf("Feed() = %q, want unchanged %q", got, in)
 	}
 }
