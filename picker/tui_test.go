@@ -94,14 +94,14 @@ func remoteFixture() []listItem {
 	}
 }
 
-// The claude/scratch modes filter local sessions; remote rows are exempt, so
+// The agent/scratch modes filter local sessions; remote rows are exempt, so
 // neither toggle may take the Remote section away.
 func TestWithFilterModesKeepRemote(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		m    tuiModel
 	}{
-		{"claude only", tuiModel{allItems: remoteFixture(), claudeOnly: true}},
+		{"agent only", tuiModel{allItems: remoteFixture(), agentOnly: true}},
 		{"scratch only", tuiModel{allItems: remoteFixture(), scratchOnly: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -732,7 +732,7 @@ func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 }
 
 // Pending rows (before any probe resolves) must be exempt from the
-// claude/scratch toggles exactly like resolved rows — itemVisible checks
+// agent/scratch toggles exactly like resolved rows — itemVisible checks
 // isRemoteRow before either toggle, and pendingRemoteItems sets it via the
 // same remoteHostRowItem helper collectRemoteItems uses.
 func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
@@ -741,7 +741,7 @@ func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
 		name string
 		m    tuiModel
 	}{
-		{"claude only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), claudeOnly: true}},
+		{"agent only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), agentOnly: true}},
 		{"scratch only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), scratchOnly: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -778,11 +778,11 @@ func TestGroupWindowsBySessionUnchanged(t *testing.T) {
 
 func TestGroupWindowsByStatePriorityOrder(t *testing.T) {
 	windows := []windowData{
-		{session: "a", index: 1, claude: claudeCounts{done: 1}},
-		{session: "b", index: 1, claude: claudeCounts{errorCnt: 1}},
-		{session: "c", index: 1}, // no claude state
-		{session: "d", index: 1, claude: claudeCounts{waiting: 1}},
-		{session: "e", index: 1}, // no claude state
+		{session: "a", index: 1, agent: agentCounts{done: 1}},
+		{session: "b", index: 1, agent: agentCounts{errorCnt: 1}},
+		{session: "c", index: 1}, // no agent state
+		{session: "d", index: 1, agent: agentCounts{waiting: 1}},
+		{session: "e", index: 1}, // no agent state
 	}
 	groups := groupWindowsByState(windows, map[string]int64{})
 
@@ -811,9 +811,9 @@ func TestGroupWindowsByStatePriorityOrder(t *testing.T) {
 
 func TestGroupWindowsByStateEmptyGroupsOmitted(t *testing.T) {
 	// Only "processing" and "" are present — every other state in
-	// claudeStateOrder must be absent from the output, not present-but-empty.
+	// agentStateOrder must be absent from the output, not present-but-empty.
 	windows := []windowData{
-		{session: "a", index: 1, claude: claudeCounts{processing: 1}},
+		{session: "a", index: 1, agent: agentCounts{processing: 1}},
 		{session: "b", index: 1},
 	}
 	groups := groupWindowsByState(windows, map[string]int64{})
@@ -826,7 +826,7 @@ func TestRenderWindowItemsStateGroupedHeaderOrder(t *testing.T) {
 	windows := []windowData{
 		{session: "a", index: 1, name: "a"},
 		{session: "b", index: 1, name: "b"},
-		{session: "c", index: 1, name: "c", claude: claudeCounts{errorCnt: 1}},
+		{session: "c", index: 1, name: "c", agent: agentCounts{errorCnt: 1}},
 	}
 	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, true)
 
@@ -846,8 +846,8 @@ func TestRenderWindowItemsStateGroupedFoldsSession(t *testing.T) {
 	// were silently skipped, the row's plain text would never contain
 	// "alpha"/"beta" at all, so this fixture can actually fail.
 	windows := []windowData{
-		{session: "alpha", index: 1, name: "win-one", claude: claudeCounts{waiting: 1}},
-		{session: "beta", index: 1, name: "win-two", claude: claudeCounts{done: 1}},
+		{session: "alpha", index: 1, name: "win-one", agent: agentCounts{waiting: 1}},
+		{session: "beta", index: 1, name: "win-two", agent: agentCounts{done: 1}},
 	}
 	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, true)
 
@@ -890,7 +890,7 @@ func TestRenderWindowItemsStateGroupedRespectsColumnBudget(t *testing.T) {
 	// labelCol budget every other row (session-grouped or not) is aligned to.
 	windows := []windowData{
 		{session: "a-very-long-worktree-session-name-indeed", index: 1, name: "x",
-			claude: claudeCounts{waiting: 1}, labelID: "L PROJECT-123456", labelRest: " a fairly long issue title here"},
+			agent: agentCounts{waiting: 1}, labelID: "L PROJECT-123456", labelRest: " a fairly long issue title here"},
 	}
 	narrow := renderWindowItems(windows, map[string]string{}, nil, "dark", 40, true)
 	wide := renderWindowItems(windows, map[string]string{}, nil, "dark", 40, false)

@@ -22,7 +22,7 @@ func TestFormatIssueIDs(t *testing.T) {
 }
 
 func TestAddIssuesDedupes(t *testing.T) {
-	cc := &claudeCounts{}
+	cc := &agentCounts{}
 	addIssues(cc, []string{"ENG-1", "GH-2"})
 	addIssues(cc, []string{"GH-2", "ENG-3"})
 	want := []string{"ENG-1", "GH-2", "ENG-3"}

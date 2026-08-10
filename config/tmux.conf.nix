@@ -741,11 +741,11 @@
     bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{session_name} #{window_index} #{@window_per}'
     bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{session_name} #{window_index} #{@window_per}'
 
-    # Session/window pickers (wrappers pre-compute claude status), plus the
+    # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
     bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
-    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --claude'
+    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --agent'
     bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.

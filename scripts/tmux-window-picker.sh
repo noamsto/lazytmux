@@ -4,9 +4,9 @@ set -euo pipefail
 
 ARGS="--tui --windows"
 TITLE=" Windows "
-if [[ ${1:-} == "--claude" ]]; then
-	ARGS="$ARGS --claude"
-	TITLE=" 🧠 Claude Windows "
+if [[ ${1:-} == "--agent" ]]; then
+	ARGS="$ARGS --agent"
+	TITLE=" Agent Windows "
 fi
 
 BORDER_FG=$(tmux show -gv @thm_overlay_1 2>/dev/null || echo "#7f849c")

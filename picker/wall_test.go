@@ -755,8 +755,8 @@ func TestFocusedKeepsCtrlBindings(t *testing.T) {
 
 	got, _ := m.handleKey(wallKey("ctrl+a"))
 	gm := got.(tuiModel)
-	if !gm.claudeOnly {
-		t.Error("ctrl+a should still toggle the claude filter while focused")
+	if !gm.agentOnly {
+		t.Error("ctrl+a should still toggle the agent filter while focused")
 	}
 	if !gm.focused {
 		t.Error("toggling a filter should not unfocus")
@@ -887,12 +887,12 @@ func TestRenderWallHintsShowFocusedTarget(t *testing.T) {
 func wallFixture() tuiModel {
 	items := []listItem{
 		{display: "── Windows ──", plain: "── Windows ──", isHeader: true, session: "s"},
-		{target: "s:1", display: "1: alpha", plain: "1: alpha", session: "s", hasActiveClaude: true},
-		{target: "s:2", display: "2: beta", plain: "2: beta", session: "s", hasActiveClaude: true},
-		{target: "s:3", display: "3: gamma", plain: "3: gamma", session: "s", hasActiveClaude: true},
-		{target: "s:4", display: "4: delta", plain: "4: delta", session: "s", hasActiveClaude: true},
-		{target: "s:5", display: "5: epsilon", plain: "5: epsilon", session: "s", hasActiveClaude: true},
-		{target: "s:6", display: "6: zeta", plain: "6: zeta", session: "s", hasActiveClaude: true},
+		{target: "s:1", display: "1: alpha", plain: "1: alpha", session: "s", hasActiveAgent: true},
+		{target: "s:2", display: "2: beta", plain: "2: beta", session: "s", hasActiveAgent: true},
+		{target: "s:3", display: "3: gamma", plain: "3: gamma", session: "s", hasActiveAgent: true},
+		{target: "s:4", display: "4: delta", plain: "4: delta", session: "s", hasActiveAgent: true},
+		{target: "s:5", display: "5: epsilon", plain: "5: epsilon", session: "s", hasActiveAgent: true},
+		{target: "s:6", display: "6: zeta", plain: "6: zeta", session: "s", hasActiveAgent: true},
 		{target: "/tmp/dir", createPath: "/tmp/dir", createName: "dir", display: "dir", plain: "dir"},
 		{target: "g5", remoteHost: "g5", isRemoteRow: true, display: "g5", plain: "g5"},
 	}

@@ -33,7 +33,7 @@ func TestRenderWindowItemsEnriched(t *testing.T) {
 		// window 2 has none. Both icon and label columns must be padded for the
 		// identity column to align.
 		{session: "proj", index: 1, name: "x", branch: "feat/eng-1-a",
-			claude:  claudeCounts{issues: []string{"AAA-1"}},
+			agent:   agentCounts{issues: []string{"AAA-1"}},
 			labelID: "L ENG-1", labelRest: " short title",
 			prPlain: "  #10", prState: "open", prCheck: "success", prMergeable: "mergeable"},
 		{session: "proj", index: 2, name: "a-much-longer-window-name", active: true, branch: "feat/eng-2-b",
