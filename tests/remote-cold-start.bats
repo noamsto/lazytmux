@@ -3,7 +3,7 @@
 # Cold-starting a serverless remote (#287). The launcher may only reach for
 # tmux-startup.service when list-sessions came back empty, and must re-probe
 # afterwards instead of assuming the unit produced the session it wanted —
-# unit state is not server state.
+# unit state is not server state, in either direction (#345).
 #
 # ssh and tmux are fakes on PATH; nothing here touches a real host or server.
 
@@ -51,13 +51,16 @@ setup() {
 			;;
 		*"command -v tmux"*) echo /usr/bin/tmux ;;
 		*"uname -s; id -u"*) printf '%s\n%s\n' "${FAKE_UNAME:-Linux}" 1000 ;;
-		*"systemctl --user start"*)
+		*"systemctl --user restart"*)
 			if [ -n "${FAKE_UNIT_MISSING:-}" ]; then
-				echo "Failed to start tmux-startup.service: Unit not found." >&2
+				echo "Failed to restart tmux-startup.service: Unit not found." >&2
 				exit 1
 			fi
 			touch "$REMOTE_SERVER"
 			;;
+		# `start` against a dead server behind a RemainAfterExit=yes unit
+		# systemd still calls `active`: exits 0, produces nothing (#345).
+		*"systemctl --user start"*) ;;
 		*"launchctl kickstart"*)
 			if [ -n "${FAKE_AGENT_MISSING:-}" ]; then
 				echo "Could not find service \"org.nix-community.home.tmux-startup\" in domain for gui" >&2
@@ -122,7 +125,11 @@ teardown() {
 	run bash "$LAUNCHER" tp-g6
 	[ "$status" -eq 0 ]
 
-	grep -q 'systemctl --user start tmux-startup.service' "$SSH_LOG"
+	grep -q 'systemctl --user restart tmux-startup.service' "$SSH_LOG"
+	# `start` would no-op against a unit systemd still calls active (#345).
+	run grep -c 'systemctl --user start' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+
 	# Two probes: the empty one that triggered the start, and the one after it.
 	[ "$(grep -c list-sessions "$SSH_LOG")" -eq 2 ]
 
@@ -334,7 +341,7 @@ teardown() {
 	run bash "$LAUNCHER" tp-g6 work
 	[ "$status" -eq 0 ]
 
-	grep -q 'systemctl --user start tmux-startup.service' "$SSH_LOG"
+	grep -q 'systemctl --user restart tmux-startup.service' "$SSH_LOG"
 	grep -q "has-session -t '=work'" "$SSH_LOG"
 	grep -q 'tmux-remux restore' "$SSH_LOG"
 	# Guards against dropping the PATH= that lets tmux-remux find the bare

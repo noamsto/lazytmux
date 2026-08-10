@@ -62,9 +62,10 @@ first_remote_session() {
 # RemainAfterExit, the launchd agent is RunAtLoad, and both scripts
 # exact-match `has-session` before creating anything. Callers must always
 # re-probe with first_remote_session afterwards rather than trust this
-# returning cleanly — unit state is not server state, a live server can sit
-# behind an `inactive` unit (#287). Exits the whole script on failure: a cold
-# start is a fatal precondition for every caller.
+# returning cleanly — unit state is not server state: a live server can sit
+# behind an `inactive` unit (#287), and a dead one behind an `active` unit
+# (#345). Exits the whole script on failure: a cold start is a fatal
+# precondition for every caller.
 start_remote_server() {
 	if [[ $remote_os == Darwin ]]; then
 		# The launchd agent mirrors tmux-startup.service on macOS; kickstart
@@ -72,7 +73,10 @@ start_remote_server() {
 		start_cmd=(launchctl kickstart "gui/$remote_uid/org.nix-community.home.tmux-startup")
 		start_desc="tmux-startup launchd agent"
 	else
-		start_cmd=(systemctl --user start tmux-startup.service)
+		# `restart`, not `start`: RemainAfterExit keeps the unit `active` after
+		# the tmux server it forked has exited, so `start` no-ops on exactly the
+		# host this function exists for (#345).
+		start_cmd=(systemctl --user restart tmux-startup.service)
 		start_desc="tmux-startup.service"
 	fi
 	if ! ssh "$host" -- "${start_cmd[@]}"; then
