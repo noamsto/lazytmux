@@ -712,7 +712,9 @@
     unbind '"'
     bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v '#{@bridge_pane}'" } { split-window -v -c "#{pane_current_path}" }
     bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window '#{@bridge_pane}'" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
-    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
+    # #{q:} on the session name, not \"...\": run-shell format-expands before sh -c,
+    # so a name containing a quote breaks out and executes (see client-attached[50]).
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad --client "#{client_name}" #{q:session_name}'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
@@ -743,13 +745,13 @@
 
     # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
-    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
-    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --agent'
-    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall'
+    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
+    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}"'
+    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}" --agent'
+    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall --client "#{client_name}"'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.
-    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
+    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
 
     ${lib.optionalString splashEnable ''
       # Summon the welcome splash on demand (bypasses the once-per-session gate;
@@ -1051,8 +1053,14 @@
     ${lib.optionalString splashEnable ''
       # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
       # index-0 bindings on the same events (a bare set-hook would clobber them).
-      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
-      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+      # _name (not #{hook_session}) sidesteps the $0 re-expansion hazard at :960-961.
+      # #{q:} and NOT \"...\": the whole string is format-expanded before sh -c sees
+      # it, so a quote in the name breaks out and executes — and a bridged session's
+      # name comes from the remote host (lztmux-remote-open builds it from the
+      # remote's list). || true stops the gate's fail-closed exit from pushing the
+      # hook's pane into view-mode.
+      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
+      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
     ''}
 
     ${lib.optionalString notifyEnable ''

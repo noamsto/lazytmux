@@ -283,8 +283,13 @@ default through `programs.lazytmux.splash.enable`.
   folded to spaces). The deck plays ~real-time (`deckStep` ticks/frame); the
   renderer recolors every glyph, so the source is shape-only.
 - **Trigger:** indexed `client-attached[50]` / `client-session-changed[50]`
-  hooks fire `tmux-splash-maybe`, which gates on the global `@splash_shown`
-  (once per server) + 1-window/1-pane + `pane_current_command` being a shell.
+  hooks fire `tmux-splash-maybe`, passing `#{hook_session_name}` (the id form
+  `#{hook_session}` gets re-expanded by `run-shell`'s own shell) and
+  `#{hook_client}`, which gates on the global `@splash_shown` (once per
+  server) + 1-window/1-pane + `pane_current_command` being a shell, and now
+  also skips control-mode clients (the remote bridge's `-CC` attach) without
+  setting `@splash_shown`; the popup itself is pinned to the attaching client
+  with `-c`.
 - **Remote (ssh) attach:** `programs.lazytmux.splash.remote` (`full` default,
   `static`, or `skip`) controls what `tmux-splash-maybe` does when the client
   that attached to the session came in over ssh. Detected via
