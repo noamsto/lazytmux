@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 
 	"github.com/BurntSushi/toml"
@@ -61,10 +62,8 @@ func ForCommand(ms []Manifest, cmd string) (Manifest, bool) {
 		cmd = m[1]
 	}
 	for _, m := range ms {
-		for _, c := range m.MatchCommands {
-			if c == cmd {
-				return m, true
-			}
+		if slices.Contains(m.MatchCommands, cmd) {
+			return m, true
 		}
 	}
 	return Manifest{}, false
