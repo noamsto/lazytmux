@@ -3,6 +3,7 @@ package manifest
 import (
 	"embed"
 	"fmt"
+	"regexp"
 	"sort"
 
 	"github.com/BurntSushi/toml"
@@ -32,6 +33,8 @@ type Manifest struct {
 	Rules         []Rule   `toml:"rules"`
 }
 
+var wrappedRe = regexp.MustCompile(`^\.(.*)-wrapped$`)
+
 func Load() ([]Manifest, error) {
 	entries, err := manifestFS.ReadDir("manifests")
 	if err != nil {
@@ -54,6 +57,9 @@ func Load() ([]Manifest, error) {
 }
 
 func ForCommand(ms []Manifest, cmd string) (Manifest, bool) {
+	if m := wrappedRe.FindStringSubmatch(cmd); m != nil {
+		cmd = m[1]
+	}
 	for _, m := range ms {
 		for _, c := range m.MatchCommands {
 			if c == cmd {
