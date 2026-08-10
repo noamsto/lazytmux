@@ -761,10 +761,11 @@
 
     ${lib.optionalString enrichEnable ''
       # === Issue/PR enrichment ===
-      # prefix + i opens the enrich card popup (issue/PR/branch/Claude identity
-      # + o/p/r/q actions). Icons use the RAW set: the popup's stdout is not
-      # re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
-      bind-key i display-popup -E -w 64 -h 18 "${picker-card-bin} \
+      # prefix + i opens the enrich card in a floating pane, window-scoped like
+      # yazi/prdash below (it reads the *current window's* @issue_*/@pr_*, so
+      # window scope is correct). Icons use the RAW set: the card's stdout is
+      # not re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
+      bind-key i new-pane -x 64 -y 18 -X 20% -Y 15% -B heavy "${picker-card-bin} \
         --target '#{session_id}:#{window_id}' \
         --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
         --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
@@ -775,7 +776,7 @@
         --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
         --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
         --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}' \
-        --icon-draft '${enrichIconSetRaw.draft}'"
+        --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich
     ''}
 
     ${lib.optionalString notifyEnable ''
@@ -787,14 +788,16 @@
       bind-key n display-popup -E -w 80% -h 60% '${script.lztmux-notify-center}/bin/lztmux-notify-center'
     ''}
 
-    # Floating popups
-    bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
-    bind-key "b" display-popup -E -w 90% -h 90% btop
-    bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
+    # Floating panes (window-scoped; see the yazi comment below for why floats
+    # over popups — full escape-sequence passthrough, and a pane is mirrorable
+    # across the remote bridge in principle where a popup can never be).
+    bind-key "g" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy lazygit \; set -p @pane_label lazygit
+    bind-key "b" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy btop \; set -p @pane_label btop
+    bind-key "G" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy ${script.tmux-gh-dash}/bin/tmux-gh-dash \; set -p @pane_label gh-dash
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
-    bind-key "k" display-popup -E -w 90% -h 90% "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }"
+    bind-key "k" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
