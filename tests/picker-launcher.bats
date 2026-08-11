@@ -92,11 +92,11 @@ width_of() { sed -n 's/.*-w \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 	run ! grep -Eq -- '(^| )-c ' "$ARGS_LOG"
 }
 
-@test "window picker: --client foo --claude pins the client and still reaches --claude" {
+@test "window picker: --client foo --agent pins the client and still reaches --agent" {
 	launcher="$(mk_launcher tmux-window-picker.sh)"
-	bash "$launcher" --client foo --claude
+	bash "$launcher" --client foo --agent
 	grep -Eq -- '(^| )-c foo( |$)' "$ARGS_LOG"
-	grep -q -- '--claude' "$ARGS_LOG"
+	grep -q -- '--agent' "$ARGS_LOG"
 }
 
 @test "scratchpad: --client foo pins the client and still treats sess as the session" {
