@@ -214,14 +214,21 @@ A host that needs an answer ssh can only get from a terminal — an unknown host
 key, a password, a 2FA code — shows as
 `<host>  (auth needed — Enter to connect)`. Enter hands the picker's popup to
 ssh, which prompts for itself; lazytmux never sees the secret. That one
-handshake opens a shared connection (`ControlMaster`), so the bridge, the
-launcher and every later probe reuse it without asking again — for
-`remote.authPersistSeconds` of idle time (default 4h; a live bridge never
-expires, since it holds the connection open).
+handshake opens a shared connection (`ControlMaster`), and the picker's probe
+and the launcher reuse it without asking again — for `remote.authPersistSeconds`
+of idle time (default 4h). If your ssh config has no `ControlPath` set (the
+OpenSSH default), sharing is off entirely and the message says so; you'll be
+asked again on the next connection regardless of this setting.
+
+The remote-bridge daemon does **not** ride that connection — it opens its own
+`ssh` with its own `-o ControlPath`, so it authenticates independently. If the
+`ssh-copy-id` offer below is declined, the daemon has no terminal to answer a
+password prompt with, and bridging a session to that host will fail (visibly,
+in the popup, at decline time) until a key is installed.
 
 If a key is not installed, the same prompt offers to run `ssh-copy-id`, which
 rides the connection just opened and so needs no second password. Accepting it
-means the host never asks again.
+means the host never asks again — including the daemon.
 
 A host whose key has *changed* since it was accepted shows as
 `<host>  (host key changed — verify manually)` and Enter does nothing. That is

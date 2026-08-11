@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop the session picker reporting auth-needed hosts as "unreachable", and give the user one place to satisfy the ssh prompt — after which every other call site rides the resulting ControlMaster for free.
+**Goal:** Stop the session picker reporting auth-needed hosts as "unreachable", and give the user one place to satisfy the ssh prompt — after which the probe and the launcher ride the resulting ControlMaster for free.
 
-**Architecture:** The probe keeps `BatchMode=yes` and never blocks, but now captures stderr and classifies exit 255 into `needsAuth` / `hostKeyChanged` / `unreachable`. Enter on a needs-auth row hands the picker's popup pty to `ssh` via `tea.ExecProcess`, running `lztmux-remote-auth`, which creates a self-reaping ControlMaster and then offers `ssh-copy-id`. Nothing in `lztmux-remote-open.sh`, the bridge daemon, or the graphics fetcher changes — verified that `ControlMaster no` still *reuses* an existing master.
+**Architecture:** The probe keeps `BatchMode=yes` and never blocks, but now captures stderr and classifies exit 255 into `needsAuth` / `hostKeyChanged` / `unreachable`. Enter on a needs-auth row hands the picker's popup pty to `ssh` via `tea.ExecProcess`, running `lztmux-remote-auth`, which creates a self-reaping ControlMaster and then offers `ssh-copy-id`. `lztmux-remote-open.sh` is unchanged and rides that same master for free — verified that `ControlMaster no` still *reuses* an existing master. The bridge daemon and the graphics fetcher are also unchanged, but do **not** ride it: the daemon passes its own `-o ControlPath` on the command line, which overrides the config and builds a master of its own, so those two keep authenticating independently regardless of this handshake.
 
 **Tech Stack:** Go 1.25 (`charm.land/bubbletea/v2 v2.0.2`), bash, Nix (flake + home-manager module), bats.
 
@@ -960,3 +960,19 @@ host key before testing; that would destroy the fixture.
 - [ ] Enter on an `mbp` session row opens the bridge with no further prompt.
 - [ ] Close the picker, reopen — `mbp` probes green with no interaction.
 - [ ] `ssh -o BatchMode=yes -T mbp true` now exits 0, proving the key install worked.
+
+The accept path above never reaches the daemon's own auth, since the launcher
+and probe ride this handshake's master while the daemon builds its own — the
+decline path is the one that actually exercises that gap:
+
+- [ ] On a second password-only host (or after removing the key just
+  installed on `mbp` from its `authorized_keys`), run the handshake and answer
+  **n** to the `ssh-copy-id` offer. The popup must print the "bridging a
+  session to this host will fail until a key is installed" warning before
+  returning.
+- [ ] The picker row still probes green (or "no server") afterward — the probe
+  rides the handshake's master regardless of the decline.
+- [ ] Enter on a session row for that host: confirm what actually happens
+  without a key. Per the design, the daemon has no tty and should die into
+  `${sock}.log` with an empty/broken mirror and no visible error in the
+  picker — check `${sock}.log` to see whether that is really what happens.

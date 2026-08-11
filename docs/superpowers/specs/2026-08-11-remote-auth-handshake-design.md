@@ -38,12 +38,25 @@ $ ssh -o ControlMaster=no  -o ControlPath=/tmp/cmtest.sock -v -T tp-g6 true
 debug1: mux_client_request_session: master session id: 2
 ```
 
-So once a master exists for a host, **every existing call site rides it with no
-code change**: the probe, all eight launcher calls, the daemon's `ssh -CC`, and
-the graphics fetcher (whose comment at `picker/remotebridge/graphics/fetch.go:39`
-already assumes a `ControlMaster` socket that nothing in this repo creates).
+So once a master exists for a host, **two of the four call sites ride it with
+no code change**: the probe and `lztmux-remote-open.sh`'s ssh calls both omit
+`-o ControlPath`, so they fall through to the config's `~/.ssh/master-%r@%n:%p`
+and find the master this handshake just created.
 
-The only missing piece is master *creation*. That is the whole feature.
+The other two do **not**, and were never going to: `picker/remotebridge/cmd/daemon/main.go`
+passes its own `-o ControlPath=/tmp/lztmux-bridge-<pid>.sock` on the command
+line, which overrides the config outright, so the daemon always builds a
+master of its own regardless of what this handshake does. The graphics
+fetcher (`picker/remotebridge/graphics/fetch.go`) then rides *that* socket via
+`-S`, not the one this handshake creates. Both authenticate independently —
+on a password-only host where the user declines the `ssh-copy-id` offer below,
+the picker goes green and the launcher succeeds, but the detached daemon has
+no tty to answer a password prompt and dies into `${sock}.log`, silently.
+That daemon/fetcher path is unchanged by this feature and is not being
+redesigned here (see "Out of scope").
+
+The missing piece for the two call sites this *does* fix is master
+*creation*. That is the feature's actual size.
 
 `ssh -G <host>` resolves `controlpath` to
 `/home/noams/.ssh/master-noams@mbp:22` — comfortably under the 108-byte
@@ -199,10 +212,13 @@ So the gate would have cost a `ssh -G` fork per host per picker open to optimise
 the one case that was never the problem. Left out deliberately.
 
 `ControlPersist` is an **idle** timer — it starts counting only once no
-multiplexed sessions remain. The daemon's `ssh -CC` is a session riding the
-master for the life of the mirror, so a live bridge never idles out regardless
-of how short `authPersist` is. The timer effectively measures time since the
-last bridged session to that host closed.
+multiplexed sessions remain. It only governs this handshake's own master,
+though: the daemon's `ssh -CC` is not a session on it, since the daemon passes
+its own `-o ControlPath` and builds an unrelated master for the life of the
+mirror. So an idle probe/launcher master times out on its own schedule
+regardless of whether a bridge to the same host is open — `authPersist` is not
+extended by a live mirror, it just measures time since the last probe or
+launcher call to that host.
 
 ## The `authPersistSeconds` option
 
@@ -252,11 +268,32 @@ point. An `SSH_ASKPASS` helper backed by a real OS keychain remains the escape
 hatch if a host ever turns up that cannot accept a key — but it is not built
 here, and should not be until such a host exists.
 
+This design does still accept an exposure of the same shape it rejects
+password-at-rest for: for up to `authPersistSeconds` (default 4h), a live
+`ControlMaster` socket sits under `~/.ssh`, and any process running as this
+user can use it to reach the remote host with no credential of its own —
+"anything that can read `~` reads both" applies to a live socket exactly as it
+does to a stored key. The difference is duration and revocability (it expires
+on its own and carries no secret past that point), not the absence of the
+property.
+
 ## Out of scope
 
 - `SSH_ASKPASS` in any form (above).
 - Auto-reauthentication when a master dies mid-session. The `-O check` gate plus
   the needs-auth row means the user is told to reconnect; the bridge does not
   try to repair itself. Revisit only if a master proves to die often in practice.
-- Anything about the eight launcher calls or the daemon. They are unchanged, and
-  that is the design's main claim.
+- Anything about `lztmux-remote-open.sh`'s ssh calls. They are unchanged, and
+  riding this handshake's master for free is the design's real claim for them.
+- **The daemon and the graphics fetcher are explicitly not touched**, and that
+  is a deliberate exclusion, not an oversight this handshake happens to cover:
+  the daemon's `-o ControlPath=/tmp/lztmux-bridge-<pid>.sock` overrides the
+  config, so it always builds its own master no matter what this feature does,
+  and the fetcher rides that socket, not this one. Making the daemon share this
+  handshake's master was considered and declined — it would mean either
+  dropping its own `-o ControlPath` (losing the isolation that keeps image
+  bytes off the control stream, see the daemon's own comment) or teaching it to
+  probe for and adopt an unrelated master, neither of which this issue's scope
+  justifies. The consequence — a declined `ssh-copy-id` offer leaves the daemon
+  unable to authenticate, dying silently into `${sock}.log` — is accepted as a
+  known gap, not fixed here.
