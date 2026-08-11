@@ -645,17 +645,29 @@ And extend `scriptsWithRemote` (line 448) — the script sources `lib-remote.sh`
 
 - [ ] **Step 5: Build and verify the substitution actually landed**
 
+**Correction (found during Task 4):** `./result/bin/lztmux-remote-auth` does not
+exist — `nix build .#default` produces a `symlinkJoin` exposing only the
+wrapped `tmux` binary at `./result/bin/tmux`; each script lives at its own
+store path, reached via the wrapper's `PATH`, not under `./result`. Resolve
+the real path via `nix-store -q --references` on the wrapped binary instead:
+
 ```bash
 nix build .#default
-grep -c '@lib_remote@' ./result/bin/lztmux-remote-auth
+AUTH_SCRIPT=$(nix-store -q --references $(readlink -f ./result/bin/tmux) | grep lztmux-remote-auth)
+grep -c '@lib_remote@' "$AUTH_SCRIPT/bin/lztmux-remote-auth"
 ```
 
 Expected: `nix build` succeeds; `grep -c` prints `0` — an unsubstituted placeholder would mean the script was packaged by `mkScriptFull` instead of `mkRemoteScript` and would fail at runtime with a `source: @lib_remote@` error.
 
 - [ ] **Step 6: Verify the tmux option is set**
 
+**Correction (found during Task 4):** `./result/share/tmux/tmux.conf` does not
+exist either — the generated config is its own store path, also reached only
+through the wrapper's references, not exposed under `./result`:
+
 ```bash
-grep 'remote_auth_persist' ./result/share/tmux/tmux.conf || grep -r 'remote_auth_persist' ./result
+CONF=$(nix-store -q --references $(readlink -f ./result/bin/tmux) | grep 'tmux.conf$')
+grep 'remote_auth_persist' "$CONF"
 ```
 
 Expected: one `set -g @remote_auth_persist "14400"` line.
