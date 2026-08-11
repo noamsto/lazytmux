@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -611,7 +613,7 @@ func TestLayoutShowsPreview(t *testing.T) {
 func TestFirstPaintIncludesRemoteRows(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	items := []listItem{{target: "lazytmux", searchText: "lazytmux"}}
-	m := newPickerModel(false, false, false, opts, "dark", items)
+	m := newPickerModel(false, false, false, opts, "dark", items, "")
 
 	var sawHeader, sawLab, sawDead bool
 	for _, item := range m.visible {
@@ -980,5 +982,176 @@ func TestToggleStateGroupedNoopInWallMode(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatal("ctrl+g should not trigger a refresh in the wall")
+	}
+}
+
+// --- Remote-pick mode (#356) ---
+
+// A remote-of-remote Remote section would offer bridging from a host we're
+// not attached to — spec D8 drops it entirely in emit mode.
+func TestEmitModeBuildsNoRemoteSection(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
+	items := []listItem{{target: "lazytmux", searchText: "lazytmux"}}
+	m := newPickerModel(false, false, false, opts, "dark", items, "/tmp/emit")
+
+	if m.remoteItems != nil {
+		t.Errorf("remoteItems = %+v, want nil in emit mode", m.remoteItems)
+	}
+	for _, item := range m.visible {
+		if item.isRemoteHeader || item.remoteHost != "" {
+			t.Fatalf("emit mode built a Remote section: %+v", m.visible)
+		}
+	}
+}
+
+// Init's remote-of-remote probe must not fire in emit mode either — a
+// serverless host would otherwise pay for an ssh round trip to nowhere.
+func TestEmitModeInitSkipsRemoteCmd(t *testing.T) {
+	base := tuiModel{mode: modeList, theme: "dark", tmuxOpts: map[string]string{}}
+	countCmds := func(m tuiModel) int {
+		msg := m.Init()()
+		batch, ok := msg.(tea.BatchMsg)
+		if !ok {
+			t.Fatalf("Init() did not return a batch: %T", msg)
+		}
+		return len(batch)
+	}
+
+	ordinary := base
+	emit := base
+	emit.emitPath = "/tmp/emit"
+
+	if got, want := countCmds(emit), countCmds(ordinary)-1; got != want {
+		t.Errorf("emit mode Init() batched %d commands, want %d (one fewer than ordinary mode — no remoteCmd)", got, want)
+	}
+}
+
+// Inherited unchanged, ctrl+x would kill-session / zoxideForget against the
+// *remote* server and db (spec D8).
+func TestCtrlXInertInEmitMode(t *testing.T) {
+	m := tuiModel{emitPath: "/tmp/emit", visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Error("ctrl+x should be a no-op in emit mode")
+	}
+	mm := m2.(tuiModel)
+	if mm.statusMsg != "" {
+		t.Errorf("ctrl+x set statusMsg in emit mode: %q", mm.statusMsg)
+	}
+	if len(mm.visible) != 1 || mm.visible[0].target != "lazytmux" {
+		t.Errorf("ctrl+x mutated visible rows in emit mode: %+v", mm.visible)
+	}
+}
+
+func TestActivateCurrentEmitModeWritesSessionPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "emit")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("pre-create: %v", err)
+	}
+	m := tuiModel{emitPath: path, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+
+	_, cmd := m.activateCurrent()
+	if cmd == nil {
+		t.Fatal("activateCurrent should quit after a successful emit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("cmd() = %T, want tea.QuitMsg", cmd())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read emit file: %v", err)
+	}
+	if kind, _ := testKVGet(string(data), "kind"); kind != "session" {
+		t.Errorf("kind = %q, want session (payload: %q)", kind, data)
+	}
+}
+
+// D9: cancel (q/esc/ctrl+c) writes nothing — the wrapper pre-creates the
+// file, so an empty file left untouched is how it reads "cancelled".
+func TestEmitModeCancelWritesNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "emit")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("pre-create: %v", err)
+	}
+	m := tuiModel{emitPath: path, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'q'},
+		{Code: tea.KeyEscape},
+		{Code: 'c', Mod: tea.ModCtrl},
+	} {
+		if _, cmd := m.handleKey(key); cmd == nil {
+			t.Errorf("%s should quit", key)
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("cancel wrote %q, want the pre-created file left empty", data)
+	}
+}
+
+// AC2's headline case: a serverless remote still offers its zoxide dirs, and
+// they must be selectable and resolve to a dir payload.
+func TestEmitModeSessionsEmptyZoxideNonEmptySelectable(t *testing.T) {
+	headerOnly := []listItem{{isHeader: true, plain: "Session"}}
+	m := newPickerModel(false, false, false, map[string]string{}, "dark", headerOnly, "/tmp/emit")
+
+	zItems := []listItem{
+		{isHeader: true, isZoxideHeader: true, plain: "── New session ──"},
+		{target: "/home/x/proj", createPath: "/home/x/proj", createName: "proj", plain: "proj", searchText: "proj"},
+	}
+	m2, _ := m.Update(zoxideMsg{items: zItems})
+	mm := m2.(tuiModel)
+
+	var found bool
+	for _, item := range mm.visible {
+		if item.createPath == "" {
+			continue
+		}
+		found = true
+		if !mm.isSelectable(item) {
+			t.Errorf("zoxide row not selectable: %+v", item)
+		}
+		p, ok := resolveEmitPick(item)
+		if !ok || p.kind != "dir" {
+			t.Errorf("resolveEmitPick(%+v) = %+v, %v; want ok kind=dir", item, p, ok)
+		}
+	}
+	if !found {
+		t.Fatal("no zoxide row present when sessions are empty")
+	}
+}
+
+// Step 9: the both-empty placeholder must appear only once the zoxide probe
+// has genuinely returned empty-handed — not merely because it hasn't
+// answered yet, which every host's first paint would otherwise flash.
+func TestRecombineBothEmptyGuard(t *testing.T) {
+	headerOnly := []listItem{{isHeader: true}}
+	isPlaceholder := func(item listItem) bool {
+		return item.target == "" && item.remoteHost == "" && !item.isHeader
+	}
+
+	pending := tuiModel{emitPath: "/tmp/emit", sessionItems: headerOnly, tmuxOpts: map[string]string{}}.recombine()
+	for _, item := range pending.allItems {
+		if isPlaceholder(item) {
+			t.Errorf("placeholder shown before the zoxide probe returned: %+v", pending.allItems)
+		}
+	}
+
+	empty := pending
+	empty.zoxideReady = true
+	empty = empty.recombine()
+	var found bool
+	for _, item := range empty.allItems {
+		if isPlaceholder(item) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("both-empty guard did not add a placeholder row")
 	}
 }

@@ -91,8 +91,10 @@ func (m tuiModel) renderHints() string {
 		scratchLabel = highlight.Render(scratchLabel)
 	}
 
+	item, hasItem := m.currentItem()
+
 	killLabel := "kill"
-	if item, ok := m.currentItem(); ok && item.createPath != "" {
+	if hasItem && item.createPath != "" {
 		killLabel = "forget"
 	}
 
@@ -103,19 +105,33 @@ func (m tuiModel) renderHints() string {
 		toggleLabel = "wall"
 	}
 
+	// Emit mode never switches or creates — enter only writes the pick back to
+	// the wrapper (spec D8) — and inherits no session/window to kill or forget.
+	enterLabel := "open"
+	if m.emitPath != "" {
+		enterLabel = "pick"
+	}
+
 	parts := []string{
 		hint("^jk/↑↓", "nav"),
-		hint("enter", "open"),
-		hint("^x", killLabel),
+		hint("enter", enterLabel),
+	}
+	if m.emitPath == "" {
+		parts = append(parts, hint("^x", killLabel))
+	}
+	parts = append(parts,
 		hint("^a", agentLabel),
 		hint("^s", scratchLabel),
-	}
+	)
 	if m.windowMode {
 		groupLabel := "group"
 		if m.stateGrouped {
 			groupLabel = highlight.Render(groupLabel)
 		}
 		parts = append(parts, hint("^g", groupLabel))
+	}
+	if hasItem && item.remoteHost != "" {
+		parts = append(parts, hint("^o", "remote"))
 	}
 	parts = append(parts,
 		hint("^/", toggleLabel),

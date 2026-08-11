@@ -223,6 +223,40 @@ both pickers, exactly as a local one does. It needs lazytmux on the remote as
 well — that side stamps the state on the pane, since a control-mode client
 renders no status line for the usual pollers to run in.
 
+### `^o` — the remote's own picker
+
+The Remote section is built locally, so it can only offer what a bounded SSH
+probe saw: sessions not already bridged, and nothing at all from a host that
+answered slowly. `^o` on a Remote row is the escape hatch. It opens a local
+**floating pane** running that host's *own* session picker over SSH — the
+remote's live sessions **and** its top zoxide directories — and hands the pick
+back to `lztmux-remote-open`, so the result is an ordinary mirror. Enter picks,
+`esc`/`q` cancels and opens nothing. The hint appears only while the cursor is
+on a Remote row.
+
+Picking a directory rather than a session creates the session on the remote
+first, in that directory, and then bridges it — which needs the same
+**lingering** precondition as a cold start above, or the new session dies with
+the SSH connection that made it.
+
+The remote host needs `lztmux-remote-picker` on its per-user profile PATH —
+i.e. a remote rebuilt from this revision, the same requirement as
+`tmux-claude-images`/`resvg` for bridge graphics. `remote.exposePickOnPath` is
+on by default and puts it there; a host that answers SSH without it reports
+`remote lazytmux too old — rebuild <host>` rather than hanging.
+
+Two honest limitations of this view, both consequences of it being the *remote's*
+picker rather than the local one:
+
+- The local Remote section's `(restore — saved …)` rows come from a
+  `tmux-remux` snapshot read locally; the remote's own picker builds none for
+  itself. So for a host with no running server, `^o` trades those restore rows
+  for the remote's zoxide directories. Both views stay reachable — pick whichever
+  the situation wants.
+- A remote session named `scratch-*` is still hidden by default, because the
+  remote picker inherits the same scratch split as the local one. `^s` reveals
+  it.
+
 **Known limitations** (documented, not solved here):
 
 - Remote copy-mode / scrollback is not pre-seeded locally yet (M2.4).

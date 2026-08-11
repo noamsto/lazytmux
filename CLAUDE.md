@@ -51,7 +51,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `tmux-window-nav` | `M-J`/`M-K` (Alt+Shift, no prefix) | Moves the window selection down/up a row in the reflowed grid: jumps `±@window_per` in window-index order, clamps down to the last window when the column below is missing, no-ops at the top/bottom edge or in single-line mode. (`M-H`/`M-L` cover horizontal.) |
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (error > waiting > denied > compacting > interrupted > processing > done > idle). Handles staleness fade and interrupt reclassification (both in `read_pane_state`). |
 | `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`; `issue add|done|clear <ID>` maintains self-reported issue ids in `/tmp/claude-status/issues/<pane_id>`; `task set <text>|clear` maintains a freeform "what Claude is doing" phrase in `/tmp/claude-status/tasks/<pane_id>` (auto-captured from the latest prompt by the CC plugin's `UserPromptSubmit` hook); `name set <title>|clear` maintains a window title in `/tmp/claude-status/names/<pane_id>` (the `UserPromptSubmit` hook seeds it from the first prompt on an unnamed fallback window, then nudges the pane's Claude once to upgrade the seed — the seed flips the gate so the nudge fires only once). Separate files — state hooks fire around the very call that stamps, sharing a file would lose updates. Called by the CC plugin's hooks / skill. Every write also mirrors into the pane options `@claude_status` (`<state> <epoch> <unseen>`), `@claude_task`, `@claude_issues` via `bridge_stamp` (folded into the refresh call it already made) — the only way this state reaches a remote-bridge host. |
-| `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity (mirrors tagged with their `@bridge_host` in the Host column, which costs no width when there are none), then the Remote section (a row per `@remote_bridge_hosts` host, its unbridged sessions as `├─`/`╰─` children), then top-30 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). Remote rows are exempt from the claude/scratch toggles — neither may take the section away. |
+| `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity (mirrors tagged with their `@bridge_host` in the Host column, which costs no width when there are none), then the Remote section (a row per `@remote_bridge_hosts` host, its unbridged sessions as `├─`/`╰─` children), then top-30 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). Remote rows are exempt from the claude/scratch toggles — neither may take the section away. `^o` on a Remote row spawns a floating pane running `lztmux-remote-picker <host>` — the remote's own picker — and quits the popup; the hint renders only on such a row, and the key is inert in `prefix + w`/`prefix + W` because no window-mode row carries `remoteHost`. |
 | `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session (default) or, via `ctrl+g`, by claude priority state — same order as `claude_priority_state` (error > waiting > denied > compacting > processing > done > idle), stateless windows in one trailing group, session name folded into the identity column. Resets to session grouping on every popup launch. Window rows show the enrich identity (`@window_label_id`/`@window_label_rest_long`) and a PR badge (`@window_pr_plain`, tinted by `@pr_check_state`/`@pr_mergeable`); aligned columns, searchable by issue id / PR number. |
 | `tmux-window-wall` | `prefix + W` | Same TUI in wall mode (`--tui --windows --wall`): a tiled grid of live window previews, one batched `capture-pane` per tick. Fixed popup geometry — ignores `@picker_layout`. |
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
@@ -64,7 +64,8 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `tmux-agent-usage` | `#()` in status-format[0] (`--tick`) | Background usage-limit poller. A pass runs only while an agent pane exists (pane-command scan against the agentdetect manifest commands) and refreshes `/tmp/lazytmux-agent-usage/<agent>.json` per authed CLI, lock-guarded via `acquire_lock`. Rendered top-right by `tmux-statusline` (Go) — same live gate, so the segment vanishes when the last agent exits. |
 | `tmux-agent-usage-claude` / `-codex` / `-cursor` | called by the dispatcher | Provider impls: curl the vendor usage endpoint with the CLI's own stored token (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.config/cursor/auth.json` — no extra API keys) → normalized `{windows:[{label,pct,reset_at}], monthly:{label,pct,reset_at}}`. Failed fetches keep the previous cache. Cursor chains four DashboardService calls (GetMe → GetHardLimit → GetCurrentPeriodUsage → GetAggregatedUsageEvents) to compute monthly spend-limit utilization. |
 | `tmux-claude-images` | `prefix + I` | Toggle the image carousel for the invoking Claude session. In tmux: split pane keyed by `$TMUX_PANE` (bound to `prefix + I`). Outside tmux in kitty (remote control on): `kitty @ launch` window keyed by `$CLAUDE_CODE_SESSION_ID`, tagged `user_var claude_img_src`. Renderer + manifest shared across modes. |
-| `lztmux-remote-open` | `prefix + s` remote section / CLI | Opens a remote tmux session as native local windows via the control-mode bridge (`lztmux-remote-bridge-daemon`). Outbound SSH only. When no session resolves (the remote has no server), starts the remote's own `tmux-startup.service` and re-probes — unit state is not server state, so the second `list-sessions` is the authority, never `systemctl is-active` (#287). |
+| `lztmux-remote-open` | `prefix + s` remote section / CLI | Opens a remote tmux session as native local windows via the control-mode bridge (`lztmux-remote-bridge-daemon`). Outbound SSH only. When no session resolves (the remote has no server), starts the remote's own `tmux-startup.service` and re-probes — unit state is not server state, so the second `list-sessions` is the authority, never `systemctl is-active` (#287). `LZTMUX_REMOTE_NEW_DIR=<dir>` creates the named session on the remote in that dir first (cold-starting the server if needed, then re-asserting `has-session`) — one creator resolving one socket dir, which is why the remote-side picker never creates it; mutually exclusive with `LZTMUX_REMOTE_RESTORE`. An empty active-window lookup is fatal rather than a blank mirror. |
+| `lztmux-remote-picker` | `prefix + s` `^o` / CLI | Dual-role wrapper for the remote's own session picker (#356). Local role (`<host>`, the floating pane's command): probe leg → interactive `ssh -t` leg → collect leg → hands the pick to `lztmux-remote-open`. Remote role: `--probe` reports resolved `script`/`emit_dir`/`tmpdir` and mutates nothing; `--serve <token>` prepares a 0700-asserted emit dir and execs `tmux-picker-generate --tui --remote-pick` with `LZTMUX_PICKER_EMIT` set. Presence of *this script* on the remote is the capability marker — an older picker binary ignores unknown flags and would launch its TUI into the probe, which over SSH is a hang. |
 
 ### Shared Libraries
 
@@ -264,6 +265,24 @@ option.
   toggle on the remote (ctl verb `carousel`), so the carousel is a remote
   split mirrored back like any other structural change.
 - Remote host needs `tmux-claude-images` and `resvg` on PATH.
+
+### What the Remote Host Needs on PATH
+
+Each bridge feature that runs code on the *remote* names its own requirement, and
+they are all satisfied the same way — a remote rebuilt from this revision, whose
+`/etc/profiles/per-user/<user>/bin` is the only lazytmux PATH a non-interactive
+`ssh` sees:
+
+| Feature | Remote needs |
+|---------|--------------|
+| Bridge graphics (`prefix + I` across a mirror) | `tmux-claude-images`, `resvg` |
+| Remote agent status | lazytmux's `claude-status-update` (it stamps the pane options the daemon polls) |
+| Cold start (`prefix + s` on a serverless host) | `tmux-startup.service` / the launchd agent, plus lingering |
+| Remote-side picker (`prefix + s` `^o`) | `lztmux-remote-picker` (`remote.exposePickOnPath`, default true) |
+
+`lztmux-remote-picker` doubles as the picker's capability probe, so its absence
+is the one requirement that reports itself: the asking side prints
+`remote lazytmux too old — rebuild <host>` instead of degrading silently.
 
 ### Welcome Buffer (splash)
 

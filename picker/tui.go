@@ -103,6 +103,15 @@ type tuiModel struct {
 	// Config
 	theme    string
 	tmuxOpts map[string]string
+
+	// Remote-pick mode (#356): the picker runs on a remote host over ssh, with
+	// no attached tmux client to switch — Enter writes emitPath instead.
+	// "" means the ordinary interactive picker.
+	emitPath string
+	// zoxideReady is set once zoxideMsg arrives: a nil zoxideItems means both
+	// "no suggestions" and "the probe hasn't answered", which recombine's
+	// both-empty guard has to tell apart.
+	zoxideReady bool
 }
 
 // --- Catppuccin palette (dark/light) ---
@@ -181,7 +190,7 @@ func wallMode(wall bool) pickerMode {
 // inputs — no tmux/ssh/proc calls of its own — so the first-paint wiring
 // (including the Remote section, #312) is exercised by a real unit test
 // instead of only by a manual tmux check.
-func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, theme string, items []listItem) tuiModel {
+func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, theme string, items []listItem, emitPath string) tuiModel {
 	m := tuiModel{
 		mode:         wallMode(wall),
 		wallLaunched: wall,
@@ -193,11 +202,14 @@ func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, th
 		sessionItems: items,
 		wallContent:  map[string]string{},
 		wallBad:      map[string]bool{},
+		emitPath:     emitPath,
 	}
-	if !windowMode {
+	if !windowMode && emitPath == "" {
 		// Host rows are static config — render them now so the Remote section
 		// exists from the first paint. remoteCmd's probe (kicked from Init)
-		// fills in each row's annotation in place via remoteMsg (#312).
+		// fills in each row's annotation in place via remoteMsg (#312). Emit
+		// mode builds none: it runs on a host we are not attached to, so a
+		// Remote section there would bridge from the wrong side.
 		m.remoteItems = pendingRemoteItems(opts)
 	}
 	m = m.recombine().withFilter()
@@ -208,7 +220,20 @@ func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, th
 	return m
 }
 
-func runTUI(windowMode, agentOnly, wall bool) error {
+func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
+	var emitPath string
+	if remotePick {
+		// A bare flag doesn't otherwise stop --remote-pick --windows from
+		// emitting a *window* target as a session name.
+		if windowMode || wall {
+			return errors.New("--remote-pick is incompatible with --windows/--wall")
+		}
+		emitPath = os.Getenv("LZTMUX_PICKER_EMIT")
+		if emitPath == "" {
+			return errors.New("--remote-pick requires LZTMUX_PICKER_EMIT")
+		}
+	}
+
 	theme := detectTheme()
 	opts := readTmuxOpts()
 	panes := collectAgentPanes()
@@ -220,11 +245,21 @@ func runTUI(windowMode, agentOnly, wall bool) error {
 		items = buildSessionItems(opts, panes, theme, false)
 	}
 
-	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items)
+	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items, emitPath)
 
 	p := tea.NewProgram(m)
-	_, err := p.Run()
-	return err
+	final, err := p.Run()
+	if err != nil {
+		return err
+	}
+	// A failed emit write can't os.Exit from inside Update — that would leave
+	// the remote ssh pty in altscreen/raw mode. It sets statusMsg and quits
+	// instead, so the error surfaces here only after bubbletea has restored
+	// the terminal.
+	if fm, ok := final.(tuiModel); ok && fm.emitPath != "" && fm.statusMsg != "" {
+		return errors.New(fm.statusMsg)
+	}
+	return nil
 }
 
 // --- Bubbletea interface ---
@@ -236,7 +271,12 @@ func (m tuiModel) Init() tea.Cmd {
 	if !m.windowMode {
 		// First paint skips the ps -A fork; kick a full refresh right away so
 		// CPU/Mem replace the placeholder without waiting for the 1s tick.
-		cmds = append(cmds, m.zoxideCmd(), m.remoteCmd(), m.refreshDataCmd())
+		cmds = append(cmds, m.zoxideCmd(), m.refreshDataCmd())
+		if m.emitPath == "" {
+			// Emit mode never quits to bridge a further-remote host, so its
+			// probe would just be wasted round trips (spec D8).
+			cmds = append(cmds, m.remoteCmd())
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -309,6 +349,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case zoxideMsg:
 		keep := m.currentTarget()
 		m.zoxideItems = msg.items
+		m.zoxideReady = true
 		m = m.recombine().withFilter()
 		if m.cursor >= len(m.visible) {
 			m.cursor = m.firstSelectable(0)
@@ -446,6 +487,12 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.activateCurrent()
 
 	case "ctrl+x":
+		if m.emitPath != "" {
+			// Inherited unchanged this would kill-session and zoxideForget
+			// against the *remote* server and db (spec D8); renderHints drops
+			// the ^x advertisement to match.
+			return m, nil
+		}
 		item, ok := m.currentItem()
 		if !ok {
 			return m, nil
@@ -474,6 +521,30 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.refreshDataCmd()
 		}
+
+	case "ctrl+o":
+		item, ok := m.currentItem()
+		if !ok || item.remoteHost == "" {
+			// Structurally inert outside the Remote section — no window-mode
+			// row ever carries remoteHost (spec D10).
+			return m, nil
+		}
+		raw, _ := exec.Command("tmux", "display-message", "-p",
+			"#{&&:#{@bridge_win},#{@bridge_pane}}").Output()
+		if remotePickGated(string(raw)) {
+			m.statusMsg = "mirror window — open the remote picker from a local window"
+			return m, nil
+		}
+		bin := envOrMap("REMOTE_PICK_BIN", m.tmuxOpts, "@remote_pick_bin", "")
+		if bin == "" {
+			m.statusMsg = "remote picker not configured — reload tmux"
+			return m, nil
+		}
+		if err := exec.Command("tmux", remotePickNewPaneArgs(bin, item.remoteHost)...).Run(); err != nil {
+			m.statusMsg = err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 
 	case "ctrl+a":
 		m = m.toggleAgentOnly()
@@ -1079,6 +1150,20 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 	if !ok || (item.target == "" && item.remoteHost == "") {
 		return m, nil
 	}
+	if m.emitPath != "" {
+		// Emit mode never switches or creates — the picker runs in an ssh
+		// pty with no attached tmux client, so the only side effect it may
+		// have is this one file write (spec D8).
+		payload, ok := resolveEmitPick(item)
+		if !ok {
+			return m, nil
+		}
+		if err := writeEmitPayload(m.emitPath, payload); err != nil {
+			m.statusMsg = err.Error()
+			return m, tea.Quit
+		}
+		return m, tea.Quit
+	}
 	if item.remoteHost != "" {
 		if err := openRemoteBridge(item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
 			m.statusMsg = err.Error()
@@ -1433,10 +1518,17 @@ func (m tuiModel) remoteCmd() tea.Cmd {
 // recombine rebuilds allItems from the session base plus the async suggestion
 // rows, so a 1s refresh (sessions only) doesn't drop loaded remote/zoxide entries.
 func (m tuiModel) recombine() tuiModel {
-	all := make([]listItem, 0, len(m.sessionItems)+len(m.remoteItems)+len(m.zoxideItems))
+	all := make([]listItem, 0, len(m.sessionItems)+len(m.remoteItems)+len(m.zoxideItems)+1)
 	all = append(all, m.sessionItems...)
 	all = append(all, m.remoteItems...)
 	all = append(all, m.zoxideItems...)
+	// A serverless remote still shows its zoxide dirs (spec D3), so the view is
+	// only blank when both are empty — and that is indistinguishable from a
+	// zoxide probe still in flight, hence zoxideReady. Deciding this at
+	// item-build time instead would flash the row on every host's first paint.
+	if m.emitPath != "" && m.zoxideReady && noSessionRows(m.sessionItems) && len(m.zoxideItems) == 0 {
+		all = append(all, emitEmptyRow(m.tmuxOpts))
+	}
 	m.allItems = all
 	return m
 }

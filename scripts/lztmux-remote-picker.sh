@@ -164,9 +164,15 @@ remote_serve() {
 		"$picker_generate" --tui --remote-pick
 }
 
+# Deliberately not `local` to local_pick: the EXIT trap below is evaluated after
+# that function has returned, where a local is already out of scope — under
+# `set -u` that turns every *successful* pick into an exit 1 with a spurious
+# "unbound variable", long after the bridge was opened.
+work=""
+
 local_pick() {
 	local host="$1"
-	local work probe_out payload rc key script emit_dir tmpdir token kind name msg
+	local probe_out payload rc key script emit_dir tmpdir token kind name msg
 	local open_env=()
 
 	work="$(mktemp -d "${TMPDIR:-/tmp}/lztmux-remote-picker.XXXXXX")"
