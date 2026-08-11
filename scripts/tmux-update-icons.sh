@@ -189,11 +189,12 @@ main() {
 			desired=""
 			[[ -n $uuid ]] && desired="claude --resume $uuid"
 			cur="${pane_cur_relaunch[$pane_file]:-}"
-			# Only touch a value this poller owns (empty, or previously stamped by
-			# this same "claude --resume *" branch) — never clobber a Codex/Cursor
-			# hook's own stamp on a pane that also has a screen-only state file
-			# (agent-detect fires for every known agent, unconditionally).
-			if [[ -z $cur || $cur == "claude --resume "* ]] && [[ $desired != "$cur" ]]; then
+			# An empty desired means no real transcript (a screen-only agent-detect
+			# ghost entry) — refuse to clobber a Codex/Cursor hook's own stamp with
+			# nothing. A non-empty desired is positive evidence of a live Claude
+			# session, so it may overwrite a foreign stamp (a pane that moved from
+			# Codex/Cursor to Claude).
+			if [[ -n $desired ]] && [[ $desired != "$cur" ]]; then
 				tmux set -pq -t "%$pane_file" @remux_relaunch "$desired"
 			fi
 		fi

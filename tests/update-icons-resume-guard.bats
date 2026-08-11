@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+bats_require_minimum_version 1.5.0 # run !
 # Regression test for the RESUME_CLAUDE stamper in tmux-update-icons.sh: it
 # iterates claude_pane_ids() (panes/* UNION screen/*), so a Cursor/Codex pane
 # that only has a screen/<id> file (agent-detect scrapes every known agent CLI
@@ -93,4 +94,49 @@ run_update_icons() {
 	run_update_icons
 
 	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume deadbeef-0000-0000-0000-000000000001" ]
+}
+
+@test "a pane that moved from Codex/Cursor to a live Claude session overwrites the foreign stamp" {
+	TRANSCRIPT="$TDIR/cafebabe-0000-0000-0000-000000000003.jsonl"
+	: >"$TRANSCRIPT"
+	{
+		echo "state=processing"
+		echo "timestamp=$(date +%s)"
+		echo "session=work"
+		echo "transcript=$TRANSCRIPT"
+	} >"$CLAUDE_STATUS_DIR/panes/$PANE_ID"
+	tmux set -p -t "%$PANE_ID" @remux_relaunch "codex resume abc123"
+
+	run_update_icons
+
+	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume cafebabe-0000-0000-0000-000000000003" ]
+}
+
+@test "no write is issued when the stamp already matches the desired value" {
+	TRANSCRIPT="$TDIR/11111111-0000-0000-0000-000000000002.jsonl"
+	: >"$TRANSCRIPT"
+	{
+		echo "state=processing"
+		echo "timestamp=$(date +%s)"
+		echo "session=work"
+		echo "transcript=$TRANSCRIPT"
+	} >"$CLAUDE_STATUS_DIR/panes/$PANE_ID"
+	tmux set -p -t "%$PANE_ID" @remux_relaunch "claude --resume 11111111-0000-0000-0000-000000000002"
+
+	REAL_TMUX="$(command -v tmux)"
+	SPY_DIR="$TDIR/tmux-spy"
+	SPY_LOG="$TDIR/tmux-calls.log"
+	mkdir -p "$SPY_DIR"
+	: >"$SPY_LOG"
+	cat >"$SPY_DIR/tmux" <<-SPYEOF
+		#!/bin/sh
+		printf '%s\n' "\$*" >>"$SPY_LOG"
+		exec "$REAL_TMUX" "\$@"
+	SPYEOF
+	chmod +x "$SPY_DIR/tmux"
+
+	PATH="$SPY_DIR:$PATH" run_update_icons
+
+	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume 11111111-0000-0000-0000-000000000002" ]
+	run ! grep -q '^set .*@remux_relaunch' "$SPY_LOG"
 }
