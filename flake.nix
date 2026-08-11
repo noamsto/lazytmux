@@ -598,6 +598,7 @@
               cp -r ${./tests} tests
               bats tests/remote.bats
               bats tests/remote-cold-start.bats
+              bats tests/remote-picker.bats
               touch $out
             '';
 

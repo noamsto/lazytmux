@@ -107,7 +107,7 @@ func main() {
 	for _, a := range args {
 		flags[a] = true
 	}
-	if err := runTUI(flags["--windows"], flags["--agent"], flags["--wall"]); err != nil {
+	if err := runTUI(flags["--windows"], flags["--agent"], flags["--wall"], flags["--remote-pick"]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

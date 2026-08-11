@@ -18,6 +18,8 @@ setup() {
 	export REMOTE_SERVER="$BATS_TEST_TMPDIR/remote-server"
 	export REMOTE_SESSION="workstation"
 	export RESTORE_MARKER="$BATS_TEST_TMPDIR/restored"
+	# Presence of this file is the fake remote's "session 'proj' exists".
+	export NEWDIR_MARKER="$BATS_TEST_TMPDIR/created"
 	: >"$SSH_LOG"
 	: >"$TMUX_LOG"
 	: >"$CTL_LOG"
@@ -49,6 +51,15 @@ setup() {
 			[ -f "$RESTORE_MARKER" ] && exit 0
 			exit 1
 			;;
+		*"new-session -d -s 'proj'"*)
+			if [ -z "${NEWDIR_TARGET_MISMATCH:-}" ]; then
+				touch "$NEWDIR_MARKER"
+			fi
+			;;
+		*"has-session -t '=proj'"*)
+			[ -f "$NEWDIR_MARKER" ] && exit 0
+			exit 1
+			;;
 		*"command -v tmux"*) echo /usr/bin/tmux ;;
 		*"uname -s; id -u"*) printf '%s\n%s\n' "${FAKE_UNAME:-Linux}" 1000 ;;
 		*"systemctl --user restart"*)
@@ -69,7 +80,9 @@ setup() {
 			touch "$REMOTE_SERVER"
 			;;
 		*list-sessions*) [ -f "$REMOTE_SERVER" ] && echo "$REMOTE_SESSION" ;;
-		*list-windows*) echo 1 ;;
+		# A failed remote list-windows still exits 0 with empty stdout: the remote
+		# command is a pipeline ending in awk, and carries none of our pipefail.
+		*list-windows*) [ -n "${FAKE_NO_WINDOW:-}" ] || echo 1 ;;
 		esac
 		exit 0
 	EOF
@@ -387,6 +400,82 @@ teardown() {
 	run bash "$LAUNCHER" tp-g6 work
 	[ "$status" -eq 1 ]
 	[[ $output == *"tmux-remux's restore filter may have skipped it"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "new dir: session absent and no server -> cold starts, then creates it" {
+	export LZTMUX_REMOTE_NEW_DIR="/srv/my proj"
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 0 ]
+
+	# Neither of the two -z $sess cold-start gates fires with a name in hand, so
+	# without this branch's own gate the server would be an ssh session's.
+	grep -q 'systemctl --user restart tmux-startup.service' "$SSH_LOG"
+	grep -q "new-session -d -s 'proj' -c '/srv/my proj'" "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-proj' "$TMUX_LOG"
+}
+
+@test "new dir: server already running -> creates without a cold start" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 0 ]
+
+	run grep -c systemctl "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	grep -q "new-session -d -s 'proj' -c '/srv/proj'" "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-proj' "$TMUX_LOG"
+}
+
+@test "new dir: a session that already exists is bridged, not recreated" {
+	touch "$REMOTE_SERVER" "$NEWDIR_MARKER"
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 0 ]
+
+	run grep -c new-session "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	grep -q 'switch-client -t =tp-g6-proj' "$TMUX_LOG"
+}
+
+@test "new dir: session absent even after a successful create fails loudly" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export NEWDIR_TARGET_MISMATCH=1
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 1 ]
+	[[ $output == *"was not created"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "new dir: combined with a restore is rejected before any round trip" {
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export LZTMUX_REMOTE_RESTORE=1
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 1 ]
+	[[ $output == *"mutually exclusive"* ]]
+
+	[ ! -s "$SSH_LOG" ]
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "a session with no active window fails instead of opening a blank mirror" {
+	touch "$REMOTE_SERVER"
+	export FAKE_NO_WINDOW=1
+
+	run bash "$LAUNCHER" tp-g6 ghost
+	[ "$status" -eq 1 ]
+	[[ $output == *"ghost"* ]]
 
 	run grep -c new-session "$TMUX_LOG"
 	[ "$status" -ne 0 ]

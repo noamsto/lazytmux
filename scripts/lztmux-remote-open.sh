@@ -35,6 +35,15 @@ if [[ -n $win && ! $win =~ ^[0-9]+$ ]]; then
 	exit 1
 fi
 
+# Both pre-create a session the caller named, by different means, so honouring
+# them together would restore and then create over the result. Checked here
+# rather than left to callers: this is a public entry point (the README hands it
+# out), so the picker never setting both is not an invariant to rely on.
+if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n ${LZTMUX_REMOTE_RESTORE:-} ]]; then
+	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR and LZTMUX_REMOTE_RESTORE are mutually exclusive" >&2
+	exit 1
+fi
+
 # One round-trip for the remote's OS + uid: the OS decides the tmux socket dir
 # (/run/user/<uid> on Linux; tmux's default /tmp/tmux-<uid> on macOS, which has
 # no $XDG_RUNTIME_DIR) and the service manager that can cold-start a server.
@@ -134,11 +143,46 @@ if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
 	fi
 fi
 
+# The picker's row was a remote zoxide directory, not a session (#356): the name
+# is derived, so nothing by it exists yet. Creation lives here rather than in the
+# remote-side picker so there is one creator resolving one socket dir, and so the
+# session is made moments before the daemon attaches instead of having to survive
+# the whole interactive pick.
+if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n $sess ]]; then
+	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+	if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
+		# Both cold-start gates above are `[[ -z $sess ]]`, and we hold a name —
+		# so without this the server would be whatever a transient ssh session
+		# spawned, outside the startup unit that owns it everywhere else (#345).
+		if [[ -z "$(first_remote_session)" ]]; then
+			start_remote_server
+		fi
+		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux new-session -d -s $(shell_quote "$sess") -c $(shell_quote "$LZTMUX_REMOTE_NEW_DIR")"; then
+			echo "lztmux-remote-open: could not create session '$sess' in '$LZTMUX_REMOTE_NEW_DIR' on $host" >&2
+			exit 1
+		fi
+		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
+			echo "lztmux-remote-open: session '$sess' was not created on $host" >&2
+			exit 1
+		fi
+	fi
+fi
+
 if [[ -z $win ]]; then
 	# base-index is non-zero under lazytmux (windows start at 1), so target the
 	# session's active window rather than assuming index 0.
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t $(shell_quote "$sess") -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
+	# A live session always has an active window, and this pipeline can't fail:
+	# a failed list-windows still exits 0 into awk with the remote shell carrying
+	# none of our pipefail. So empty means the session isn't there, and bridging
+	# on would launch the daemon at a blank window index.
+	if [[ -z $win ]]; then
+		echo "lztmux-remote-open: session '$sess' has no window on $host — it is gone or was never there" >&2
+		exit 1
+	fi
 fi
 
 local_sess="${host}-${sess}"

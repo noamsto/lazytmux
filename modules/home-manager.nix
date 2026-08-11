@@ -360,6 +360,25 @@ in {
           bridge). Empty list hides the remote section.
         '';
       };
+
+      exposePickOnPath = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Expose `lztmux-remote-picker` on PATH via home.packages, so this host
+          can serve `prefix + s` → `^o` (the asking host opens *this* host's own
+          session picker in a floating pane).
+
+          Deliberately not gated on `remote.hosts`: that list names the hosts a
+          machine reaches *out* to, while this script is needed on the machine
+          being reached — which typically sets no `remote.hosts` at all. The
+          asking side probes for it over a non-interactive ssh, where only the
+          per-user profile is on PATH, and treats its absence as "remote lazytmux
+          too old".
+
+          Set false on a host that should never be a bridge target.
+        '';
+      };
     };
 
     persist = {
@@ -976,6 +995,9 @@ in {
             tmuxConfig.script.tmux-issue-stamp-linear
             tmuxConfig.script.tmux-issue-stamp-github
             tmuxConfig.script.tmux-pr-enrich
+          ]
+          ++ lib.optionals cfg.remote.exposePickOnPath [
+            tmuxConfig.script.lztmux-remote-picker
           ]
           ++ lib.optionals (carousel-toggle != null) cfg.carouselDiagramTools
           ++ cfg.popupTools;

@@ -343,6 +343,7 @@
     "cursor-status-hook"
     "cursor-hooks-install"
     "lztmux-remote-open"
+    "lztmux-remote-picker"
     "lztmux-notify"
     "lztmux-notify-center"
     "tmux-agent-usage"
@@ -460,6 +461,26 @@
       (builtins.readFile ../scripts/${name}.sh)
     );
 
+  # The remote-side session picker's dual-role wrapper (#356). The remote copy
+  # execs the picker and needs zoxide by store path — the ssh PATH carries neither,
+  # and guessing at profile bin dirs would only degrade the miss instead of
+  # removing it. @remote_open@ is pinned for the reason @reflow@ above spells out:
+  # the local role is spawned by the tmux server, whose PATH is frozen until a
+  # restart, so a bare name reaches a stale launcher — one that would silently
+  # ignore LZTMUX_REMOTE_NEW_DIR.
+  scriptsWithRemotePicker = ["lztmux-remote-picker"];
+  mkScriptRemotePicker = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings
+      ["@remote_open@" "@picker_generate@" "@zoxide@"]
+      [
+        "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+        picker-generate-bin
+        "${pkgs.zoxide}"
+      ]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # The notification router + history center. Both source lib-notify; the router
   # also sources lib-log (acquire_lock / file_mtime, reached via notify_prune).
   scriptsWithNotify = ["lztmux-notify" "lztmux-notify-center"];
@@ -529,6 +550,8 @@
     then mkScriptWithLog name
     else if builtins.elem name scriptsWithRemote
     then mkRemoteScript name
+    else if builtins.elem name scriptsWithRemotePicker
+    then mkScriptRemotePicker name
     else if builtins.elem name scriptsWithNotify
     then mkScriptNotify name
     else mkScript name);
@@ -871,6 +894,11 @@
     set -g @picker_list_ratio "${toString pickerListRatio}"
     set -g @picker_layout "${pickerLayout}"
     set -g @remote_bridge_hosts "${remoteBridgeHosts}"
+    # An option, not a PATH lookup: the picker's ^o spawns this from inside a
+    # popup on the tmux server, whose PATH is frozen until a server restart, so a
+    # brand-new script would resolve to nothing until then. An option repoints on
+    # a config reload alone (#336).
+    set -g @remote_pick_bin "${script.lztmux-remote-picker}/bin/lztmux-remote-picker"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
     # PR badge lives on the window list only — not duplicated here.
