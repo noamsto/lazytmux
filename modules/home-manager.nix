@@ -152,6 +152,7 @@
     pickerListRatio = cfg.picker.listRatio;
     pickerLayout = cfg.picker.layout;
     remoteBridgeHosts = lib.concatStringsSep " " cfg.remote.hosts;
+    remoteAuthPersistSeconds = cfg.remote.authPersistSeconds;
     inherit (cfg) prefix defaultShell focusFollowsMouse copyModeLineNumbers;
     # Pass the resolved TERM string so tmux.conf can derive terminal-features
     # without needing to re-encode emulator names. Null when no preset is active.
@@ -377,6 +378,18 @@ in {
           too old".
 
           Set false on a host that should never be a bridge target.
+        '';
+      };
+
+      authPersistSeconds = lib.mkOption {
+        type = lib.types.ints.between 60 86400;
+        default = 14400;
+        description = ''
+          How long an ssh ControlMaster created by the picker's auth handshake
+          survives idle, in seconds (clamped 60–86400, default 4h). Passed
+          straight to ssh's `ControlPersist`. This is an *idle* timer: a live
+          bridge holds a session on the master, so an open mirror never expires
+          regardless of this value.
         '';
       };
     };
