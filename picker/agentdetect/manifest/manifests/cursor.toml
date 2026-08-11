@@ -40,6 +40,7 @@ priority = 100
 region = "last_lines:16"
 regex = '(?s)\$ .+\d+\..+s'
 contains = ["ctrl+c to stop"]
+not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]
 state = "processing"
