@@ -124,7 +124,11 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 // where the failure is ssh's own.
 var authFailurePatterns = []string{
 	"Host key verification failed",
-	"Permission denied",
+	// The "(" anchors on ssh's own "Permission denied (publickey,password)."
+	// rather than the bare phrase, which also appears in a local firewall's
+	// "ssh: connect to host X port 22: Permission denied" (EACCES) — a
+	// genuinely down host, not one a prompt could fix.
+	"Permission denied (",
 	"Too many authentication failures",
 	"keyboard-interactive",
 }
@@ -135,6 +139,14 @@ var authFailurePatterns = []string{
 // a flow that invites the user to connect. ssh prints it alongside "Host key
 // verification failed", so it is matched first.
 const hostKeyChangedPattern = "REMOTE HOST IDENTIFICATION HAS CHANGED"
+
+// revokedHostKeyPattern is ssh's refusal banner for a key listed in a
+// RevokedHostKeys file. ssh refuses it unconditionally — nothing unsafe can be
+// accepted — but it prints no hostKeyChangedPattern alongside it and instead
+// follows with a bare "Host key verification failed.", which would otherwise
+// fall into authFailurePatterns and invite exactly the "Enter to connect"
+// action a revoked key must never offer.
+const revokedHostKeyPattern = "REVOKED HOST KEY DETECTED"
 
 // classifyProbeErr decides which failure a non-zero probe was. ssh exits 255
 // when it could not reach the host; any other status is the remote command's
@@ -150,7 +162,7 @@ func classifyProbeErr(err error, stderr string, timedOut bool) error {
 	if errors.As(err, &exitErr) && exitErr.ExitCode() != sshConnectFailureExit {
 		return fmt.Errorf("%w: %w", errRemoteNoServer, err)
 	}
-	if strings.Contains(stderr, hostKeyChangedPattern) {
+	if strings.Contains(stderr, hostKeyChangedPattern) || strings.Contains(stderr, revokedHostKeyPattern) {
 		return fmt.Errorf("%w: %w", errRemoteHostKeyChanged, err)
 	}
 	for _, p := range authFailurePatterns {
@@ -159,6 +171,21 @@ func classifyProbeErr(err error, stderr string, timedOut bool) error {
 		}
 	}
 	return fmt.Errorf("%w: %w", errRemoteUnreachable, err)
+}
+
+// remoteAuthStartFailure classifies the tea.ExecProcess callback error for the
+// auth handshake popup. *exec.ExitError means lztmux-remote-auth ran and
+// already explained itself — it pauses on any failure it prints before
+// returning the pty — so only a *exec.Error (the process never started at
+// all, most often a stale PATH after a lazytmux bump until the server
+// restarts) has nothing on screen to explain, and that is the only case worth
+// surfacing into the status line.
+func remoteAuthStartFailure(err error) (string, bool) {
+	var startErr *exec.Error
+	if errors.As(err, &startErr) {
+		return err.Error(), true
+	}
+	return "", false
 }
 
 // sshListRemoteSessions runs the same path/tmpdir resolution as

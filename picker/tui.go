@@ -158,10 +158,14 @@ type remoteMsg struct {
 }
 
 // remoteAuthDoneMsg lands when the interactive ssh handshake has exited and the
-// popup's pty is back under bubbletea's control. It carries no result: the
-// handshake's effect is a ControlMaster on disk, so the only honest way to know
-// what changed is to probe again.
-type remoteAuthDoneMsg struct{}
+// popup's pty is back under bubbletea's control. err is ExecProcess's own
+// error, not the script's exit status — the script always explains itself and
+// pauses before returning on a failure it caused, so only a *exec.Error (the
+// process never started at all, e.g. lztmux-remote-auth missing from a stale
+// PATH) has nothing on screen to explain and needs surfacing here.
+type remoteAuthDoneMsg struct {
+	err error
+}
 
 type previewMsg struct {
 	content   string
@@ -378,6 +382,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case remoteAuthDoneMsg:
+		if execErrorMessage, ok := remoteAuthStartFailure(msg.err); ok {
+			m.statusMsg = execErrorMessage
+		}
 		return m, m.remoteCmd()
 
 	case previewMsg:
@@ -1189,7 +1196,7 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		// process.
 		if item.remoteNeedsAuth {
 			cmd := exec.Command("lztmux-remote-auth", item.remoteHost)
-			return m, tea.ExecProcess(cmd, func(error) tea.Msg { return remoteAuthDoneMsg{} })
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return remoteAuthDoneMsg{err: err} })
 		}
 		if err := openRemoteBridge(item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
 			m.statusMsg = err.Error()

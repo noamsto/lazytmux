@@ -3,8 +3,11 @@
 #
 # Creates a ControlMaster, which is the whole point: `ControlMaster no` (the
 # Host * default) still REUSES an existing master, so once this succeeds the
-# picker probe, lztmux-remote-open's 3-8 ssh calls, the bridge daemon's `ssh
-# -CC` and the graphics fetcher all ride it with no prompt and no code changes.
+# picker probe and lztmux-remote-open's ssh calls ride it with no prompt and no
+# code changes. The bridge daemon and the graphics fetcher do NOT: the daemon
+# passes its own `-o ControlPath` on the ssh command line, which overrides the
+# config and builds a master of its own, so those two still authenticate
+# independently.
 #
 # Runs with a real tty — the picker hands its popup over via tea.ExecProcess —
 # because ssh must own the terminal while a password is typed. Nothing here
@@ -18,7 +21,10 @@ set -euo pipefail
 host="${1:?usage: lztmux-remote-auth <host>}"
 
 persist="$(tmux show -gv @remote_auth_persist 2>/dev/null || true)"
-[[ $persist =~ ^[0-9]+$ ]] || persist=14400
+# 0 tells ssh to persist forever, not "off" — a hand-set tmux option can carry
+# it even though the home-manager type clamps 60-86400, so reject it like any
+# other non-positive value rather than passing it through.
+[[ $persist =~ ^[1-9][0-9]*$ ]] || persist=14400
 
 # Pause before handing the terminal back, so a failure is readable instead of
 # being wiped by the picker's next full-screen paint.
@@ -31,6 +37,12 @@ pause_then_exit() {
 }
 
 printf 'Authenticating to %s\n\n' "$host"
+
+# Read once, before the master command, so the ControlPath check below has an
+# answer regardless of whether auth succeeds; reused for the identity lookup
+# near the end instead of asking ssh again.
+sshg="$(ssh -G -- "$host" 2>/dev/null || true)"
+controlpath="$(awk '$1 == "controlpath" { print $2; exit }' <<<"$sshg")"
 
 # -M overrides the config's `ControlMaster no`. ControlPath is deliberately NOT
 # passed: the user's config owns it, and every other call site looks there.
@@ -46,7 +58,16 @@ if ! ssh -M -f -o ControlPersist="$persist" -o ServerAliveInterval=15 -- "$host"
 	pause_then_exit 1
 fi
 
-printf '\nConnected. %s stays authenticated for %ss of idle time.\n' "$host" "$persist"
+# OpenSSH's own default ControlPath is "none": connection sharing is off
+# unless the user's config sets a path, in which case -M above created nothing
+# for anything to reuse. Claiming a persistent connection in that case would
+# be false — lazytmux is a public flake, so a stock config is the common case,
+# not the exception.
+if [[ -z $controlpath || $controlpath == none ]]; then
+	printf '\nConnected to %s. Connection sharing is off (no ControlPath set), so ssh will prompt again on the next connection — set a ControlPath in your ssh config to avoid that.\n' "$host"
+else
+	printf '\nConnected. %s stays authenticated for %ss of idle time.\n' "$host" "$persist"
+fi
 
 # Would pubkey auth alone have worked? ControlPath=none forces a fresh
 # connection rather than riding the master just created, and BatchMode makes it
@@ -56,14 +77,17 @@ if ssh -o BatchMode=yes -o ControlPath=none -o ConnectTimeout=5 -- "$host" true 
 	exit 0
 fi
 
-remote_auth_identity "$(ssh -G -- "$host" 2>/dev/null || true)"
+remote_auth_identity "$sshg"
 key="$REPLY"
-[[ -n $key && -f $key ]] || exit 0
+[[ -n $key ]] || exit 0
 [[ -t 0 ]] || exit 0
 
 printf '\nInstall %s on %s so this is the last time? [y/N] ' "$key" "$host"
 read -r reply
-[[ $reply == [Yy]* ]] || exit 0
+if [[ $reply != [Yy]* ]]; then
+	printf '\nNo key installed — the remote-bridge daemon runs detached with no terminal and cannot answer a password prompt, so bridging a session to %s will fail until a key is installed.\n' "$host"
+	exit 0
+fi
 
 # Rides the master created above, so this needs no second password.
 if ! ssh-copy-id -i "$key" "$host"; then

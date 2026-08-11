@@ -215,6 +215,14 @@ func TestClassifyProbeErr(t *testing.T) {
 		"@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n" +
 		"Host key verification failed."
 
+	// ssh's refusal banner for a RevokedHostKeys match: no "IDENTIFICATION HAS
+	// CHANGED" line, just this warning followed by the same bare
+	// "Host key verification failed." that authFailurePatterns matches.
+	const revokedHostKeyStderr = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" +
+		"@    WARNING: REVOKED HOST KEY DETECTED!               @\n" +
+		"The ECDSA host key for tp-g6 is marked as revoked.\n" +
+		"Host key verification failed."
+
 	cases := []struct {
 		name     string
 		err      error
@@ -237,11 +245,19 @@ func TestClassifyProbeErr(t *testing.T) {
 
 		// New: a changed key outranks the auth patterns ssh prints alongside it.
 		{"host key changed", exitErr(255), hostKeyChangedStderr, false, errRemoteHostKeyChanged},
+		// New: a revoked key must land on the same inert row as a changed one —
+		// ssh refuses it unconditionally, so nothing unsafe can be accepted, but
+		// the row must never invite the "Enter to connect" action regardless.
+		{"revoked host key", exitErr(255), revokedHostKeyStderr, false, errRemoteHostKeyChanged},
 
 		// Genuinely down hosts must not be dragged into the auth flow.
 		{"refused", exitErr(255), "ssh: connect to host lab port 22: Connection refused", false, errRemoteUnreachable},
 		{"no route", exitErr(255), "ssh: connect to host lab port 22: No route to host", false, errRemoteUnreachable},
 		{"unknown name", exitErr(255), "ssh: Could not resolve hostname lab: Name or service not known", false, errRemoteUnreachable},
+		// A local firewall's EACCES prints the same words as ssh's own auth
+		// refusal but with no "(publickey,...)" reason list — a genuinely down
+		// host, not one a prompt could fix.
+		{"firewall EACCES", exitErr(255), "ssh: connect to host lab port 22: Permission denied", false, errRemoteUnreachable},
 
 		// Precedence: a non-255 exit is the remote command's, whatever it printed.
 		{"remote command printed Permission denied", exitErr(1), "cat: /etc/shadow: Permission denied", false, errRemoteNoServer},
@@ -253,6 +269,32 @@ func TestClassifyProbeErr(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyProbeErr(tc.err, tc.stderr, tc.timedOut); !errors.Is(got, tc.want) {
 				t.Errorf("classifyProbeErr(%v, %q, %v) = %v, want %v", tc.err, tc.stderr, tc.timedOut, got, tc.want)
+			}
+		})
+	}
+}
+
+// The auth popup's script explains and pauses on any failure it causes, so
+// only a start failure (the exec.Command never ran) has nothing on screen to
+// explain and needs surfacing into the status line.
+func TestRemoteAuthStartFailure(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		wantOK bool
+	}{
+		{"nil: normal exit, nothing to surface", nil, false},
+		{"ExitError: the script already explained and paused", exec.Command("sh", "-c", "exit 1").Run(), false},
+		{"exec.Error: PATH stale, the process never started", exec.Command("lztmux-remote-auth-does-not-exist").Run(), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, ok := remoteAuthStartFailure(tc.err)
+			if ok != tc.wantOK {
+				t.Fatalf("remoteAuthStartFailure(%v) ok = %v, want %v", tc.err, ok, tc.wantOK)
+			}
+			if ok && msg == "" {
+				t.Errorf("remoteAuthStartFailure(%v) returned ok with an empty message", tc.err)
 			}
 		})
 	}
