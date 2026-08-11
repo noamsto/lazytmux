@@ -2,15 +2,40 @@ id = "cursor"
 match_commands = ["cursor-agent"]
 
 [[rules]]
-# Anchored on the braille spinner, not "ctrl+c to stop": cursor keeps that bar in
-# the input line for any active turn, including while it waits on an approval
-# decision and on reject-feedback text, so keying on it would report busy for two
-# states where the human is the one being waited on. last_lines:8 — the spinner
-# sits 6 non-empty lines above the cwd footer, leaving headroom for a wrapped path.
+# Older TUI (≤2026.07.23): braille spinner line above the input bar.
 state = "processing"
 priority = 100
 region = "last_lines:8"
 regex = '[\x{2800}-\x{28FF}]+ working'
+
+[[rules]]
+# 2026.08.04+ TUI: status phrases while a turn is in flight.
+state = "processing"
+priority = 100
+region = "last_lines:8"
+regex = 'running .+ now'
+not = [{ regex = 'proceed \(y\)|what to do instead' }]
+
+[[rules]]
+state = "processing"
+priority = 100
+region = "last_lines:8"
+regex = 'creating .+ now'
+not = [{ regex = 'proceed \(y\)|what to do instead' }]
+
+[[rules]]
+# Shell-tool timing line (e.g. "$ sleep 3 && echo DONE_PROBE 4.6s").
+state = "processing"
+priority = 100
+region = "last_lines:8"
+regex = '(?s)\$ .+\d+\..+s'
+
+[[rules]]
+state = "processing"
+priority = 100
+region = "last_lines:8"
+regex = 'editing .+'
+not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]
 # Both user-turn prompts: the approval list ("→ Proceed (y)") and the
