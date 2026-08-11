@@ -9,11 +9,10 @@ region = "last_lines:8"
 regex = '[\x{2800}-\x{28FF}]+ working'
 
 [[rules]]
-# 2026.08.04+ TUI: status phrases while a turn is in flight. "Running X now."
-# etc. is turn narration that stays on screen after the turn ends, so require
-# the footer's live-turn hint ("ctrl+c to stop") in the same window — it
-# disappears the instant the composer goes idle (verified live: present at
-# testdata/cursor_working.txt/_capture.txt, absent at cursor_idle.txt/_capture.txt).
+# 2026.08.04+ TUI: status phrases while a turn is in flight, but "Running X
+# now." etc. is turn narration that stays on screen after the turn ends —
+# require the footer's live-turn hint ("ctrl+c to stop") in the same window;
+# it disappears the instant the composer goes idle.
 state = "processing"
 priority = 100
 region = "last_lines:8"
