@@ -1,12 +1,18 @@
   Cursor Agent
-  v2026.07.23-e383d2b
-  Tip: Type ? in the prompt bar to show in-app hints.
+  v2026.08.04-aaa8809
+  Tip: Use subagents to parallelize work and preserve context.
 
-  Run ls -la in this directory, then say the word DONE_PROBE.
+  Run: sleep 3 && echo DONE_PROBE
 
- ⠘⠤ Working
+  Running the command now.
+
+  $ sleep 3 && echo DONE_PROBE 4.6s
+    DONE_PROBE
+
+  DONE_PROBE
+
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  → Add a follow-up                                     ctrl+c to stop
+  → Add a follow-up
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Cursor Grok 4.5 High
-  /tmp/scratch/cursorprobe
+  Cursor Grok 4.5 Low Fast · 10.4%
+  /tmp/cursorprobe

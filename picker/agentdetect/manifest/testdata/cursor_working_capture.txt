@@ -1,0 +1,29 @@
+[1m[38;2;166;227;161m󰈺[0m [38;2;137;180;250mcd[38;2;205;214;244m [4m[38;2;242;205;205m/tmp/cursorprobe[0m[38;2;205;214;244m [38;2;245;194;231m&&[38;2;205;214;244m [38;2;243;139;168mexec[38;2;205;214;244m [38;2;137;180;250mcursor-agent[38;2;205;214;244m [38;2;166;227;161m--force[38;2;205;214;244m [38;2;166;227;161m--trust[38;2;205;214;244m [38;2;166;227;161m--approve-mcps[38;2;205;214;244m [38;2;166;227;161m--disable-indexing[38;2;205;214;244m [38;2;166;227;161m--disab
+le-codebase-ref[38;2;205;214;244m [38;2;166;227;161m--model[38;2;205;214;244m [38;2;242;205;205mcursor-grok-4.5-low-fast[39m
+
+
+  Cursor Agent
+  [2mv2026.08.04-aaa8809[0m
+  [2mTip: Use subagents to parallelize work and preserve context.[0m
+
+ [48;2;47;47;64m                                                                                                  [49m
+ [48;2;47;47;64m Run: sleep 3 && echo DONE_PROBE                                                                  [49m
+ [48;2;47;47;64m                                                                                                  [49m
+
+  Running the command now.
+
+  $ sleep 3 && echo DONE_PROBE [2m4.6s[0m
+    [2mDONE_PROBE[0m
+
+  [38;2;168;181;230mDONE_PROBE[39m
+
+
+
+ [48;2;39;39;52m                                                                                                  [49m
+ [48;2;39;39;52m [2m→ [0;7m[48;2;39;39;52mA[0;2m[48;2;39;39;52mdd a follow-up[0m[48;2;39;39;52m                                                                                [49m
+ [48;2;39;39;52m                                                                                                  [49m
+
+  [2mCursor Grok 4.5 Low Fast[0m [2m·[0m [2m10.4%[0m                                     [35mRun Everything[39m [2m-- INSERT --[0m
+  [2m/tmp/cursorprobe[0m
+
+

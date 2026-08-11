@@ -1,8 +1,8 @@
 // Fixtures under testdata/ mirror real Claude/Codex/Cursor TUI output — the
 // idle/working layouts (Claude's ❯ prompt box + trailing status lines, Codex's ›
 // prompt and "Working (Ns • esc to interrupt)" line, Cursor's block-bar input and
-// braille "Working" line) were verified against live panes, then trimmed to
-// representative form here.
+// "Running … now" / shell-tool timing lines, or the older braille "Working" line)
+// were verified against live panes, then trimmed to representative form here.
 package manifest
 
 import (
@@ -35,6 +35,7 @@ func TestFixtures(t *testing.T) {
 		{"codex_working.txt", "codex", "processing"},
 		{"codex_idle.txt", "codex", "idle"},
 		{"cursor_working.txt", "cursor-agent", "processing"},
+		{"cursor_working_braille.txt", "cursor-agent", "processing"},
 		{"cursor_idle.txt", "cursor-agent", "idle"},
 		{"cursor_permission.txt", "cursor-agent", "waiting"},
 		{"cursor_reject_feedback.txt", "cursor-agent", "waiting"},
