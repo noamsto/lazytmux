@@ -233,6 +233,33 @@ setup_sweep() {
 	[ ! -d "$BATS_TEST_TMPDIR/live" ]
 }
 
+@test "sweep calls claude_reap_dead_panes with the fetched rows" {
+	setup_sweep
+	run bash -c '
+		claude_reap_dead_panes() { printf "%s" "$1" >"'"$BATS_TEST_TMPDIR"'/reap.log"; }
+		source scripts/tmux-update-icons.sh
+		arm_agent_detect
+	'
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$BATS_TEST_TMPDIR/reap.log")" == *'%3'*'codex'* ]]
+}
+
+@test "sweep still reaps when both arm and stamp are off" {
+	# arm=0 (AGENT_DETECT_BIN falls back to the unsubstituted placeholder) and
+	# stamp=0 (no ASSUME_DEAD_AFTER) together used to bail before the
+	# list-panes roundtrip ever happened — the reap must not share that fate,
+	# since it (unlike arm/stamp) has to work regardless of either feature.
+	setup_sweep
+	run bash -c '
+		unset AGENT_DETECT_BIN
+		claude_reap_dead_panes() { printf "%s" "$1" >"'"$BATS_TEST_TMPDIR"'/reap.log"; }
+		source scripts/tmux-update-icons.sh
+		arm_agent_detect
+	'
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$BATS_TEST_TMPDIR/reap.log")" == *'%3'*'codex'* ]]
+}
+
 @test "sweep: a zero threshold writes nothing" {
 	setup_sweep 0
 	run bash -c 'source scripts/tmux-update-icons.sh; arm_agent_detect'

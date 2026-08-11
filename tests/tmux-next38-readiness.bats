@@ -11,6 +11,7 @@ setup() {
 	export XDG_CONFIG_HOME="$TEST_HOME/.config"
 	export XDG_STATE_HOME="$TEST_HOME/.local/state"
 	export TERM=xterm-256color
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
 
 	t new-session -d -s s -c "$PWD"
 	wait_for_nonempty_option @thm_bg
@@ -329,6 +330,29 @@ wait_for_client() {
 
 	# The clear that makes that true has to be in the config, not incidental.
 	grep -q 'set-hook -gu after-select-pane' "$(store_conf)"
+}
+
+# Guards the general defect class behind #341 (a `set-hook -g` that tmux
+# silently discards, e.g. `pane-exited` on the pinned tmux), not just that one
+# hook name: every hook the generated config registers must actually be
+# stored, or reload would look fine while the hook quietly never fires.
+@test "every hook the config registers with set-hook -g is actually stored by tmux" {
+	run t show-hooks -g
+	[ "$status" -eq 0 ]
+	stored="$output"
+
+	local conf hooks name
+	conf="$(store_conf)"
+	hooks="$(grep -v -E '^\s*#' "$conf" | grep -oE 'set-hook -g ([A-Za-z-]+(\[[0-9]+\])?)' | awk '{print $3}' | sort -u)"
+	[ -n "$hooks" ]
+
+	while IFS= read -r name; do
+		[[ -n $name ]] || continue
+		if [[ $stored != *"$name"* ]]; then
+			printf 'hook %s registered in config but not stored by tmux (silent set-hook no-op)\n' "$name" >&2
+			return 1
+		fi
+	done <<<"$hooks"
 }
 
 @test "single-row separator omits only after the last window (next_window_index-driven)" {

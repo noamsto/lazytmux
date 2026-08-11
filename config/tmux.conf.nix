@@ -909,7 +909,6 @@
     set-hook -gu after-new-session
     set-hook -gu client-session-changed
     set-hook -gu client-attached
-    set-hook -gu pane-exited
 
     # Also clear hooks from older config versions that may linger
     set-hook -gu window-linked
@@ -983,8 +982,9 @@
     # coexists with any future consumer; the bare `set-hook -gu` above clears it.
     set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus '#{@bridge_pane}'\" }"
 
-    # Clean up claude status file when a pane closes (pane_id is %N, files are just N)
-    set-hook -g pane-exited 'run-shell "rm -f /tmp/claude-status/panes/#{s/%%//:pane_id} /tmp/claude-status/screen/#{s/%%//:pane_id} /tmp/claude-status/interrupt/#{s/%%//:pane_id} /tmp/claude-status/watchers/#{s/%%//:pane_id}"'
+    # The `pane-exited` hook is a silent no-op on the pinned tmux (confirmed
+    # via show-hooks -g), so per-pane claude-status cleanup instead rides the
+    # every-5th-tick full-server sweep in tmux-update-icons.sh (issue #341).
 
     # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
     set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'
