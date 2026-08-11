@@ -94,7 +94,9 @@ tmux_tokenize() {
 			;;
 		esac
 	done
-	((have)) && TOKENS+=("$buf")
+	# `if`, not `((have)) &&`: an &&-list's false branch makes it the function's
+	# exit status, which aborts the caller under errexit.
+	if ((have)); then TOKENS+=("$buf"); fi
 }
 
 # --- violation bookkeeping ----------------------------------------------
@@ -237,29 +239,58 @@ walk_tokens() {
 	done
 }
 
-# --- conf walker ---------------------------------------------------------
-# Joins backslash line-continuations, skips comment/blank lines, and walks
-# each logical line's tokens.
-scan_conf() {
+# --- logical lines --------------------------------------------------------
+# Both rules below run over the SAME joined stream, so neither can miss a
+# statement the other sees. Fills LOGICAL_TEXT/LOGICAL_START in step.
+#
+# Continuation follows tmux's lexer (cmd-parse.y counts consecutive
+# backslashes): only an ODD trailing count continues the line. Treating any
+# trailing backslash as a continuation glues the next statement on as one inert
+# token, and the command word on it is then never scanned.
+LOGICAL_TEXT=()
+LOGICAL_START=()
+join_logical_lines() {
+	LOGICAL_TEXT=()
+	LOGICAL_START=()
 	local conf="$1"
-	local lineno=0 logical="" logical_start=0
-	local line
+	local lineno=0 logical="" start=0 line trimmed t nbs
 	while IFS= read -r line || [[ -n $line ]]; do
 		lineno=$((lineno + 1))
 		if [[ -z $logical ]]; then
-			local trimmed="${line#"${line%%[![:space:]]*}"}"
+			trimmed="${line#"${line%%[![:space:]]*}"}"
 			[[ -z $trimmed || $trimmed == '#'* ]] && continue
-			logical_start=$lineno
+			start=$lineno
 		fi
-		if [[ $line == *\\ ]]; then
+		t="$line"
+		nbs=0
+		while [[ $t == *\\ ]]; do
+			t="${t%\\}"
+			nbs=$((nbs + 1))
+		done
+		if ((nbs % 2 == 1)); then
 			logical+="${line%\\}"
 			continue
 		fi
 		logical+="$line"
-		tmux_tokenize "$logical"
-		walk_tokens "$logical_start" "${TOKENS[@]}"
+		LOGICAL_TEXT+=("$logical")
+		LOGICAL_START+=("$start")
 		logical=""
 	done <"$conf"
+	# A file ending mid-continuation still holds a statement; dropping it would
+	# report a clean zero for text nobody scanned.
+	if [[ -n $logical ]]; then
+		LOGICAL_TEXT+=("$logical")
+		LOGICAL_START+=("$start")
+	fi
+}
+
+scan_conf() {
+	join_logical_lines "$1"
+	local i
+	for i in "${!LOGICAL_TEXT[@]}"; do
+		tmux_tokenize "${LOGICAL_TEXT[i]}"
+		walk_tokens "${LOGICAL_START[i]}" "${TOKENS[@]}"
+	done
 }
 
 # Entry point for tests: prints every violation, returns 1 if any were found.
@@ -283,24 +314,41 @@ check_conf_quoting() {
 IDENTITY_FORMATS=(session_name hook_session_name window_name pane_title)
 
 check_hashparen_identity() {
-	local conf="$1"
 	CONF_VIOLATIONS=0
-	local lineno=0 line body name
-	# #( up to the first ) — tmux's own #() bodies here never contain a literal
-	# unescaped ')', and #{q:} escapes one in a VALUE, so first-')' is enough.
-	local re='#\(([^)]*)\)'
-	while IFS= read -r line || [[ -n $line ]]; do
-		lineno=$((lineno + 1))
-		[[ ${line#"${line%%[![:space:]]*}"} == '#'* ]] && continue
-		while [[ $line =~ $re ]]; do
-			body="${BASH_REMATCH[1]}"
-			line="${line#*"${BASH_REMATCH[0]}"}"
-			for name in "${IDENTITY_FORMATS[@]}"; do
-				[[ $body == *"#{$name}"* ]] &&
-					record_violation "$lineno" "#{$name}" "${body:0:80}"
+	join_logical_lines "$1"
+	local idx line lineno n i depth j body name
+	for idx in "${!LOGICAL_TEXT[@]}"; do
+		line="${LOGICAL_TEXT[idx]}"
+		lineno="${LOGICAL_START[idx]}"
+		n=${#line}
+		i=0
+		while ((i < n)); do
+			if [[ ${line:i:2} != '#(' ]]; then
+				i=$((i + 1))
+				continue
+			fi
+			# Balance parens to find the close. Stopping at the FIRST ')' would
+			# truncate the body at any literal one -- an rgba()/regex argument --
+			# and hide a bare format after it. Over-scanning can only cost a false
+			# positive; under-scanning costs exactly the miss this guard exists for.
+			depth=1
+			j=$((i + 2))
+			while ((j < n && depth > 0)); do
+				case "${line:j:1}" in
+				'(') depth=$((depth + 1)) ;;
+				')') depth=$((depth - 1)) ;;
+				esac
+				j=$((j + 1))
 			done
+			body="${line:$((i + 2)):$((j - i - 3))}"
+			for name in "${IDENTITY_FORMATS[@]}"; do
+				if [[ $body == *"#{$name}"* ]]; then
+					record_violation "$lineno" "#{$name}" "${body:0:80}"
+				fi
+			done
+			i=$j
 		done
-	done <"$conf"
+	done
 	((CONF_VIOLATIONS == 0))
 }
 
@@ -397,4 +445,42 @@ EOF
 		echo "$output" >&2
 	fi
 	[ "$status" -eq 0 ]
+}
+
+# The three ways this scanner was found to report a clean zero over conf text
+# that plainly contains a bare format reaching a shell. Each is a false
+# NEGATIVE, so each fixture must come back with a violation, not just a diff.
+
+@test "a literal ) earlier in a #(...) body does not hide a bare format after it" {
+	cat >"$BATS_TEST_TMPDIR/paren.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --style 'rgba(0,0,0)' --session #{session_name})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/paren.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{session_name}'* ]]
+}
+
+@test "an even trailing backslash run is not a continuation" {
+	# tmux continues only on an ODD count; treating this as one would glue the
+	# next statement on as an inert token and never scan its command word.
+	printf 'run-shell "safe" \\\\\nrun-shell "bad #{session_name}"\n' \
+		>"$BATS_TEST_TMPDIR/parity.conf"
+	run check_conf_quoting "$BATS_TEST_TMPDIR/parity.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{session_name}'* ]]
+}
+
+@test "a statement left pending by a continuation at EOF is still scanned" {
+	printf 'run-shell "bad #{session_name}" \\\n' >"$BATS_TEST_TMPDIR/eof.conf"
+	run check_conf_quoting "$BATS_TEST_TMPDIR/eof.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{session_name}'* ]]
+}
+
+@test "a real (odd) continuation still joins into one statement" {
+	printf 'run-shell "bad #{session_name}" \\\n   --extra\n' \
+		>"$BATS_TEST_TMPDIR/join.conf"
+	run check_conf_quoting "$BATS_TEST_TMPDIR/join.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{session_name}'* ]]
 }
