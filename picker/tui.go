@@ -29,18 +29,18 @@ type listItem struct {
 	isRemoteHeader bool   // the "── Remote ──" divider
 	session        string // owning session name (for kill)
 	groupKey       string // window-mode header key this row re-attaches to
-	// when filtering: session name, or claude state
-	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
-	hasActiveClaude bool   // used for --claude filter
-	isScratch       bool   // scratch-* session
-	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
-	createName      string // zoxide suggestion: derived session name
-	isRemoteRow     bool   // belongs to the Remote section (set even when unselectable)
-	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
-	remoteSess      string // remote bridge row: optional remote session name
-	displayEnd      string // remote session row: display with the closing tree glyph
-	plainEnd        string // remote session row: plain with the closing tree glyph
-	remoteRestore   bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	// when filtering: session name, or agent state
+	bridgeHost     string // @bridge_host — set when this session mirrors a remote host
+	hasActiveAgent bool   // used for --agent filter
+	isScratch      bool   // scratch-* session
+	createPath     string // zoxide suggestion: dir to create a session at ("" = normal row)
+	createName     string // zoxide suggestion: derived session name
+	isRemoteRow    bool   // belongs to the Remote section (set even when unselectable)
+	remoteHost     string // remote bridge row: ssh host for lztmux-remote-open
+	remoteSess     string // remote bridge row: optional remote session name
+	displayEnd     string // remote session row: display with the closing tree glyph
+	plainEnd       string // remote session row: plain with the closing tree glyph
+	remoteRestore  bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
 }
 
 // pickerMode selects which renderer draws the body. One model, three
@@ -68,8 +68,8 @@ type tuiModel struct {
 	// a toggle rather than a one-way trip out of the wall.
 	wallLaunched bool
 	windowMode   bool
-	stateGrouped bool // window mode: group by claude state instead of session (#229)
-	claudeOnly   bool
+	stateGrouped bool // window mode: group by agent state instead of session (#229)
+	agentOnly    bool
 	scratchOnly  bool
 
 	// Wall
@@ -181,12 +181,12 @@ func wallMode(wall bool) pickerMode {
 // inputs — no tmux/ssh/proc calls of its own — so the first-paint wiring
 // (including the Remote section, #312) is exercised by a real unit test
 // instead of only by a manual tmux check.
-func newPickerModel(windowMode, claudeOnly, wall bool, opts map[string]string, theme string, items []listItem) tuiModel {
+func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, theme string, items []listItem) tuiModel {
 	m := tuiModel{
 		mode:         wallMode(wall),
 		wallLaunched: wall,
 		windowMode:   windowMode,
-		claudeOnly:   claudeOnly,
+		agentOnly:    agentOnly,
 		showPreview:  layoutShowsPreview(opts),
 		theme:        theme,
 		tmuxOpts:     opts,
@@ -208,10 +208,10 @@ func newPickerModel(windowMode, claudeOnly, wall bool, opts map[string]string, t
 	return m
 }
 
-func runTUI(windowMode, claudeOnly, wall bool) error {
+func runTUI(windowMode, agentOnly, wall bool) error {
 	theme := detectTheme()
 	opts := readTmuxOpts()
-	panes := collectClaudePanes()
+	panes := collectAgentPanes()
 
 	var items []listItem
 	if windowMode {
@@ -220,7 +220,7 @@ func runTUI(windowMode, claudeOnly, wall bool) error {
 		items = buildSessionItems(opts, panes, theme, false)
 	}
 
-	m := newPickerModel(windowMode, claudeOnly, wall, opts, theme, items)
+	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items)
 
 	p := tea.NewProgram(m)
 	_, err := p.Run()
@@ -476,7 +476,7 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+a":
-		m = m.toggleClaudeOnly()
+		m = m.toggleAgentOnly()
 		return m, m.loadPreviewCmd()
 
 	case "ctrl+s":
@@ -549,9 +549,9 @@ func printableKey(key string) bool {
 	return len(key) == 1 && key[0] >= 0x20 && key[0] < 0x7f
 }
 
-func (m tuiModel) toggleClaudeOnly() tuiModel {
-	m.claudeOnly = !m.claudeOnly
-	if m.claudeOnly {
+func (m tuiModel) toggleAgentOnly() tuiModel {
+	m.agentOnly = !m.agentOnly
+	if m.agentOnly {
 		m.scratchOnly = false
 	}
 	m = m.withFilter()
@@ -562,7 +562,7 @@ func (m tuiModel) toggleClaudeOnly() tuiModel {
 func (m tuiModel) toggleScratchOnly() tuiModel {
 	m.scratchOnly = !m.scratchOnly
 	if m.scratchOnly {
-		m.claudeOnly = false
+		m.agentOnly = false
 	}
 	m = m.withFilter()
 	m.cursor = m.firstSelectable(0)
@@ -616,7 +616,7 @@ func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 		m.focused = false
 		return m, m.loadPreviewCmd(), true
 	case "ctrl+a":
-		m = m.toggleClaudeOnly().snapWall()
+		m = m.toggleAgentOnly().snapWall()
 		return m, m.captureWallCmd(), true
 	case "ctrl+s":
 		m = m.toggleScratchOnly().snapWall()
@@ -1134,9 +1134,9 @@ func (m tuiModel) inPreview(x, y int) bool {
 // --- Filter ---
 
 // itemVisible reports whether an item passes the current mode filters
-// (scratch/claude). Headers are always visible (pruned separately).
+// (scratch/agent). Headers are always visible (pruned separately).
 // Zoxide suggestion rows are intentionally hidden by both modes: a dir
-// has no claude activity and is never a scratch session. Remote bridge rows
+// has no agent activity and is never a scratch session. Remote bridge rows
 // are exempt instead — they are the only way to reach a host from here, so
 // neither mode may drop the section.
 func (m tuiModel) itemVisible(item listItem) bool {
@@ -1149,7 +1149,7 @@ func (m tuiModel) itemVisible(item listItem) bool {
 	if !m.scratchOnly && item.isScratch {
 		return false
 	}
-	if m.claudeOnly && !item.hasActiveClaude {
+	if m.agentOnly && !item.hasActiveAgent {
 		return false
 	}
 	return true
@@ -1226,7 +1226,7 @@ func (m tuiModel) withFilter() tuiModel {
 
 	if m.windowMode {
 		// Re-group under headers, ordered by best child score. groupKey is
-		// the session name (session-grouped) or claude state (state-grouped,
+		// the session name (session-grouped) or agent state (state-grouped,
 		// #229) — whichever the current render built headers on.
 		headerMap := make(map[string]listItem)
 		for _, item := range m.allItems {
@@ -1395,7 +1395,7 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 	theme := m.theme
 	lw := m.listWidth() // capture the value; the closure runs off-thread
 	return func() tea.Msg {
-		panes := collectClaudePanes()
+		panes := collectAgentPanes()
 		var items []listItem
 		if wm {
 			items = buildWindowItems(opts, panes, theme, lw, sg)
@@ -1493,10 +1493,10 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 // padding stays aligned (multibyte glyphs measure wide in bytes, narrow in cells).
 const resourcePlaceholder = "-"
 
-func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, withResources bool) []listItem {
+func buildSessionItems(tmuxOpts map[string]string, agentPanes []agentPaneInfo, theme string, withResources bool) []listItem {
 	sessions := collectSessions()
-	claudeMap := aggregateClaudeBySession(claudePanes)
-	mergeClaude(sessions, claudeMap)
+	agentMap := aggregateAgentBySession(agentPanes)
+	mergeAgent(sessions, agentMap)
 
 	// Resource collection forks `ps -A`, so it stays off the first-paint path:
 	// the initial render passes withResources=false and an immediate async
@@ -1541,8 +1541,8 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			maxName = len(s.name)
 		}
 		icons, dw := buildProcIcons(s.procs, maxIconsPicker)
-		icons, dw = appendClaudeIcon(icons, dw, s.claude, theme, dim, reset)
-		icons, dw = appendIssueIDs(icons, dw, s.claude.issues, cDim, reset)
+		icons, dw = appendAgentIcon(icons, dw, s.agent, theme, dim, reset)
+		icons, dw = appendIssueIDs(icons, dw, s.agent.issues, cDim, reset)
 		rows[i] = row{sess: s, icons: icons, iconDW: dw}
 		if dw > maxIconDW {
 			maxIconDW = dw
@@ -1658,14 +1658,14 @@ func buildSessionItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo,
 			stripANSI(icons), resPlain, iDir, shortPath,
 		)
 		items = append(items, listItem{
-			target:          r.sess.name,
-			display:         display,
-			plain:           plain,
-			searchText:      r.sess.name,
-			session:         r.sess.name,
-			bridgeHost:      r.sess.bridgeHost,
-			hasActiveClaude: isActiveState(claudePriority(r.sess.claude)),
-			isScratch:       strings.HasPrefix(r.sess.name, "scratch-"),
+			target:         r.sess.name,
+			display:        display,
+			plain:          plain,
+			searchText:     r.sess.name,
+			session:        r.sess.name,
+			bridgeHost:     r.sess.bridgeHost,
+			hasActiveAgent: isActiveState(agentPriority(r.sess.agent)),
+			isScratch:      strings.HasPrefix(r.sess.name, "scratch-"),
 		})
 	}
 	return items
@@ -1714,8 +1714,8 @@ func collectZoxideItems(tmuxOpts map[string]string) []listItem {
 	return items
 }
 
-func buildWindowItems(tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int, stateGrouped bool) []listItem {
-	return renderWindowItems(collectWindows(), tmuxOpts, claudePanes, theme, width, stateGrouped)
+func buildWindowItems(tmuxOpts map[string]string, agentPanes []agentPaneInfo, theme string, width int, stateGrouped bool) []listItem {
+	return renderWindowItems(collectWindows(), tmuxOpts, agentPanes, theme, width, stateGrouped)
 }
 
 const (
@@ -1745,7 +1745,7 @@ func identityCapFor(width, leadDW, iconDW, prDW int) int {
 }
 
 // windowGroup is one header's worth of window rows, in render order. key is
-// either an owning session name (session-grouped mode) or a claude priority
+// either an owning session name (session-grouped mode) or an agent priority
 // state ("" = no agent, state-grouped mode).
 type windowGroup struct {
 	key     string
@@ -1787,17 +1787,18 @@ func groupWindowsBySession(windows []windowData, sessActivity map[string]int64) 
 	return groups
 }
 
-// groupWindowsByState buckets windows by claude_priority_state, in
-// claudeStateOrder — the same priority the status bar and pane pollers use
-// (#229). Windows with no claude state at all collapse into one trailing
-// group (key ""), never one group per stateless window. Within a group,
-// windows keep session-activity order so the busiest session's windows still
-// lead — the same tiebreak groupWindowsBySession uses.
+// groupWindowsByState buckets windows by claude_priority_state (the same
+// priority ordering the shell side uses for any agent, not only Claude — see
+// scripts/lib-claude.sh), in agentStateOrder — the same priority the status
+// bar and pane pollers use (#229). Windows with no agent state at all collapse
+// into one trailing group (key ""), never one group per stateless window.
+// Within a group, windows keep session-activity order so the busiest
+// session's windows still lead — the same tiebreak groupWindowsBySession uses.
 func groupWindowsByState(windows []windowData, sessActivity map[string]int64) []windowGroup {
 	byKey := map[string]*windowGroup{}
 	for i := range windows {
 		w := &windows[i]
-		key := claudePriority(w.claude)
+		key := agentPriority(w.agent)
 		g, ok := byKey[key]
 		if !ok {
 			g = &windowGroup{key: key}
@@ -1805,7 +1806,7 @@ func groupWindowsByState(windows []windowData, sessActivity map[string]int64) []
 		}
 		g.windows = append(g.windows, w)
 	}
-	order := append(append([]string{}, claudeStateOrder...), "")
+	order := append(append([]string{}, agentStateOrder...), "")
 	groups := make([]windowGroup, 0, len(order))
 	for _, key := range order {
 		if g, ok := byKey[key]; ok {
@@ -1831,9 +1832,9 @@ func groupWindowsByState(windows []windowData, sessActivity map[string]int64) []
 // renderWindowItems is the pure rendering half of buildWindowItems, split out so
 // the enriched row layout can be unit-tested with synthetic windows. width is
 // the list width in cells (0 = unknown → default identity cap).
-func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudePanes []claudePaneInfo, theme string, width int, stateGrouped bool) []listItem {
-	claudeByWin := aggregateClaudeByWindow(claudePanes)
-	mergeClaudeWindows(windows, claudeByWin)
+func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPanes []agentPaneInfo, theme string, width int, stateGrouped bool) []listItem {
+	agentByWin := aggregateAgentByWindow(agentPanes)
+	mergeAgentWindows(windows, agentByWin)
 
 	thmMauve := envOrMap("THM_MAUVE", tmuxOpts, "@thm_mauve", "#cba6f7")
 	thmGreen := envOrMap("THM_GREEN", tmuxOpts, "@thm_green", "#a6e3a1")
@@ -1891,8 +1892,8 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	for i := range windows {
 		w := &windows[i]
 		icons, dw := buildProcIcons(w.procs, maxIconsPicker)
-		icons, dw = appendClaudeIcon(icons, dw, w.claude, theme, dim, reset)
-		icons, dw = appendIssueIDs(icons, dw, w.claude.issues, cDim, reset)
+		icons, dw = appendAgentIcon(icons, dw, w.agent, theme, dim, reset)
+		icons, dw = appendIssueIDs(icons, dw, w.agent.issues, cDim, reset)
 
 		name := truncateCells(w.name, 40)
 
@@ -1981,33 +1982,33 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 	var items []listItem
 	for _, g := range groups {
 		var headerDisplay, headerPlain, headerSession string
-		var headerHasClaude bool
+		var headerHasAgent bool
 		if stateGrouped {
 			headerDisplay, headerPlain = stateGroupHeader(g.key, theme, cFaint)
-			headerHasClaude = isActiveState(g.key)
+			headerHasAgent = isActiveState(g.key)
 		} else {
-			sessHasClaude := false
+			sessHasAgent := false
 			for _, w := range g.windows {
 				key := fmt.Sprintf("%s:%d", w.session, w.index)
-				if cc, ok := claudeByWin[key]; ok && isActiveState(claudePriority(*cc)) {
-					sessHasClaude = true
+				if cc, ok := agentByWin[key]; ok && isActiveState(agentPriority(*cc)) {
+					sessHasAgent = true
 					break
 				}
 			}
 			headerDisplay = fmt.Sprintf("%s %s", cMauve+iSess+reset, cMauve+g.key+reset)
 			headerPlain = fmt.Sprintf("%s %s", iSess, g.key)
 			headerSession = g.key
-			headerHasClaude = sessHasClaude
+			headerHasAgent = sessHasAgent
 		}
 		items = append(items, listItem{
-			target:          g.key,
-			display:         headerDisplay,
-			plain:           headerPlain,
-			searchText:      g.key,
-			isHeader:        true,
-			session:         headerSession,
-			groupKey:        g.key,
-			hasActiveClaude: headerHasClaude,
+			target:         g.key,
+			display:        headerDisplay,
+			plain:          headerPlain,
+			searchText:     g.key,
+			isHeader:       true,
+			session:        headerSession,
+			groupKey:       g.key,
+			hasActiveAgent: headerHasAgent,
 		})
 
 		multiWin := len(g.windows) > 1
@@ -2073,13 +2074,13 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, claudeP
 				search += " " + r.crewName
 			}
 			items = append(items, listItem{
-				target:          fmt.Sprintf("%s:%d", w.session, w.index),
-				display:         display,
-				plain:           plain,
-				searchText:      search,
-				session:         w.session,
-				groupKey:        g.key,
-				hasActiveClaude: isActiveState(claudePriority(w.claude)),
+				target:         fmt.Sprintf("%s:%d", w.session, w.index),
+				display:        display,
+				plain:          plain,
+				searchText:     search,
+				session:        w.session,
+				groupKey:       g.key,
+				hasActiveAgent: isActiveState(agentPriority(w.agent)),
 			})
 		}
 	}
@@ -2109,13 +2110,14 @@ func foldSessionPrefix(session, cDim, reset string, identityCap int) (prefix, pl
 	return prefix, plain, remainingCap
 }
 
-// stateGroupHeader renders a state-grouped mode header for a claude priority
+// stateGroupHeader renders a state-grouped mode header for an agent priority
 // state key ("" = the trailing no-agent group), using the same icon/color a
-// window row in that state gets (claudeStateIcon, claudeColors) so the
-// header reads as the same state at a glance. cNoAgent colors the trailing
-// group, which has no entry in claudeColors.
+// window row in that state gets (claudeStateIcon, claudeColors — one state
+// dot shared across agents, not a per-agent glyph) so the header reads as the
+// same state at a glance. cNoAgent colors the trailing group, which has no
+// entry in claudeColors.
 func stateGroupHeader(key, theme, cNoAgent string) (display, plain string) {
-	label := claudeStateLabel[key]
+	label := agentStateLabel[key]
 	icon := claudeStateIcon(key)
 	color := cNoAgent
 	if hex, ok := claudeColors[theme][key]; ok {
@@ -2130,7 +2132,7 @@ func stateGroupHeader(key, theme, cNoAgent string) (display, plain string) {
 
 // --- Utilities ---
 
-// isActiveState reports whether a claude priority state is worth highlighting.
+// isActiveState reports whether an agent priority state is worth highlighting.
 func isActiveState(state string) bool {
 	return state != "" && state != "idle"
 }

@@ -3,7 +3,7 @@
 // Usage:
 //
 //	tmux-picker-generate --tui              # session picker
-//	tmux-picker-generate --tui --windows    # window picker (add --claude to filter)
+//	tmux-picker-generate --tui --windows    # window picker (add --agent to filter)
 //	tmux-picker-generate --tui --wall       # same, as a grid of live pane captures
 package main
 
@@ -56,7 +56,7 @@ type sessionData struct {
 	procs      []string // unique process names
 	panePIDs   []int    // shell PIDs for resource collection
 	bridgeHost string   // @bridge_host — ssh host this session mirrors, "" when local
-	claude     claudeCounts
+	agent      agentCounts
 	cpuPct     float64 // total CPU% across all descendant processes
 	memMB      float64 // total RSS in MiB across all descendant processes
 }
@@ -69,7 +69,7 @@ type windowData struct {
 	branch  string
 	active  bool // currently active window in its session
 	procs   []string
-	claude  claudeCounts
+	agent   agentCounts
 	// Enrich identity, read from the window options build_window_label already
 	// stamped (single source of truth — the status bar reads the same).
 	labelID     string // @window_label_id   — "<provider> <id>" or ""
@@ -83,15 +83,15 @@ type windowData struct {
 	crewColor   string // @crew_color — tmux colour code paired with the codename
 }
 
-type claudeCounts struct {
+type agentCounts struct {
 	waiting, compacting, processing, done, idle, errorCnt, denied int
 	allStale                                                      bool
 	anyUnseen                                                     bool
 	issues                                                        []string // union of self-reported issue ids
 }
 
-// claudePaneInfo holds parsed pane file data with window-level targeting.
-type claudePaneInfo struct {
+// agentPaneInfo holds parsed pane file data with window-level targeting.
+type agentPaneInfo struct {
 	session string
 	winIdx  int
 	state   string
@@ -107,7 +107,7 @@ func main() {
 	for _, a := range args {
 		flags[a] = true
 	}
-	if err := runTUI(flags["--windows"], flags["--claude"], flags["--wall"]); err != nil {
+	if err := runTUI(flags["--windows"], flags["--agent"], flags["--wall"]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -517,22 +517,32 @@ func (rc resourceColors) memColor(mb float64) string {
 }
 
 // ---------------------------------------------------------------------------
-// Claude status
+// Agent status
 // ---------------------------------------------------------------------------
 
-func collectClaudePanes() []claudePaneInfo {
-	dir := "/tmp/claude-status/panes"
-	issuesDir := "/tmp/claude-status/issues"
+// hookPaneState is one /tmp/claude-status/panes/<pane_id> hook-written state
+// file — written by the Claude Code plugin's own hooks.
+type hookPaneState struct {
+	state     string
+	session   string
+	timestamp int64
+	unseen    bool
+}
+
+// screenPaneState is one /tmp/claude-status/screen/<pane_id> scraper-written
+// state file (agentdetect) — no session/unseen fields, since the scraper
+// never sees the hook's request context, only the pane's screen contents.
+type screenPaneState struct {
+	state     string
+	timestamp int64
+}
+
+func readHookPaneStates(dir string) map[string]hookPaneState {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-
-	// Build pane_id -> (session, window_index) mapping
-	paneMap := buildPaneMap()
-	now := time.Now().Unix()
-	var result []claudePaneInfo
-
+	out := make(map[string]hookPaneState, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -541,44 +551,156 @@ func collectClaudePanes() []claudePaneInfo {
 		if err != nil {
 			continue
 		}
-
-		var state, session string
-		var timestamp int64
-		var unseen bool
+		var hp hookPaneState
 		for _, line := range strings.Split(string(data), "\n") {
 			if k, v, ok := strings.Cut(line, "="); ok {
 				switch k {
 				case "state":
-					state = v
+					hp.state = v
 				case "session":
-					session = v
+					hp.session = v
 				case "timestamp":
-					timestamp, _ = strconv.ParseInt(v, 10, 64)
+					hp.timestamp, _ = strconv.ParseInt(v, 10, 64)
 				case "unseen":
-					unseen = v == "1"
+					hp.unseen = v == "1"
 				}
 			}
 		}
-		if session == "" || state == "" {
+		if hp.state == "" {
+			continue
+		}
+		out[e.Name()] = hp
+	}
+	return out
+}
+
+func readScreenPaneStates(dir string) map[string]screenPaneState {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]screenPaneState, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var sp screenPaneState
+		for _, line := range strings.Split(string(data), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok {
+				switch k {
+				case "state":
+					sp.state = v
+				case "timestamp":
+					sp.timestamp, _ = strconv.ParseInt(v, 10, 64)
+				}
+			}
+		}
+		if sp.state == "" {
+			continue
+		}
+		out[e.Name()] = sp
+	}
+	return out
+}
+
+// screenOverrideMaxAge mirrors the max_age table in read_pane_state
+// (scripts/lib-claude.sh): only a hook state that a missed completion hook
+// can leave stuck (compacting/processing/done) is eligible for a screen
+// override. waiting/error/denied are human-blocking states the scraper must
+// never downgrade — they look identical to idle on screen.
+func screenOverrideMaxAge(state string) int64 {
+	switch state {
+	case "compacting":
+		return staleCompacting
+	case "processing":
+		return staleProcessing
+	case "done":
+		return staleDone
+	}
+	return 0
+}
+
+// collectAgentPanes merges the hook-written state (panes/) with the
+// screen-scraper's state (screen/) for every pane, hook-first, with the same
+// state precedence read_pane_state uses in scripts/lib-claude.sh. Unlike
+// read_pane_state, a screen override re-resolves session from the live pane
+// map instead of blanking it — this picker's session/window aggregation both
+// key off the same field, so blanking it would drop the pane entirely.
+func collectAgentPanes() []agentPaneInfo {
+	return collectAgentPanesFrom(
+		"/tmp/claude-status/panes", "/tmp/claude-status/screen", "/tmp/claude-status/issues",
+		buildPaneMap(), time.Now().Unix(),
+	)
+}
+
+// collectAgentPanesFrom is collectAgentPanes with its directories, pane map,
+// and clock injected — exercised directly by tests so the hook/screen merge
+// precedence is pure Go, no tmux or /tmp required.
+func collectAgentPanesFrom(hookDir, screenDir, issuesDir string, paneMap map[string]paneMapping, now int64) []agentPaneInfo {
+	hooks := readHookPaneStates(hookDir)
+	screens := readScreenPaneStates(screenDir)
+	if len(hooks) == 0 && len(screens) == 0 {
+		return nil
+	}
+
+	ids := make(map[string]bool, len(hooks)+len(screens))
+	for id := range hooks {
+		ids[id] = true
+	}
+	for id := range screens {
+		ids[id] = true
+	}
+
+	var result []agentPaneInfo
+	for id := range ids {
+		hook, hasHook := hooks[id]
+		screen, hasScreen := screens[id]
+
+		var state, session string
+		var timestamp int64
+		var unseen bool
+
+		pm, hasPane := paneMap[id]
+
+		if hasHook {
+			state, timestamp, session, unseen = hook.state, hook.timestamp, hook.session, hook.unseen
+			if maxAge := screenOverrideMaxAge(state); maxAge > 0 && now-timestamp > maxAge && hasScreen {
+				// Hook stale past its own threshold with a live screen
+				// reading available — screen is ground truth.
+				state, timestamp, unseen = screen.state, screen.timestamp, false
+				if hasPane {
+					session = pm.session
+				}
+			}
+		} else {
+			// Scraper-only pane: the screen file carries no session, so it
+			// can only be placed by asking tmux directly.
+			if !hasPane {
+				continue
+			}
+			state, timestamp, session = screen.state, screen.timestamp, pm.session
+		}
+		if session == "" {
 			continue
 		}
 
-		stale := isStale(state, now, timestamp)
-
-		// Try to resolve window index from pane map
 		winIdx := -1
-		if pm, ok := paneMap[e.Name()]; ok {
+		if hasPane {
 			winIdx = pm.winIdx
 		}
 
-		result = append(result, claudePaneInfo{
+		result = append(result, agentPaneInfo{
 			session: session,
 			winIdx:  winIdx,
 			state:   state,
 			ts:      timestamp,
-			stale:   stale,
+			stale:   isStale(state, now, timestamp),
 			unseen:  unseen,
-			issues:  readPaneIssues(filepath.Join(issuesDir, e.Name())),
+			issues:  readPaneIssues(filepath.Join(issuesDir, id)),
 		})
 	}
 	return result
@@ -628,12 +750,12 @@ func buildPaneMap() map[string]paneMapping {
 	return m
 }
 
-func aggregateClaudeBySession(panes []claudePaneInfo) map[string]*claudeCounts {
-	result := make(map[string]*claudeCounts)
+func aggregateAgentBySession(panes []agentPaneInfo) map[string]*agentCounts {
+	result := make(map[string]*agentCounts)
 	for _, p := range panes {
 		cc, ok := result[p.session]
 		if !ok {
-			cc = &claudeCounts{allStale: true}
+			cc = &agentCounts{allStale: true}
 			result[p.session] = cc
 		}
 		if !p.stale {
@@ -642,14 +764,14 @@ func aggregateClaudeBySession(panes []claudePaneInfo) map[string]*claudeCounts {
 		if p.unseen {
 			cc.anyUnseen = true
 		}
-		addClaudeState(cc, p.state)
+		addAgentState(cc, p.state)
 		addIssues(cc, p.issues)
 	}
 	return result
 }
 
-func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
-	result := make(map[string]*claudeCounts)
+func aggregateAgentByWindow(panes []agentPaneInfo) map[string]*agentCounts {
+	result := make(map[string]*agentCounts)
 	for _, p := range panes {
 		if p.winIdx < 0 {
 			continue
@@ -657,7 +779,7 @@ func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
 		key := fmt.Sprintf("%s:%d", p.session, p.winIdx)
 		cc, ok := result[key]
 		if !ok {
-			cc = &claudeCounts{allStale: true}
+			cc = &agentCounts{allStale: true}
 			result[key] = cc
 		}
 		if !p.stale {
@@ -666,13 +788,13 @@ func aggregateClaudeByWindow(panes []claudePaneInfo) map[string]*claudeCounts {
 		if p.unseen {
 			cc.anyUnseen = true
 		}
-		addClaudeState(cc, p.state)
+		addAgentState(cc, p.state)
 		addIssues(cc, p.issues)
 	}
 	return result
 }
 
-func addClaudeState(cc *claudeCounts, state string) {
+func addAgentState(cc *agentCounts, state string) {
 	switch state {
 	case "waiting":
 		cc.waiting++
@@ -691,7 +813,7 @@ func addClaudeState(cc *claudeCounts, state string) {
 	}
 }
 
-func addIssues(cc *claudeCounts, ids []string) {
+func addIssues(cc *agentCounts, ids []string) {
 	for _, id := range ids {
 		seen := false
 		for _, e := range cc.issues {
@@ -728,48 +850,48 @@ func isStale(state string, now, ts int64) bool {
 	return false
 }
 
-func mergeClaude(sessions []sessionData, claude map[string]*claudeCounts) {
-	if claude == nil {
+func mergeAgent(sessions []sessionData, agent map[string]*agentCounts) {
+	if agent == nil {
 		return
 	}
 	for i := range sessions {
-		if cc, ok := claude[sessions[i].name]; ok {
-			sessions[i].claude = *cc
+		if cc, ok := agent[sessions[i].name]; ok {
+			sessions[i].agent = *cc
 		}
 	}
 }
 
-func mergeClaudeWindows(windows []windowData, claude map[string]*claudeCounts) {
-	if claude == nil {
+func mergeAgentWindows(windows []windowData, agent map[string]*agentCounts) {
+	if agent == nil {
 		return
 	}
 	for i := range windows {
 		key := fmt.Sprintf("%s:%d", windows[i].session, windows[i].index)
-		if cc, ok := claude[key]; ok {
-			windows[i].claude = *cc
+		if cc, ok := agent[key]; ok {
+			windows[i].agent = *cc
 		}
 	}
 }
 
-// claudeStateOrder mirrors lib-claude.sh's claude_priority_state, minus
+// agentStateOrder mirrors lib-claude.sh's claude_priority_state, minus
 // "interrupted" — a shell-only state derived from a transcript-tail scrape
 // the Go picker never does (see CLAUDE.md's Remote Agent Status section).
-// Single source of truth for both claudePriority (per-window state) and
+// Single source of truth for both agentPriority (per-window state) and
 // window mode's state-grouped header order (#229) — a second, hand-copied
 // list here would silently diverge from this one.
-var claudeStateOrder = []string{
+var agentStateOrder = []string{
 	"error", "waiting", "denied", "compacting", "processing", "done", "idle",
 }
 
-// claudeStateLabel is the header text for each state in window mode's
-// state-grouped view; "" (no claude state at all) is the trailing group.
-var claudeStateLabel = map[string]string{
+// agentStateLabel is the header text for each state in window mode's
+// state-grouped view; "" (no agent state at all) is the trailing group.
+var agentStateLabel = map[string]string{
 	"error": "Error", "waiting": "Waiting", "denied": "Denied",
 	"compacting": "Compacting", "processing": "Processing", "done": "Done",
 	"idle": "Idle", "": "No agent",
 }
 
-func claudeStateCount(c claudeCounts, state string) int {
+func agentStateCount(c agentCounts, state string) int {
 	switch state {
 	case "error":
 		return c.errorCnt
@@ -789,9 +911,9 @@ func claudeStateCount(c claudeCounts, state string) int {
 	return 0
 }
 
-func claudePriority(c claudeCounts) string {
-	for _, state := range claudeStateOrder {
-		if claudeStateCount(c, state) > 0 {
+func agentPriority(c agentCounts) string {
+	for _, state := range agentStateOrder {
+		if agentStateCount(c, state) > 0 {
 			return state
 		}
 	}
@@ -819,8 +941,8 @@ func claudeStateIcon(state string) string {
 	return ""
 }
 
-func appendClaudeIcon(icons string, dw int, cc claudeCounts, theme, dim, reset string) (string, int) {
-	state := claudePriority(cc)
+func appendAgentIcon(icons string, dw int, cc agentCounts, theme, dim, reset string) (string, int) {
+	state := agentPriority(cc)
 	if state == "" {
 		return icons, dw
 	}
@@ -1025,7 +1147,6 @@ func ansiBg(hex string) string {
 	b, _ := strconv.ParseUint(hex[4:6], 16, 8)
 	return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
 }
-
 
 func readTmuxOpts() map[string]string {
 	out, err := exec.Command("tmux", "show", "-g").Output()

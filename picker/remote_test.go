@@ -302,7 +302,7 @@ func TestPendingRemoteItems(t *testing.T) {
 			t.Errorf("row %d: must be selectable before the probe returns", i)
 		}
 		if !row.isRemoteRow {
-			t.Errorf("row %d: must be flagged isRemoteRow so claude/scratch toggles can't hide it", i)
+			t.Errorf("row %d: must be flagged isRemoteRow so agent/scratch toggles can't hide it", i)
 		}
 		if row.searchText != host {
 			t.Errorf("row %d: searchText=%q, want %q", i, row.searchText, host)

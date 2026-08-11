@@ -217,9 +217,9 @@ func (m tuiModel) renderWallHints() string {
 	}
 
 	highlight := lipgloss.NewStyle().Foreground(m.thmColor("@thm_peach", "#fab387", "#fe640b"))
-	claudeLabel := "claude"
-	if m.claudeOnly {
-		claudeLabel = highlight.Render(claudeLabel)
+	agentLabel := "agents"
+	if m.agentOnly {
+		agentLabel = highlight.Render(agentLabel)
 	}
 	scratchLabel := "scratch"
 	if m.scratchOnly {
@@ -240,7 +240,7 @@ func (m tuiModel) renderWallHints() string {
 		hint("tab", "focus"),
 		hint("^x", "kill"),
 		filterHint,
-		hint("^a", claudeLabel),
+		hint("^a", agentLabel),
 		hint("^s", scratchLabel),
 		hint("^/", "list"),
 		quitHint,
