@@ -179,15 +179,24 @@ network dropped can sit alive-but-hung. `ssh -O check` does not catch this: it
 is local IPC to a master process that is still running. It catches only the
 *dead* master — socket file present, process gone.
 
-Two consequences:
+The mitigation is that the master invocation carries its own
+`-o ServerAliveInterval=15`, so a half-open master terminates itself rather than
+hanging every later call.
 
-- The master invocation carries its own `-o ServerAliveInterval=15`, so a
-  half-open master terminates itself rather than hanging every later call.
-- `remoteSessionsForHost` gains a pre-probe gate: if the resolved `controlpath`
-  exists, `ssh -O check` runs first (local IPC, no network, effectively
-  instant); on failure the stale socket is removed and the host is reported as
-  `remoteProbeNeedsAuth` without paying the 3s probe timeout. This handles
-  suspend-then-resume, the common case.
+An earlier draft of this spec also added an `ssh -O check` gate before the probe,
+to clear a stale socket without paying the 3s probe timeout. **That gate is not
+built**, because its own premise defeats it:
+
+- `-O check` detects only the *dead* master — and a dead master is already
+  harmless. ssh notices the unusable socket and falls straight through to a
+  direct connection, which then fails auth fast and lands on the needs-auth row.
+  Nothing is slow and nothing is wrong.
+- The case that *is* slow — an alive-but-hung master eating the full timeout — is
+  exactly the case `-O check` cannot see, since it is local IPC to a process that
+  is still running. `ServerAliveInterval=15` is what addresses that.
+
+So the gate would have cost a `ssh -G` fork per host per picker open to optimise
+the one case that was never the problem. Left out deliberately.
 
 `ControlPersist` is an **idle** timer — it starts counting only once no
 multiplexed sessions remain. The daemon's `ssh -CC` is a session riding the
