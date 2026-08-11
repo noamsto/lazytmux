@@ -11,8 +11,9 @@
 # reads, stores or forwards the secret.
 set -euo pipefail
 
+# @lib_remote@ is substituted at Nix build time; in bats the lib is pre-sourced.
 # shellcheck source=/dev/null
-source "@lib_remote@"
+[[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
 host="${1:?usage: lztmux-remote-auth <host>}"
 
@@ -40,7 +41,7 @@ printf 'Authenticating to %s\n\n' "$host"
 # and leave a stale socket across a suspend.
 # ServerAliveInterval is explicit because Host * sets it to 0, which would let a
 # half-open master hang every later call with nothing to time it out.
-if ! ssh -M -f -o ControlPersist="$persist" -o ServerAliveInterval=15 "$host" true; then
+if ! ssh -M -f -o ControlPersist="$persist" -o ServerAliveInterval=15 -- "$host" true; then
 	printf '\nCould not authenticate to %s.\n' "$host" >&2
 	pause_then_exit 1
 fi
@@ -51,11 +52,11 @@ printf '\nConnected. %s stays authenticated for %ss of idle time.\n' "$host" "$p
 # connection rather than riding the master just created, and BatchMode makes it
 # fail rather than prompt — so a non-zero exit means no key is installed. This
 # tests the condition directly instead of parsing `ssh -v` for its auth method.
-if ssh -o BatchMode=yes -o ControlPath=none -o ConnectTimeout=5 "$host" true 2>/dev/null; then
+if ssh -o BatchMode=yes -o ControlPath=none -o ConnectTimeout=5 -- "$host" true 2>/dev/null; then
 	exit 0
 fi
 
-remote_auth_identity "$(ssh -G "$host" 2>/dev/null || true)"
+remote_auth_identity "$(ssh -G -- "$host" 2>/dev/null || true)"
 key="$REPLY"
 [[ -n $key && -f $key ]] || exit 0
 [[ -t 0 ]] || exit 0
