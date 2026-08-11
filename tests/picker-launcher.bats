@@ -104,5 +104,30 @@ width_of() { sed -n 's/.*-w \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 	bash "$launcher" --client foo sess
 	grep -Eq -- '(^| )-c foo( |$)' "$ARGS_LOG"
 	grep -F -- 'scratch: sess' "$ARGS_LOG"
-	grep -Eq -- "--attach 'sess'" "$ARGS_LOG"
+	# the shape of the quoting is printf %q's business (a benign name needs
+	# none) -- assert the session reaches --attach, not how it was quoted
+	grep -Eq -- '--attach ([^ ]*)?sess' "$ARGS_LOG"
+}
+
+# display-popup -E hands its argument to a shell, and on a bridged session the
+# name comes from the remote host, so a "'" in it used to close the quoting and
+# execute the remainder. The popup command must carry it as one inert word.
+@test "scratchpad: a session name with shell metacharacters cannot break out" {
+	launcher="$(mk_launcher tmux-scratchpad.sh)"
+	evil="x'; touch $BATS_TEST_TMPDIR/pwned; echo '"
+	bash "$launcher" --client foo "$evil"
+	[ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+
+	# -E hands the command to a shell, so run it that way too: the payload must
+	# not fire, and the name must arrive as one argument. Standing in for the
+	# launcher (the command names it) is a recorder that just echoes its $2.
+	popup_cmd=$(sed -n 's/.* -S fg= //p' "$ARGS_LOG")
+	cat >"$BATS_TEST_TMPDIR/tmux-scratchpad.sh" <<-'EOF'
+		#!/bin/sh
+		printf '%s\n' "$2" >"$SEEN"
+	EOF
+	chmod +x "$BATS_TEST_TMPDIR/tmux-scratchpad.sh"
+	SEEN="$BATS_TEST_TMPDIR/seen" sh -c "$popup_cmd"
+	[ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+	[ "$(cat "$BATS_TEST_TMPDIR/seen")" = "$evil" ]
 }

@@ -319,7 +319,7 @@
           # by inspection: hooks present at the free [20] index, both commands
           # pinned to a store path (a bare name resolves against the tmux
           # server's frozen PATH and would make prefix+r an incomplete deploy),
-          # both passing #{window_id} (never #{session_id} — run-shell's sh -c
+          # both passing #{q:window_id} (never #{session_id} — run-shell's sh -c
           # re-expands a leading $), matching -gu clears for reload idempotence,
           # and the n bind running a store-path center.
           #
@@ -343,8 +343,8 @@
               grep -q 'set-hook -g alert-activity\[20\]' "$CONF"
               grep -q 'set-hook -gu alert-bell' "$CONF"
               grep -q 'set-hook -gu alert-activity' "$CONF"
-              grep -E 'alert-bell\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{window_id\}' "$CONF"
-              grep -E 'alert-activity\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{window_id\}' "$CONF"
+              grep -E 'alert-bell\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{q:window_id\}' "$CONF"
+              grep -E 'alert-activity\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{q:window_id\}' "$CONF"
               grep -E 'bind-key n display-popup -E .*/nix/store/[^ ]*/bin/lztmux-notify-center' "$CONF"
 
               # ORDER, not just presence: the clear must precede the setter, or
@@ -399,6 +399,23 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/splash.bats
+              touch $out
+            '';
+
+          # Regression guard for the command-injection class of issue #355,
+          # which has now been introduced three times. Asserted on the EMITTED
+          # conf, never the Nix source — that layer plus tmux's own quoting make
+          # the source unreliable to eyeball. A presence grep for today's
+          # #{q:...} would not hold: this has to reject the NEXT bare one, which
+          # is why it is a scanner rather than a grep. Rule and scope live in
+          # tests/conf-shell-quoting.bats.
+          conf-shell-quoting-tests =
+            pkgs.runCommand "conf-shell-quoting-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              cp -r ${./tests} tests
+              bats tests/conf-shell-quoting.bats
               touch $out
             '';
 

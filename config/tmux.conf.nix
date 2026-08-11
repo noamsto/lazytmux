@@ -300,7 +300,7 @@
   # else branch — a regression in normal keybind behavior would defeat the whole
   # point of the bridge (zero blast radius on the human's live session).
   bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}";
-  bridgeCtl = "${picker-bridge-ctl-bin} --display-error '#{client_name}' --sock '#{@bridge_sock}'";
+  bridgeCtl = "${picker-bridge-ctl-bin} --display-error=#{q:client_name} --sock=#{q:@bridge_sock}";
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   # Commands the pipe-pane sweep in tmux-update-icons watches for, derived from
@@ -558,7 +558,7 @@
   # string before exec.
   carouselBind =
     lib.optionalString (carousel-toggle != null)
-    "bind I if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} carousel '#{@bridge_pane}'\" } { run-shell 'TMUX_PANE=#{pane_id} ${carousel-toggle}/bin/tmux-claude-images' }";
+    "bind I if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} carousel #{q:@bridge_pane}\" } { run-shell 'TMUX_PANE=#{q:pane_id} ${carousel-toggle}/bin/tmux-claude-images' }";
 
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
@@ -586,7 +586,7 @@
   pluginConfigs = ''
     # catppuccin theme
     # Detect theme from state file on first load (theme-toggle sets flavor before re-source)
-    if-shell '[ -z "#{@catppuccin_flavor}" ]' \
+    if-shell '[ x#{q:@catppuccin_flavor} = x ]' \
       'if-shell "grep -q light \"$HOME/.local/state/theme-state.json\" 2>/dev/null" \
         "set -g @catppuccin_flavor latte" \
         "set -g @catppuccin_flavor mocha"'
@@ -704,54 +704,56 @@
     bind -n M-l send-keys 'C-l'
 
     # Shift+Enter: process-aware newline for Claude Code / Amp / OpenCode
-    bind -n S-Enter if-shell "ps -o comm= -t '#{pane_tty}' | grep -qE '^(amp|bun|opencode)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
+    bind -n S-Enter if-shell "ps -o comm= -t #{q:pane_tty} | grep -qE '^(amp|bun|opencode)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
 
     # Pane splitting (| and _)
     unbind %
-    bind | if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-h '#{@bridge_pane}'" } { split-window -h -c "#{pane_current_path}" }
+    bind | if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-h #{q:@bridge_pane}" } { split-window -h -c "#{pane_current_path}" }
     unbind '"'
-    bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v '#{@bridge_pane}'" } { split-window -v -c "#{pane_current_path}" }
-    bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window '#{@bridge_pane}'" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
-    # #{q:} on the session name, not \"...\": run-shell format-expands before sh -c,
-    # so a name containing a quote breaks out and executes (see client-attached[50]).
-    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad --client "#{client_name}" #{q:session_name}'
+    bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v #{q:@bridge_pane}" } { split-window -v -c "#{pane_current_path}" }
+    bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window #{q:@bridge_pane}" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
+    # #{q:} and NOT \"...\", as at client-attached[50]. Bare #{q:client_name}
+    # would be zero words when no client exists, sliding the session name into
+    # --client's slot; #{?...} emits the flag and its value together or neither,
+    # which is what this script's `$1 == --client` parsing needs (no = form).
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad #{?client_name,--client #{q:client_name},} #{q:session_name}'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
-    bind Y run-shell 'tmux display-message -p "#{pane_current_path}" | wl-copy'
+    bind Y run-shell 'tmux display-message -p #{q:pane_current_path} | wl-copy'
 
     # Resize panes. In a mirror window the resize lands on the remote pane and the
     # mirror re-fits from the remote's new layout; -r still repeats.
-    bind -r -T prefix M-Up    if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' U 5" } { resize-pane -U 5 }
-    bind -r -T prefix M-Down  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' D 5" } { resize-pane -D 5 }
-    bind -r -T prefix M-Left  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' L 5" } { resize-pane -L 5 }
-    bind -r -T prefix M-Right if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize '#{@bridge_pane}' R 5" } { resize-pane -R 5 }
+    bind -r -T prefix M-Up    if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize #{q:@bridge_pane} U 5" } { resize-pane -U 5 }
+    bind -r -T prefix M-Down  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize #{q:@bridge_pane} D 5" } { resize-pane -D 5 }
+    bind -r -T prefix M-Left  if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize #{q:@bridge_pane} L 5" } { resize-pane -L 5 }
+    bind -r -T prefix M-Right if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} resize #{q:@bridge_pane} R 5" } { resize-pane -R 5 }
 
     # === Remote bridge: keys this config did NOT previously bind ===
     # Gating them means the config now owns them, so each else-branch reproduces
     # next-3.8's default verbatim, -N note included (the note feeds which-key).
     # The rename prompt seeds from @window_bridge_name, not #W: on a mirror window
     # #W is the label reflow derived, while the option holds the remote's own name.
-    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename '#{@bridge_pane}' '%%'" } } { command-prompt -I'#W' { rename-window -- '%%' } }
-    bind-key -N 'Swap the active pane with the pane above' '{' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap '#{@bridge_pane}' U" } { swap-pane -U }
-    bind-key -N 'Swap the active pane with the pane below' '}' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap '#{@bridge_pane}' D" } { swap-pane -D }
+    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename #{q:@bridge_pane} '%%'" } } { command-prompt -I'#W' { rename-window -- '%%' } }
+    bind-key -N 'Swap the active pane with the pane above' '{' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} U" } { swap-pane -U }
+    bind-key -N 'Swap the active pane with the pane below' '}' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} D" } { swap-pane -D }
 
     # Alt-shift window navigation: H/L step within a row, J/K move row-to-row in
     # the reflowed multi-line window grid (no-op when there is no row that way).
     bind -n M-H previous-window
     bind -n M-L next-window
-    bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{session_name} #{window_index} #{@window_per}'
-    bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{session_name} #{window_index} #{@window_per}'
+    bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{q:session_name} #{q:window_index} #{q:@window_per}'
+    bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{q:session_name} #{q:window_index} #{q:@window_per}'
 
     # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
-    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}"'
-    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}" --agent'
-    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall --client "#{client_name}"'
+    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},}'
+    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker #{?client_name,--client #{q:client_name},}'
+    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker #{?client_name,--client #{q:client_name},} --agent'
+    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall #{?client_name,--client #{q:client_name},}'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.
-    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
+    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},}'
 
     ${lib.optionalString splashEnable ''
       # Summon the welcome splash on demand (bypasses the once-per-session gate;
@@ -816,16 +818,20 @@
     # In a mirror window the guard would be reading the wrong process — a mirror
     # pane runs the renderer, not the remote workload — so a bridge kill always
     # confirms, naming the remote pane, then kills it on the remote.
-    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}? (y/n)" { run-shell "${bridgeCtl} kill-pane '#{@bridge_pane}'" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{pane_id} #{pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
-    bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window '#{@bridge_pane}'" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
+    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
+    bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window #{q:@bridge_pane}" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
-    is_vim="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf)(diff)?$'"
-    bind-key -n C-h if-shell "$is_vim" "send-keys C-h" "run-shell 'tmux-smart-nav L left #{window_zoomed_flag} #{pane_at_left}'"
-    bind-key -n C-j if-shell "$is_vim" "send-keys C-j" "run-shell 'tmux-smart-nav D down #{window_zoomed_flag} #{pane_at_bottom}'"
-    bind-key -n C-k if-shell "$is_vim" "send-keys C-k" "run-shell 'tmux-smart-nav U up #{window_zoomed_flag} #{pane_at_top}'"
-    bind-key -n C-l if-shell "$is_vim" "send-keys C-l" "run-shell 'tmux-smart-nav R right #{window_zoomed_flag} #{pane_at_right}'"
+    # tmux substitutes $is_vim into each bind at parse time, so this string IS an
+    # if-shell shell argument and #{pane_tty} is expanded before sh -c — quoted
+    # like every other such site. The conf-shell-quoting guard cannot see this one:
+    # it scans the emitted text, where the binds below read only "$is_vim".
+    is_vim="ps -o state= -o comm= -t #{q:pane_tty} | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf)(diff)?$'"
+    bind-key -n C-h if-shell "$is_vim" "send-keys C-h" "run-shell 'tmux-smart-nav L left #{q:window_zoomed_flag} #{q:pane_at_left}'"
+    bind-key -n C-j if-shell "$is_vim" "send-keys C-j" "run-shell 'tmux-smart-nav D down #{q:window_zoomed_flag} #{q:pane_at_bottom}'"
+    bind-key -n C-k if-shell "$is_vim" "send-keys C-k" "run-shell 'tmux-smart-nav U up #{q:window_zoomed_flag} #{q:pane_at_top}'"
+    bind-key -n C-l if-shell "$is_vim" "send-keys C-l" "run-shell 'tmux-smart-nav R right #{q:window_zoomed_flag} #{q:pane_at_right}'"
 
     # Window titles
     set-option -g set-titles on
@@ -885,7 +891,7 @@
     # passing.
     # ticker per client attach — whenever that first tick exceeds 1s, i.e. under
     # CPU load.
-    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons '#{session_name}' '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session '#{session_name}' --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
+    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons #{q:session_name} '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session #{q:session_name} --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
     # A window tagged by an external fan-out orchestrator (@crew_name codename +
     # @crew_color) shows the codename as a badge after "index: ", tinted by that
@@ -937,23 +943,23 @@
     # server's command queue instead of wedging it. session-window-changed
     # fires on every switch but is a win_count:WIDTH cache hit that exits before
     # the lock, so it stays synchronous.
-    set-hook -g after-new-window        'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g window-unlinked         'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g after-new-window        'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g window-unlinked         'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
     # client-resized fires on every step of a terminal drag; each distinct width
     # is a cache miss → full O(N) recompute. Background it (-b, off the server's
     # command queue) with --debounce so a drag coalesces to one reflow at the
     # final width — see the debounce block in tmux-reflow-windows.
-    set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{session_name} #{client_width}"'
-    set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
-    set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{q:session_name} #{q:client_width}"'
+    set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
     # A cold attach to an existing session (tmux attach, terminal reconnect, a
     # 2nd client at a different width) fires client-attached but not
     # client-session-changed, so the window-list grid would stay sized for the
     # last reflow's width until a resize/switch nudged it (issue #188). Indexed
     # [10] so it coexists with the splash/carousel client-attached[50]/[60]
     # hooks; the bare `set-hook -gu client-attached` above clears it on reload.
-    set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"'
+    set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
 
     # Tag every newly-created window as a worktree window from its cwd — at
     # creation, regardless of creator or CLAUDECODE (issue #95). new-session
@@ -963,8 +969,8 @@
     # the index-0 reflow hooks; the bare `set-hook -gu` above clears them on reload.
     # Target by #{window_id} alone (globally unique): #{session_id} is "$N", and
     # run-shell's sh -c would re-expand the leading $ (e.g. $0 -> "sh").
-    set-hook -g after-new-window[10]  'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
-    set-hook -g after-new-session[10] 'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{window_id}"'
+    set-hook -g after-new-window[10]  'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{q:window_id}"'
+    set-hook -g after-new-session[10] 'run-shell -b "${script.tmux-reconcile-window}/bin/tmux-reconcile-window #{q:window_id}"'
 
     # Post-#199 (issue #100): after-split-window / pane-focus-in reconcile hooks
     # were considered here and deliberately NOT added. Since #199
@@ -985,18 +991,18 @@
     # Backgrounded so a socket round-trip never sits on the server's command queue
     # — the daemon drops a request that arrives out of order. Indexed [20] so it
     # coexists with any future consumer; the bare `set-hook -gu` above clears it.
-    set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus '#{@bridge_pane}'\" }"
+    set-hook -g after-select-pane[20] "if-shell -F '${bridgeGate}' { run-shell -b \"${bridgeCtl} focus #{q:@bridge_pane}\" }"
 
     # The `pane-exited` hook is a silent no-op on the pinned tmux (confirmed
     # via show-hooks -g), so per-pane claude-status cleanup instead rides the
     # every-5th-tick full-server sweep in tmux-update-icons.sh (issue #341).
 
     # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
-    set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t \"=scratch-#{hook_session_name}\" 2>/dev/null || true"'
+    set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t =scratch-#{q:hook_session_name} 2>/dev/null || true"'
 
     # Clear unseen claude status flags when user focuses a window
-    set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{session_name} --window #{window_index}"'
-    set-hook -g client-session-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{session_name} --window #{window_index}"'
+    set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{q:session_name} --window #{q:window_index}"'
+    set-hook -g client-session-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{q:session_name} --window #{q:window_index}"'
 
     # Pane borders
     setw -g pane-border-status top
@@ -1050,8 +1056,8 @@
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Synchronous init on config load so icons + window bar are ready before the user sees it
-    run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{session_name}"
-    run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{session_name} #{client_width}"
+    run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{q:session_name}"
+    run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"
 
     ${lib.optionalString splashEnable ''
       # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
@@ -1084,8 +1090,8 @@
       # stays at its default off — turning it on would make every unfocused
       # window with output (i.e. every working Claude pane) an event — so the
       # activity hook ships wired but dormant.
-      set-hook -g alert-bell[20]     'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source bell --level warn --window #{window_id} --title bell"'
-      set-hook -g alert-activity[20] 'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source activity --level info --window #{window_id} --title activity"'
+      set-hook -g alert-bell[20]     'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source bell --level warn --window #{q:window_id} --title bell"'
+      set-hook -g alert-activity[20] 'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source activity --level info --window #{q:window_id} --title activity"'
     ''}
 
     ${carouselHooks}

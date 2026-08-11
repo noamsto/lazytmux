@@ -11,10 +11,11 @@ if [[ ${1:-} == --attach ]]; then
 	SCRATCH="scratch-${2:-}"
 	# Hints live in the popup top-border title (set in outer mode); the
 	# scratch session itself runs without a status bar.
-	printf '%s\n' \
-		"set -t '$SCRATCH' detach-on-destroy on" \
-		"set -t '$SCRATCH' status off" |
-		tmux source - 2>/dev/null || true
+	# Direct argv, not a command string piped to `tmux source -`: the name is
+	# session-derived, and a "'" in it closes the '$SCRATCH' quoting so tmux
+	# reparses the remainder as command words (measured: "too few arguments").
+	tmux set -t "$SCRATCH" detach-on-destroy on 2>/dev/null || true
+	tmux set -t "$SCRATCH" status off 2>/dev/null || true
 	# new-session -A is the correct way to attach inside a display-popup
 	# (attach-session doesn't work reliably in popup PTY context).
 	exec tmux new-session -A -s "$SCRATCH"
@@ -49,7 +50,12 @@ TITLE=" #[fg=#{@thm_lavender}]scratch: ${SESSION}#[fg=#{@thm_overlay_1}]  ·  #[
 # client, which on a bridged host can be the tty-less control client (#346).
 POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
+# display-popup -E runs its argument through a shell, so both halves have to be
+# shell-quoted by us: the session name is remote-derived on a bridged session
+# (lztmux-remote-open names it from the remote's list), and a "'" in it would
+# otherwise close the quoting and execute the rest.
+printf -v POPUP_CMD '%q --attach %q' "$SELF" "$SESSION"
 tmux display-popup "${POPUP_CLIENT[@]}" -E -w 80% -h 80% -b rounded \
 	-T "$TITLE" \
 	-S "fg=${BORDER_FG}" \
-	"'${SELF}' --attach '${SESSION}'"
+	"$POPUP_CMD"
