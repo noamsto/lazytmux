@@ -263,22 +263,18 @@ identityfile ~/.ssh/id_xmss"
 	[[ $output != *"Connection sharing is off"* ]]
 }
 
-# The cases above all hit `[[ -t 0 ]] || exit 0` — bats' `run` gives the child
-# a non-tty stdin, so none of them ever reach the confirm prompt or
-# ssh-copy-id. Mutation testing confirmed the gap: swapping the ssh-copy-id
-# argument order left every test above green. These cases drive the script
-# under a real pty via util-linux `script -qec CMD /dev/null`, piping the
-# answer into script's own stdin so it lands on the child's pty stdin exactly
-# like a typed reply. `script`'s stdout mirrors the pty (stdin+stdout+stderr
-# all merge once a pty is in play, same as any real terminal), so `run`
-# captures everything the user would see. FAKE_PROBE_EXIT is left unset
-# (defaults to 1, i.e. no key installed yet) to reach the offer.
+# The confirm prompt sits behind `[[ -t 0 ]]` and bats' `run` gives the child a
+# non-tty stdin, so reaching it needs a real pty: util-linux `script -qec CMD
+# /dev/null`. Piping the answer into script's own stdin lands it on the child's
+# pty stdin like a typed reply, and script's stdout mirrors the pty
+# (stdin/stdout/stderr all merge once a pty is in play), so `run` captures what
+# the user would see. FAKE_PROBE_EXIT is left unset (defaults to 1, no key
+# installed) to reach the offer at all.
 #
-# The accept and ssh-copy-id-failure paths both end at pause_then_exit, which
-# reads one more line ("Press Enter to return…") before returning — the
-# second blank line in the piped input satisfies that, not a second answer.
-# The decline path exits straight from the confirm branch with no pause, so
-# it only ever needs the one answer line.
+# The accept and ssh-copy-id-failure paths end at pause_then_exit, which reads
+# one more line — that is what the second blank line in the piped input
+# satisfies, not a second answer. The decline path exits from the confirm
+# branch with no pause, so it needs only the one line.
 
 @test "accepting the offer runs ssh-copy-id with -i <key> before the host, never swapped" {
 	run bash -c "printf 'y\n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"

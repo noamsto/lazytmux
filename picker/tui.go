@@ -159,10 +159,8 @@ type remoteMsg struct {
 
 // remoteAuthDoneMsg lands when the interactive ssh handshake has exited and the
 // popup's pty is back under bubbletea's control. err is ExecProcess's own
-// error, not the script's exit status — the script always explains itself and
-// pauses before returning on a failure it caused, so only a *exec.Error (the
-// process never started at all, e.g. lztmux-remote-auth missing from a stale
-// PATH) has nothing on screen to explain and needs surfacing here.
+// error, not the script's exit status; remoteAuthStartFailure decides which
+// kind is worth showing.
 type remoteAuthDoneMsg struct {
 	err error
 }

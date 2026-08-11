@@ -141,11 +141,9 @@ var authFailurePatterns = []string{
 const hostKeyChangedPattern = "REMOTE HOST IDENTIFICATION HAS CHANGED"
 
 // revokedHostKeyPattern is ssh's refusal banner for a key listed in a
-// RevokedHostKeys file. ssh refuses it unconditionally — nothing unsafe can be
-// accepted — but it prints no hostKeyChangedPattern alongside it and instead
-// follows with a bare "Host key verification failed.", which would otherwise
-// fall into authFailurePatterns and invite exactly the "Enter to connect"
-// action a revoked key must never offer.
+// RevokedHostKeys file. It prints no hostKeyChangedPattern alongside it, only a
+// bare "Host key verification failed.", which would otherwise fall into
+// authFailurePatterns and offer to connect to a host ssh has already refused.
 const revokedHostKeyPattern = "REVOKED HOST KEY DETECTED"
 
 // classifyProbeErr decides which failure a non-zero probe was. ssh exits 255

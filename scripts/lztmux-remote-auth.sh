@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Interactive ssh handshake for one remote-bridge host (#357).
 #
-# Creates a ControlMaster, which is the whole point: `ControlMaster no` (the
-# Host * default) still REUSES an existing master, so once this succeeds the
-# picker probe and lztmux-remote-open's ssh calls ride it with no prompt and no
-# code changes. The bridge daemon and the graphics fetcher do NOT: the daemon
-# passes its own `-o ControlPath` on the ssh command line, which overrides the
-# config and builds a master of its own, so those two still authenticate
+# Creates a ControlMaster: `ControlMaster no` (the Host * default) still REUSES
+# an existing master, so once this succeeds the picker probe and
+# lztmux-remote-open's ssh calls ride it unprompted. The bridge daemon and the
+# graphics fetcher do NOT — the daemon passes its own `-o ControlPath` on the
+# command line, which overrides the config, so those two always authenticate
 # independently.
 #
 # Runs with a real tty — the picker hands its popup over via tea.ExecProcess —
@@ -58,11 +57,9 @@ if ! ssh -M -f -o ControlPersist="$persist" -o ServerAliveInterval=15 -- "$host"
 	pause_then_exit 1
 fi
 
-# OpenSSH's own default ControlPath is "none": connection sharing is off
-# unless the user's config sets a path, in which case -M above created nothing
-# for anything to reuse. Claiming a persistent connection in that case would
-# be false — lazytmux is a public flake, so a stock config is the common case,
-# not the exception.
+# OpenSSH's own default ControlPath is "none", which disables sharing outright:
+# on a stock config -M above created nothing for anything to reuse, so claiming
+# a persistent connection would be false.
 if [[ -z $controlpath || $controlpath == none ]]; then
 	printf '\nConnected to %s. Connection sharing is off (no ControlPath set), so ssh will prompt again on the next connection — set a ControlPath in your ssh config to avoid that.\n' "$host"
 else
