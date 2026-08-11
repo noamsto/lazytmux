@@ -276,7 +276,18 @@ identityfile ~/.ssh/id_xmss"
 # satisfies, not a second answer. The decline path exits from the confirm
 # branch with no pause, so it needs only the one line.
 
+# nixpkgs' util-linux claims darwin support but its darwin build ships no
+# `script`, so these four exited 127 on the aarch64-darwin CI leg. Probe the
+# GNU calling convention rather than testing `uname`: BSD `script` takes the
+# command after the file and would silently misread `-qec`, so "a script(1)
+# exists" is the wrong question. Skipping is visible in the bats output; the
+# linux leg still runs all four.
+require_gnu_script() {
+	script -qec true /dev/null >/dev/null 2>&1 || skip "no GNU-style script(1) for a pty"
+}
+
 @test "accepting the offer runs ssh-copy-id with -i <key> before the host, never swapped" {
+	require_gnu_script
 	run bash -c "printf 'y\n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
 	[ "$status" -eq 0 ]
 
@@ -287,12 +298,14 @@ identityfile ~/.ssh/id_xmss"
 }
 
 @test "answering n exits 0 without running ssh-copy-id" {
+	require_gnu_script
 	run bash -c "printf 'n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
 	[ "$status" -eq 0 ]
 	[ ! -s "$COPYID_LOG" ]
 }
 
 @test "declining the offer warns the daemon cannot authenticate unattended" {
+	require_gnu_script
 	run bash -c "printf 'n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
 	[ "$status" -eq 0 ]
 	[[ $output == *"cannot answer a password prompt"* ]]
@@ -300,12 +313,14 @@ identityfile ~/.ssh/id_xmss"
 }
 
 @test "answering with empty input exits 0 without running ssh-copy-id" {
+	require_gnu_script
 	run bash -c "printf '\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
 	[ "$status" -eq 0 ]
 	[ ! -s "$COPYID_LOG" ]
 }
 
 @test "a failing ssh-copy-id still exits 0, since the connection is authenticated regardless" {
+	require_gnu_script
 	export FAKE_COPYID_EXIT=1
 	run bash -c "printf 'y\n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
 	[ "$status" -eq 0 ]
