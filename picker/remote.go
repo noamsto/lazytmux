@@ -93,8 +93,13 @@ func localBridgeSession(host, sess string) string {
 func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) ([]string, error)) ([]string, remoteProbeState) {
 	names, err := probe(host)
 	if err != nil {
-		if errors.Is(err, errRemoteNoServer) {
+		switch {
+		case errors.Is(err, errRemoteNoServer):
 			return nil, remoteProbeNoServer
+		case errors.Is(err, errRemoteNeedsAuth):
+			return nil, remoteProbeNeedsAuth
+		case errors.Is(err, errRemoteHostKeyChanged):
+			return nil, remoteProbeHostKeyChanged
 		}
 		return nil, remoteProbeUnreachable
 	}
@@ -172,10 +177,11 @@ func sshListRemoteSessions(host string) ([]string, error) {
 		"--",
 		remoteListSessionsCmd,
 	)
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, classifyProbeErr(err, "", ctx.Err() != nil)
+		return nil, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	out := make([]string, 0, len(lines))
@@ -323,10 +329,11 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 		"--",
 		remoteRestorableCmd,
 	)
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return remuxManifest{}, classifyProbeErr(err, "", ctx.Err() != nil)
+		return remuxManifest{}, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
 	return restorableFromProbeOutput(stdout.String())
 }
@@ -494,6 +501,11 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		case remoteProbeUnreachable:
 			// The host may be back up by the time it is picked.
 			note = "(unreachable — open default)"
+		case remoteProbeNeedsAuth:
+			// ssh wants an answer a batch-mode probe can never give (#357).
+			note = "(auth needed — Enter to connect)"
+		case remoteProbeHostKeyChanged:
+			note = "(host key changed — verify manually)"
 		case remoteProbeNoServer:
 			// The launcher cold-starts the host's own startup session (#287).
 			// The host row itself never restores — it carries no
@@ -506,7 +518,14 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				note = "(all open)"
 			}
 		}
-		items = append(items, remoteHostRowItem(tmuxOpts, r.host, note))
+		hostRow := remoteHostRowItem(tmuxOpts, r.host, note)
+		switch r.state {
+		case remoteProbeNeedsAuth:
+			hostRow.remoteNeedsAuth = true
+		case remoteProbeHostKeyChanged:
+			hostRow.remoteInert = true
+		}
+		items = append(items, hostRow)
 		for _, sess := range r.sess {
 			items = append(items, listItem{
 				isRemoteRow: true,

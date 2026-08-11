@@ -510,3 +510,71 @@ func TestRestorableFromProbeOutput(t *testing.T) {
 		})
 	}
 }
+
+// A host that only wants an interactive answer is not "unreachable": it gets
+// its own note and an actionable row (#357).
+func TestCollectRemoteItemsNeedsAuth(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
+	probe := func(string) ([]string, error) {
+		return nil, fmt.Errorf("%w: exit status 255", errRemoteNeedsAuth)
+	}
+	items := collectRemoteItems(opts, nil, probe, nil)
+
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want header + one host row", len(items))
+	}
+	row := items[1]
+	if !strings.Contains(row.plain, "(auth needed — Enter to connect)") {
+		t.Errorf("row = %q, want the auth-needed note", row.plain)
+	}
+	if !row.remoteNeedsAuth {
+		t.Error("remoteNeedsAuth = false, want true so Enter runs the handshake")
+	}
+	if row.remoteInert {
+		t.Error("remoteInert = true, want false — this row must be actionable")
+	}
+}
+
+// A changed host key is a MITM signature. The row must say so and Enter must
+// have nothing to act on: offering "Enter to connect" here would train the user
+// to accept key changes without checking a fingerprint.
+func TestCollectRemoteItemsHostKeyChanged(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
+	probe := func(string) ([]string, error) {
+		return nil, fmt.Errorf("%w: exit status 255", errRemoteHostKeyChanged)
+	}
+	items := collectRemoteItems(opts, nil, probe, nil)
+
+	row := items[1]
+	if !strings.Contains(row.plain, "(host key changed — verify manually)") {
+		t.Errorf("row = %q, want the host-key-changed note", row.plain)
+	}
+	if !row.remoteInert {
+		t.Error("remoteInert = false, want true so Enter refuses to act")
+	}
+	if row.remoteNeedsAuth {
+		t.Error("remoteNeedsAuth = true, want false — a key change is not an auth prompt")
+	}
+}
+
+// The two new states map through remoteSessionsForHost, not just through
+// classifyProbeErr.
+func TestRemoteSessionsForHostNewStates(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want remoteProbeState
+	}{
+		"needs auth":       {fmt.Errorf("%w: x", errRemoteNeedsAuth), remoteProbeNeedsAuth},
+		"host key changed": {fmt.Errorf("%w: x", errRemoteHostKeyChanged), remoteProbeHostKeyChanged},
+		"unreachable":      {fmt.Errorf("%w: x", errRemoteUnreachable), remoteProbeUnreachable},
+		"no server":        {fmt.Errorf("%w: x", errRemoteNoServer), remoteProbeNoServer},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			probe := func(string) ([]string, error) { return nil, tc.err }
+			if _, got := remoteSessionsForHost("h", nil, probe); got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

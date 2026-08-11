@@ -30,17 +30,19 @@ type listItem struct {
 	session        string // owning session name (for kill)
 	groupKey       string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
-	bridgeHost     string // @bridge_host — set when this session mirrors a remote host
-	hasActiveAgent bool   // used for --agent filter
-	isScratch      bool   // scratch-* session
-	createPath     string // zoxide suggestion: dir to create a session at ("" = normal row)
-	createName     string // zoxide suggestion: derived session name
-	isRemoteRow    bool   // belongs to the Remote section (set even when unselectable)
-	remoteHost     string // remote bridge row: ssh host for lztmux-remote-open
-	remoteSess     string // remote bridge row: optional remote session name
-	displayEnd     string // remote session row: display with the closing tree glyph
-	plainEnd       string // remote session row: plain with the closing tree glyph
-	remoteRestore  bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
+	hasActiveAgent  bool   // used for --agent filter
+	isScratch       bool   // scratch-* session
+	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
+	createName      string // zoxide suggestion: derived session name
+	isRemoteRow     bool   // belongs to the Remote section (set even when unselectable)
+	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
+	remoteSess      string // remote bridge row: optional remote session name
+	displayEnd      string // remote session row: display with the closing tree glyph
+	plainEnd        string // remote session row: plain with the closing tree glyph
+	remoteRestore   bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	remoteNeedsAuth bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs lztmux-remote-auth
+	remoteInert     bool   // remote host row: host key changed — Enter must refuse to act, never offer to connect
 }
 
 // pickerMode selects which renderer draws the body. One model, three
