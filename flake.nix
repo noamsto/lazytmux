@@ -599,6 +599,7 @@
               bats tests/remote.bats
               bats tests/remote-cold-start.bats
               bats tests/remote-picker.bats
+              bats tests/remote-auth.bats
               touch $out
             '';
 
