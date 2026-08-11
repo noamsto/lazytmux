@@ -40,10 +40,12 @@ setup() {
 		exit 1
 	EOF
 
+	# FAKE_COPYID_EXIT defaults to 0 so every existing accept-path test keeps
+	# seeing success; the failing-install test below overrides it.
 	cat >"$FAKEBIN/ssh-copy-id" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>"$COPYID_LOG"
-		exit 0
+		exit "${FAKE_COPYID_EXIT:-0}"
 	EOF
 
 	# PERSIST_EXIT defaults to 1: tmux exits non-zero for a session option that
@@ -201,4 +203,48 @@ hostname lab"
 	[ "$(wc -l <"$SSH_LOG")" -eq 3 ]
 	[[ $(tail -n1 "$SSH_LOG") == *"-G -- tp-g6"* ]]
 	[ ! -s "$COPYID_LOG" ]
+}
+
+# The cases above all hit `[[ -t 0 ]] || exit 0` on line 62 — bats' `run` gives
+# the child a non-tty stdin, so none of them ever reach the confirm prompt or
+# ssh-copy-id. Mutation testing confirmed the gap: swapping the ssh-copy-id
+# argument order left every test above green. These cases drive the script
+# under a real pty via util-linux `script -qec CMD /dev/null`, piping the
+# answer into script's own stdin so it lands on the child's pty stdin exactly
+# like a typed reply. `script`'s stdout mirrors the pty (stdin+stdout+stderr
+# all merge once a pty is in play, same as any real terminal), so `run`
+# captures everything the user would see. FAKE_PROBE_EXIT is left unset
+# (defaults to 1, i.e. no key installed yet) to reach the offer.
+#
+# The accept and ssh-copy-id-failure paths both end at pause_then_exit, which
+# reads one more line ("Press Enter to return…") before returning — the
+# second blank line in the piped input satisfies that, not a second answer.
+
+@test "accepting the offer runs ssh-copy-id with -i <key> before the host, never swapped" {
+	run bash -c "printf 'y\n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
+	[ "$status" -eq 0 ]
+
+	# Argument order is the whole point: ssh-copy-id -i <key> <host>. Asserting
+	# the exact recorded string (not just that ssh-copy-id ran at all) is what
+	# makes this fail if the two arguments are ever swapped.
+	[ "$(cat "$COPYID_LOG")" = "-i $HOME/.ssh/id_ed25519.pub tp-g6" ]
+}
+
+@test "answering n exits 0 without running ssh-copy-id" {
+	run bash -c "printf 'n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
+	[ "$status" -eq 0 ]
+	[ ! -s "$COPYID_LOG" ]
+}
+
+@test "answering with empty input exits 0 without running ssh-copy-id" {
+	run bash -c "printf '\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
+	[ "$status" -eq 0 ]
+	[ ! -s "$COPYID_LOG" ]
+}
+
+@test "a failing ssh-copy-id still exits 0, since the connection is authenticated regardless" {
+	export FAKE_COPYID_EXIT=1
+	run bash -c "printf 'y\n\n' | timeout 5 script -qec 'bash $SCRIPT tp-g6' /dev/null"
+	[ "$status" -eq 0 ]
+	[[ $output == *"Could not install the key; the connection is still authenticated."* ]]
 }
