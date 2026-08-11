@@ -21,6 +21,12 @@ if [[ ${1:-} == --attach ]]; then
 fi
 
 # ── Outer mode: called from keybinding via run-shell ───────────────────────
+CLIENT=""
+if [[ ${1:-} == --client ]]; then
+	CLIENT=${2:-}
+	shift 2 || shift
+fi
+
 SESSION=${1:-}
 
 # No-op when already inside a scratchpad (prevents nesting)
@@ -39,7 +45,11 @@ tmux new-session -d -s "$SCRATCH" 2>/dev/null || true
 # the descriptions. tmux interpolates #{@thm_*} format strings in -T.
 TITLE=" #[fg=#{@thm_lavender}]scratch: ${SESSION}#[fg=#{@thm_overlay_1}]  ·  #[fg=#{@thm_lavender}]\`d#[fg=#{@thm_overlay_1}] hide  ·  #[fg=#{@thm_lavender}]exit#[fg=#{@thm_overlay_1}] close "
 
-tmux display-popup -E -w 80% -h 80% -b rounded \
+# Pin the client: unpinned, tmux re-resolves to the session's most-recently-active
+# client, which on a bridged host can be the tty-less control client (#346).
+POPUP_CLIENT=()
+[[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
+tmux display-popup "${POPUP_CLIENT[@]}" -E -w 80% -h 80% -b rounded \
 	-T "$TITLE" \
 	-S "fg=${BORDER_FG}" \
 	"'${SELF}' --attach '${SESSION}'"

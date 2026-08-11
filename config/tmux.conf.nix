@@ -712,7 +712,9 @@
     unbind '"'
     bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v '#{@bridge_pane}'" } { split-window -v -c "#{pane_current_path}" }
     bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window '#{@bridge_pane}'" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
-    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad "#{session_name}"'
+    # #{q:} on the session name, not \"...\": run-shell format-expands before sh -c,
+    # so a name containing a quote breaks out and executes (see client-attached[50]).
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad --client "#{client_name}" #{q:session_name}'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
@@ -743,13 +745,13 @@
 
     # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
-    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker'
-    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --agent'
-    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall'
+    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
+    bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}"'
+    bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker --client "#{client_name}" --agent'
+    bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall --client "#{client_name}"'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.
-    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker'
+    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker --client "#{client_name}"'
 
     ${lib.optionalString splashEnable ''
       # Summon the welcome splash on demand (bypasses the once-per-session gate;
@@ -759,10 +761,11 @@
 
     ${lib.optionalString enrichEnable ''
       # === Issue/PR enrichment ===
-      # prefix + i opens the enrich card popup (issue/PR/branch/Claude identity
-      # + o/p/r/q actions). Icons use the RAW set: the popup's stdout is not
-      # re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
-      bind-key i display-popup -E -w 64 -h 18 "${picker-card-bin} \
+      # prefix + i opens the enrich card in a floating pane, window-scoped like
+      # yazi/prdash below (it reads the *current window's* @issue_*/@pr_*, so
+      # window scope is correct). Icons use the RAW set: the card's stdout is
+      # not re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
+      bind-key i new-pane -x 64 -y 18 -X 20% -Y 15% -B heavy "${picker-card-bin} \
         --target '#{session_id}:#{window_id}' \
         --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
         --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
@@ -773,7 +776,7 @@
         --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
         --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
         --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}' \
-        --icon-draft '${enrichIconSetRaw.draft}'"
+        --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich
     ''}
 
     ${lib.optionalString notifyEnable ''
@@ -785,14 +788,16 @@
       bind-key n display-popup -E -w 80% -h 60% '${script.lztmux-notify-center}/bin/lztmux-notify-center'
     ''}
 
-    # Floating popups
-    bind-key "g" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' lazygit
-    bind-key "b" display-popup -E -w 90% -h 90% btop
-    bind-key "G" display-popup -E -w 90% -h 90% -d '#{pane_current_path}' ${script.tmux-gh-dash}/bin/tmux-gh-dash
+    # Floating panes (window-scoped; see the yazi comment below for why floats
+    # over popups — full escape-sequence passthrough, and a pane is mirrorable
+    # across the remote bridge in principle where a popup can never be).
+    bind-key "g" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy lazygit \; set -p @pane_label lazygit
+    bind-key "b" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy btop \; set -p @pane_label btop
+    bind-key "G" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy ${script.tmux-gh-dash}/bin/tmux-gh-dash \; set -p @pane_label gh-dash
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
-    bind-key "k" display-popup -E -w 90% -h 90% "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }"
+    bind-key "k" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
@@ -1051,8 +1056,14 @@
     ${lib.optionalString splashEnable ''
       # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
       # index-0 bindings on the same events (a bare set-hook would clobber them).
-      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
-      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{hook_session}"'
+      # _name (not #{hook_session}) sidesteps the $0 re-expansion hazard at :960-961.
+      # #{q:} and NOT \"...\": the whole string is format-expanded before sh -c sees
+      # it, so a quote in the name breaks out and executes — and a bridged session's
+      # name comes from the remote host (lztmux-remote-open builds it from the
+      # remote's list). || true stops the gate's fail-closed exit from pushing the
+      # hook's pane into view-mode.
+      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
+      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
     ''}
 
     ${lib.optionalString notifyEnable ''
