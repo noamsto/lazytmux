@@ -188,7 +188,12 @@ main() {
 			uuid="${uuid%.jsonl}"
 			desired=""
 			[[ -n $uuid ]] && desired="claude --resume $uuid"
-			if [[ $desired != "${pane_cur_relaunch[$pane_file]:-}" ]]; then
+			cur="${pane_cur_relaunch[$pane_file]:-}"
+			# Only touch a value this poller owns (empty, or previously stamped by
+			# this same "claude --resume *" branch) — never clobber a Codex/Cursor
+			# hook's own stamp on a pane that also has a screen-only state file
+			# (agent-detect fires for every known agent, unconditionally).
+			if [[ -z $cur || $cur == "claude --resume "* ]] && [[ $desired != "$cur" ]]; then
 				tmux set -pq -t "%$pane_file" @remux_relaunch "$desired"
 			fi
 		fi

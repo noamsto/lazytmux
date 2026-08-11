@@ -342,6 +342,8 @@
     "codex-relaunch-stamp"
     "cursor-status-hook"
     "cursor-hooks-install"
+    "cursor-relaunch-stamp"
+    "cursor-relaunch-hooks-install"
     "lztmux-remote-open"
     "lztmux-notify"
     "lztmux-notify-center"

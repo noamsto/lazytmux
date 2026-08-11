@@ -269,6 +269,28 @@
               touch $out
             '';
 
+          cursor-relaunch-stamp-tests =
+            pkgs.runCommand "cursor-relaunch-stamp-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/cursor-relaunch-stamp.bats
+              touch $out
+            '';
+
+          cursor-relaunch-hooks-install-tests =
+            pkgs.runCommand "cursor-relaunch-hooks-install-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.jq];
+            } ''
+              cp -r ${./tests} tests
+              cp -r ${./scripts} scripts
+              mkdir modules
+              cp ${./modules/home-manager.nix} modules/home-manager.nix
+              bats tests/cursor-relaunch-hooks-install.bats
+              touch $out
+            '';
+
           prune-stale-state-tests =
             pkgs.runCommand "prune-stale-state-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
@@ -483,6 +505,18 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/update-icons-enrich-trigger.bats
+              touch $out
+            '';
+
+          update-icons-resume-guard-tests =
+            pkgs.runCommand "update-icons-resume-guard-tests" {
+              # tmux: drives a private, config-less server (like reflow-fanout-tests);
+              # git: builds a real repo in $HOME to exercise a real branch transition.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.git pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/update-icons-resume-guard.bats
               touch $out
             '';
 
