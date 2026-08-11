@@ -1,9 +1,18 @@
   Cursor Agent
   v2026.08.04-aaa8809
-  Tip: Try Cursor Grok 4.5 via /model, frontier intelligence at a fraction of the cost.
+  Tip: Use /run-everything to skip all approvals.
+
+  Run: sleep 4 && echo DONE_PROBE
+
+  Running the probe command now.
+
+  $ sleep 4 && echo DONE_PROBE 5.6s
+    DONE_PROBE
+
+  DONE_PROBE — completed successfully (exit 0).
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  → Plan, search, build anything
+  → Add a follow-up
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Cursor Grok 4.5 Low Fast
+  Cursor Grok 4.5 Low Fast · 10.4%
   /tmp/cursorprobe

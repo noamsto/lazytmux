@@ -9,11 +9,15 @@ region = "last_lines:8"
 regex = '[\x{2800}-\x{28FF}]+ working'
 
 [[rules]]
-# 2026.08.04+ TUI: status phrases while a turn is in flight.
+# 2026.08.04+ TUI: status phrases while a turn is in flight, but "Running X
+# now." etc. is turn narration that stays on screen after the turn ends —
+# require the footer's live-turn hint ("ctrl+c to stop") in the same window;
+# it disappears the instant the composer goes idle.
 state = "processing"
 priority = 100
 region = "last_lines:8"
 regex = 'running .+ now'
+contains = ["ctrl+c to stop"]
 not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]
@@ -21,20 +25,28 @@ state = "processing"
 priority = 100
 region = "last_lines:8"
 regex = 'creating .+ now'
+contains = ["ctrl+c to stop"]
 not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]
-# Shell-tool timing line (e.g. "$ sleep 3 && echo DONE_PROBE 4.6s").
+# Shell-tool timing line (e.g. "$ sleep 3 && echo DONE_PROBE 4.6s") stays on
+# screen after the command finishes, so it needs the same liveness qualifier.
+# Wider window than its siblings: the composer's own border row can wrap
+# across two terminal lines while a "1 task" badge is showing, which pushes
+# the timing line further back from the footer than the other markers sit.
 state = "processing"
 priority = 100
-region = "last_lines:8"
+region = "last_lines:16"
 regex = '(?s)\$ .+\d+\..+s'
+contains = ["ctrl+c to stop"]
+not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]
 state = "processing"
 priority = 100
 region = "last_lines:8"
 regex = 'editing .+'
+contains = ["ctrl+c to stop"]
 not = [{ regex = 'proceed \(y\)|what to do instead' }]
 
 [[rules]]

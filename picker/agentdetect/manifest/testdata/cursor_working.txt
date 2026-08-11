@@ -1,18 +1,16 @@
   Cursor Agent
   v2026.08.04-aaa8809
-  Tip: Use subagents to parallelize work and preserve context.
+  Tip: Use /run-everything to skip all approvals.
 
-  Run: sleep 3 && echo DONE_PROBE
+  Run: sleep 4 && echo DONE_PROBE
 
-  Running the command now.
+  Running the probe command now.
 
-  $ sleep 3 && echo DONE_PROBE 4.6s
-    DONE_PROBE
+  $ sleep 4 && echo DONE_PROBE 3.8s
 
-  DONE_PROBE
-
+ ⠠⠛ Running  46 tokens
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  → Add a follow-up
+  → Add a follow-up                                     ctrl+c to stop
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  Cursor Grok 4.5 Low Fast · 10.4%
+  Cursor Grok 4.5 Low Fast
   /tmp/cursorprobe
