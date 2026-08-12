@@ -391,6 +391,37 @@
               touch $out
             '';
 
+          # The float-refit WIRING (#371). tmux bakes a float's percentage
+          # geometry into cells at creation and never revisits it, so every
+          # float bind must hand its percentages to @float_geom for the
+          # window-resized hook to reassert. A bind that forgets the stamp
+          # builds clean and looks right until the client resizes — nothing
+          # else catches it, which is why it is asserted on the generated conf.
+          float-conf-assertions =
+            pkgs.runCommand "float-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.gnused pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              # Join backslash-continued lines: the enrich card's bind spans
+              # several, with its stamp on the last one.
+              sed -e :a -e '/\\$/N; s/\\\n//; ta' "$CONF" >joined
+
+              [ "$(grep -cE '^bind(-key)? .*new-pane' joined)" -ge 1 ]
+              if grep -E '^bind(-key)? .*new-pane' joined | grep -v '@float_geom'; then
+                echo "float bind above has no @float_geom stamp — tmux-float-refit cannot refit it" >&2
+                exit 1
+              fi
+
+              grep -E 'set-hook -g window-resized .*/nix/store/[^ ]*/bin/tmux-float-refit #\{q:window_id\}' "$CONF"
+
+              # ORDER, as for the alert hooks above: the clear must precede the
+              # setter, or every config load erases the hook it just set.
+              clear=$(grep -n 'set-hook -gu window-resized' "$CONF" | head -1 | cut -d: -f1)
+              setter=$(grep -n 'set-hook -g window-resized ' "$CONF" | head -1 | cut -d: -f1)
+              [ "$clear" -lt "$setter" ]
+              touch $out
+            '';
+
           notify-bell-integration-tests =
             pkgs.runCommand "notify-bell-integration-tests" {
               # mkTmux, not pkgs.tmux: the hook behavior this pins must be the

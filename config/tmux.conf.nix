@@ -329,6 +329,7 @@
     "tmux-kill-pane-guard"
     "tmux-smart-nav"
     "tmux-reconcile-window"
+    "tmux-float-refit"
     "tmux-worktree-match"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
@@ -587,6 +588,21 @@
     lib.optionalString (carousel-toggle != null)
     "bind I if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} carousel #{q:@bridge_pane}\" } { run-shell 'TMUX_PANE=#{q:pane_id} ${carousel-toggle}/bin/tmux-claude-images' }";
 
+  # Float geometry, declared once per shape. tmux resolves the percentages into
+  # absolute cells at creation and never revisits them (layout_resize skips
+  # floating cells), so a float outlives the client size it was made for —
+  # @float_geom carries the percentages forward for tmux-float-refit to reassert
+  # on window-resized. Both come from one source here so they cannot drift.
+  mkFloat = w: h: x: y: {
+    flags = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy";
+    stamp = "set -p @float_geom '${w} ${h} ${x} ${y}'";
+  };
+  floatFull = mkFloat "90%" "90%" "5%" "5%";
+  floatShort = mkFloat "90%" "85%" "5%" "8%";
+  # The enrich card sizes to its contents, not to the client; only its offsets
+  # are percentages, and those are what walk off a shrinking window.
+  floatCard = mkFloat "64" "18" "20%" "15%";
+
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
   # switches when the pane closes.
@@ -595,7 +611,7 @@
   # and the cascade counter survives kill-pane. @pane_label → mauve border title.
   prdashBind =
     lib.optionalString (prdash != null)
-    "bind-key p new-pane -c '#{pane_current_path}' -x 90% -y 85% -X 5% -Y 8% -B heavy ${prdash}/bin/prdash \\; set -p @pane_label prdash";
+    "bind-key p new-pane -c '#{pane_current_path}' ${floatShort.flags} ${prdash}/bin/prdash \\; set -p @pane_label prdash \\; ${floatShort.stamp}";
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
@@ -794,7 +810,7 @@
       # yazi/prdash below (it reads the *current window's* @issue_*/@pr_*, so
       # window scope is correct). Icons use the RAW set: the card's stdout is
       # not re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
-      bind-key i new-pane -x 64 -y 18 -X 20% -Y 15% -B heavy "${picker-card-bin} \
+      bind-key i new-pane ${floatCard.flags} "${picker-card-bin} \
         --target '#{session_id}:#{window_id}' \
         --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
         --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
@@ -805,7 +821,7 @@
         --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
         --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
         --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}' \
-        --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich
+        --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich \; ${floatCard.stamp}
     ''}
 
     ${lib.optionalString notifyEnable ''
@@ -820,19 +836,19 @@
     # Floating panes (window-scoped; see the yazi comment below for why floats
     # over popups — full escape-sequence passthrough, and a pane is mirrorable
     # across the remote bridge in principle where a popup can never be).
-    bind-key "g" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy lazygit \; set -p @pane_label lazygit
-    bind-key "b" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy btop \; set -p @pane_label btop
-    bind-key "G" new-pane -c '#{pane_current_path}' -x 90% -y 90% -X 5% -Y 5% -B heavy ${script.tmux-gh-dash}/bin/tmux-gh-dash \; set -p @pane_label gh-dash
+    bind-key "g" new-pane -c '#{pane_current_path}' ${floatFull.flags} lazygit \; set -p @pane_label lazygit \; ${floatFull.stamp}
+    bind-key "b" new-pane ${floatFull.flags} btop \; set -p @pane_label btop \; ${floatFull.stamp}
+    bind-key "G" new-pane -c '#{pane_current_path}' ${floatFull.flags} ${script.tmux-gh-dash}/bin/tmux-gh-dash \; set -p @pane_label gh-dash \; ${floatFull.stamp}
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
-    bind-key "k" new-pane -x 90% -y 90% -X 5% -Y 5% -B heavy "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s
+    bind-key "k" new-pane ${floatFull.flags} "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s \; ${floatFull.stamp}
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
     # full escape-sequence passthrough, so yazi's image preview / terminal
     # detection work. Scoped to the launching window (no window-line entry).
-    bind-key "y" new-pane -c '#{pane_current_path}' -x 90% -y 85% -X 5% -Y 8% -B heavy yazi \; set -p @pane_label yazi
+    bind-key "y" new-pane -c '#{pane_current_path}' ${floatShort.flags} yazi \; set -p @pane_label yazi \; ${floatShort.stamp}
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"
@@ -953,6 +969,7 @@
     set-hook -gu after-new-session
     set-hook -gu client-session-changed
     set-hook -gu client-attached
+    set-hook -gu window-resized
 
     # Also clear hooks from older config versions that may linger
     set-hook -gu window-linked
@@ -993,6 +1010,15 @@
     # [10] so it coexists with the splash/carousel client-attached[50]/[60]
     # hooks; the bare `set-hook -gu client-attached` above clears it on reload.
     set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+
+    # Refit floating panes to the new window size (#371). window-resized, not
+    # client-resized: it carries the window that actually changed, and it also
+    # covers the sizes that change without a client resize (attaching a second,
+    # smaller client; switching a window between clients of different sizes).
+    # Undebounced, unlike the reflow above — the work is two no-op-when-unchanged
+    # tmux commands per stamped float, and tracking a live terminal drag is the
+    # point.
+    set-hook -g window-resized          'run-shell -b "${script.tmux-float-refit}/bin/tmux-float-refit #{q:window_id}"'
 
     # Tag every newly-created window as a worktree window from its cwd — at
     # creation, regardless of creator or CLAUDECODE (issue #95). new-session

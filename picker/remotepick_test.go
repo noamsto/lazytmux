@@ -214,6 +214,8 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 		"/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick 'tp-g6'",
 		";",
 		"set", "-p", "@pane_label", "remote tp-g6",
+		";",
+		"set", "-p", "@float_geom", "90% 85% 5% 8%",
 	}
 	if len(args) != len(want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
