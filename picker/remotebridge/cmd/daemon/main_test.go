@@ -22,6 +22,13 @@ import (
 // its own.
 func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
+		// LAZYTMUX_REQUIRE_TMUX is set by pickerChecked's checkPhase in flake.nix,
+		// which also adds pkgs.tmux to nativeBuildInputs — so under `nix flake
+		// check` a missing tmux means that input was pruned, not that this is a
+		// dev machine. Fail instead of silently skipping this regression check.
+		if os.Getenv("LAZYTMUX_REQUIRE_TMUX") != "" {
+			t.Fatal("tmux is required (LAZYTMUX_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
+		}
 		t.Skip("tmux is not available")
 	}
 
