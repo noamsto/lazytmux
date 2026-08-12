@@ -19,4 +19,9 @@ session_id=""
 [[ $input =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && session_id="${BASH_REMATCH[1]}"
 
 [[ -n $session_id ]] || exit 0
+# @remux_relaunch is exec'd verbatim via /bin/sh -c by tmux-remux on a future
+# restore, so a session id carrying shell metacharacters (spaces, ;, $,
+# backticks) must never reach it. Codex's own ids are UUIDs in practice;
+# reject anything else rather than stamp an exploitable command.
+[[ $session_id =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 tmux set-option -p -t "$TMUX_PANE" @remux_relaunch "codex resume $session_id"

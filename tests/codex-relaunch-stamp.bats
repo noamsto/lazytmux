@@ -53,3 +53,11 @@ EOF
 	[ "$status" -eq 0 ]
 	[ ! -f "$TMUX_LOG" ]
 }
+
+@test "no-op when session_id contains shell metacharacters" {
+	run bash "$STAMP" <<'EOF'
+{"session_id":"abc$(touch /tmp/pwned)-def"}
+EOF
+	[ "$status" -eq 0 ]
+	[ ! -f "$TMUX_LOG" ]
+}

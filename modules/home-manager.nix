@@ -188,6 +188,10 @@
   # act on @remux_relaunch, mirroring resumeClaudeEnable above.
   resumeCodexEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCodex;
 
+  # Only provision the cursor resume hooks when tmux-remux is actually
+  # installed to act on @remux_relaunch, mirroring resumeCodexEnable above.
+  resumeCursorEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCursor;
+
   # Stable startup script shared by the Linux systemd service and the darwin
   # launchd agent. Resolves tmux from the user profile so the unit/plist never
   # embeds a nix store path (no churn on update).
@@ -453,6 +457,39 @@ in {
           There is no way to pre-seed that trust declaratively (the trust hash is
           an undocumented, versioned, content-based digest), so this is opt-in
           until you've done that step. Restore is manual-by-default
+          (restoreMode = "off"), so this only fires on an explicit restore.
+        '';
+      };
+
+      resumeCursor = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Resume Cursor Agent CLI sessions when a window is restored. When on,
+          home-manager activation idempotently upserts a `sessionStart` AND
+          `beforeSubmitPrompt` hook entry into `~/.cursor/hooks.json`
+          (marker-guarded, like `cursorStatus`'s status hooks — aeye/user entries
+          are left alone) pointing at the `cursor-relaunch-stamp` binary; the hook
+          reads the chat id (`conversation_id`, falling back to `session_id`) out
+          of the hook's own JSON payload and stamps the pane's `@remux_relaunch`
+          with `cursor-agent --resume <chatId>`, so tmux-remux relaunches the
+          actual chat (not a bare shell) on restore.
+
+          `sessionStart` alone would only fire once per new conversation — Cursor
+          never re-fires it on `--resume` — so the hook is also wired on
+          `beforeSubmitPrompt` to re-stamp on every subsequent turn, including
+          turns sent after a restore. This means resume survives repeated restore
+          cycles as long as at least one message is sent per cycle; a restored
+          pane that receives zero further turns before the next save reverts to a
+          plain shell on the restore after that. Unlike `resumeClaude`'s
+          continuous poll or `resumeCodex`'s `startup|resume` hook matcher,
+          Cursor's CLI gives no re-fire-on-resume event to hang this off.
+
+          Defaults to false, like `persist.resumeCodex`: this is a brand-new
+          capture path across an externally-versioned CLI, not the long-proven
+          Claude transcript path. If a future Cursor CLI version renames or drops
+          the id field, the hook stamps nothing and the pane restores as a plain
+          shell rather than a broken resume command. Restore is manual-by-default
           (restoreMode = "off"), so this only fires on an explicit restore.
         '';
       };
@@ -1006,6 +1043,7 @@ in {
             tmuxConfig.script.cursor-status-hook
             tmuxConfig.script.cursor-hooks-install
           ]
+          ++ lib.optionals resumeCursorEnable [tmuxConfig.script.cursor-relaunch-stamp tmuxConfig.script.cursor-relaunch-hooks-install]
           ++ lib.optionals cfg.enrich.enable [
             tmuxConfig.script.tmux-issue-stamp
             tmuxConfig.script.tmux-issue-stamp-linear
@@ -1239,6 +1277,19 @@ in {
               run env PATH="${lib.makeBinPath [pkgs.jq pkgs.coreutils]}:$PATH" \
                 ${tmuxConfig.script.cursor-hooks-install}/bin/cursor-hooks-install \
                 ${config.home.profileDirectory}/bin/cursor-status-hook
+            ''
+          );
+
+          # Upsert Cursor CLI resume-on-restore hooks into ~/.cursor/hooks.json every
+          # switch (strip prior /bin/cursor-relaunch-stamp entries; leave
+          # aeye/cursor-status-hook/user entries alone). No agentIntegration
+          # assertion needed (unlike cursorStatus/codexStatus) — cursor-relaunch-stamp
+          # calls tmux directly, no claude-status-update dependency.
+          provisionCursorResumeHook = lib.mkIf resumeCursorEnable (
+            lib.hm.dag.entryAfter ["writeBoundary"] ''
+              run env PATH="${lib.makeBinPath [pkgs.jq pkgs.coreutils]}:$PATH" \
+                ${tmuxConfig.script.cursor-relaunch-hooks-install}/bin/cursor-relaunch-hooks-install \
+                ${config.home.profileDirectory}/bin/cursor-relaunch-stamp
             ''
           );
         };

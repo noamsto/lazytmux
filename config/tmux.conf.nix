@@ -343,6 +343,8 @@
     "codex-relaunch-stamp"
     "cursor-status-hook"
     "cursor-hooks-install"
+    "cursor-relaunch-stamp"
+    "cursor-relaunch-hooks-install"
     "lztmux-remote-open"
     "lztmux-remote-picker"
     "lztmux-remote-auth"
