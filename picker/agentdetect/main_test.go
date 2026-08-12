@@ -58,6 +58,7 @@ func (f *fakeScreen) Feed([]byte) {
 func (f *fakeScreen) Text() string    { return "" }
 func (f *fakeScreen) Title() string   { return "" }
 func (f *fakeScreen) AltScreen() bool { return false }
+func (f *fakeScreen) Close()          {}
 
 func TestFeedSafeRecoversFromPanic(t *testing.T) {
 	if feedSafe(&fakeScreen{panicOnFeed: true}, []byte("x")) {
@@ -65,6 +66,20 @@ func TestFeedSafeRecoversFromPanic(t *testing.T) {
 	}
 	if !feedSafe(&fakeScreen{}, []byte("x")) {
 		t.Fatal("feedSafe should return true when Feed succeeds")
+	}
+}
+
+// Real capture: ESC[1;40r + 38 reverse-indices from a live codex pane after resize.
+func TestFeedSafeRecoversFromRealResizeBurst(t *testing.T) {
+	data, err := os.ReadFile("testdata/codex_resize_scroll.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if feedSafe(screen.New(100, 30), data) {
+		t.Fatal("feedSafe on 100x30 should return false for the resize-scroll burst")
+	}
+	if !feedSafe(screen.New(100, 40), data) {
+		t.Fatal("feedSafe on 100x40 should return true for the same resize-scroll burst")
 	}
 }
 

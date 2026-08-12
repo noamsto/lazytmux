@@ -24,8 +24,6 @@ const (
 	// path (#238); it also bounds how long any pane can show a stale state.
 	sampleCeiling = 500 * time.Millisecond
 	stateDir      = "/tmp/claude-status/screen"
-	stateDirEnv   = "AGENT_DETECT_STATE_DIR"
-	watcherRegEnv = "AGENT_DETECT_WATCHER_DIR"
 	// Per-pane backlog cap. The reader always drains stdin into this buffer so
 	// tmux never buffers the pipe-pane backlog in-server; if the emulator can't
 	// keep up, oldest bytes are dropped and the emulator is resynced. 1 MiB
@@ -46,16 +44,6 @@ const (
 	watcherRegDir    = "/tmp/claude-status/watchers"
 )
 
-// envOr returns the override dir when set, else the built-in default. The
-// overrides exist so tests and reproductions can run a watcher without
-// touching the live /tmp/claude-status tree.
-func envOr(envKey, def string) string {
-	if v := os.Getenv(envKey); v != "" {
-		return v
-	}
-	return def
-}
-
 func main() {
 	if len(os.Args) < 2 {
 		return
@@ -73,14 +61,13 @@ func main() {
 	}
 
 	myPID := os.Getpid()
-	regDir := envOr(watcherRegEnv, watcherRegDir)
-	if !registerWatcher(regDir, paneID, myPID) {
+	if !registerWatcher(watcherRegDir, paneID, myPID) {
 		return
 	}
 
 	scr, curCols, curRows := seededScreen(paneID)
 	deb := debounce.New(debounceWindow, sampleCeiling)
-	w := statefile.New(envOr(stateDirEnv, stateDir), paneID)
+	w := statefile.New(stateDir, paneID)
 	emit(scr, m, w) // report what is already on screen, before any new output
 
 	buf := drainbuf.New(maxBufferedBytes)
@@ -93,6 +80,11 @@ func main() {
 	geometry := time.NewTicker(geometryInterval)
 	defer geometry.Stop()
 
+	reseed := func() {
+		scr.Close()
+		scr, curCols, curRows = seededScreen(paneID)
+	}
+
 	for {
 		select {
 		case <-buf.Notify():
@@ -102,16 +94,16 @@ func main() {
 				// can't linger. Seeding rather than blanking matters for an
 				// agent that only ever repaints a few cells — a blank screen
 				// would never be filled back in.
-				scr, curCols, curRows = seededScreen(paneID)
+				reseed()
 			}
 			if len(data) > 0 {
 				if !feedSafe(scr, data) {
-					scr, curCols, curRows = seededScreen(paneID)
+					reseed()
 				}
 				deb.Mark(time.Now())
 			}
 			if closed {
-				emitIfOwner(regDir, paneID, myPID, scr, m, w) // final snapshot on EOF
+				emitIfOwner(watcherRegDir, paneID, myPID, scr, m, w) // final snapshot on EOF
 				return
 			}
 		case <-ticker.C:
@@ -120,22 +112,25 @@ func main() {
 			// Neither removes the registry file (by now it's the new
 			// watcher's, not ours — deleting it would make the new watcher
 			// self-evict on its own next check) nor emits (see emitIfOwner).
-			if !stillOwner(regDir, paneID, myPID) {
+			if !stillOwner(watcherRegDir, paneID, myPID) {
 				return
 			}
 			if deb.Due(time.Now()) {
 				emit(scr, m, w)
 			}
 		case <-geometry.C:
+			if !stillOwner(watcherRegDir, paneID, myPID) {
+				return
+			}
 			if c, r, _, ok := paneInfo(paneID); ok && (c != curCols || r != curRows) {
-				scr, curCols, curRows = seededScreen(paneID)
+				reseed()
 				emit(scr, m, w)
 			}
 		case <-liveness.C:
 			// Backstop for the case EOF never arrives: dead pane, or the
 			// tmux server gone outright.
 			if !paneAlive(paneID) {
-				emitIfOwner(regDir, paneID, myPID, scr, m, w)
+				emitIfOwner(watcherRegDir, paneID, myPID, scr, m, w)
 				return
 			}
 		}
