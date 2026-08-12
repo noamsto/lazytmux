@@ -340,6 +340,13 @@ wait_for_client() {
 	run t show-hooks -g
 	[ "$status" -eq 0 ]
 	stored="$output"
+	# A window-scoped hook (window-resized) lands in the global *window* table
+	# even when set with a bare -g — tmux routes by the option's own table, not
+	# by the flag. Both tables have to be searched, or such a hook goes
+	# unexamined here while looking covered.
+	run t show-hooks -gw
+	[ "$status" -eq 0 ]
+	stored="$stored"$'\n'"$output"
 
 	local conf hooks name
 	conf="$(store_conf)"

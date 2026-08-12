@@ -107,7 +107,9 @@ func shellQuote(s string) string {
 // path — reached by option rather than bare name, since the tmux server's
 // PATH is frozen until a restart (#336) and a fresh script is absent from it
 // until then. host is shell-quoted because tmux hands the command string on
-// to the pane's own shell, not to us.
+// to the pane's own shell, not to us. @float_geom repeats the percentages so
+// tmux-float-refit can reassert them when the window resizes (#371) — tmux
+// itself bakes them into cells at creation and never revisits them.
 func remotePickNewPaneArgs(bin, host string) []string {
 	return []string{
 		"new-pane",
@@ -115,6 +117,8 @@ func remotePickNewPaneArgs(bin, host string) []string {
 		bin + " " + shellQuote(host),
 		";",
 		"set", "-p", "@pane_label", "remote " + host,
+		";",
+		"set", "-p", "@float_geom", "90% 85% 5% 8%",
 	}
 }
 
