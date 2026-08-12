@@ -215,6 +215,16 @@
               touch $out
             '';
 
+          mark-seen-tests =
+            pkgs.runCommand "mark-seen-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/mark-seen.bats
+              touch $out
+            '';
+
           codex-relaunch-stamp-tests =
             pkgs.runCommand "codex-relaunch-stamp-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];
