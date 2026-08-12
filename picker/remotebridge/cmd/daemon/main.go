@@ -158,7 +158,7 @@ func main() {
 		if *reflowBin == "" {
 			return
 		}
-		runLocalTmux("run-shell", "-b", shellQuote(*reflowBin)+" --force "+shellQuote(*localSess))
+		runLocalTmux(reflowRunShellArgs(*reflowBin, *localSess)...)
 	}
 	panes := func() map[string]string { return localPaneMap(localTmuxArgv, *localSess) }
 
@@ -343,4 +343,20 @@ func envIntDefault(key string, fallback int) int {
 // quotes. Used for the session name in the ssh remote-command argv.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// reflowRunShellArgs builds the run-shell argv that forces a reflow.
+// run-shell format-expands its whole shell-command string before /bin/sh
+// ever sees it, so a value embedded directly in that string is exposed to
+// the tmux format layer — "#(...)" is a job introducer there, not just a
+// POSIX shell metacharacter — and shellQuote's escaping (the shell layer)
+// does nothing to stop that (#368). Passing reflowBin/localSess as trailing
+// run-shell arguments and referencing them only via #{1}/#{2} keeps them out
+// of the string tmux format-expands: argv values are substituted in
+// literally, after format expansion has already run over the command
+// template, so a "#(" embedded in either value can never be read back as a
+// job introducer. shellQuote still runs first — argv closes the format-layer
+// hole, it does not exempt the value from needing to be a single shell token.
+func reflowRunShellArgs(reflowBin, localSess string) []string {
+	return []string{"run-shell", "-b", "#{1} --force #{2}", shellQuote(reflowBin), shellQuote(localSess)}
 }
