@@ -35,3 +35,7 @@ remote_auth_identity() {
 	done <<<"$1"
 	return 0
 }
+
+# Absolute, and free of whitespace and shell metacharacters: callers interpolate
+# these values *unquoted* into remote command strings.
+valid_remote_path() { [[ $1 =~ ^/[A-Za-z0-9._/@+:-]*$ ]]; }

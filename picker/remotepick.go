@@ -94,9 +94,9 @@ func remotePickGated(raw string) bool {
 	return strings.TrimSpace(raw) == "1"
 }
 
-// shellQuote single-quotes s for a POSIX shell, escaping embedded single
-// quotes — the Go twin of the house shell_quote() bash helper
-// (scripts/lztmux-remote-open.sh, scripts/lztmux-remote-picker.sh).
+// shellQuote single-quotes s for the local float pane's shell (fish),
+// escaping embedded single quotes only — the Go twin of the house helper for
+// that purpose, not a full fish-safe backslash quoter.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

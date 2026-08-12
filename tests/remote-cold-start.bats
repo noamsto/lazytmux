@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031 # bats @test blocks run in subshells; export is intentional
+# shellcheck disable=SC2030,SC2031,SC2016 # bats @test blocks run in subshells; export is intentional; '$(…)' in single quotes is the injection payload under test
 # Cold-starting a serverless remote (#287). The launcher may only reach for
 # tmux-startup.service when list-sessions came back empty, and must re-probe
 # afterwards instead of assuming the unit produced the session it wanted —
@@ -491,4 +491,40 @@ teardown() {
 	run grep -cE 'has-session|tmux-remux' "$SSH_LOG"
 	[ "$status" -ne 0 ]
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "bad LZTMUX_REMOTE_TMPDIR is rejected before bridging" {
+	export LZTMUX_REMOTE_TMPDIR="/run/user/1000 x"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 1 ]
+	[[ $output == *"unusable remote tmpdir"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+
+	export LZTMUX_REMOTE_TMPDIR='/run/user/$(id -u)'
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 1 ]
+	[[ $output == *"unusable remote tmpdir"* ]]
+
+	run grep -c new-session "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "shell_quote preserves backslashes under fish" {
+	# shellcheck disable=SC1090
+	eval "$(sed -n '/^shell_quote()/,/^}/p' "$LAUNCHER")"
+
+	if ! command -v fish >/dev/null 2>&1; then
+		skip "fish not on PATH"
+	fi
+
+	local input quoted result
+	for input in $'/srv/a\\' $'/srv/a\\b'; do
+		quoted="$(shell_quote "$input")"
+		result="$(fish -c "echo $quoted")"
+		[ "$result" = "$input" ]
+	done
 }

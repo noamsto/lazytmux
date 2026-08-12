@@ -9,9 +9,14 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
-# shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
-# mirroring shellQuote in the daemon — remote-derived names must not break out.
-shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# shell_quote single-quotes $1 for fish (the remote login shell): escape `\`
+# then `'`. Fish treats `\` specially even inside single quotes.
+shell_quote() {
+	local s="$1"
+	s="${s//\\/\\\\}"
+	s="${s//\'/\'\\\'\'}"
+	printf "'%s'" "$s"
+}
 
 # reap_daemon SIGTERMs pid, waits up to 2s, then SIGKILLs if it's still
 # alive. Used whenever a live daemon has been proven stale so its socket +
@@ -54,6 +59,10 @@ else
 	default_tmpdir="/run/user/$remote_uid"
 fi
 remote_tmpdir="${LZTMUX_REMOTE_TMPDIR:-$default_tmpdir}"
+if ! valid_remote_path "$remote_tmpdir"; then
+	echo "lztmux-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
+	exit 1
+fi
 # single-quoted: $(id -un) expands on the remote side (NixOS profile fallback)
 remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux')"
 
