@@ -513,18 +513,68 @@ teardown() {
 	[ "$status" -ne 0 ]
 }
 
-@test "shell_quote preserves backslashes under fish" {
+@test "LZTMUX_REMOTE_NEW_DIR containing a backslash is rejected before any round trip" {
+	export LZTMUX_REMOTE_NEW_DIR='/srv/pro\ject'
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 1 ]
+	[[ $output == *"backslash"* ]]
+
+	[ ! -s "$SSH_LOG" ]
+}
+
+@test "a session name containing a backslash is rejected before list-windows ever runs" {
+	# An explicit sess arg skips both cold-start gates regardless of
+	# REMOTE_SERVER, so the only shell_quote("$sess") call this path reaches is
+	# list-windows — assert it never gets built.
+	run bash "$LAUNCHER" tp-g6 'wor\kstation'
+	[ "$status" -eq 1 ]
+	[[ $output == *"backslash"* ]]
+
+	run grep -c list-windows "$SSH_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "a session name containing a backslash is rejected before the restore path's has-session ever runs" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_RESTORE=1
+
+	run bash "$LAUNCHER" tp-g6 'wor\kstation'
+	[ "$status" -eq 1 ]
+	[[ $output == *"backslash"* ]]
+
+	run grep -c has-session "$SSH_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "shell_quote is plain POSIX single-quoting: correct for quotes, backslash-bearing input is unchanged (rejected upstream, not doubled)" {
 	# shellcheck disable=SC1090
 	eval "$(sed -n '/^shell_quote()/,/^}/p' "$LAUNCHER")"
 
-	if ! command -v fish >/dev/null 2>&1; then
-		skip "fish not on PATH"
-	fi
-
 	local input quoted result
-	for input in $'/srv/a\\' $'/srv/a\\b'; do
+
+	# Single-quote correctness, round-tripped under sh — the case shell_quote
+	# still has to get right in every dialect.
+	input="it's/a path"
+	quoted="$(shell_quote "$input")"
+	result="$(sh -c "printf '%s' $quoted")"
+	[ "$result" = "$input" ]
+
+	# A literal backslash now passes through inert (no longer doubled):
+	# backslash-bearing values are rejected at the launcher's entry before they
+	# ever reach shell_quote (see the rejection tests below), so this guards
+	# only against reintroducing backslash-doubling here directly.
+	quoted="$(shell_quote 'a\b')"
+	[ "$quoted" = "'a\\b'" ]
+
+	# fish round-trips the same single-quote case identically — `nix flake
+	# check`'s sandbox has no fish (see flake.nix's remote-tests
+	# nativeBuildInputs), so this leg only strengthens local runs; it must never
+	# skip the sh assertions above, which are what the CI gate actually relies
+	# on.
+	if command -v fish >/dev/null 2>&1; then
 		quoted="$(shell_quote "$input")"
 		result="$(fish -c "echo $quoted")"
 		[ "$result" = "$input" ]
-	done
+	fi
 }

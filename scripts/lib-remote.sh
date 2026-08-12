@@ -39,3 +39,10 @@ remote_auth_identity() {
 # Absolute, and free of whitespace and shell metacharacters: callers interpolate
 # these values *unquoted* into remote command strings.
 valid_remote_path() { [[ $1 =~ ^/[A-Za-z0-9._/@+:-]*$ ]]; }
+
+# shell_quote's single-quoting is correct for every character except a literal
+# backslash: fish treats `\` specially even inside single quotes, POSIX shells
+# don't, and no quoted form satisfies both — so reject a backslash-bearing
+# value at the boundary instead of trying to quote it. Screen $sess and
+# LZTMUX_REMOTE_NEW_DIR through this before either ever reaches shell_quote.
+shell_quotable() { [[ $1 != *\\* ]]; }

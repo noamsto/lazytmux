@@ -70,8 +70,85 @@ review named.
 
 ## Acceptance
 
-- [ ] Bad `LZTMUX_REMOTE_TMPDIR` is rejected inside `lztmux-remote-open`, not only by the picker caller.
-- [ ] A `NEW_DIR` containing `\` is not silently corrupted by fish single-quote rules; `$sess` uses the same helper.
-- [ ] Comments no longer claim POSIX-only consumers for the open/remotepick twins.
-- [ ] Capability-refusal test fails if leg 2 (`--serve`) runs.
-- [ ] Local gate green; PR closes #365.
+- [x] Bad `LZTMUX_REMOTE_TMPDIR` is rejected inside `lztmux-remote-open`, not only by the picker caller.
+- [x] A `NEW_DIR` containing `\` is not silently corrupted by fish single-quote rules; `$sess` uses the same helper. (Superseded below — this landed as rejection, not fish-safe quoting.)
+- [x] Comments no longer claim POSIX-only consumers for the open/remotepick twins.
+- [x] Capability-refusal test fails if leg 2 (`--serve`) runs.
+- [x] Local gate green; PR closes #365.
+
+## Addendum: finding 2's fish-fix regressed POSIX remotes — reopened and fixed by rejection, not quoting
+
+Step 3 above shipped fish-safe `shell_quote` (escape `\` then `'`). That closed the
+fish failure but opened a POSIX one: `'/srv/a\\'` (the doubled form) decodes to the
+*wrong but valid* `/srv/a\\` under sh/bash, not the correct `/srv/a\`. There is no
+single-quoted form correct under both dialects for a literal backslash — the two
+disagree on what `\` means inside `'…'`. Quoting was the wrong tool for this
+character; the fix is to reject it instead, which the "define errors out of
+existence" house principle already prescribes.
+
+**What changed:**
+
+- `scripts/lib-remote.sh` gained `shell_quotable()` — `[[ $1 != *\\* ]]` — next to
+  `valid_remote_path`, with a comment stating the fish/POSIX disagreement and why
+  reject-not-quote.
+- `scripts/lztmux-remote-open.sh`: `LZTMUX_REMOTE_NEW_DIR` is screened through
+  `shell_quotable` right after the existing mutual-exclusivity check (before any
+  ssh round trip); `$sess` is screened once resolved (after the cold-start block,
+  before the restore branch's first `shell_quote "$sess"` call — it can't be
+  checked any earlier, since `$sess` may come from the remote's own
+  `first_remote_session()` and isn't known before that point). Both fail loudly
+  with a message naming the offending value and exit 1.
+- `shell_quote` itself reverted to plain POSIX single-quote escaping (no more
+  backslash-doubling) — safe again in every dialect now that backslash can never
+  reach it.
+- A third consumer confirmed transitively protected, no edit needed: `lztmux-remote-open.sh`
+  exports `LZTMUX_BRIDGE_SESSION="$sess"` downstream of the new guard, and both
+  `picker/remotebridge/cmd/daemon/main.go` and `picker/remotebridge/main.go` quote
+  that env var with their own `shellQuote` — since it can no longer carry a
+  backslash by the time either sees it, neither needed changing (both are out of
+  scope for this fix regardless, per #368/PR #376).
+
+**Why not the stdin/heredoc alternative** (routing values through `ssh host bash
+-s` and reading them via `read` from a stdin data line, which genuinely bypasses
+the remote login shell's parsing): `$sess` is interpolated at five call sites
+across the script's existing control flow, each a single `ssh host "…"` string
+built inline with other client-resolved variables. Converting all five to
+stdin-fed heredocs would restructure every call site, duplicate the read-preamble
+five times, and rewrite the `SC2029`/`SC2016` annotations and every `SSH_LOG` grep
+assertion that pattern-matches today's command strings — a rewrite disproportionate
+to a bug this narrow: `remote_tmpdir` already excludes `\` by charset (finding 1),
+so only `$sess` and `LZTMUX_REMOTE_NEW_DIR` are exposed, and a backslash in either
+is rare. This is a correctness/robustness fix, not a live security hole — revisit
+the heredoc approach only if a future value legitimately needs to carry `\`.
+
+**Exposure, precisely stated:** on a POSIX-shell (sh/bash) remote, a backslash in
+`LZTMUX_REMOTE_NEW_DIR` or `$sess` was silently mangled into a different,
+valid-looking path — corruption, not injection. On a **fish** remote, though, it
+was more than that: `\` immediately followed by `'` breaks fish's single-quote
+balance, so a crafted value (e.g. a session name ending `x\'; touch
+/tmp/PWNED #`) could inject an arbitrary trailing command into the remote shell —
+a real command-injection primitive, confirmed by PoC during review, not merely
+theoretical. This fix closes the whole class outright (reject `\`, don't try to
+quote it), so the distinction doesn't change what to do — but the practical
+exposure stays narrow because the precondition is steep: `$sess`/`LZTMUX_REMOTE_NEW_DIR`
+are influenced by (a) the local user's own arguments, (b) the remote's own most-recent
+tmux session name, or (c) a zoxide-visible directory name — exploiting it requires
+already controlling one of those on a host the user is bridging to, at which point
+simpler attacks are usually available. The rejection is deliberately narrower than
+`valid_remote_path`'s charset — it excludes only `\`, not spaces or punctuation —
+so a legitimate zoxide directory with spaces still opens.
+
+**Known follow-up, not fixed here (out of scope):** `picker/remotebridge/main.go`
+and `picker/remotebridge/cmd/daemon/main.go` trust `LZTMUX_BRIDGE_SESSION` is
+already backslash-free by the time they quote it — true today (its one producer,
+`lztmux-remote-open.sh`, is guarded), but there's no independent `shell_quotable`-
+equivalent check at their point of use. Latent, not live: revisit only if a future
+caller sets that env var directly, bypassing the launcher.
+
+**Tests:** `tests/remote.bats` gained a `shell_quotable` unit test; the old
+"shell_quote preserves backslashes under fish" test (a guarantee this fix
+deliberately drops) was replaced in `tests/remote-cold-start.bats` with a test
+proving `shell_quote`'s POSIX/fish single-quote correctness plus its
+backslash-inertness, and three new integration tests proving `$sess` /
+`LZTMUX_REMOTE_NEW_DIR` are rejected before the call site that would have quoted
+them (`list-windows`, `has-session`, or no round trip at all) ever runs.

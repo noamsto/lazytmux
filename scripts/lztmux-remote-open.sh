@@ -9,11 +9,13 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
-# shell_quote single-quotes $1 for fish (the remote login shell): escape `\`
-# then `'`. Fish treats `\` specially even inside single quotes.
+# shell_quote single-quotes $1, escaping embedded single quotes — correct
+# under any POSIX shell or fish for every character except a literal
+# backslash (see shell_quotable() in lib-remote.sh for why). Callers must
+# clear a value through shell_quotable() before it reaches here; $sess and
+# LZTMUX_REMOTE_NEW_DIR are the two that do.
 shell_quote() {
 	local s="$1"
-	s="${s//\\/\\\\}"
 	s="${s//\'/\'\\\'\'}"
 	printf "'%s'" "$s"
 }
@@ -46,6 +48,11 @@ fi
 # out), so the picker never setting both is not an invariant to rely on.
 if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n ${LZTMUX_REMOTE_RESTORE:-} ]]; then
 	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR and LZTMUX_REMOTE_RESTORE are mutually exclusive" >&2
+	exit 1
+fi
+
+if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} ]] && ! shell_quotable "$LZTMUX_REMOTE_NEW_DIR"; then
+	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR contains a backslash, which no remote shell dialect can quote safely: $LZTMUX_REMOTE_NEW_DIR" >&2
 	exit 1
 fi
 
@@ -114,6 +121,11 @@ if [[ -z $sess ]]; then
 		echo "lztmux-remote-open: started $start_desc on $host but no session appeared" >&2
 		exit 1
 	fi
+fi
+
+if ! shell_quotable "$sess"; then
+	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+	exit 1
 fi
 
 # The picker's row came from a tmux-remux snapshot, not a live probe (#268):
