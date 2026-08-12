@@ -13,6 +13,90 @@ import (
 	"github.com/noamsto/lazytmux/picker/agentdetect/statefile"
 )
 
+func TestPaneInfoReportsOK(t *testing.T) {
+	cases := []struct {
+		name     string
+		out      string
+		wantCols int
+		wantRows int
+		wantCmd  string
+		wantOK   bool
+	}{
+		{"valid", "100 30 codex", 100, 30, "codex", true},
+		{"empty", "", 0, 0, "", false},
+		{"width only", "100", 0, 0, "", false},
+		{"non-numeric", "abc def", 0, 0, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cols, rows, cmd, ok := parsePaneInfo(c.out)
+			if cols != c.wantCols || rows != c.wantRows || cmd != c.wantCmd || ok != c.wantOK {
+				t.Errorf("parsePaneInfo(%q) = (%d,%d,%q,%v), want (%d,%d,%q,%v)",
+					c.out, cols, rows, cmd, ok, c.wantCols, c.wantRows, c.wantCmd, c.wantOK)
+			}
+		})
+	}
+}
+
+func TestSeedBytesConvertsLFToCRLF(t *testing.T) {
+	got := seedBytes([]byte("line1\nline2\n"))
+	want := []byte("line1\r\nline2\r\n")
+	if string(got) != string(want) {
+		t.Fatalf("seedBytes = %q, want %q", got, want)
+	}
+}
+
+type fakeScreen struct {
+	panicOnFeed bool
+}
+
+func (f *fakeScreen) Feed([]byte) {
+	if f.panicOnFeed {
+		panic("feed boom")
+	}
+}
+func (f *fakeScreen) Text() string    { return "" }
+func (f *fakeScreen) Title() string   { return "" }
+func (f *fakeScreen) AltScreen() bool { return false }
+
+func TestFeedSafeRecoversFromPanic(t *testing.T) {
+	if feedSafe(&fakeScreen{panicOnFeed: true}, []byte("x")) {
+		t.Fatal("feedSafe should return false when Feed panics")
+	}
+	if !feedSafe(&fakeScreen{}, []byte("x")) {
+		t.Fatal("feedSafe should return true when Feed succeeds")
+	}
+}
+
+func TestSeedMatchesIdleCodex(t *testing.T) {
+	content, err := os.ReadFile("testdata/codex_idle_seed.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ms, err := manifest.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := manifest.ForCommand(ms, "codex")
+	if !ok {
+		t.Fatal("no manifest for codex")
+	}
+
+	scr := screen.New(100, 30)
+	scr.Feed(seedBytes(content))
+	got, ok := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
+	if !ok || got != "idle" {
+		t.Fatalf("seedBytes feed Match = (%q,%v), want (idle,true)", got, ok)
+	}
+
+	raw := screen.New(100, 30)
+	raw.Feed(content)
+	got, ok = manifest.Match(m, raw.Text(), raw.Title(), raw.AltScreen())
+	if ok && got == "idle" {
+		t.Fatal("raw unconverted feed unexpectedly matched idle — seedBytes should be load-bearing")
+	}
+}
+
 func TestAliveFromProbe(t *testing.T) {
 	if !aliveFromProbe(nil) {
 		t.Error("nil probe error should mean alive")
