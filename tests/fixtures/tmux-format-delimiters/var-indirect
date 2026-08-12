@@ -1,0 +1,2 @@
+FMT='#{window_index}	#{pane_current_command}'
+tmux list-windows -F "$FMT"

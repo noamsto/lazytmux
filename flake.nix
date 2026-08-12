@@ -422,6 +422,33 @@
               touch $out
             '';
 
+          # A control byte is invisible in review and only misbehaves for clients
+          # without a UTF-8 locale, so the delimiter rule needs a build-time gate
+          # rather than vigilance (#373). Scoped to scripts/ — modules/ and
+          # picker/ still carry tab-delimited formats, tracked separately, and a
+          # check that scanned them would have to fail today.
+          tmux-format-delimiter-assertions =
+            pkgs.runCommand "tmux-format-delimiter-assertions" {
+              nativeBuildInputs = [pkgs.bash pkgs.coreutils pkgs.findutils];
+            } ''
+              scan=${./tests/check-tmux-format-delimiters.sh}
+              bash "$scan" ${./scripts}
+
+              # Prove the scanner can actually fail, and that EACH rule pulls its
+              # weight: a single non-zero exit would let an inverted rule ship.
+              if report=$(bash "$scan" ${./tests/fixtures/tmux-format-delimiters} 2>&1); then
+                echo "scanner accepted the deliberately-broken fixtures" >&2
+                exit 1
+              fi
+              for f in literal-tab escaped-tab var-indirect; do
+                case "$report" in
+                  *"$f"*) ;;
+                  *) echo "scanner missed fixture $f:" >&2; echo "$report" >&2; exit 1 ;;
+                esac
+              done
+              touch $out
+            '';
+
           notify-bell-integration-tests =
             pkgs.runCommand "notify-bell-integration-tests" {
               # mkTmux, not pkgs.tmux: the hook behavior this pins must be the

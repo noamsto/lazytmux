@@ -16,7 +16,7 @@ set -uo pipefail
 target=${1:-}
 [[ -z $target ]] && exit 0
 
-while IFS=$'\t' read -r pane geom; do
+while IFS='|' read -r pane geom; do
 	read -r width height xoff yoff <<<"$geom"
 	# Floats created outside the binds (a mouse Ctrl-drag) carry no stamp:
 	# their geometry is the user's, not ours, so leave them alone.
@@ -24,4 +24,4 @@ while IFS=$'\t' read -r pane geom; do
 	tmux resize-pane -t "$pane" -x "$width" -y "$height"
 	tmux move-pane -t "$pane" -X "$xoff" -Y "$yoff"
 done < <(tmux list-panes -t "$target" -f '#{pane_floating_flag}' \
-	-F $'#{pane_id}\t#{@float_geom}' 2>/dev/null)
+	-F '#{pane_id}|#{@float_geom}' 2>/dev/null)

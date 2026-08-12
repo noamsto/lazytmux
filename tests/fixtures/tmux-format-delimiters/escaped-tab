@@ -1,0 +1,1 @@
+rows=$(tmux list-panes -a -F $'#{pane_id}\t#{pane_pipe}')

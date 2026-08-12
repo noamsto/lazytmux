@@ -214,13 +214,13 @@ done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 # Collect all pane processes in one call, bucket by window index
 declare -A win_seen # keyed by "idx:proc"
-while IFS=$'\t' read -r win_idx proc; do
+while IFS='|' read -r win_idx proc; do
 	[[ -n $proc ]] || continue
 	if [[ -z ${win_seen["${win_idx}:${proc}"]+x} ]]; then
 		win_seen["${win_idx}:${proc}"]=1
 		win_procs[$win_idx]+="${win_procs[$win_idx]:+ }$proc"
 	fi
-done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}|#{pane_current_command}')
 unset win_seen
 
 # Fixed icon-column width for the slot math below. The icon *content*
