@@ -1,0 +1,1 @@
+fmt=$(tmux list-panes -F $'#{pane_id}\x09#{pane_pipe}')

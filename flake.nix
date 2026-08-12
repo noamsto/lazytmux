@@ -424,15 +424,18 @@
 
           # A control byte is invisible in review and only misbehaves for clients
           # without a UTF-8 locale, so the delimiter rule needs a build-time gate
-          # rather than vigilance (#373). Scoped to scripts/ — modules/ and
-          # picker/ still carry tab-delimited formats, tracked separately, and a
+          # rather than vigilance (#373). Scoped to scripts/ + config/ — modules/
+          # and picker/ still carry tab-delimited formats, tracked in #378, and a
           # check that scanned them would have to fail today.
           tmux-format-delimiter-assertions =
             pkgs.runCommand "tmux-format-delimiter-assertions" {
               nativeBuildInputs = [pkgs.bash pkgs.coreutils pkgs.findutils];
             } ''
+              # `bash "$scan"`, not "$scan": the scanner's shebang is
+              # /usr/bin/env bash and the Linux build sandbox has no /usr/bin.
               scan=${./tests/check-tmux-format-delimiters.sh}
               bash "$scan" ${./scripts}
+              bash "$scan" ${./config}
 
               # Prove the scanner can actually fail, and that EACH rule pulls its
               # weight: a single non-zero exit would let an inverted rule ship.
@@ -440,7 +443,7 @@
                 echo "scanner accepted the deliberately-broken fixtures" >&2
                 exit 1
               fi
-              for f in literal-tab escaped-tab var-indirect; do
+              for f in literal-tab escaped-tab var-indirect newline-escape us-escape hex-tab-escape; do
                 case "$report" in
                   *"$f"*) ;;
                   *) echo "scanner missed fixture $f:" >&2; echo "$report" >&2; exit 1 ;;

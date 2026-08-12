@@ -9,15 +9,19 @@
 #
 # Two rules, because either alone is evadable:
 #   (a) no raw C0 byte or DEL — catches -F '#{a}<TAB>#{b}'
-#   (b) no \t / \x09 / \x1f escape text — catches -F $'#{a}\t#{b}', whose source
-#       bytes are all printable
+#   (b) no \t / \n / \x09 / \x1f escape text — catches -F $'#{a}\t#{b}', whose
+#       source bytes are all printable
 # Leading indentation is stripped before (a): this repo indents with tabs, and
 # dozens of legitimate format-bearing lines start with one. A tab that survives
 # the strip is one somebody put *inside* the line.
 #
-# Deliberately allowed: multi-byte UTF-8 (tmux-reflow-windows.sh's FMT carries
-# ├─/╰─ glyphs) and \n (tmux-reflow-windows.sh reads a 3-line -p format; tmux
-# splits the output buffer on LF before sanitizing, so newlines are not mangled).
+# \n is rejected too, and is not a special case: tmux mangles a newline exactly
+# like a tab (measured — `LC_ALL=C tmux display-message -p $'a\nb'` prints a_b),
+# so a multi-line -p read collapses the same way. tmux-reflow-windows.sh:76 used
+# to do that.
+#
+# Deliberately allowed: multi-byte UTF-8 — the status-format strings in
+# tmux-reflow-windows.sh carry ├─/╰─ glyphs, which are printable.
 #
 # Scans whole files rather than -F-bearing lines, so a format assembled into a
 # variable and used later as -F "$FMT" is caught at the line that spells the
@@ -49,7 +53,7 @@ while IFS= read -r file; do
 		esac
 
 		case $line in
-		*'\t'* | *'\x09'* | *'\x1f'*)
+		*'\t'* | *'\n'* | *'\x09'* | *'\x1f'*)
 			printf "%s:%s: escaped control byte in a tmux format — use '|'\n" "$file" "$lineno" >&2
 			status=1
 			;;
