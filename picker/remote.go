@@ -39,8 +39,10 @@ const remoteRestorableCmd = `hostname; $(command -v tmux-remux 2>/dev/null || ec
 const sshConnectFailureExit = 255
 
 var (
-	errRemoteUnreachable = errors.New("remote unreachable")
-	errRemoteNoServer    = errors.New("remote tmux server not running")
+	errRemoteUnreachable    = errors.New("remote unreachable")
+	errRemoteNoServer       = errors.New("remote tmux server not running")
+	errRemoteNeedsAuth      = errors.New("remote needs interactive authentication")
+	errRemoteHostKeyChanged = errors.New("remote host key changed")
 )
 
 type remoteProbeState int
@@ -49,6 +51,8 @@ const (
 	remoteProbeOK remoteProbeState = iota
 	remoteProbeNoServer
 	remoteProbeUnreachable
+	remoteProbeNeedsAuth
+	remoteProbeHostKeyChanged
 )
 
 // Tree prefixes for a host's session rows; markRemoteTreeEnds decides which
@@ -89,8 +93,13 @@ func localBridgeSession(host, sess string) string {
 func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) ([]string, error)) ([]string, remoteProbeState) {
 	names, err := probe(host)
 	if err != nil {
-		if errors.Is(err, errRemoteNoServer) {
+		switch {
+		case errors.Is(err, errRemoteNoServer):
 			return nil, remoteProbeNoServer
+		case errors.Is(err, errRemoteNeedsAuth):
+			return nil, remoteProbeNeedsAuth
+		case errors.Is(err, errRemoteHostKeyChanged):
+			return nil, remoteProbeHostKeyChanged
 		}
 		return nil, remoteProbeUnreachable
 	}
@@ -110,10 +119,40 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 	return out, remoteProbeOK
 }
 
+// authFailurePatterns are the ssh stderr signatures meaning a human at a real
+// terminal could fix this by answering a prompt. Only consulted on exit 255,
+// where the failure is ssh's own.
+var authFailurePatterns = []string{
+	"Host key verification failed",
+	// The "(" anchors on ssh's own "Permission denied (publickey,password)."
+	// rather than the bare phrase, which also appears in a local firewall's
+	// "ssh: connect to host X port 22: Permission denied" (EACCES) — a
+	// genuinely down host, not one a prompt could fix.
+	"Permission denied (",
+	"Too many authentication failures",
+	"keyboard-interactive",
+}
+
+// hostKeyChangedPattern is ssh's warning that the host key no longer matches
+// known_hosts. Kept out of authFailurePatterns deliberately: this is the
+// signature of a MITM as much as of a reinstalled host, so it must never reach
+// a flow that invites the user to connect. ssh prints it alongside "Host key
+// verification failed", so it is matched first.
+const hostKeyChangedPattern = "REMOTE HOST IDENTIFICATION HAS CHANGED"
+
+// revokedHostKeyPattern is ssh's refusal banner for a key listed in a
+// RevokedHostKeys file. It prints no hostKeyChangedPattern alongside it, only a
+// bare "Host key verification failed.", which would otherwise fall into
+// authFailurePatterns and offer to connect to a host ssh has already refused.
+const revokedHostKeyPattern = "REVOKED HOST KEY DETECTED"
+
 // classifyProbeErr decides which failure a non-zero probe was. ssh exits 255
 // when it could not reach the host; any other status is the remote command's
-// own, so the host answered and only its tmux server is missing (#266).
-func classifyProbeErr(err error, timedOut bool) error {
+// own, so the host answered and only its tmux server is missing (#266). Within
+// 255, stderr distinguishes a host that merely wants an interactive answer from
+// one that is genuinely down (#357) — an unrecognised 255 stays unreachable, so
+// being wrong costs a stale label rather than a pointless password prompt.
+func classifyProbeErr(err error, stderr string, timedOut bool) error {
 	if timedOut {
 		return fmt.Errorf("%w: probe timed out", errRemoteUnreachable)
 	}
@@ -121,7 +160,30 @@ func classifyProbeErr(err error, timedOut bool) error {
 	if errors.As(err, &exitErr) && exitErr.ExitCode() != sshConnectFailureExit {
 		return fmt.Errorf("%w: %w", errRemoteNoServer, err)
 	}
+	if strings.Contains(stderr, hostKeyChangedPattern) || strings.Contains(stderr, revokedHostKeyPattern) {
+		return fmt.Errorf("%w: %w", errRemoteHostKeyChanged, err)
+	}
+	for _, p := range authFailurePatterns {
+		if strings.Contains(stderr, p) {
+			return fmt.Errorf("%w: %w", errRemoteNeedsAuth, err)
+		}
+	}
 	return fmt.Errorf("%w: %w", errRemoteUnreachable, err)
+}
+
+// remoteAuthStartFailure classifies the tea.ExecProcess callback error for the
+// auth handshake popup. *exec.ExitError means lztmux-remote-auth ran and
+// already explained itself — it pauses on any failure it prints before
+// returning the pty — so only a *exec.Error (the process never started at
+// all, most often a stale PATH after a lazytmux bump until the server
+// restarts) has nothing on screen to explain, and that is the only case worth
+// surfacing into the status line.
+func remoteAuthStartFailure(err error) (string, bool) {
+	var startErr *exec.Error
+	if errors.As(err, &startErr) {
+		return err.Error(), true
+	}
+	return "", false
 }
 
 // sshListRemoteSessions runs the same path/tmpdir resolution as
@@ -140,10 +202,11 @@ func sshListRemoteSessions(host string) ([]string, error) {
 		"--",
 		remoteListSessionsCmd,
 	)
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, classifyProbeErr(err, ctx.Err() != nil)
+		return nil, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	out := make([]string, 0, len(lines))
@@ -291,10 +354,11 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 		"--",
 		remoteRestorableCmd,
 	)
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return remuxManifest{}, err
+		return remuxManifest{}, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
 	return restorableFromProbeOutput(stdout.String())
 }
@@ -462,6 +526,11 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		case remoteProbeUnreachable:
 			// The host may be back up by the time it is picked.
 			note = "(unreachable — open default)"
+		case remoteProbeNeedsAuth:
+			// ssh wants an answer a batch-mode probe can never give (#357).
+			note = "(auth needed — Enter to connect)"
+		case remoteProbeHostKeyChanged:
+			note = "(host key changed — verify manually)"
 		case remoteProbeNoServer:
 			// The launcher cold-starts the host's own startup session (#287).
 			// The host row itself never restores — it carries no
@@ -474,7 +543,14 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				note = "(all open)"
 			}
 		}
-		items = append(items, remoteHostRowItem(tmuxOpts, r.host, note))
+		hostRow := remoteHostRowItem(tmuxOpts, r.host, note)
+		switch r.state {
+		case remoteProbeNeedsAuth:
+			hostRow.remoteNeedsAuth = true
+		case remoteProbeHostKeyChanged:
+			hostRow.remoteInert = true
+		}
+		items = append(items, hostRow)
 		for _, sess := range r.sess {
 			items = append(items, listItem{
 				isRemoteRow: true,

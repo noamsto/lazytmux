@@ -591,14 +591,18 @@
           remote-tests =
             pkgs.runCommand "remote-tests" {
               # bash: the cold-start cases run the launcher through an explicit
-              # interpreter (no /usr/bin/env in the sandbox).
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.bash];
+              # interpreter (no /usr/bin/env in the sandbox). util-linux
+              # provides `script`, which remote-auth.bats uses to give the
+              # accept-path cases a real pty (same pattern as
+              # remote-bridge-integration-tests below).
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.bash pkgs.util-linux];
             } ''
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/remote.bats
               bats tests/remote-cold-start.bats
               bats tests/remote-picker.bats
+              bats tests/remote-auth.bats
               touch $out
             '';
 

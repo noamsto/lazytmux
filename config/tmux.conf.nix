@@ -35,6 +35,7 @@
   # Whitespace-separated ssh Host aliases the session picker probes for remote
   # tmux sessions (prefix + s remote section). Empty => no remote section.
   remoteBridgeHosts ? "",
+  remoteAuthPersistSeconds ? 14400,
   # tmux prefix key (literal character). Default backtick.
   prefix ? "`",
   # Absolute path to the shell tmux spawns in new panes (default-shell).
@@ -344,6 +345,7 @@
     "cursor-hooks-install"
     "lztmux-remote-open"
     "lztmux-remote-picker"
+    "lztmux-remote-auth"
     "lztmux-notify"
     "lztmux-notify-center"
     "tmux-agent-usage"
@@ -446,7 +448,7 @@
   # Scripts that source lib-remote get its store path substituted, plus the
   # bridge binaries the launcher probes and spawns — pinned for the same reason
   # as @reflow@ above, which the launcher spells out.
-  scriptsWithRemote = ["lztmux-remote-open"];
+  scriptsWithRemote = ["lztmux-remote-open" "lztmux-remote-auth"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
@@ -899,6 +901,7 @@
     # brand-new script would resolve to nothing until then. An option repoints on
     # a config reload alone (#336).
     set -g @remote_pick_bin "${script.lztmux-remote-picker}/bin/lztmux-remote-picker"
+    set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
     # PR badge lives on the window list only — not duplicated here.

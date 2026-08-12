@@ -205,31 +205,98 @@ func TestLastNonEmptyLine(t *testing.T) {
 	}
 }
 
-// Exit 255 is the only status that means the host is out of reach.
+// Exit 255 means ssh itself failed; stderr says whether a human could fix it.
 func TestClassifyProbeErr(t *testing.T) {
 	exitErr := func(code int) error {
 		return exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
 	}
 
-	if got := classifyProbeErr(exitErr(255), false); !errors.Is(got, errRemoteUnreachable) {
-		t.Errorf("exit 255 => %v, want errRemoteUnreachable", got)
+	const hostKeyChangedStderr = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" +
+		"@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n" +
+		"Host key verification failed."
+
+	// ssh's refusal banner for a RevokedHostKeys match: no "IDENTIFICATION HAS
+	// CHANGED" line, just this warning followed by the same bare
+	// "Host key verification failed." that authFailurePatterns matches.
+	const revokedHostKeyStderr = "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n" +
+		"@    WARNING: REVOKED HOST KEY DETECTED!               @\n" +
+		"The ECDSA host key for tp-g6 is marked as revoked.\n" +
+		"Host key verification failed."
+
+	cases := []struct {
+		name     string
+		err      error
+		stderr   string
+		timedOut bool
+		want     error
+	}{
+		// Baselines: the pre-#357 behaviour, unchanged.
+		{"bare 255", exitErr(255), "", false, errRemoteUnreachable},
+		{"exit 1 is the remote command's own", exitErr(1), "", false, errRemoteNoServer},
+		{"tmux missing on the remote", exitErr(127), "", false, errRemoteNoServer},
+		{"timeout beats the exit status", exitErr(1), "", true, errRemoteUnreachable},
+		{"ssh binary missing", errors.New(`exec: "ssh": not found`), "", false, errRemoteUnreachable},
+
+		// New: 255 plus a stderr signature a prompt could fix.
+		{"unknown host key", exitErr(255), "Host key verification failed.", false, errRemoteNeedsAuth},
+		{"password refused", exitErr(255), "noams@mbp: Permission denied (publickey,password).", false, errRemoteNeedsAuth},
+		{"agent exhausted", exitErr(255), "Received disconnect: Too many authentication failures", false, errRemoteNeedsAuth},
+		{"2fa offered", exitErr(255), "Authentications that can continue: keyboard-interactive", false, errRemoteNeedsAuth},
+
+		// New: a changed key outranks the auth patterns ssh prints alongside it.
+		{"host key changed", exitErr(255), hostKeyChangedStderr, false, errRemoteHostKeyChanged},
+		// New: a revoked key must land on the same inert row as a changed one —
+		// ssh refuses it unconditionally, so nothing unsafe can be accepted, but
+		// the row must never invite the "Enter to connect" action regardless.
+		{"revoked host key", exitErr(255), revokedHostKeyStderr, false, errRemoteHostKeyChanged},
+
+		// Genuinely down hosts must not be dragged into the auth flow.
+		{"refused", exitErr(255), "ssh: connect to host lab port 22: Connection refused", false, errRemoteUnreachable},
+		{"no route", exitErr(255), "ssh: connect to host lab port 22: No route to host", false, errRemoteUnreachable},
+		{"unknown name", exitErr(255), "ssh: Could not resolve hostname lab: Name or service not known", false, errRemoteUnreachable},
+		// A local firewall's EACCES prints the same words as ssh's own auth
+		// refusal but with no "(publickey,...)" reason list — a genuinely down
+		// host, not one a prompt could fix.
+		{"firewall EACCES", exitErr(255), "ssh: connect to host lab port 22: Permission denied", false, errRemoteUnreachable},
+
+		// Precedence: a non-255 exit is the remote command's, whatever it printed.
+		{"remote command printed Permission denied", exitErr(1), "cat: /etc/shadow: Permission denied", false, errRemoteNoServer},
+		// Precedence: a killed process has no meaningful stderr verdict.
+		{"timeout beats an auth signature", exitErr(255), "Host key verification failed.", true, errRemoteUnreachable},
 	}
-	if got := classifyProbeErr(exitErr(1), false); !errors.Is(got, errRemoteNoServer) {
-		t.Errorf("exit 1 => %v, want errRemoteNoServer", got)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyProbeErr(tc.err, tc.stderr, tc.timedOut); !errors.Is(got, tc.want) {
+				t.Errorf("classifyProbeErr(%v, %q, %v) = %v, want %v", tc.err, tc.stderr, tc.timedOut, got, tc.want)
+			}
+		})
 	}
-	// tmux missing entirely on the remote: still the host answering, not a
-	// connection failure.
-	if got := classifyProbeErr(exitErr(127), false); !errors.Is(got, errRemoteNoServer) {
-		t.Errorf("exit 127 => %v, want errRemoteNoServer", got)
+}
+
+// The auth popup's script explains and pauses on any failure it causes, so
+// only a start failure (the exec.Command never ran) has nothing on screen to
+// explain and needs surfacing into the status line.
+func TestRemoteAuthStartFailure(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		wantOK bool
+	}{
+		{"nil: normal exit, nothing to surface", nil, false},
+		{"ExitError: the script already explained and paused", exec.Command("sh", "-c", "exit 1").Run(), false},
+		{"exec.Error: PATH stale, the process never started", exec.Command("lztmux-remote-auth-does-not-exist").Run(), true},
 	}
-	// A timeout beats the exit status: the process was killed, so its code is
-	// meaningless.
-	if got := classifyProbeErr(exitErr(1), true); !errors.Is(got, errRemoteUnreachable) {
-		t.Errorf("timeout => %v, want errRemoteUnreachable", got)
-	}
-	// Non-ExitError (ssh binary missing) is not a host that answered.
-	if got := classifyProbeErr(errors.New("exec: \"ssh\": not found"), false); !errors.Is(got, errRemoteUnreachable) {
-		t.Errorf("non-exit error => %v, want errRemoteUnreachable", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, ok := remoteAuthStartFailure(tc.err)
+			if ok != tc.wantOK {
+				t.Fatalf("remoteAuthStartFailure(%v) ok = %v, want %v", tc.err, ok, tc.wantOK)
+			}
+			if ok && msg == "" {
+				t.Errorf("remoteAuthStartFailure(%v) returned ok with an empty message", tc.err)
+			}
+		})
 	}
 }
 
@@ -481,6 +548,74 @@ func TestRestorableFromProbeOutput(t *testing.T) {
 			}
 			if len(m.Sessions) != 1 || m.Sessions[0].Name != "work" {
 				t.Fatalf("got %+v, want the one attached session", m.Sessions)
+			}
+		})
+	}
+}
+
+// A host that only wants an interactive answer is not "unreachable": it gets
+// its own note and an actionable row (#357).
+func TestCollectRemoteItemsNeedsAuth(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
+	probe := func(string) ([]string, error) {
+		return nil, fmt.Errorf("%w: exit status 255", errRemoteNeedsAuth)
+	}
+	items := collectRemoteItems(opts, nil, probe, nil)
+
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want header + one host row", len(items))
+	}
+	row := items[1]
+	if !strings.Contains(row.plain, "(auth needed — Enter to connect)") {
+		t.Errorf("row = %q, want the auth-needed note", row.plain)
+	}
+	if !row.remoteNeedsAuth {
+		t.Error("remoteNeedsAuth = false, want true so Enter runs the handshake")
+	}
+	if row.remoteInert {
+		t.Error("remoteInert = true, want false — this row must be actionable")
+	}
+}
+
+// A changed host key is a MITM signature. The row must say so and Enter must
+// have nothing to act on: offering "Enter to connect" here would train the user
+// to accept key changes without checking a fingerprint.
+func TestCollectRemoteItemsHostKeyChanged(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
+	probe := func(string) ([]string, error) {
+		return nil, fmt.Errorf("%w: exit status 255", errRemoteHostKeyChanged)
+	}
+	items := collectRemoteItems(opts, nil, probe, nil)
+
+	row := items[1]
+	if !strings.Contains(row.plain, "(host key changed — verify manually)") {
+		t.Errorf("row = %q, want the host-key-changed note", row.plain)
+	}
+	if !row.remoteInert {
+		t.Error("remoteInert = false, want true so Enter refuses to act")
+	}
+	if row.remoteNeedsAuth {
+		t.Error("remoteNeedsAuth = true, want false — a key change is not an auth prompt")
+	}
+}
+
+// The two new states map through remoteSessionsForHost, not just through
+// classifyProbeErr.
+func TestRemoteSessionsForHostNewStates(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want remoteProbeState
+	}{
+		"needs auth":       {fmt.Errorf("%w: x", errRemoteNeedsAuth), remoteProbeNeedsAuth},
+		"host key changed": {fmt.Errorf("%w: x", errRemoteHostKeyChanged), remoteProbeHostKeyChanged},
+		"unreachable":      {fmt.Errorf("%w: x", errRemoteUnreachable), remoteProbeUnreachable},
+		"no server":        {fmt.Errorf("%w: x", errRemoteNoServer), remoteProbeNoServer},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			probe := func(string) ([]string, error) { return nil, tc.err }
+			if _, got := remoteSessionsForHost("h", nil, probe); got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
 			}
 		})
 	}

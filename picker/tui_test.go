@@ -1155,3 +1155,25 @@ func TestRecombineBothEmptyGuard(t *testing.T) {
 		t.Error("both-empty guard did not add a placeholder row")
 	}
 }
+
+// Enter on a host-key-changed row must not act. It explains itself and stays
+// open — quitting or bridging would both be wrong.
+func TestActivateHostKeyChangedRowRefuses(t *testing.T) {
+	m := tuiModel{
+		visible: []listItem{{
+			isRemoteRow: true,
+			remoteHost:  "mbp",
+			remoteInert: true,
+			target:      "remote:mbp",
+		}},
+		cursor: 0,
+	}
+	next, cmd := m.activateCurrent()
+	if cmd != nil {
+		t.Error("cmd != nil, want nil — an inert row must neither quit nor bridge")
+	}
+	got := next.(tuiModel).statusMsg
+	if !strings.Contains(got, "host key") {
+		t.Errorf("statusMsg = %q, want an explanation mentioning the host key", got)
+	}
+}

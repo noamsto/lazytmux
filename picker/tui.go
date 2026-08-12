@@ -30,17 +30,19 @@ type listItem struct {
 	session        string // owning session name (for kill)
 	groupKey       string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
-	bridgeHost     string // @bridge_host — set when this session mirrors a remote host
-	hasActiveAgent bool   // used for --agent filter
-	isScratch      bool   // scratch-* session
-	createPath     string // zoxide suggestion: dir to create a session at ("" = normal row)
-	createName     string // zoxide suggestion: derived session name
-	isRemoteRow    bool   // belongs to the Remote section (set even when unselectable)
-	remoteHost     string // remote bridge row: ssh host for lztmux-remote-open
-	remoteSess     string // remote bridge row: optional remote session name
-	displayEnd     string // remote session row: display with the closing tree glyph
-	plainEnd       string // remote session row: plain with the closing tree glyph
-	remoteRestore  bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
+	hasActiveAgent  bool   // used for --agent filter
+	isScratch       bool   // scratch-* session
+	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
+	createName      string // zoxide suggestion: derived session name
+	isRemoteRow     bool   // belongs to the Remote section (set even when unselectable)
+	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
+	remoteSess      string // remote bridge row: optional remote session name
+	displayEnd      string // remote session row: display with the closing tree glyph
+	plainEnd        string // remote session row: plain with the closing tree glyph
+	remoteRestore   bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	remoteNeedsAuth bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs lztmux-remote-auth
+	remoteInert     bool   // remote host row: host key changed — Enter must refuse to act, never offer to connect
 }
 
 // pickerMode selects which renderer draws the body. One model, three
@@ -153,6 +155,14 @@ type zoxideMsg struct {
 
 type remoteMsg struct {
 	items []listItem
+}
+
+// remoteAuthDoneMsg lands when the interactive ssh handshake has exited and the
+// popup's pty is back under bubbletea's control. err is ExecProcess's own
+// error, not the script's exit status; remoteAuthStartFailure decides which
+// kind is worth showing.
+type remoteAuthDoneMsg struct {
+	err error
 }
 
 type previewMsg struct {
@@ -368,6 +378,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.snapWallTo(keep)
 		}
 		return m, nil
+
+	case remoteAuthDoneMsg:
+		if execErrorMessage, ok := remoteAuthStartFailure(msg.err); ok {
+			m.statusMsg = execErrorMessage
+		}
+		return m, m.remoteCmd()
 
 	case previewMsg:
 		if msg.target == m.currentTarget() {
@@ -1165,6 +1181,21 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if item.remoteHost != "" {
+		// A changed host key is a MITM signature as much as a reinstall, and
+		// only a human comparing fingerprints out of band can clear it. Acting
+		// here — even just offering to connect — would train that check away.
+		if item.remoteInert {
+			m.statusMsg = "host key changed for " + item.remoteHost + " — verify the fingerprint, then update known_hosts by hand"
+			return m, nil
+		}
+		// ssh needs a terminal to ask its question and the picker is holding the
+		// only one. ExecProcess releases the popup's pty for the duration, so
+		// ssh prompts for itself and the secret never passes through this
+		// process.
+		if item.remoteNeedsAuth {
+			cmd := exec.Command("lztmux-remote-auth", item.remoteHost)
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return remoteAuthDoneMsg{err: err} })
+		}
 		if err := openRemoteBridge(item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
 			m.statusMsg = err.Error()
 			return m, nil
@@ -1555,12 +1586,28 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 	}
 	if item.remoteHost != "" {
 		host, sess := item.remoteHost, item.remoteSess
+		inert, needsAuth := item.remoteInert, item.remoteNeedsAuth
 		return func() tea.Msg {
-			msg := "remote bridge → " + host
-			if sess != "" {
-				msg += "/" + sess
+			var msg string
+			switch {
+			case inert:
+				msg = "remote bridge → " + host +
+					"\n\nThe host key changed since it was last accepted. That is what a" +
+					"\nreinstalled host looks like — and also what an interception looks" +
+					"\nlike. Compare the fingerprint out of band, then fix known_hosts by" +
+					"\nhand. Enter does nothing here."
+			case needsAuth:
+				msg = "remote bridge → " + host +
+					"\n\nEnter runs lztmux-remote-auth: ssh takes this popup and asks for" +
+					"\nitself. It opens one shared connection, so the bridge and every" +
+					"\nlater probe reuse it without asking again."
+			default:
+				msg = "remote bridge → " + host
+				if sess != "" {
+					msg += "/" + sess
+				}
+				msg += "\n\nEnter runs lztmux-remote-open (outbound ssh)."
 			}
-			msg += "\n\nEnter runs lztmux-remote-open (outbound ssh)."
 			return previewMsg{content: msg, target: t, scrollTop: true}
 		}
 	}
