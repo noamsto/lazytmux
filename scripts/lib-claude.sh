@@ -20,6 +20,7 @@ CLAUDE_ICON_IDLE="󰒲"
 CLAUDE_ICON_ERROR="󰅚"       # nerd: nf-md-close_circle_outline
 CLAUDE_ICON_DENIED="󰔟"      # same clock as waiting, different color
 CLAUDE_ICON_INTERRUPTED="󰜺" # nerd: nf-md-cancel — user-interrupted (Esc) turn
+CLAUDE_ICON_BG="󰅐"          # nerd: nf-md-timer_sand — background shells still running
 
 # Timestamp cache (set once per script invocation). The env override is a test
 # seam, same shape as CLAUDE_ASSUME_DEAD_AFTER below: tmux-update-icons throttles
@@ -201,7 +202,8 @@ claude_agent_gone() {
 # Reads a pane state file and computes its staleness fade.
 # Sets REPLY to the state string, REPLY_FADE to 0..100 (0 = fresh/full color,
 # 100 = fully dim), REPLY_UNSEEN to 0 or 1, REPLY_TS to the pane's last-write
-# epoch (the "last active" time; empty when the file carries no timestamp).
+# epoch (the "last active" time; empty when the file carries no timestamp), and
+# REPLY_BG to the scraper's count of still-running background shells.
 # Unseen means the agent reached a terminal state while the user was in another
 # window. It pins the fade to 0 — the icon stays bright until the user focuses
 # that window.
@@ -233,15 +235,22 @@ read_pane_state() {
 	fi
 
 	local screen_file="$CLAUDE_SCREEN_DIR/${pane_file##*/}"
-	local screen_state="" screen_timestamp=""
+	local screen_state="" screen_timestamp="" screen_bg=""
 	if [[ -f $screen_file ]]; then
 		while IFS='=' read -r key val; do
 			case "$key" in
 			state) screen_state="$val" ;;
 			timestamp) screen_timestamp="$val" ;;
+			bg) screen_bg="$val" ;;
 			esac
 		done <"$screen_file"
 	fi
+
+	# The badge is orthogonal to the state, so it is taken from the screen file
+	# whichever source goes on to win the state below: a hook-fresh `processing`
+	# pane can still be holding background shells, and only the scraper sees them.
+	REPLY_BG=0
+	[[ $screen_bg =~ ^[0-9]+$ ]] && REPLY_BG="$screen_bg"
 
 	if [[ -n $state ]]; then
 		# max_age gates the screen-override only. The scraper distinguishes an
@@ -480,6 +489,21 @@ claude_colored_icon() {
 	}
 	claude_faded_hex "$1" "${2:-0}" "${3:-0}"
 	REPLY="#[fg=${REPLY}]${icon}${C_R} "
+}
+
+# claude_bg_badge COUNT
+# Returns the tmux-colored background-shell badge, or empty for a zero count.
+# Additive to the state icon rather than part of it — a pane can hold background
+# shells in any state, so this never enters claude_priority_state (same shape as
+# the draft marker on a PR badge). Never faded: an old background shell is more
+# interesting than a fresh one, not less.
+# Must call setup_claude_colors first.
+claude_bg_badge() {
+	if (($1 > 0)); then
+		REPLY="#[fg=${H_K}]${CLAUDE_ICON_BG}${1}${C_R} "
+	else
+		REPLY=""
+	fi
 }
 
 # claude_priority_state WAITING COMPACTING PROCESSING DONE IDLE ERROR DENIED INTERRUPTED

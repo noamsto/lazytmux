@@ -28,10 +28,25 @@ type Rule struct {
 	Not      []Predicate `toml:"not"`
 }
 
+// Flag is an orthogonal, counted observation about a pane — a background
+// shell still running, say — as opposed to Rule's single winning state. Its
+// Regex must hold one capture group holding a decimal count; a flag whose
+// count is zero or absent is simply not reported.
+//
+// Kept separate from Rule because the two answer different questions: rules
+// compete (first match wins) while flags accumulate, and a pane can carry a
+// flag in any state.
+type Flag struct {
+	Name   string `toml:"name"`
+	Region string `toml:"region"`
+	Regex  string `toml:"regex"`
+}
+
 type Manifest struct {
 	ID            string   `toml:"id"`
 	MatchCommands []string `toml:"match_commands"`
 	Rules         []Rule   `toml:"rules"`
+	Flags         []Flag   `toml:"flags"`
 }
 
 var wrappedRe = regexp.MustCompile(`^\.(.*)-wrapped$`)

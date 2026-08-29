@@ -99,14 +99,14 @@ func TestSeedMatchesIdleCodex(t *testing.T) {
 
 	scr := screen.New(100, 30)
 	scr.Feed(seedBytes(content))
-	got, ok := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
+	got, _, ok := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
 	if !ok || got != "idle" {
 		t.Fatalf("seedBytes feed Match = (%q,%v), want (idle,true)", got, ok)
 	}
 
 	raw := screen.New(100, 30)
 	raw.Feed(content)
-	got, ok = manifest.Match(m, raw.Text(), raw.Title(), raw.AltScreen())
+	got, _, ok = manifest.Match(m, raw.Text(), raw.Title(), raw.AltScreen())
 	if ok && got == "idle" {
 		t.Fatal("raw unconverted feed unexpectedly matched idle — seedBytes should be load-bearing")
 	}

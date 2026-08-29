@@ -3,6 +3,7 @@ package statefile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,7 +13,7 @@ func TestWritesOnChangeOnly(t *testing.T) {
 	w := New(dir, "3")
 	now := time.Unix(1000, 0)
 
-	changed, err := w.Update("processing", now)
+	changed, err := w.Update("processing", nil, now)
 	if err != nil || !changed {
 		t.Fatalf("first update: changed=%v err=%v", changed, err)
 	}
@@ -21,12 +22,12 @@ func TestWritesOnChangeOnly(t *testing.T) {
 		t.Fatalf("file = %q", b)
 	}
 
-	changed, _ = w.Update("processing", now.Add(time.Second))
+	changed, _ = w.Update("processing", nil, now.Add(time.Second))
 	if changed {
 		t.Fatal("same state should not rewrite")
 	}
 
-	changed, _ = w.Update("idle", now.Add(2*time.Second))
+	changed, _ = w.Update("idle", nil, now.Add(2*time.Second))
 	if !changed {
 		t.Fatal("state change should rewrite")
 	}
@@ -37,11 +38,11 @@ func TestEmptyStateClearsFile(t *testing.T) {
 	w := New(dir, "3")
 	now := time.Unix(1000, 0)
 
-	if changed, err := w.Update("processing", now); err != nil || !changed {
+	if changed, err := w.Update("processing", nil, now); err != nil || !changed {
 		t.Fatalf("seed write: changed=%v err=%v", changed, err)
 	}
 
-	changed, err := w.Update("", now.Add(time.Second))
+	changed, err := w.Update("", nil, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("empty-state update: %v", err)
 	}
@@ -58,17 +59,17 @@ func TestUpdateAfterClearRewritesSameState(t *testing.T) {
 	w := New(dir, "3")
 	now := time.Unix(1000, 0)
 
-	if _, err := w.Update("processing", now); err != nil {
+	if _, err := w.Update("processing", nil, now); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	if _, err := w.Update("", now.Add(time.Second)); err != nil {
+	if _, err := w.Update("", nil, now.Add(time.Second)); err != nil {
 		t.Fatalf("clear via empty state: %v", err)
 	}
 
 	// Same state as before the clear must still write — if Clear left
 	// w.last set, this would look like a no-op change and the file would
 	// stay missing.
-	changed, err := w.Update("processing", now.Add(2*time.Second))
+	changed, err := w.Update("processing", nil, now.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("post-clear update: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestClearWithNoFileIsNoop(t *testing.T) {
 	if changed, err := w.Clear(); err != nil || changed {
 		t.Fatalf("second clear: changed=%v err=%v", changed, err)
 	}
-	if changed, err := w.Update("", time.Unix(1, 0)); err != nil || changed {
+	if changed, err := w.Update("", nil, time.Unix(1, 0)); err != nil || changed {
 		t.Fatalf("empty update on a never-written writer: changed=%v err=%v", changed, err)
 	}
 }
@@ -129,5 +130,33 @@ func TestClearRemovesFileWrittenByAnotherWriter(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("file left by another Writer instance should be removed")
+	}
+}
+
+// A background shell starting or finishing moves no state, so deduping on the
+// state alone would pin the first count forever.
+func TestUpdateWritesOnFlagChangeAlone(t *testing.T) {
+	dir := t.TempDir()
+	w := New(dir, "%1")
+	now := time.Unix(1000, 0)
+
+	if changed, err := w.Update("idle", map[string]int{"bg": 1}, now); err != nil || !changed {
+		t.Fatalf("first Update = (%v,%v), want (true,nil)", changed, err)
+	}
+	if changed, err := w.Update("idle", map[string]int{"bg": 2}, now.Add(time.Second)); err != nil || !changed {
+		t.Fatalf("count change should rewrite, got (%v,%v)", changed, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "%1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "bg=2\n") {
+		t.Fatalf("file = %q, want bg=2", data)
+	}
+	if changed, _ := w.Update("idle", map[string]int{"bg": 2}, now.Add(2*time.Second)); changed {
+		t.Fatal("identical state+flags should not rewrite")
+	}
+	if changed, _ := w.Update("idle", nil, now.Add(3*time.Second)); !changed {
+		t.Fatal("dropping the last flag should rewrite")
 	}
 }

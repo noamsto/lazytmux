@@ -9,14 +9,14 @@ import (
 
 // replayMatch feeds raw capture-pane bytes through the VT emulator (same path as
 // agent-detect's pipe-pane watcher) and returns Match's verdict.
-func replayMatch(t *testing.T, capture []byte, cols, rows int, cmd string) (string, bool) {
+func replayMatch(t *testing.T, capture []byte, cols, rows int, cmd string) (string, map[string]int, bool) {
 	t.Helper()
 	scr := screen.New(cols, rows)
 	scr.Feed(capture)
 	return matchScreen(t, scr, cmd)
 }
 
-func matchScreen(t *testing.T, scr screen.Screen, cmd string) (string, bool) {
+func matchScreen(t *testing.T, scr screen.Screen, cmd string) (string, map[string]int, bool) {
 	t.Helper()
 	ms, err := Load()
 	if err != nil {
@@ -42,12 +42,12 @@ func TestCursorCaptureReplay(t *testing.T) {
 	// Pane geometry from the live captures (100×30 tmux pane).
 	const cols, rows = 100, 30
 
-	got, ok := replayMatch(t, working, cols, rows, "cursor-agent")
+	got, _, ok := replayMatch(t, working, cols, rows, "cursor-agent")
 	if !ok || got != "processing" {
 		t.Fatalf("working capture replay = (%q,%v), want (processing,true)", got, ok)
 	}
 
-	got, ok = replayMatch(t, idle, cols, rows, "cursor-agent")
+	got, _, ok = replayMatch(t, idle, cols, rows, "cursor-agent")
 	if !ok || got != "idle" {
 		t.Fatalf("idle capture replay = (%q,%v), want (idle,true)", got, ok)
 	}
@@ -68,13 +68,13 @@ func TestCodexCaptureReplay(t *testing.T) {
 
 	scr := screen.New(cols, rows)
 	scr.Feed(working)
-	got, ok := matchScreen(t, scr, "codex")
+	got, _, ok := matchScreen(t, scr, "codex")
 	if !ok || got != "processing" {
 		t.Fatalf("working capture replay = (%q,%v), want (processing,true)", got, ok)
 	}
 
 	scr.Feed(idle)
-	got, ok = matchScreen(t, scr, "codex")
+	got, _, ok = matchScreen(t, scr, "codex")
 	if !ok || got != "idle" {
 		t.Fatalf("idle capture replay = (%q,%v), want (idle,true)", got, ok)
 	}

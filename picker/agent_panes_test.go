@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -144,5 +145,50 @@ func TestCollectAgentPanesOverrideRefreshesSessionFromPaneMap(t *testing.T) {
 	if panes[0].session != "live-sess" || panes[0].winIdx != 2 {
 		t.Errorf("collectAgentPanesFrom() session/winIdx = %q/%d, want live-sess/2 (from the pane map, not the stale hook)",
 			panes[0].session, panes[0].winIdx)
+	}
+}
+
+// A fresh hook state wins the state but carries no background-shell count —
+// only the scraper sees those — so the badge must come off the screen file
+// even when the hook governs, and must survive the pane falling back to idle.
+func TestCollectAgentPanesTakesBGFromScreenUnderFreshHook(t *testing.T) {
+	root := t.TempDir()
+	hookDir := filepath.Join(root, "panes")
+	screenDir := filepath.Join(root, "screen")
+	issuesDir := filepath.Join(root, "issues")
+
+	writePaneStateFile(t, hookDir, "1", "waiting", 1000, "session=claude-sess\n")
+	writePaneStateFile(t, screenDir, "1", "idle", 1000, "bg=3\n")
+
+	paneMap := map[string]paneMapping{"1": {session: "claude-sess", winIdx: 0}}
+	panes := collectAgentPanesFrom(hookDir, screenDir, issuesDir, paneMap, 1000)
+
+	if len(panes) != 1 {
+		t.Fatalf("got %d panes, want 1: %+v", len(panes), panes)
+	}
+	if panes[0].state != "waiting" {
+		t.Errorf("state = %q, want waiting (fresh hook governs)", panes[0].state)
+	}
+	if panes[0].bg != 3 {
+		t.Errorf("bg = %d, want 3 (from the screen file)", panes[0].bg)
+	}
+}
+
+func TestAppendAgentIconBadgeIsAdditive(t *testing.T) {
+	plain, plainDW := appendAgentIcon("", 0, agentCounts{idle: 1}, "dark", "", "")
+	withBG, bgDW := appendAgentIcon("", 0, agentCounts{idle: 1, bg: 2}, "dark", "", "")
+
+	if !strings.HasPrefix(withBG, plain) {
+		t.Fatalf("badge should append to the state icon: %q vs %q", withBG, plain)
+	}
+	if !strings.Contains(withBG, claudeIconBG+"2") {
+		t.Errorf("badge missing its count: %q", withBG)
+	}
+	if bgDW != plainDW+3 {
+		t.Errorf("display width = %d, want %d (icon + 1 digit + space)", bgDW, plainDW+3)
+	}
+	// The state itself must be untouched — priority never sees bg.
+	if got := agentPriority(agentCounts{idle: 1, bg: 2}); got != "idle" {
+		t.Errorf("agentPriority = %q, want idle", got)
 	}
 }

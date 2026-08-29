@@ -85,6 +85,7 @@ type windowData struct {
 
 type agentCounts struct {
 	waiting, compacting, processing, done, idle, errorCnt, denied int
+	bg                                                            int // summed background shells, orthogonal to the state counts
 	allStale                                                      bool
 	anyUnseen                                                     bool
 	issues                                                        []string // union of self-reported issue ids
@@ -98,6 +99,7 @@ type agentPaneInfo struct {
 	ts      int64
 	stale   bool
 	unseen  bool
+	bg      int
 	issues  []string
 }
 
@@ -535,6 +537,7 @@ type hookPaneState struct {
 type screenPaneState struct {
 	state     string
 	timestamp int64
+	bg        int
 }
 
 func readHookPaneStates(dir string) map[string]hookPaneState {
@@ -596,6 +599,8 @@ func readScreenPaneStates(dir string) map[string]screenPaneState {
 					sp.state = v
 				case "timestamp":
 					sp.timestamp, _ = strconv.ParseInt(v, 10, 64)
+				case "bg":
+					sp.bg, _ = strconv.Atoi(v)
 				}
 			}
 		}
@@ -666,6 +671,11 @@ func collectAgentPanesFrom(hookDir, screenDir, issuesDir string, paneMap map[str
 
 		pm, hasPane := paneMap[id]
 
+		// Orthogonal to the state, so it is taken from the screen file whichever
+		// source wins below — only the scraper ever sees background shells, and
+		// they outlive the turn that started them.
+		bg := screen.bg
+
 		if hasHook {
 			state, timestamp, session, unseen = hook.state, hook.timestamp, hook.session, hook.unseen
 			if maxAge := screenOverrideMaxAge(state); maxAge > 0 && now-timestamp > maxAge && hasScreen {
@@ -697,6 +707,7 @@ func collectAgentPanesFrom(hookDir, screenDir, issuesDir string, paneMap map[str
 			session: session,
 			winIdx:  winIdx,
 			state:   state,
+			bg:      bg,
 			ts:      timestamp,
 			stale:   isStale(state, now, timestamp),
 			unseen:  unseen,
@@ -764,6 +775,7 @@ func aggregateAgentBySession(panes []agentPaneInfo) map[string]*agentCounts {
 		if p.unseen {
 			cc.anyUnseen = true
 		}
+		cc.bg += p.bg
 		addAgentState(cc, p.state)
 		addIssues(cc, p.issues)
 	}
@@ -788,6 +800,7 @@ func aggregateAgentByWindow(panes []agentPaneInfo) map[string]*agentCounts {
 		if p.unseen {
 			cc.anyUnseen = true
 		}
+		cc.bg += p.bg
 		addAgentState(cc, p.state)
 		addIssues(cc, p.issues)
 	}
@@ -959,6 +972,19 @@ func appendAgentIcon(icons string, dw int, cc agentCounts, theme, dim, reset str
 	}
 	icons += color + icon + reset + " "
 	dw += 2
+
+	// Additive, never part of agentPriority: background shells outlive the turn
+	// that started them, so a pane can hold them in any state. Not dimmed with
+	// the rest — an old background shell is more interesting, not less.
+	if cc.bg > 0 {
+		count := strconv.Itoa(cc.bg)
+		var bgColor string
+		if hex, ok := claudeColors[theme]["compacting"]; ok {
+			bgColor = ansiFg(hex)
+		}
+		icons += bgColor + claudeIconBG + count + reset + " "
+		dw += 2 + len(count)
+	}
 	return icons, dw
 }
 
