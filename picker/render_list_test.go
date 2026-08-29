@@ -42,3 +42,28 @@ func TestRenderHintsNonEmitMode(t *testing.T) {
 		t.Errorf("hints = %q, want ^x:kill outside emit mode", hints)
 	}
 }
+
+func TestWithHostBadge(t *testing.T) {
+	m := tuiModel{width: 40, emitHost: "tp-g6"}
+	row := stripANSI(m.withHostBadge("  q"))
+	if !strings.HasSuffix(row, "tp-g6 ") {
+		t.Errorf("row = %q, want the host badge right-aligned", row)
+	}
+	if got := visibleWidth(row); got != 40 {
+		t.Errorf("visibleWidth = %d, want 40", got)
+	}
+}
+
+func TestWithHostBadgeDroppedWhenNarrow(t *testing.T) {
+	m := tuiModel{width: 8, emitHost: "tp-g6"}
+	if got := m.withHostBadge("  query"); got != "  query" {
+		t.Errorf("row = %q, want the badge dropped rather than overflowing", got)
+	}
+}
+
+func TestWithHostBadgeAbsentLocally(t *testing.T) {
+	m := tuiModel{width: 40}
+	if got := m.withHostBadge("  q"); got != "  q" {
+		t.Errorf("row = %q, want no badge without an emit host", got)
+	}
+}

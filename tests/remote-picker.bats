@@ -92,6 +92,7 @@ tmpdir=/run/user/1000"
 		printf '\n' >>"$PICKER_LOG"
 		printf 'emit: [%s]\n' "${LZTMUX_PICKER_EMIT-}" >>"$PICKER_LOG"
 		printf 'tmux_tmpdir: [%s]\n' "${TMUX_TMPDIR-}" >>"$PICKER_LOG"
+		printf 'host: [%s]\n' "${LZTMUX_PICKER_HOST-}" >>"$PICKER_LOG"
 		exit 0
 	EOF
 
@@ -312,6 +313,19 @@ tmpdir=/run/user/1000"
 	[ -f "$emit" ]
 	[ ! -s "$emit" ]
 	[ "$(file_mode "$emit")" = 600 ]
+	# No label passed, so the header shows no badge rather than a stale one.
+	grep -qF 'host: []' "$PICKER_LOG"
+}
+
+@test "--serve forwards a host label, and drops one that is not host-shaped" {
+	run bash "$SCRIPT" --serve deadbeef01 tp-g6 </dev/null
+	[ "$status" -eq 0 ]
+	grep -qF 'host: [tp-g6]' "$PICKER_LOG"
+
+	: >"$PICKER_LOG"
+	run bash "$SCRIPT" --serve deadbeef02 'tp-g6; rm -rf /' </dev/null
+	[ "$status" -eq 0 ]
+	grep -qF 'host: []' "$PICKER_LOG"
 }
 
 # --- Step 12: the local role's three legs -----------------------------------
@@ -329,9 +343,11 @@ name=work"
 	# Leg 2: -t, bare argv (no `var=value` prefix fish would not parse), and the
 	# script path the probe reported — never a locally guessed one.
 	local token
-	token="$(sed -n 's/.*--serve //p' "$SSH_LOG")"
+	token="$(sed -n 's/.*--serve \([A-Za-z0-9]*\).*/\1/p' "$SSH_LOG")"
 	[[ $token =~ ^[A-Za-z0-9]+$ ]]
-	grep -qF -- "-t tp-g6 -- /nix/store/fake/bin/lztmux-remote-picker --serve $token" "$SSH_LOG"
+	# The host trails the token: the remote cannot derive the name we reached it
+	# by, and the header badge names it.
+	grep -qF -- "-t tp-g6 -- /nix/store/fake/bin/lztmux-remote-picker --serve $token tp-g6" "$SSH_LOG"
 
 	# Leg 3 reads the probe's emit_dir joined with that same token.
 	grep -qF -- "-T tp-g6 bash -s -- '/run/user/1000/lztmux-pick/$token'" "$SSH_LOG"

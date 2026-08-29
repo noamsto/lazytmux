@@ -745,8 +745,9 @@
     # Line numbers in copy mode (tmux 3.7+). Configurable — matter of taste.
     set -g copy-mode-line-numbers ${copyModeLineNumbers}
 
-    # Clear screen
-    bind -n M-l send-keys 'C-l'
+    # Clear screen — except on a @pane_keys_raw pane, where M-l is the TUI's
+    # own scroll key.
+    bind -n M-l if-shell -F '#{@pane_keys_raw}' "send-keys M-l" "send-keys C-l"
 
     # Shift+Enter: process-aware newline for Claude Code / Amp / OpenCode
     bind -n S-Enter if-shell "ps -o comm= -t #{q:pane_tty} | grep -qE '^(amp|bun|opencode)$'" "send-keys \\\\ Enter" "send-keys M-Enter"
@@ -897,11 +898,13 @@
     # if-shell shell argument and #{pane_tty} is expanded before sh -c — quoted
     # like every other such site. The conf-shell-quoting guard cannot see this one:
     # it scans the emitted text, where the binds below read only "$is_vim".
+    # The trailing @pane_keys_raw arg makes smart-nav send the key on instead
+    # of navigating — see tmux-smart-nav for which panes set it and why.
     is_vim="ps -o state= -o comm= -t #{q:pane_tty} | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf)(diff)?$'"
-    bind-key -n C-h if-shell "$is_vim" "send-keys C-h" "run-shell 'tmux-smart-nav L left #{q:window_zoomed_flag} #{q:pane_at_left}'"
-    bind-key -n C-j if-shell "$is_vim" "send-keys C-j" "run-shell 'tmux-smart-nav D down #{q:window_zoomed_flag} #{q:pane_at_bottom}'"
-    bind-key -n C-k if-shell "$is_vim" "send-keys C-k" "run-shell 'tmux-smart-nav U up #{q:window_zoomed_flag} #{q:pane_at_top}'"
-    bind-key -n C-l if-shell "$is_vim" "send-keys C-l" "run-shell 'tmux-smart-nav R right #{q:window_zoomed_flag} #{q:pane_at_right}'"
+    bind-key -n C-h if-shell "$is_vim" "send-keys C-h" "run-shell 'tmux-smart-nav L left #{q:window_zoomed_flag} #{q:pane_at_left} #{q:@pane_keys_raw}'"
+    bind-key -n C-j if-shell "$is_vim" "send-keys C-j" "run-shell 'tmux-smart-nav D down #{q:window_zoomed_flag} #{q:pane_at_bottom} #{q:@pane_keys_raw}'"
+    bind-key -n C-k if-shell "$is_vim" "send-keys C-k" "run-shell 'tmux-smart-nav U up #{q:window_zoomed_flag} #{q:pane_at_top} #{q:@pane_keys_raw}'"
+    bind-key -n C-l if-shell "$is_vim" "send-keys C-l" "run-shell 'tmux-smart-nav R right #{q:window_zoomed_flag} #{q:pane_at_right} #{q:@pane_keys_raw}'"
 
     # Window titles
     set-option -g set-titles on
