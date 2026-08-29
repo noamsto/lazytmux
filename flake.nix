@@ -20,7 +20,7 @@
     # landed as tmux/tmux#5398, the other was rejected upstream.
     # Bump: repoint rev, then `nix flake lock --update-input tmux-upstream`.
     tmux-upstream = {
-      url = "github:tmux/tmux/851c5a933d4838c32ad06c248b2ba975d106149c";
+      url = "github:tmux/tmux/40381bdcd91dac4deb177e1ed1a5794969d97d39";
       flake = false;
     };
     flake-parts.url = "github:hercules-ci/flake-parts";

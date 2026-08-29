@@ -595,8 +595,9 @@
   # floating cells), so a float outlives the client size it was made for —
   # @float_geom carries the percentages forward for tmux-float-refit to reassert
   # on window-resized. Both come from one source here so they cannot drift.
+  # -A keeps a float visible above a zoomed pane.
   mkFloat = w: h: x: y: {
-    flags = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy";
+    flags = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy -A";
     stamp = "set -p @float_geom '${w} ${h} ${x} ${y}'";
   };
   floatFull = mkFloat "90%" "90%" "5%" "5%";
