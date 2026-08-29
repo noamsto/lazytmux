@@ -174,8 +174,8 @@ func feedSafe(scr screen.Screen, data []byte) (ok bool) {
 }
 
 func emit(scr screen.Screen, m manifest.Manifest, w *statefile.Writer) {
-	state, _ := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
-	_, _ = w.Update(state, time.Now())
+	state, flags, _ := manifest.Match(m, scr.Text(), scr.Title(), scr.AltScreen())
+	_, _ = w.Update(state, flags, time.Now())
 }
 
 // emitIfOwner skips emit() once superseded by a re-arm — the new watcher

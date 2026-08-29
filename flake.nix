@@ -662,6 +662,16 @@
               touch $out
             '';
 
+          agent-bg-badge-tests =
+            pkgs.runCommand "agent-bg-badge-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-bg-badge.bats
+              touch $out
+            '';
+
           agent-detect-enum-tests =
             pkgs.runCommand "agent-detect-enum-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

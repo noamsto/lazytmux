@@ -34,3 +34,13 @@ priority = 10
 region = "last_lines:6"
 regex = '❯'
 not = [ { contains = ["do you want to proceed?"] } ]
+
+# Background shells outlive the turn that started them, so this is a flag, not
+# a state: the pane may be idle, processing, or waiting while it holds one.
+# Anchored on the footer's `·` separator and confined to the last lines — the
+# transcript is full of "Ran 9 shell commands", and old "1 shell still running"
+# lines stay in the scrollback long after that shell exited.
+[[flags]]
+name = "bg"
+region = "last_lines:3"
+regex = '·\s*(\d+)\s+shells?\b'

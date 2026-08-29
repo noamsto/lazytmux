@@ -142,6 +142,7 @@ var claudeIconDone = "󰸞"
 var claudeIconIdle = "󰒲"
 var claudeIconError = "󰅚"
 var claudeIconDenied = "󰔟" // same clock as waiting, different color
+var claudeIconBG = "󰅐" // nf-md-timer_sand — background shells still running
 
 // Default UI icons — overridden at runtime by env vars or tmux options.
 var iconSession = ""

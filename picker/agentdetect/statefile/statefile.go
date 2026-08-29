@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -13,29 +15,57 @@ type Writer struct {
 
 func New(dir, paneID string) *Writer { return &Writer{dir: dir, paneID: paneID} }
 
-// Update records a newly observed agent state. An empty state is manifest
-// matching's positive verdict that no rule matched the current screen, i.e.
-// the agent is gone — not "nothing to report" — so it delegates to Clear.
-func (w *Writer) Update(state string, now time.Time) (bool, error) {
+// Update records a newly observed agent state and its counted flags. An empty
+// state is manifest matching's positive verdict that no rule matched the
+// current screen, i.e. the agent is gone — not "nothing to report" — so it
+// delegates to Clear.
+//
+// The write is skipped only when state *and* flags are both unchanged: a
+// background shell finishing moves no state, and a pane that kept reporting
+// the stale count would never lose the badge.
+func (w *Writer) Update(state string, flags map[string]int, now time.Time) (bool, error) {
 	if state == "" {
 		return w.Clear()
 	}
-	if state == w.last {
+	key := stateKey(state, flags)
+	if key == w.last {
 		return false, nil
 	}
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return false, err
 	}
 	tmp := w.path() + ".tmp"
-	content := fmt.Sprintf("state=%s\ntimestamp=%d\n", state, now.Unix())
+	content := fmt.Sprintf("state=%s\ntimestamp=%d\n%s", state, now.Unix(), flagLines(flags))
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return false, err
 	}
 	if err := os.Rename(tmp, w.path()); err != nil {
 		return false, err
 	}
-	w.last = state
+	w.last = key
 	return true, nil
+}
+
+// flagLines renders flags as sorted key=value lines, so an unchanged set
+// always produces byte-identical content and stateKey stays a valid identity.
+func flagLines(flags map[string]int) string {
+	if len(flags) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(flags))
+	for n := range flags {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&b, "%s=%d\n", n, flags[n])
+	}
+	return b.String()
+}
+
+func stateKey(state string, flags map[string]int) string {
+	return state + "\x00" + flagLines(flags)
 }
 
 // Clear removes the state file and forgets the last written state, so a

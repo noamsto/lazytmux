@@ -24,7 +24,7 @@ source @lib_claude@
 
 # --- Counting ---
 
-count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 count_interrupted=0 total=0
+count_processing=0 count_waiting=0 count_compacting=0 count_done=0 count_idle=0 count_error=0 count_denied=0 count_interrupted=0 count_bg=0 total=0
 min_fade=100 # freshest pane wins: 0 = fresh/full color, 100 = fully dim
 any_unseen=0 # set if any pane has unseen=1
 
@@ -57,6 +57,7 @@ tally_state() {
 	esac
 	((REPLY_FADE < min_fade)) && min_fade=$REPLY_FADE
 	[[ $REPLY_UNSEEN == 1 ]] && any_unseen=1 || true
+	((count_bg += REPLY_BG)) || true
 }
 
 count_for_window() {
@@ -105,11 +106,13 @@ format_output() {
 		setup_claude_colors
 		claude_colored_icon "$state" "$fade" "$unseen"
 		local icon_out="$REPLY" issue_out=""
+		claude_bg_badge "$count_bg"
+		local bg_out="$REPLY"
 		if ((${#issue_ids[@]} > 0)); then
 			format_issue_list 3 "${issue_ids[@]}"
 			issue_out="${C_I}${REPLY}${C_R} "
 		fi
-		echo "${prefix}${icon_out}${issue_out}"
+		echo "${prefix}${icon_out}${bg_out}${issue_out}"
 		;;
 	short)
 		claude_state_icon "$state"

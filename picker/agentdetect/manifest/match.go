@@ -5,20 +5,48 @@ import (
 	"strings"
 )
 
-func Match(m Manifest, screenText, title string, altScreen bool) (string, bool) {
+// Match resolves a pane's screen into its winning state plus any counted
+// flags. Flags are evaluated independently of the state — a background shell
+// outlives the turn that started it, so it must survive the pane falling back
+// to idle — and are dropped wholesale when no rule matches, since a pane with
+// no agent has nothing to count.
+func Match(m Manifest, screenText, title string, altScreen bool) (string, map[string]int, bool) {
 	if altScreen {
-		return "", false
+		return "", nil, false
 	}
 	for _, r := range m.Rules {
 		region := regionText(r.Region, screenText, title)
 		if ruleMatches(r, region) {
 			if r.State == "skip" {
-				return "", false
+				return "", nil, false
 			}
-			return r.State, true
+			return r.State, matchFlags(m, screenText, title), true
 		}
 	}
-	return "", false
+	return "", nil, false
+}
+
+func matchFlags(m Manifest, screenText, title string) map[string]int {
+	var out map[string]int
+	for _, f := range m.Flags {
+		re, err := regexp.Compile("(?i)" + f.Regex)
+		if err != nil {
+			continue
+		}
+		sub := re.FindStringSubmatch(regionText(f.Region, screenText, title))
+		if len(sub) < 2 {
+			continue
+		}
+		n := atoiDefault(sub[1], 0)
+		if n <= 0 {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]int, len(m.Flags))
+		}
+		out[f.Name] = n
+	}
+	return out
 }
 
 func regionText(sel, screenText, title string) string {

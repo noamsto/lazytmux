@@ -47,9 +47,46 @@ func TestFixtures(t *testing.T) {
 				t.Fatalf("no manifest for %s", c.cmd)
 			}
 			title, screen := loadFixture(t, c.file)
-			got, _ := Match(m, screen, title, false)
+			got, _, _ := Match(m, screen, title, false)
 			if got != c.want {
 				t.Fatalf("Match(%s) = %q, want %q", c.file, got, c.want)
+			}
+		})
+	}
+}
+
+// Flags are orthogonal to state, so they get their own table: the same fixture
+// must report both an ordinary state and its counts, and fixtures with no flag
+// must report none — a badge that lit on every pane would be worse than absent.
+func TestFixtureFlags(t *testing.T) {
+	ms, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		file, cmd, wantState string
+		wantBG               int
+	}{
+		{"claude_bg_shell.txt", "claude", "idle", 1},
+		// "Ran 9 shell commands" in the transcript, and Cursor's "1 task"
+		// counting a foreground tool call, must both stay unflagged.
+		{"claude_idle.txt", "claude", "idle", 0},
+		{"claude_working.txt", "claude", "processing", 0},
+		{"cursor_working.txt", "cursor-agent", "processing", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.file, func(t *testing.T) {
+			m, ok := ForCommand(ms, c.cmd)
+			if !ok {
+				t.Fatalf("no manifest for %s", c.cmd)
+			}
+			title, screen := loadFixture(t, c.file)
+			got, flags, _ := Match(m, screen, title, false)
+			if got != c.wantState {
+				t.Fatalf("Match(%s) state = %q, want %q", c.file, got, c.wantState)
+			}
+			if flags["bg"] != c.wantBG {
+				t.Fatalf("Match(%s) bg = %d, want %d", c.file, flags["bg"], c.wantBG)
 			}
 		})
 	}

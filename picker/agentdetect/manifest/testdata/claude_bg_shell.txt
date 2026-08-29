@@ -1,0 +1,7 @@
+TITLE:✳ lazytmux
+  Ran 9 shell commands
+──────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────
+  🤖 Opus 5 🧠 med | 📊 80k/1M | ⚡ 50%
+  -- INSERT -- ⏵⏵ auto mode on · 1 shell · ← 3 agents
