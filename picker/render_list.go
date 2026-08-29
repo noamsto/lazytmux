@@ -115,6 +115,11 @@ func (m tuiModel) renderHints() string {
 	if hasItem && item.createPath != "" {
 		killLabel = "forget"
 	}
+	// ^x is unconfirmed here, so a row whose kill lands on another machine has
+	// to say so before it is pressed.
+	if hasItem && item.bridgePane != "" {
+		killLabel = "kill remote"
+	}
 
 	// ^/ goes back to the wall in a wall-launched popup, and toggles the preview
 	// in every other one — the label has to say which.

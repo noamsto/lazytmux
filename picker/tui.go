@@ -31,6 +31,8 @@ type listItem struct {
 	groupKey       string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
 	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
+	bridgePane      string // window row: @bridge_pane — the remote pane whose window this mirrors
+	bridgeSock      string // window row: @bridge_sock — ctl socket of the daemon mirroring it
 	hasActiveAgent  bool   // used for --agent filter
 	isScratch       bool   // scratch-* session
 	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
@@ -529,8 +531,19 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if item.target != "" && item.remoteHost == "" {
 			if strings.Contains(item.target, ":") {
-				logEvent("picker", "event", "kill_window", "target", item.target)
-				exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
+				// A local kill-window is wrong for a mirror: the daemon
+				// reconciles only toward the remote, so it would go on
+				// servicing a registry entry whose localWin is gone (#393).
+				if item.bridgePane != "" && item.bridgeSock != "" {
+					logEvent("picker", "event", "kill_bridge_window", "target", item.target, "pane", item.bridgePane)
+					if err := bridgeCtlKillWindow(m.tmuxOpts, item.bridgeSock, item.bridgePane); err != nil {
+						m.statusMsg = err.Error()
+						return m, nil
+					}
+				} else {
+					logEvent("picker", "event", "kill_window", "target", item.target)
+					exec.Command("tmux", "kill-window", "-t", item.target).Run() //nolint:errcheck
+				}
 			} else {
 				logEvent("picker", "event", "kill_session", "target", item.target)
 				// Must run before kill-session: it reads @bridge_sock off the
@@ -2226,6 +2239,8 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 				searchText:     search,
 				session:        w.session,
 				groupKey:       g.key,
+				bridgePane:     w.bridgePane,
+				bridgeSock:     w.bridgeSock,
 				hasActiveAgent: isActiveState(agentPriority(w.agent)),
 			})
 		}

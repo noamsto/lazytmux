@@ -1177,3 +1177,61 @@ func TestActivateHostKeyChangedRowRefuses(t *testing.T) {
 		t.Errorf("statusMsg = %q, want an explanation mentioning the host key", got)
 	}
 }
+
+func TestRenderWindowItemsCarriesBridgeCtlTarget(t *testing.T) {
+	// ^x on a mirror row routes to the daemon (#393); it can only do that if the
+	// row carries the pane + socket, and an empty pair silently falls back to a
+	// local kill-window — the exact bug the routing exists to fix.
+	windows := []windowData{
+		{session: "s", index: 1, name: "noams", bridgeName: "ZULU", bridgePane: "%7", bridgeSock: "/tmp/b.sock"},
+		{session: "s", index: 2, name: "local"},
+	}
+	items := renderWindowItems(windows, map[string]string{}, nil, "dark", 0, false)
+
+	var mirror, local listItem
+	for _, it := range items {
+		switch it.target {
+		case "s:1":
+			mirror = it
+		case "s:2":
+			local = it
+		}
+	}
+	if mirror.bridgePane != "%7" || mirror.bridgeSock != "/tmp/b.sock" {
+		t.Errorf("mirror row lost its ctl target: pane=%q sock=%q", mirror.bridgePane, mirror.bridgeSock)
+	}
+	if local.bridgePane != "" || local.bridgeSock != "" {
+		t.Errorf("local row must carry no ctl target: pane=%q sock=%q", local.bridgePane, local.bridgeSock)
+	}
+}
+
+func TestCtrlXOnMirrorRowRoutesToBridgeCtl(t *testing.T) {
+	// The stub's failure can only reach statusMsg down the bridge branch, so a
+	// local kill-window (the #393 bug) fails this.
+	stub := filepath.Join(t.TempDir(), "ctl")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >\"" + stub + ".argv\"\necho 'ctl says no' >&2\nexit 1\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIDGE_CTL_BIN", stub)
+
+	mirror := listItem{target: "s:1", session: "s", bridgePane: "%7", bridgeSock: "/tmp/b.sock"}
+	m := tuiModel{windowMode: true, width: 200, visible: []listItem{mirror}}
+
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
+	got, ok := next.(tuiModel)
+	if !ok {
+		t.Fatalf("Update returned %T", next)
+	}
+	if got.statusMsg != "ctl says no" {
+		t.Errorf("statusMsg = %q, want the ctl stub's stderr", got.statusMsg)
+	}
+
+	argv, err := os.ReadFile(stub + ".argv")
+	if err != nil {
+		t.Fatalf("ctl was never invoked: %v", err)
+	}
+	if want := "--sock=/tmp/b.sock kill-window %7"; strings.TrimSpace(string(argv)) != want {
+		t.Errorf("ctl argv = %q, want %q", strings.TrimSpace(string(argv)), want)
+	}
+}

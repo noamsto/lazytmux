@@ -363,6 +363,24 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 	return restorableFromProbeOutput(stdout.String())
 }
 
+// bridgeCtlKillWindow sends the ctl kill-window verb — the one prefix+& sends
+// from inside a mirror. The local mirror window goes when the daemon's
+// reconcile sees the remote lose it, never by a local kill.
+func bridgeCtlKillWindow(tmuxOpts map[string]string, sock, pane string) error {
+	// An option, not a PATH lookup — see @bridge_ctl_bin in the config.
+	bin := envOrMap("BRIDGE_CTL_BIN", tmuxOpts, "@bridge_ctl_bin", "lztmux-remote-bridge-ctl")
+	cmd := exec.Command(bin, "--sock="+sock, "kill-window", pane)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := lastNonEmptyLine(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return err
+	}
+	return nil
+}
+
 // openRemoteBridge launches lztmux-remote-open for host[/sess] and returns any
 // start error (the script switches the client itself on success). restore
 // signals a row built from a tmux-remux snapshot rather than a live probe
