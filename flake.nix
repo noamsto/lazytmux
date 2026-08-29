@@ -761,6 +761,10 @@
               # daemon's socket, since these vanilla -L servers carry no
               # lazytmux keybindings for a gate to intercept.
               CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
+              # Only tests/ is copied in, so a ../scripts path would not resolve.
+              # The raw source file is what ships: this script carries no
+              # build-time placeholder substitution.
+              DETACH = ./scripts/lztmux-remote-detach.sh;
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR

@@ -348,6 +348,7 @@
     "cursor-relaunch-hooks-install"
     "lztmux-remote-open"
     "lztmux-remote-picker"
+    "lztmux-remote-detach"
     "lztmux-remote-auth"
     "lztmux-notify"
     "lztmux-notify-center"
@@ -878,8 +879,16 @@
     # In a mirror window the guard would be reading the wrong process — a mirror
     # pane runs the renderer, not the remote workload — so a bridge kill always
     # confirms, naming the remote pane, then kills it on the remote.
-    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
+    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}#{?@bridge_proc, (#{@bridge_proc}),} on #{@bridge_host}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
     bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window #{q:@bridge_pane}" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
+    # detach-client is not lost in a mirror, just deferred: the detach kills the
+    # mirror session, and detach-on-destroy off (below) lands the client on
+    # another local session, where d is this bind's other branch.
+    #
+    # -b is load-bearing, not just responsiveness: the script waits for the
+    # daemon's teardown to kill the mirror session, and that teardown issues its
+    # kill-session through the same command queue a foreground run-shell holds.
+    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.lztmux-remote-detach}/bin/lztmux-remote-detach #{q:session_name}" } { detach-client }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
