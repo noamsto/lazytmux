@@ -953,6 +953,9 @@
     # Same, and these two are never on PATH at any point: of the remote scripts
     # only lztmux-remote-picker reaches home.packages (remote.exposePickOnPath).
     set -g @remote_open_bin "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+    # The window picker's ^x on a mirror row sends the same ctl kill-window verb
+    # prefix+& does, so it needs the binary by store path for the same reason.
+    set -g @bridge_ctl_bin "${picker-bridge-ctl-bin}"
     set -g @remote_auth_bin "${script.lztmux-remote-auth}/bin/lztmux-remote-auth"
     set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
 

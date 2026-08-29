@@ -75,6 +75,8 @@ type windowData struct {
 	labelID     string // @window_label_id   — "<provider> <id>" or ""
 	labelRest   string // @window_label_rest_long — issue title (leading space)
 	bridgeName  string // @window_bridge_name — daemon-owned remote window name, or ""
+	bridgePane  string // @bridge_pane — remote pane id this window mirrors, or ""
+	bridgeSock  string // @bridge_sock — ctl socket of the daemon mirroring this session
 	prPlain     string // @window_pr_plain   — " <glyph> #<n>" or ""
 	prState     string // @pr_state
 	prCheck     string // @pr_check_state
@@ -223,7 +225,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}\t#{@window_bridge_name}").Output()
+		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}\t#{@window_bridge_name}\t#{@bridge_pane}\t#{@bridge_sock}").Output()
 	if err != nil {
 		return nil
 	}
@@ -241,6 +243,8 @@ func collectWindows() []windowData {
 		labelID     string
 		labelRest   string
 		bridgeName  string
+		bridgePane  string
+		bridgeSock  string
 		prPlain     string
 		prState     string
 		prCheck     string
@@ -261,7 +265,7 @@ func collectWindows() []windowData {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 17)
+		parts := strings.SplitN(line, "\t", 19)
 		if len(parts) < 6 {
 			continue
 		}
@@ -288,6 +292,8 @@ func collectWindows() []windowData {
 				crewName:    field(parts, 14),
 				crewColor:   field(parts, 15),
 				bridgeName:  field(parts, 16),
+				bridgePane:  field(parts, 17),
+				bridgeSock:  field(parts, 18),
 				seen:        make(map[string]bool),
 			}
 			m[k] = wi
@@ -332,6 +338,8 @@ func collectWindows() []windowData {
 			labelID:     wi.labelID,
 			labelRest:   wi.labelRest,
 			bridgeName:  wi.bridgeName,
+			bridgePane:  wi.bridgePane,
+			bridgeSock:  wi.bridgeSock,
 			prPlain:     wi.prPlain,
 			prState:     wi.prState,
 			prCheck:     wi.prCheck,

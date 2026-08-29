@@ -67,3 +67,19 @@ func TestWithHostBadgeAbsentLocally(t *testing.T) {
 		t.Errorf("row = %q, want no badge without an emit host", got)
 	}
 }
+
+func TestHintsNameTheRemoteKill(t *testing.T) {
+	// ^x on a mirror row is unconfirmed and lands on another machine, so the
+	// footer has to say so while the row is merely selected (#393).
+	mirror := listItem{target: "s:1", bridgePane: "%7", bridgeSock: "/tmp/b.sock"}
+	local := listItem{target: "s:2"}
+
+	m := tuiModel{windowMode: true, width: 200, visible: []listItem{mirror, local}}
+	if got := stripANSI(m.renderHints()); !strings.Contains(got, "^x:kill remote") {
+		t.Errorf("hints on a mirror row = %q, want ^x:kill remote", got)
+	}
+	m.cursor = 1
+	if got := stripANSI(m.renderHints()); !strings.Contains(got, "^x:kill") || strings.Contains(got, "kill remote") {
+		t.Errorf("hints on a local row = %q, want a plain ^x:kill", got)
+	}
+}
