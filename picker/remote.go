@@ -368,12 +368,14 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 // signals a row built from a tmux-remux snapshot rather than a live probe
 // (#268): the session doesn't exist on the remote yet, so the launcher must
 // restore it before there's anything to bridge into.
-func openRemoteBridge(host, sess string, restore bool) error {
+func openRemoteBridge(tmuxOpts map[string]string, host, sess string, restore bool) error {
 	args := []string{host}
 	if sess != "" {
 		args = append(args, sess)
 	}
-	cmd := exec.Command("lztmux-remote-open", args...)
+	// An option, not a PATH lookup — see @remote_open_bin in the config.
+	bin := envOrMap("REMOTE_OPEN_BIN", tmuxOpts, "@remote_open_bin", "lztmux-remote-open")
+	cmd := exec.Command(bin, args...)
 	if restore {
 		cmd.Env = append(os.Environ(), "LZTMUX_REMOTE_RESTORE=1")
 	}
