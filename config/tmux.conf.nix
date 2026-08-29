@@ -477,11 +477,12 @@
   mkScriptRemotePicker = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
-      ["@remote_open@" "@picker_generate@" "@zoxide@"]
+      ["@remote_open@" "@picker_generate@" "@zoxide@" "@coreutils@"]
       [
         "${script.lztmux-remote-open}/bin/lztmux-remote-open"
         picker-generate-bin
         "${pkgs.zoxide}"
+        "${pkgs.coreutils}"
       ]
       (builtins.readFile ../scripts/${name}.sh)
     );

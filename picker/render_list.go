@@ -131,7 +131,7 @@ func (m tuiModel) renderHints() string {
 		parts = append(parts, hint("^g", groupLabel))
 	}
 	if hasItem && item.remoteHost != "" {
-		parts = append(parts, hint("^o", "remote"))
+		parts = append(parts, hint("^o", "browse"))
 	}
 	parts = append(parts,
 		hint("^/", toggleLabel),
