@@ -758,6 +758,30 @@
               touch $out
             '';
 
+          # A keypress, not the conf text: `prefix + ,` inside a mirror window is
+          # driven for real (#367) — the wrapped tmux with the emitted config, a
+          # second -L server supplying the attached client a keybind needs, and a
+          # socat stub on @bridge_sock recording the delivered ctl frame. socat is
+          # already in the wrapper's PATH closure but is named here explicitly
+          # because the test, not the wrapper, invokes it. CTL is the real binary,
+          # which the harness self-test drives to prove the stub's ack satisfies it.
+          rename-bind-integration-tests =
+            pkgs.runCommand "rename-bind-integration-tests" {
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.diffutils pkgs.gnugrep pkgs.socat];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
+              # A window name fixture is UTF-8, and so is the status line it is
+              # read back from.
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/rename-bind-integration.bats
+              touch $out
+            '';
+
           # The gate itself, not a keypress: remote-m2-integration-tests above
           # drives vanilla -L servers with no lazytmux keybindings for a gate to
           # intercept (comment on that check), so it can only exercise the
