@@ -102,6 +102,7 @@ cleanup_stale_panes() {
 state="${1:-}"
 pane_id="${TMUX_PANE:-}"
 session_name=""
+win_target=""
 force=0
 transcript_path=""
 
@@ -355,6 +356,10 @@ while [[ $# -gt 0 ]]; do
 		session_name="$2"
 		shift 2
 		;;
+	--window)
+		win_target="$2"
+		shift 2
+		;;
 	--force)
 		force=1
 		shift
@@ -362,6 +367,10 @@ while [[ $# -gt 0 ]]; do
 	--transcript)
 		transcript_path="$2"
 		shift 2
+		;;
+	--*)
+		echo "Error: Unknown option '$1'" >&2
+		exit 1
 		;;
 	*)
 		shift
@@ -392,22 +401,6 @@ fi
 # Called by tmux hooks on window/session switch.
 # Usage: claude-status-update mark-seen --session <name> --window <index>
 if [[ $state == "mark-seen" ]]; then
-	win_target=""
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--session)
-			shift
-			session_name="$1"
-			shift
-			;;
-		--window)
-			shift
-			win_target="$1"
-			shift
-			;;
-		*) shift ;;
-		esac
-	done
 	[[ -n $session_name && -n $win_target ]] || exit 0
 	[[ -d $PANES_DIR ]] || exit 0
 	# Get pane IDs in the target window
