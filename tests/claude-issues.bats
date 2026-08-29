@@ -341,7 +341,7 @@ write_pane_fixture() {
 	[[ $output != *"ENG-123"* ]]
 }
 
-# Stubs tmux so cleanup sees PANE_LIST (TSV of "pane_id<TAB>current_command"
+# Stubs tmux so cleanup sees PANE_LIST ("pane_id|current_command"
 # lines, '%' optional) as the live panes; all other tmux subcommands no-op.
 stub_tmux() {
 	mkdir -p "$BATS_TEST_TMPDIR/bin"
@@ -358,7 +358,7 @@ EOF
 @test "cleanup: keeps stamp for a live pane not running claude" {
 	write_pane_fixture 7 work "ENG-123"
 	stub_tmux
-	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|fish\n' bash "$CSU" cleanup
 	[ -f "$CLAUDE_STATUS_DIR/issues/7" ]
 	[ -f "$CLAUDE_STATUS_DIR/panes/7" ]
 }
@@ -366,7 +366,7 @@ EOF
 @test "cleanup: removes stamp for a pane that no longer exists" {
 	write_pane_fixture 9 work "GH-42"
 	stub_tmux
-	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|claude\n' bash "$CSU" cleanup
 	[ ! -f "$CLAUDE_STATUS_DIR/issues/9" ]
 	[ ! -f "$CLAUDE_STATUS_DIR/panes/9" ]
 }
@@ -375,7 +375,7 @@ EOF
 	mkdir -p "$CLAUDE_STATUS_DIR/tasks"
 	printf 'fix the reflow\n' >"$CLAUDE_STATUS_DIR/tasks/9"
 	stub_tmux
-	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|claude\n' bash "$CSU" cleanup
 	[ ! -f "$CLAUDE_STATUS_DIR/tasks/9" ]
 }
 
@@ -383,7 +383,7 @@ EOF
 	mkdir -p "$CLAUDE_STATUS_DIR/tasks"
 	printf 'fix the reflow\n' >"$CLAUDE_STATUS_DIR/tasks/7"
 	stub_tmux
-	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|fish\n' bash "$CSU" cleanup
 	[ -f "$CLAUDE_STATUS_DIR/tasks/7" ]
 }
 
@@ -405,7 +405,7 @@ EOF
 	mkdir -p "$CLAUDE_STATUS_DIR/screen"
 	printf 'pane=7\nscreens=[]\n' >"$CLAUDE_STATUS_DIR/screen/9"
 	stub_tmux
-	PANE_LIST=$'%7\tclaude\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|claude\n' bash "$CSU" cleanup
 	[ ! -f "$CLAUDE_STATUS_DIR/screen/9" ]
 }
 
@@ -413,7 +413,7 @@ EOF
 	mkdir -p "$CLAUDE_STATUS_DIR/screen"
 	printf 'pane=7\nscreens=[]\n' >"$CLAUDE_STATUS_DIR/screen/7"
 	stub_tmux
-	PANE_LIST=$'%7\tfish\n' bash "$CSU" cleanup
+	PANE_LIST=$'%7|fish\n' bash "$CSU" cleanup
 	[ -f "$CLAUDE_STATUS_DIR/screen/7" ]
 }
 

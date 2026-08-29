@@ -13,7 +13,7 @@ setup() {
 	cat >"$FAKEBIN/tmux" <<-EOF
 		#!/bin/sh
 		case "\$*" in
-		*"list-panes"*) printf '%%3\tcodex\t0\n%%5\tfish\t0\n%%7\t.claude-wrapped\t0\n%%9\t.nvim-wrapped\t0\n' ;;
+		*"list-panes"*) printf '%%3|codex|0\n%%5|fish|0\n%%7|.claude-wrapped|0\n%%9|.nvim-wrapped|0\n' ;;
 		*"pipe-pane"*) echo "\$@" >>"$BATS_TEST_TMPDIR/pipe.log" ;;
 		esac
 	EOF

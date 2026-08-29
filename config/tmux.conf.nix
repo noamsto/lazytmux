@@ -777,7 +777,24 @@
     # next-3.8's default verbatim, -N note included (the note feeds which-key).
     # The rename prompt seeds from @window_bridge_name, not #W: on a mirror window
     # #W is the label reflow derived, while the option holds the remote's own name.
-    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename #{q:@bridge_pane} '%%'" } } { command-prompt -I'#W' { rename-window -- '%%' } }
+    # That seed is remote-derived, so the prompt result is untrusted and reaches
+    # the shell as a run-shell ARGUMENT (%1) referenced #{qs:1}, never as text
+    # spliced into the command string, where run-shell would format-expand it and
+    # a #(...) in the name would run before sh saw the command at all.
+    #   - #{qs:1}, not #{q:1}: format_quote_shell omits ~, { and } from its escape
+    #     set and never wraps, so the value lands as a bare shell word — measured,
+    #     a remote window named ~/src was delivered as the LOCAL $HOME-expanded
+    #     path, and x{a,b} split into two argv words. #{qs:1} POSIX-single-quotes.
+    #   - %1, not '%%': tmux's template substitution leaves %N unescaped, so
+    #     #{qs:} is the only quoting layer; '%%' would double-escape.
+    #   - The { ... } block form is what makes an unescaped %1 safe: the block is
+    #     never re-lexed, whereas a string command argument would re-parse it.
+    #   - #{qs:1} must stay in a BARE word position: it emits its own surrounding
+    #     single quotes, so wrapping it ('#{qs:1}') would have the modifier's
+    #     opening quote close the outer one and defeat the escaping. The
+    #     conf-shell-quoting scanner tracks no sub-quoting context and cannot
+    #     catch that.
+    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename #{q:@bridge_pane} #{qs:1}" %1 } } { command-prompt -I'#W' { rename-window -- '%%' } }
     bind-key -N 'Swap the active pane with the pane above' '{' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} U" } { swap-pane -U }
     bind-key -N 'Swap the active pane with the pane below' '}' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} D" } { swap-pane -D }
 
