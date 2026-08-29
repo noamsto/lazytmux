@@ -361,6 +361,9 @@ name=work"
 	run bash "$SCRIPT" tp-g6 </dev/null
 	[ "$status" -eq 1 ]
 	[[ $output == *"remote lazytmux too old — rebuild tp-g6"* ]]
+
+	run grep -c -- --serve "$SSH_LOG"
+	[ "$status" -ne 0 ]
 }
 
 @test "leg 1: an unusable remote emit dir is named" {
