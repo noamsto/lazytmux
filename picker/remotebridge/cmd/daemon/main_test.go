@@ -57,7 +57,11 @@ func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 		t.Fatalf("run-shell: %v: %s", err, out)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	// run-shell's job is asynchronous and this waits on a real tmux server, so
+	// the budget is a stall detector, not a race to beat: a parallel `go test
+	// ./...` on a loaded builder starves it well past 3s (the recorder then
+	// never appears and the failure reads as a broken fix, not a slow one).
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(record); err == nil {
 			break

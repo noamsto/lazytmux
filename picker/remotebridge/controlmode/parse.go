@@ -52,6 +52,7 @@ const (
 	WindowAdd
 	WindowRenamed
 	SessionWindowChanged
+	SessionChanged
 	WindowPaneChanged
 	Pause
 	Continue
@@ -106,6 +107,12 @@ func ParseLine(raw string) Line {
 		// whole name (kept in Data, not Fields-split).
 		id, name, _ := strings.Cut(rest, " ")
 		return Line{Kind: WindowRenamed, Args: []string{id}, Data: []byte(name)}
+	case "%session-changed":
+		// Emitted at attach and on every switch-client that moves this client.
+		// Same shape as %window-renamed: id is the first token, the rest is the
+		// whole session name, which may contain spaces.
+		id, name, _ := strings.Cut(rest, " ")
+		return Line{Kind: SessionChanged, Args: []string{id}, Data: []byte(name)}
 	case "%session-window-changed":
 		return Line{Kind: SessionWindowChanged, Args: strings.Fields(rest)}
 	case "%window-pane-changed":
