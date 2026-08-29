@@ -210,7 +210,7 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 	args := remotePickNewPaneArgs("/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick", "tp-g6")
 	want := []string{
 		"new-pane",
-		"-x", "90%", "-y", "85%", "-X", "5%", "-Y", "8%", "-B", "heavy",
+		"-x", "90%", "-y", "85%", "-X", "5%", "-Y", "8%", "-B", "heavy", "-A",
 		"/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick 'tp-g6'",
 		";",
 		"set", "-p", "@pane_label", "remote tp-g6",
@@ -225,8 +225,8 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 			t.Errorf("args[%d] = %q, want %q", i, args[i], want[i])
 		}
 	}
-	if args[12] != ";" {
-		t.Errorf("`;` must be its own argv token, got %q at index 12: %#v", args[12], args)
+	if args[13] != ";" {
+		t.Errorf("`;` must be its own argv token, got %q at index 13: %#v", args[13], args)
 	}
 }
 
@@ -234,7 +234,7 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 // string tmux hands to the pane's own shell.
 func TestRemotePickNewPaneArgsHostWithEmbeddedQuote(t *testing.T) {
 	args := remotePickNewPaneArgs("/bin/lztmux-remote-pick", "o'brien")
-	cmdStr := args[11]
+	cmdStr := args[12]
 	want := `/bin/lztmux-remote-pick 'o'\''brien'`
 	if cmdStr != want {
 		t.Errorf("command string = %q, want %q", cmdStr, want)
