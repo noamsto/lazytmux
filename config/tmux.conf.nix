@@ -942,6 +942,11 @@
     set -g @remote_auth_bin "${script.lztmux-remote-auth}/bin/lztmux-remote-auth"
     set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
 
+    # Same reasoning, for outside consumers: an external tool that stamps
+    # @crew_* on a window has to kick a reflow for the badge to render, and
+    # reflow is never on PATH. The option is the only handle it can reach.
+    set -g @reflow_bin "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
     # PR badge lives on the window list only — not duplicated here.
     # The statusline #() takes only stable args (session, theme, icons); it
