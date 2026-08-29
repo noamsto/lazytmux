@@ -23,6 +23,14 @@ setup() {
 	mkdir -p "$CLAUDE_STATUS_DIR/panes" "$CLAUDE_STATUS_DIR/screen"
 	export TMPDIR="$TDIR"
 
+	# update-icons throttles its presence sweep on CLAUDE_NOW % 5, and that sweep
+	# reaps the very state files these tests write. Unpinned it fires on one run
+	# in five, which is what made this suite flake (#373); pinning it makes every
+	# run exercise the reap. Floored from the real clock, not a constant — the
+	# fixtures below stamp `timestamp=$(date +%s)`, and a reader clock detached
+	# from them would skew every staleness comparison.
+	export CLAUDE_NOW=$(($(date +%s) / 5 * 5))
+
 	# Fake reflow: update-icons kicks it on every branch change; a no-op is
 	# fine here, this file only asserts on @remux_relaunch stamping.
 	FAKE_REFLOW="$TDIR/fake-reflow"
@@ -64,12 +72,36 @@ setup() {
 }
 
 teardown() {
+	# BATS_TEST_COMPLETED is unset only on failure. The interesting evidence is
+	# whether the pane's state file survived the run and what the script said
+	# while losing it — neither is recoverable afterwards, since bats removes
+	# BATS_TEST_TMPDIR before --keep-failed can preserve the sandbox.
+	if [ -z "${BATS_TEST_COMPLETED:-}" ]; then
+		echo "state files: $(ls "$CLAUDE_STATUS_DIR/panes" "$CLAUDE_STATUS_DIR/screen" 2>&1)"
+		echo "update-icons stderr: $(cat "$UI_LOG" 2>/dev/null)"
+	fi
 	tmux kill-server 2>/dev/null || true
 }
 
 run_update_icons() {
 	# $2 = RESUME_CLAUDE ("on"), same arg tmux itself passes via #{@resume_claude}.
-	bash "$UPDATE_ICONS" S on >/dev/null 2>&1 || true
+	# stderr is kept, not discarded: `tmux set -p` (no -q) is the only place a
+	# lost @remux_relaunch write announces itself.
+	UI_LOG="$TDIR/update-icons.log"
+	bash "$UPDATE_ICONS" S on >/dev/null 2>"$UI_LOG" || true
+}
+
+# assert_relaunch EXPECTED — compares @remux_relaunch and, on mismatch, reports
+# what it actually held. A bare `[ "$(tmux show -pv …)" = … ]` reported only
+# tmux's "invalid option: @remux_relaunch" on stderr, which says the option is
+# unset but never says what the test wanted (#366).
+assert_relaunch() {
+	local want="$1" got
+	got=$(tmux show -pv -t "%$PANE_ID" @remux_relaunch 2>/dev/null) || got="<unset>"
+	if [ "$got" != "$want" ]; then
+		echo "@remux_relaunch: expected [$want], actual [$got]"
+		return 1
+	fi
 }
 
 @test "screen-only pane (no hook transcript) does not clobber another agent's relaunch stamp" {
@@ -78,7 +110,10 @@ run_update_icons() {
 
 	run_update_icons
 
-	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "cursor-agent --resume abc123" ]
+	# The stamp surviving proves nothing on its own — a run that deleted the
+	# state file leaves it untouched too, which is exactly how #373 hid here.
+	[ -e "$CLAUDE_STATUS_DIR/screen/$PANE_ID" ]
+	assert_relaunch "cursor-agent --resume abc123"
 }
 
 @test "hook pane with a transcript still stamps claude --resume <uuid>" {
@@ -93,7 +128,7 @@ run_update_icons() {
 
 	run_update_icons
 
-	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume deadbeef-0000-0000-0000-000000000001" ]
+	assert_relaunch "claude --resume deadbeef-0000-0000-0000-000000000001"
 }
 
 @test "a pane that moved from Codex/Cursor to a live Claude session overwrites the foreign stamp" {
@@ -109,7 +144,7 @@ run_update_icons() {
 
 	run_update_icons
 
-	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume cafebabe-0000-0000-0000-000000000003" ]
+	assert_relaunch "claude --resume cafebabe-0000-0000-0000-000000000003"
 }
 
 @test "no write is issued when the stamp already matches the desired value" {
@@ -137,6 +172,81 @@ run_update_icons() {
 
 	PATH="$SPY_DIR:$PATH" run_update_icons
 
-	[ "$(tmux show -pv -t "%$PANE_ID" @remux_relaunch)" = "claude --resume 11111111-0000-0000-0000-000000000002" ]
+	# Same vacuity trap as test 1: "no write was issued" is satisfied by a run
+	# that wiped the state dir, so pin the fixture's survival first.
+	[ -e "$CLAUDE_STATUS_DIR/panes/$PANE_ID" ]
+	assert_relaunch "claude --resume 11111111-0000-0000-0000-000000000002"
 	run ! grep -q '^set .*@remux_relaunch' "$SPY_LOG"
+}
+
+@test "the presence sweep's own format survives a non-UTF-8 locale" {
+	# Every other reap test feeds the parser rows it built itself, so the real -F
+	# format was never exercised (#373). Two things make this one bite: the
+	# format is lifted out of the built script rather than restated, so producer
+	# and assertion cannot drift, and the locale is forced rather than inherited,
+	# so a tab format is red under `nix develop` too — not only in the sandbox.
+	: >"$CLAUDE_STATUS_DIR/panes/$PANE_ID"
+	# shellcheck source=/dev/null
+	source scripts/lib-claude.sh
+
+	local fmt rows
+	# Addressed on the assignment, not a bare "list-panes -a -F": a comment above
+	# it that happens to quote the command would otherwise win the match and
+	# leave $fmt empty.
+	fmt=$(sed -n "/rows=\$(tmux list-panes -a -F/{s/.*-F '\([^']*\)'.*/\1/p;q;}" "$UPDATE_ICONS")
+	[ -n "$fmt" ]
+	rows=$(env -u LANG -u LC_ALL -u LC_CTYPE tmux list-panes -a -F "$fmt")
+
+	claude_reap_dead_panes "$rows"
+
+	[ -e "$CLAUDE_STATUS_DIR/panes/$PANE_ID" ] ||
+		{ echo "reap deleted a live pane; rows were [$rows]" && false; }
+}
+
+@test "a failed @remux_relaunch write is loud" {
+	# `tmux set -pq` returned 0 and printed nothing on a bad target, so a lost
+	# write could only ever surface downstream as "invalid option" (#373). The
+	# spy redirects the stamper's write to a pane that cannot exist; without -q
+	# tmux must say so, and run_update_icons must not swallow it.
+	TRANSCRIPT="$TDIR/aaaaaaaa-0000-0000-0000-000000000004.jsonl"
+	: >"$TRANSCRIPT"
+	{
+		echo "state=processing"
+		echo "timestamp=$(date +%s)"
+		echo "transcript=$TRANSCRIPT"
+	} >"$CLAUDE_STATUS_DIR/panes/$PANE_ID"
+
+	# The spy rewrites only the -t target and forwards the script's own argv, so
+	# what gets tested is the script's flags. A spy that issued its own command
+	# would pass with -q restored — it would be asserting about itself.
+	REAL_TMUX="$(command -v tmux)"
+	SPY_DIR="$TDIR/tmux-spy"
+	mkdir -p "$SPY_DIR"
+	# /bin/sh, not /usr/bin/env: the Nix flake-check sandbox has no /usr/bin.
+	# Rotates argv once, swapping only the -t operand, so every other flag the
+	# script passed (notably the absence of -q) reaches tmux untouched.
+	cat >"$SPY_DIR/tmux" <<-SPYEOF
+		#!/bin/sh
+		# Anchored on the verb: a future read-back via \`show -pv … @remux_relaunch\`
+		# must not get its target rewritten too, or this test would go green on a
+		# silent write again — the exact hole it exists to close.
+		case "\$1:\$* " in
+		set:*" @remux_relaunch "*)
+			n=\$#; prev=
+			while [ "\$n" -gt 0 ]; do
+				a=\$1; shift
+				if [ "\$prev" = -t ]; then set -- "\$@" %999; else set -- "\$@" "\$a"; fi
+				prev=\$a
+				n=\$((n - 1))
+			done ;;
+		esac
+		exec "$REAL_TMUX" "\$@"
+	SPYEOF
+	chmod +x "$SPY_DIR/tmux"
+
+	PATH="$SPY_DIR:$PATH" run_update_icons
+
+	# Match the pane id, not tmux's wording — the id is ours, the message is not.
+	grep -q '%999' "$UI_LOG" ||
+		{ echo "write was silent; stderr was [$(cat "$UI_LOG")]" && false; }
 }

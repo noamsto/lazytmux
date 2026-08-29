@@ -73,11 +73,11 @@ fi
 # tab's color, which tmux re-renders on its own without a reflow.
 # One display-message fetches the window count, the stored key and the height
 # (the fast path runs on every reflow, so keeping its forks down matters).
-{
-	IFS= read -r win_count
-	IFS= read -r prev_key
-	IFS= read -r HEIGHT
-} < <(tmux display-message -t "$SESSION" -p $'#{session_windows}\n#{@reflow_key}\n#{client_height}' 2>/dev/null)
+# '|'-delimited, not newline: tmux rewrites a newline in a format to "_" for any
+# client without a UTF-8 locale, exactly as it does a tab (#373) — which
+# collapsed all three fields into win_count, so prev_key was always empty (cache
+# never hit) and HEIGHT always 0 (the 4th status row could never unlock).
+IFS='|' read -r win_count prev_key HEIGHT < <(tmux display-message -t "$SESSION" -p '#{session_windows}|#{@reflow_key}|#{client_height}' 2>/dev/null)
 # Height only gates the extra window row, so a size-neutral client (empty
 # client_height) falls back to the baseline cap instead of skipping the reflow
 # the way an empty width has to. Resolve it before it reaches the cache key so
@@ -214,13 +214,13 @@ done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 # Collect all pane processes in one call, bucket by window index
 declare -A win_seen # keyed by "idx:proc"
-while IFS=$'\t' read -r win_idx proc; do
+while IFS='|' read -r win_idx proc; do
 	[[ -n $proc ]] || continue
 	if [[ -z ${win_seen["${win_idx}:${proc}"]+x} ]]; then
 		win_seen["${win_idx}:${proc}"]=1
 		win_procs[$win_idx]+="${win_procs[$win_idx]:+ }$proc"
 	fi
-done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}	#{pane_current_command}')
+done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}|#{pane_current_command}')
 unset win_seen
 
 # Fixed icon-column width for the slot math below. The icon *content*

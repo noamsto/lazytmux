@@ -204,7 +204,7 @@ setup_sweep() {
 	cat >"$FAKEBIN/tmux" <<-EOF
 		#!/bin/sh
 		case "\$*" in
-		*"list-panes"*) printf '%%3\tcodex\t0\n%%5\tfish\t0\n' ;;
+		*"list-panes"*) printf '%%3|codex|0\n%%5|fish|0\n' ;;
 		*"pipe-pane"*)
 			[ -e "$BATS_TEST_TMPDIR/live/.sweep" ] && echo early >>"$BATS_TEST_TMPDIR/order.log"
 			echo "\$@" >>"$BATS_TEST_TMPDIR/pipe.log" ;;
@@ -287,7 +287,7 @@ setup_sweep() {
 	cat >"$FAKEBIN/tmux" <<-EOF
 		#!/bin/sh
 		case "\$*" in
-		*"list-panes"*) printf '%%3\t.codex-wrapped\t0\n' ;;
+		*"list-panes"*) printf '%%3|.codex-wrapped|0\n' ;;
 		esac
 	EOF
 	chmod +x "$FAKEBIN/tmux"
