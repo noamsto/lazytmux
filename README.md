@@ -192,6 +192,12 @@ session list, tagged with its host in the **Host** column. Live window
 add/close/rename sync through the control-mode daemon; structural keybinds
 inside a mirror window act on the remote.
 
+`prefix + d` inside a mirror detaches the **bridge** rather than the client:
+the daemon exits, the mirror session goes, and the remote — which only ever
+had a control-mode client attached — keeps running untouched, so `prefix + s`
+reopens it. The plain `detach-client` is one keystroke further out: the client
+lands on another local session, where `d` means what it always did.
+
 A host that answers SSH but has **no tmux server** shows as
 `<host>  (no server — Enter starts one)`. Enter starts the remote's own
 `tmux-startup.service`, then re-probes and bridges whatever session that
