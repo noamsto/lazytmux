@@ -71,7 +71,7 @@ stamp() {
 
 @test "reap drops dead pane files across panes/screen/interrupt/watchers, keeps live ones" {
 	local rows
-	rows="$(printf '%%3\tcodex\t0\n%%5\tfish\t0\n')"
+	rows="$(printf '%%3|codex|0\n%%5|fish|0\n')"
 	local dir id
 	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
 		for id in 3 5 8; do
@@ -88,7 +88,7 @@ stamp() {
 
 @test "reap never touches CLAUDE_LIVE_DIR" {
 	local rows
-	rows="$(printf '%%3\tcodex\t0\n')"
+	rows="$(printf '%%3|codex|0\n')"
 	printf 'x' >"$CLAUDE_LIVE_DIR/8"
 	claude_reap_dead_panes "$rows"
 	[ -e "$CLAUDE_LIVE_DIR/8" ]
@@ -102,6 +102,6 @@ stamp() {
 
 @test "reap with a live pane id that has no files is a no-op" {
 	local rows
-	rows="$(printf '%%3\tcodex\t0\n')"
+	rows="$(printf '%%3|codex|0\n')"
 	claude_reap_dead_panes "$rows"
 }

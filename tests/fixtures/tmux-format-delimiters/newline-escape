@@ -1,0 +1,1 @@
+fmt=$(tmux display-message -p $'#{session_windows}\n#{client_height}')

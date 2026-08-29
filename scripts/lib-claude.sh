@@ -21,8 +21,16 @@ CLAUDE_ICON_ERROR="󰅚"       # nerd: nf-md-close_circle_outline
 CLAUDE_ICON_DENIED="󰔟"      # same clock as waiting, different color
 CLAUDE_ICON_INTERRUPTED="󰜺" # nerd: nf-md-cancel — user-interrupted (Esc) turn
 
-# Timestamp cache (set once per script invocation)
-printf -v CLAUDE_NOW '%(%s)T' -1
+# Timestamp cache (set once per script invocation). The env override is a test
+# seam, same shape as CLAUDE_ASSUME_DEAD_AFTER below: tmux-update-icons throttles
+# its presence sweep on CLAUDE_NOW % 5, so without this a suite cannot pin the
+# second and the sweep is a 1-in-5 coin flip (#373). Kept fork-free — this runs
+# on the per-second status path.
+#
+# Digits only: a non-numeric value inherited from a shell would freeze the clock
+# for every status script, and freeze the % 5 throttle with it — so the sweep
+# would either never run again or run every tick, silently.
+[[ ${CLAUDE_NOW:-} =~ ^[0-9]+$ ]] || printf -v CLAUDE_NOW '%(%s)T' -1
 
 # Staleness fade — the color stays the state's bright hue until its threshold,
 # then eases toward dim grey over CLAUDE_FADE_DURATION seconds (not a hard snap).
@@ -103,20 +111,30 @@ claude_prune_stale_state() {
 }
 
 # claude_reap_dead_panes ROWS
-# ROWS is tmux list-panes -a output: "%N<TAB>..." per line, extra columns
+# ROWS is tmux list-panes -a output: "%N|..." per line, extra columns
 # ignored. Removes panes/screen/interrupt/watchers state for any pane id not
 # present in ROWS. Full-server positive evidence: the caller must only pass
 # ROWS from a list-panes call that is known to have succeeded and returned
 # real data (see tmux-update-icons.sh) — an empty/failed ROWS is a no-op here,
 # never reaping anything, so a bad call site can only under-reap, not wipe.
+#
+# '|' and not a tab: tmux rewrites non-printable bytes to "_" unless the
+# querying client's locale is UTF-8, so a tab-delimited format collapses to one
+# field, every pane id reads as dead, and this deleted every state file once
+# per 5s (#373).
 claude_reap_dead_panes() {
 	local rows="$1"
 	[[ -n $rows ]] || return 0
 
 	local -A live=()
 	local pid rest
-	while IFS=$'\t' read -r pid rest; do
+	while IFS='|' read -r pid rest; do
 		[[ -n $pid ]] || continue
+		# Fail closed on a row that isn't a pane id. The empty-ROWS guard above
+		# only catches "no rows at all"; in #373 the rows were non-empty and
+		# merely unsplit, so every id read as dead and the sweep wiped
+		# everything. A malformed row means don't reap, not reap all.
+		[[ $pid =~ ^%[0-9]+$ ]] || return 0
 		live["${pid#%}"]=1
 	done <<<"$rows"
 

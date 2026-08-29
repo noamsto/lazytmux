@@ -20,7 +20,7 @@
     # landed as tmux/tmux#5398, the other was rejected upstream.
     # Bump: repoint rev, then `nix flake lock --update-input tmux-upstream`.
     tmux-upstream = {
-      url = "github:tmux/tmux/d5afb67a81d8a30379e0d4186ec4b968244393bf";
+      url = "github:tmux/tmux/851c5a933d4838c32ad06c248b2ba975d106149c";
       flake = false;
     };
     flake-parts.url = "github:hercules-ci/flake-parts";
@@ -100,8 +100,20 @@
             processIcons = import ./config/process-icons.nix;
             fallbackIcon = "";
             maxIconsPicker = "5";
-          }).overrideAttrs (_old: {
+          }).overrideAttrs (old: {
             doCheck = true;
+            # tmux: TestReflowRunShellArgsSurvivesFormatInjection (#368) drives a
+            # real run-shell call, same private config-less pattern as
+            # reflow-fanout-tests. Kept here rather than picker/default.nix so it's
+            # scoped to this check alone — the package itself is reused for
+            # prebuilt binaries by the remote bridge integration checks, which
+            # don't need a test-only dependency.
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.tmux];
+            # Tells TestReflowRunShellArgsSurvivesFormatInjection (#368) to fail
+            # rather than skip if tmux is somehow still missing, so pruning the
+            # nativeBuildInputs entry above breaks loudly instead of silently
+            # dropping the regression check.
+            LAZYTMUX_REQUIRE_TMUX = "1";
             checkPhase = ''
               runHook preCheck
               export GOFLAGS=''${GOFLAGS//-trimpath/}
@@ -432,6 +444,36 @@
               touch $out
             '';
 
+          # A control byte is invisible in review and only misbehaves for clients
+          # without a UTF-8 locale, so the delimiter rule needs a build-time gate
+          # rather than vigilance (#373). Scoped to scripts/ + config/ — modules/
+          # and picker/ still carry tab-delimited formats, tracked in #378, and a
+          # check that scanned them would have to fail today.
+          tmux-format-delimiter-assertions =
+            pkgs.runCommand "tmux-format-delimiter-assertions" {
+              nativeBuildInputs = [pkgs.bash pkgs.coreutils pkgs.findutils];
+            } ''
+              # `bash "$scan"`, not "$scan": the scanner's shebang is
+              # /usr/bin/env bash and the Linux build sandbox has no /usr/bin.
+              scan=${./tests/check-tmux-format-delimiters.sh}
+              bash "$scan" ${./scripts}
+              bash "$scan" ${./config}
+
+              # Prove the scanner can actually fail, and that EACH rule pulls its
+              # weight: a single non-zero exit would let an inverted rule ship.
+              if report=$(bash "$scan" ${./tests/fixtures/tmux-format-delimiters} 2>&1); then
+                echo "scanner accepted the deliberately-broken fixtures" >&2
+                exit 1
+              fi
+              for f in literal-tab escaped-tab var-indirect newline-escape us-escape hex-tab-escape; do
+                case "$report" in
+                  *"$f"*) ;;
+                  *) echo "scanner missed fixture $f:" >&2; echo "$report" >&2; exit 1 ;;
+                esac
+              done
+              touch $out
+            '';
+
           notify-bell-integration-tests =
             pkgs.runCommand "notify-bell-integration-tests" {
               # mkTmux, not pkgs.tmux: the hook behavior this pins must be the
@@ -723,6 +765,30 @@
               cp -r ${./tests} tests
               export HOME=$TMPDIR
               bats tests/remote-m2-integration.bats
+              touch $out
+            '';
+
+          # A keypress, not the conf text: `prefix + ,` inside a mirror window is
+          # driven for real (#367) — the wrapped tmux with the emitted config, a
+          # second -L server supplying the attached client a keybind needs, and a
+          # socat stub on @bridge_sock recording the delivered ctl frame. socat is
+          # already in the wrapper's PATH closure but is named here explicitly
+          # because the test, not the wrapper, invokes it. CTL is the real binary,
+          # which the harness self-test drives to prove the stub's ack satisfies it.
+          rename-bind-integration-tests =
+            pkgs.runCommand "rename-bind-integration-tests" {
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.diffutils pkgs.gnugrep pkgs.socat];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
+              # A window name fixture is UTF-8, and so is the status line it is
+              # read back from.
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/rename-bind-integration.bats
               touch $out
             '';
 

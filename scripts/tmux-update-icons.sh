@@ -55,7 +55,7 @@ arm_agent_detect() {
 	# after one would assert a pass that never observed anything — the reader
 	# would then read every live pane's lagging stamp as a dead agent.
 	local rows
-	rows=$(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_pipe}' 2>/dev/null) || return 0
+	rows=$(tmux list-panes -a -F '#{pane_id}|#{pane_current_command}|#{pane_pipe}' 2>/dev/null) || return 0
 	claude_reap_dead_panes "$rows"
 
 	((arm || stamp)) || return 0
@@ -65,7 +65,7 @@ arm_agent_detect() {
 	fi
 
 	local pid cmd piped
-	while IFS=$'\t' read -r pid cmd piped; do
+	while IFS='|' read -r pid cmd piped; do
 		# A here-string of an empty result still yields one blank line.
 		[[ -n $pid ]] || continue
 		normalize_wrapped_cmd "$cmd"
@@ -194,8 +194,11 @@ main() {
 			# nothing. A non-empty desired is positive evidence of a live Claude
 			# session, so it may overwrite a foreign stamp (a pane that moved from
 			# Codex/Cursor to Claude).
+			# No -q, unlike the batched sets below: it made a lost write return 0
+			# and print nothing, so the only trace was a downstream
+			# "invalid option" (#373).
 			if [[ -n $desired ]] && [[ $desired != "$cur" ]]; then
-				tmux set -pq -t "%$pane_file" @remux_relaunch "$desired"
+				tmux set -p -t "%$pane_file" @remux_relaunch "$desired"
 			fi
 		fi
 		# Freshest pane timestamp per window drives the "last active" label

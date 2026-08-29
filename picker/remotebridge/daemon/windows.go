@@ -151,29 +151,56 @@ func localWinForRemoteIndex(wins []remoteWindow, reg *registry, remoteIdx string
 	return "", false
 }
 
-// sanitizeWindowName cleans a remote-derived window name before it is written
-// to @window_bridge_name: strip tmux #[...] style sequences, escape surviving
-// '#' as '##', and drop '|' / newlines / control chars that would break the
-// reflow FMT delimiter or a tmux command line. Style strip must precede '#'
-// escape — otherwise '#[fg=red]' becomes '##[fg=red]' and no longer matches.
-func sanitizeWindowName(s string) string {
-	var stripped strings.Builder
-	for i := 0; i < len(s); {
-		if i+1 < len(s) && s[i] == '#' && s[i+1] == '[' {
-			j := strings.IndexByte(s[i:], ']')
-			if j >= 0 {
-				i += j + 1
-				continue
-			}
-		}
-		stripped.WriteByte(s[i])
-		i++
-	}
-	var b strings.Builder
-	for _, r := range stripped.String() {
+// stripWindowName drops what must never reach a tmux command line — '|' (the
+// reflow FMT delimiter), newlines and control chars — and then strips tmux
+// #[...] style sequences. Both orderings here are load-bearing, and both guard
+// the same failure: a '#'-run immediately followed by '[' is what tmux's
+// format_expand passes through verbatim instead of collapsing pairwise
+// (format.c:6671-6694), so the rename round trip drifts unboundedly.
+//   - The drop runs FIRST because it can join a '#' to a '[' that a strip scan
+//     never saw together: "a#|[x]b" would otherwise survive as "a##[x]b".
+//   - The strip iterates to a fixed point because one pass can likewise join a
+//     surviving '#' to a later '[': "##[a][" collapses to "#[".
+//
+// An unterminated "#[" (no ']' anywhere after it) drops to end-of-string; there
+// is no way to escape it into something a later expansion reads as literal.
+func stripWindowName(s string) string {
+	var dropped strings.Builder
+	for _, r := range s {
 		if r == '|' || r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
 			continue
 		}
+		dropped.WriteRune(r)
+	}
+	cur := dropped.String()
+	for {
+		var b strings.Builder
+		for i := 0; i < len(cur); {
+			if i+1 < len(cur) && cur[i] == '#' && cur[i+1] == '[' {
+				j := strings.IndexByte(cur[i:], ']')
+				if j < 0 {
+					i = len(cur)
+					continue
+				}
+				i += j + 1
+				continue
+			}
+			b.WriteByte(cur[i])
+			i++
+		}
+		if b.Len() == len(cur) {
+			return cur
+		}
+		cur = b.String()
+	}
+}
+
+// sanitizeWindowName cleans a remote-derived window name before it is written
+// to @window_bridge_name: stripWindowName, then escape every surviving '#' as
+// '##' so a format expansion of the option renders it literally.
+func sanitizeWindowName(s string) string {
+	var b strings.Builder
+	for _, r := range stripWindowName(s) {
 		if r == '#' {
 			b.WriteString("##")
 			continue
@@ -181,4 +208,13 @@ func sanitizeWindowName(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// decodeWindowName inverts sanitizeWindowName's escape. Its caller applies it to
+// whatever the rename prompt returns, edited or not: the prompt is seeded from
+// @window_bridge_name, so the whole field speaks that option's escaped dialect and
+// nothing marks which parts the user retyped. A typed literal '##' therefore
+// collapses to one '#'.
+func decodeWindowName(s string) string {
+	return strings.ReplaceAll(s, "##", "#")
 }

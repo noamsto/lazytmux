@@ -276,6 +276,72 @@ wait_for_client() {
 	[[ $output == *'Swap the active pane with the pane below'* ]]
 }
 
+# Pins the mirror branch's '{ ... }' block form. Its trailing %1 is a template
+# substitution done with NO escaping at all (NQ) — safe only because a
+# '{ ... }' block is parsed once (ARGS_COMMANDS) and never re-lexed. A later
+# rewrite of the same bind into a quoted-string command argument would re-lex
+# the printed text and turn %1 into raw injection, and the conf-shell-quoting
+# scanner cannot see that change (it scans source text, not tmux's own
+# parse). list-keys can: it prints ARGS_COMMANDS as '{ ... }' and ARGS_STRING
+# as a quoted string, so a block-to-string rewrite is visible here.
+@test "prefix + , mirror branch keeps the { ... } block form with #{qs:1} and a trailing %1" {
+	run t list-keys -T prefix ,
+	[ "$status" -eq 0 ]
+	# list-keys does not escape '#' in printed args (see the '-I "#W"'
+	# expectation above), so plain substring matching works.
+	[[ $output == *'{ command-prompt -I "#{@window_bridge_name}" { run-shell "'*'rename #{q:@bridge_pane} #{qs:1}" "%1" } }'* ]]
+}
+
+# The tmux-level half of the inverse the whole '#'-handling fix depends on:
+# X(E(r)) == S(r), where X is tmux's own rename-window format expansion and
+# E/S are sanitizeWindowName/stripWindowName. Expected strings are hardcoded
+# from the plan's fixture table; windows_test.go's TestWindowNameFixtures pins
+# the same E(r)/S(r) strings against the real Go functions, so the pair
+# together — not either alone — proves Go and tmux agree.
+#
+# Rows 6, 8 and 10 of the fixture table have an empty E(r) (nothing to rename
+# to) and are excluded here. No row has an unterminated '#[' in E(r) either:
+# the sanitizer drops it while building E, so it can never survive into a
+# rename target.
+@test "tmux rename-window of E(r) yields S(r) for every fixture row with a non-empty E" {
+	t new-window -d -t s: -n scratch367
+	wid="$(t list-windows -t s -F '#{window_id} #{window_name}' | grep scratch367 | awk '{print $1}')"
+
+	# shellcheck disable=SC2088 # literal remote window names, not paths to expand
+	local -a e_vals=(
+		'pr##367'
+		'a####b'
+		'plain-name'
+		'x'
+		'a##b'
+		'ab'
+		'abc'
+		"it's"
+		'~/src'
+		'[nix-amd-ai 🧠 󰪣 󰘭 ##46]'
+	)
+	# shellcheck disable=SC2088 # literal remote window names, not paths to expand
+	local -a s_vals=(
+		'pr#367'
+		'a##b'
+		'plain-name'
+		'x'
+		'a#b'
+		'ab'
+		'abc'
+		"it's"
+		'~/src'
+		'[nix-amd-ai 🧠 󰪣 󰘭 #46]'
+	)
+
+	local i got
+	for i in "${!e_vals[@]}"; do
+		t rename-window -t "$wid" -- "${e_vals[$i]}"
+		got="$(t display-message -p -t "$wid" '#{window_name}')"
+		[ "$got" = "${s_vals[$i]}" ]
+	done
+}
+
 # Every gated key must still carry its original local behavior in the else
 # branch: a regression here is a regression for every non-bridge window.
 @test "gated keys keep their local behavior in the else branch" {

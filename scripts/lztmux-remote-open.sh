@@ -9,9 +9,16 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
-# shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
-# mirroring shellQuote in the daemon — remote-derived names must not break out.
-shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# shell_quote single-quotes $1, escaping embedded single quotes — correct
+# under any POSIX shell or fish for every character except a literal
+# backslash (see shell_quotable() in lib-remote.sh for why). Callers must
+# clear a value through shell_quotable() before it reaches here; $sess and
+# LZTMUX_REMOTE_NEW_DIR are the two that do.
+shell_quote() {
+	local s="$1"
+	s="${s//\'/\'\\\'\'}"
+	printf "'%s'" "$s"
+}
 
 # reap_daemon SIGTERMs pid, waits up to 2s, then SIGKILLs if it's still
 # alive. Used whenever a live daemon has been proven stale so its socket +
@@ -44,6 +51,11 @@ if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n ${LZTMUX_REMOTE_RESTORE:-} ]]; then
 	exit 1
 fi
 
+if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} ]] && ! shell_quotable "$LZTMUX_REMOTE_NEW_DIR"; then
+	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR contains a backslash, which no remote shell dialect can quote safely: $LZTMUX_REMOTE_NEW_DIR" >&2
+	exit 1
+fi
+
 # One round-trip for the remote's OS + uid: the OS decides the tmux socket dir
 # (/run/user/<uid> on Linux; tmux's default /tmp/tmux-<uid> on macOS, which has
 # no $XDG_RUNTIME_DIR) and the service manager that can cold-start a server.
@@ -54,6 +66,10 @@ else
 	default_tmpdir="/run/user/$remote_uid"
 fi
 remote_tmpdir="${LZTMUX_REMOTE_TMPDIR:-$default_tmpdir}"
+if ! valid_remote_path "$remote_tmpdir"; then
+	echo "lztmux-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
+	exit 1
+fi
 # single-quoted: $(id -un) expands on the remote side (NixOS profile fallback)
 remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux')"
 
@@ -105,6 +121,11 @@ if [[ -z $sess ]]; then
 		echo "lztmux-remote-open: started $start_desc on $host but no session appeared" >&2
 		exit 1
 	fi
+fi
+
+if ! shell_quotable "$sess"; then
+	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+	exit 1
 fi
 
 # The picker's row came from a tmux-remux snapshot, not a live probe (#268):
