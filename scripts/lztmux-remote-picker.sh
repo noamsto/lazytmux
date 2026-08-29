@@ -21,6 +21,15 @@ remote_open="@remote_open@"
 picker_generate="@picker_generate@"
 zoxide_bin="@zoxide@/bin"
 
+# A floating pane's command is handed to the pane's own shell (fish), which
+# rebuilds PATH from its config and so drops the tmux wrapper's coreutils
+# prefix — leaving a macOS host with no `timeout` at all. Appended, not
+# prefixed, so a host's own coreutils still wins.
+coreutils_bin="@coreutils@/bin"
+if [[ $coreutils_bin != @* ]]; then
+	PATH="$PATH:$coreutils_bin"
+fi
+
 # BatchMode on the interactive leg too: the bridge already requires
 # non-interactive auth, and without it a key-less host parks a password prompt
 # in a floating pane — a hang, not a message.

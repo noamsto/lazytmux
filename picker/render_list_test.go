@@ -8,8 +8,8 @@ import (
 func TestRenderHintsRemoteRow(t *testing.T) {
 	m := tuiModel{width: 200, visible: []listItem{{remoteHost: "tp-g6"}}, cursor: 0}
 	hints := stripANSI(m.renderHints())
-	if !strings.Contains(hints, "^o:remote") {
-		t.Errorf("hints = %q, want ^o:remote on a remote row", hints)
+	if !strings.Contains(hints, "^o:browse") {
+		t.Errorf("hints = %q, want ^o:browse on a remote row", hints)
 	}
 }
 
