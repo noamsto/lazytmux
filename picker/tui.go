@@ -110,6 +110,9 @@ type tuiModel struct {
 	// no attached tmux client to switch — Enter writes emitPath instead.
 	// "" means the ordinary interactive picker.
 	emitPath string
+	// emitHost is the ssh host the local side reached us by, carried across so
+	// the header can name it — the remote cannot derive it. Display only.
+	emitHost string
 	// zoxideReady is set once zoxideMsg arrives: a nil zoxideItems means both
 	// "no suggestions" and "the probe hasn't answered", which recombine's
 	// both-empty guard has to tell apart.
@@ -256,6 +259,9 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 	}
 
 	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items, emitPath)
+	if emitPath != "" {
+		m.emitHost = os.Getenv("LZTMUX_PICKER_HOST")
+	}
 
 	p := tea.NewProgram(m)
 	final, err := p.Run()

@@ -123,12 +123,16 @@ remote_probe() {
 }
 
 remote_serve() {
-	local token="$1" emit_dir emit mode found
+	local token="$1" label="${2:-}" emit_dir emit mode found
 	# Validated before it is joined onto a path, so it can never escape it.
 	if [[ ! $token =~ ^[A-Za-z0-9]+$ ]]; then
 		echo "lztmux-remote-picker: invalid emit token" >&2
 		exit 1
 	fi
+	# Carried rather than derived: the remote cannot know which name the local
+	# side reached it by. Display-only, so a label that is not host-shaped is
+	# dropped — a badge is not worth failing a pick over.
+	[[ $label =~ ^[A-Za-z0-9._@-]{1,64}$ ]] || label=""
 
 	emit_dir="$(emit_dir_path)"
 	# -m applies only when mkdir creates; -p calls an existing directory success
@@ -169,6 +173,7 @@ remote_serve() {
 	# lazytmux PATH. @zoxide@ ships from the same store path as this script, so
 	# the two cannot drift.
 	exec env TMUX_TMPDIR="$(resolve_tmpdir)" LZTMUX_PICKER_EMIT="$emit" \
+		LZTMUX_PICKER_HOST="$label" \
 		PATH="$zoxide_bin:$(dirname "$(resolve_tmux)"):$PATH" \
 		"$picker_generate" --tui --remote-pick
 }
@@ -211,7 +216,7 @@ local_pick() {
 
 	# Bare argv, no `var=value` prefix: the remote login shell is fish, which
 	# does not parse a leading assignment. Unbounded — the human is browsing.
-	ssh "${SSH_OPTS[@]}" -t "$host" -- "$script" --serve "$token" && rc=0 || rc=$?
+	ssh "${SSH_OPTS[@]}" -t "$host" -- "$script" --serve "$token" "$host" && rc=0 || rc=$?
 	case "$rc" in
 	0) ;;
 	4) fatal "$host: emit dir unusable" ;;
@@ -266,9 +271,9 @@ local_pick() {
 
 case "${1:-}" in
 --probe) remote_probe ;;
---serve) remote_serve "${2:-}" ;;
+--serve) remote_serve "${2:-}" "${3:-}" ;;
 "" | -*)
-	echo "usage: lztmux-remote-picker <host> | --probe | --serve <token>" >&2
+	echo "usage: lztmux-remote-picker <host> | --probe | --serve <token> [label]" >&2
 	exit 1
 	;;
 *) local_pick "$1" ;;

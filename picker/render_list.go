@@ -64,7 +64,25 @@ func (m tuiModel) renderSearch() string {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
 		BorderForeground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0")).
-		Render(icon + queryStr)
+		Render(m.withHostBadge(icon + queryStr))
+}
+
+// withHostBadge right-aligns the remote host on the search row, so a picker
+// that looks identical to the local one still says whose sessions it lists.
+// Dropped, never truncated, when the row is too narrow for both: the query
+// being typed outranks it.
+func (m tuiModel) withHostBadge(row string) string {
+	if m.emitHost == "" {
+		return row
+	}
+	badge := lipgloss.NewStyle().
+		Foreground(m.thmColor("@thm_mauve", "#cba6f7", "#8839ef")).
+		Render(" " + m.emitHost + " ")
+	gap := m.width - visibleWidth(row) - visibleWidth(badge)
+	if gap < 1 {
+		return row
+	}
+	return row + strings.Repeat(" ", gap) + badge
 }
 
 func (m tuiModel) renderHints() string {

@@ -110,6 +110,8 @@ func shellQuote(s string) string {
 // to the pane's own shell, not to us. @float_geom repeats the percentages so
 // tmux-float-refit can reassert them when the window resizes (#371) — tmux
 // itself bakes them into cells at creation and never revisits them.
+// @pane_keys_raw keeps C-hjkl and M-l for the remote picker's own keymap, which
+// the root key table would otherwise eat (tmux-smart-nav).
 func remotePickNewPaneArgs(bin, host string) []string {
 	return []string{
 		"new-pane",
@@ -119,6 +121,8 @@ func remotePickNewPaneArgs(bin, host string) []string {
 		"set", "-p", "@pane_label", "remote " + host,
 		";",
 		"set", "-p", "@float_geom", "90% 85% 5% 8%",
+		";",
+		"set", "-p", "@pane_keys_raw", "1",
 	}
 }
 
