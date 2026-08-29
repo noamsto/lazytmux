@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016 # '$(…)' in single quotes is the injection payload under test
 
 setup() {
 	# shellcheck source=/dev/null
@@ -24,4 +25,37 @@ setup() {
 	rm -f "$pidfile"
 	run remote_daemon_alive "$pidfile"
 	[ "$status" -ne 0 ]
+}
+
+@test "valid_remote_path: accepts normal absolute paths" {
+	run valid_remote_path "/run/user/1000"
+	[ "$status" -eq 0 ]
+
+	run valid_remote_path "/tmp/tmux-1000"
+	[ "$status" -eq 0 ]
+}
+
+@test "valid_remote_path: rejects relative, whitespace, and metacharacters" {
+	run valid_remote_path "bin/x"
+	[ "$status" -ne 0 ]
+
+	run valid_remote_path "/run/user/1000 x"
+	[ "$status" -ne 0 ]
+
+	run valid_remote_path '/run/user/$(id -u)'
+	[ "$status" -ne 0 ]
+}
+
+@test "shell_quotable: rejects a literal backslash, accepts everything else" {
+	run shell_quotable 'a\b'
+	[ "$status" -ne 0 ]
+
+	run shell_quotable "/srv/my project (v2)"
+	[ "$status" -eq 0 ]
+
+	run shell_quotable "workstation"
+	[ "$status" -eq 0 ]
+
+	run shell_quotable "it's a test"
+	[ "$status" -eq 0 ]
 }

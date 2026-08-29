@@ -348,6 +348,7 @@
     "cursor-relaunch-hooks-install"
     "lztmux-remote-open"
     "lztmux-remote-picker"
+    "lztmux-remote-detach"
     "lztmux-remote-auth"
     "lztmux-notify"
     "lztmux-notify-center"
@@ -777,7 +778,24 @@
     # next-3.8's default verbatim, -N note included (the note feeds which-key).
     # The rename prompt seeds from @window_bridge_name, not #W: on a mirror window
     # #W is the label reflow derived, while the option holds the remote's own name.
-    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename #{q:@bridge_pane} '%%'" } } { command-prompt -I'#W' { rename-window -- '%%' } }
+    # That seed is remote-derived, so the prompt result is untrusted and reaches
+    # the shell as a run-shell ARGUMENT (%1) referenced #{qs:1}, never as text
+    # spliced into the command string, where run-shell would format-expand it and
+    # a #(...) in the name would run before sh saw the command at all.
+    #   - #{qs:1}, not #{q:1}: format_quote_shell omits ~, { and } from its escape
+    #     set and never wraps, so the value lands as a bare shell word — measured,
+    #     a remote window named ~/src was delivered as the LOCAL $HOME-expanded
+    #     path, and x{a,b} split into two argv words. #{qs:1} POSIX-single-quotes.
+    #   - %1, not '%%': tmux's template substitution leaves %N unescaped, so
+    #     #{qs:} is the only quoting layer; '%%' would double-escape.
+    #   - The { ... } block form is what makes an unescaped %1 safe: the block is
+    #     never re-lexed, whereas a string command argument would re-parse it.
+    #   - #{qs:1} must stay in a BARE word position: it emits its own surrounding
+    #     single quotes, so wrapping it ('#{qs:1}') would have the modifier's
+    #     opening quote close the outer one and defeat the escaping. The
+    #     conf-shell-quoting scanner tracks no sub-quoting context and cannot
+    #     catch that.
+    bind-key -N 'Rename current window' , if-shell -F '${bridgeGate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "${bridgeCtl} rename #{q:@bridge_pane} #{qs:1}" %1 } } { command-prompt -I'#W' { rename-window -- '%%' } }
     bind-key -N 'Swap the active pane with the pane above' '{' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} U" } { swap-pane -U }
     bind-key -N 'Swap the active pane with the pane below' '}' if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} swap #{q:@bridge_pane} D" } { swap-pane -D }
 
@@ -861,8 +879,16 @@
     # In a mirror window the guard would be reading the wrong process — a mirror
     # pane runs the renderer, not the remote workload — so a bridge kill always
     # confirms, naming the remote pane, then kills it on the remote.
-    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
+    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}#{?@bridge_proc, (#{@bridge_proc}),} on #{@bridge_host}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
     bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window #{q:@bridge_pane}" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
+    # detach-client is not lost in a mirror, just deferred: the detach kills the
+    # mirror session, and detach-on-destroy off (below) lands the client on
+    # another local session, where d is this bind's other branch.
+    #
+    # -b is load-bearing, not just responsiveness: the script waits for the
+    # daemon's teardown to kill the mirror session, and that teardown issues its
+    # kill-session through the same command queue a foreground run-shell holds.
+    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.lztmux-remote-detach}/bin/lztmux-remote-detach #{q:session_name}" } { detach-client }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
@@ -919,7 +945,16 @@
     # brand-new script would resolve to nothing until then. An option repoints on
     # a config reload alone (#336).
     set -g @remote_pick_bin "${script.lztmux-remote-picker}/bin/lztmux-remote-picker"
+    # Same, and these two are never on PATH at any point: of the remote scripts
+    # only lztmux-remote-picker reaches home.packages (remote.exposePickOnPath).
+    set -g @remote_open_bin "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+    set -g @remote_auth_bin "${script.lztmux-remote-auth}/bin/lztmux-remote-auth"
     set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
+
+    # Same reasoning, for outside consumers: an external tool that stamps
+    # @crew_* on a window has to kick a reflow for the badge to render, and
+    # reflow is never on PATH. The option is the only handle it can reach.
+    set -g @reflow_bin "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
     # PR badge lives on the window list only — not duplicated here.

@@ -7,8 +7,11 @@
 # user-influenced). tmux's own fix is #{q:NAME}, which backslash-escapes the
 # metacharacters sh -c would otherwise see. This file walks the EMITTED
 # tmux.conf (a Nix store file, not the Nix source) and fails on every #{...}
-# inside a shell-string argument that isn't exactly `#{q:NAME}` with a plain,
-# unnested body.
+# inside a shell-string argument that isn't one of tmux's two SHELL-quoting
+# forms -- `#{q:NAME}` or `#{qs:NAME}` -- with a plain, unnested body. The style
+# modifiers `#{qe:}`/`#{qh:}` and the argument-escaping `#{qa:}` stay flagged:
+# they double `#` for the format drawer, they do not quote for a shell.
+# It also fails on a `%%`/`%N` command-prompt placeholder in a shell string.
 #
 # Scope, precisely:
 #   - run-shell's command argument (after its flags) is a shell string.
@@ -110,9 +113,10 @@ record_violation() {
 }
 
 # Scans one shell-command string (already stripped of its own outer quotes)
-# for #{...} expansions. Every one must be exactly #{q:NAME}, with no
-# further #{ nested inside NAME -- #{q:#{X}} does NOT quote, it's #{q:} of
-# a body that is itself unquoted. Reports every offender, not just the first.
+# for #{...} expansions and for %%/%N placeholders. Every expansion must be
+# #{q:NAME} or #{qs:NAME}, with no further #{ nested inside NAME -- #{q:#{X}}
+# does NOT quote, it's #{q:} of a body that is itself unquoted.
+# Reports every offender, not just the first.
 scan_shell_string() {
 	local str="$1" lineno="$2"
 	local n=${#str}
@@ -157,10 +161,26 @@ scan_shell_string() {
 					fi
 				done
 				((k < bn)) && scan_shell_string "${body:$((k + 1))}" "$lineno"
-			elif [[ $group != '#{q:'* ]] || ((nested)); then
+			elif [[ $group != '#{q:'* && $group != '#{qs:'* ]] || ((nested)); then
 				record_violation "$lineno" "$group" "$excerpt"
 			fi
 			i=$j
+		elif [[ ${str:i:2} == '%%' || ${str:i:2} =~ ^%[1-9]$ ]]; then
+			# A command-prompt template placeholder is substituted AFTER format
+			# expansion, so no #{q:...}/#{qs:...} can ever reach it -- it is
+			# unprotectable in a shell string by construction. And %N inside a
+			# run-shell string is NQ (cmd.c:869-871): raw, unescaped insertion,
+			# strictly worse than the '%%' it would replace. The safe shape is to
+			# pass the prompt result as a run-shell ARGUMENT and reference it
+			# #{qs:N}, which puts it back under the rule above.
+			#
+			# This over-flags rather than under-flags: the scanner cannot see
+			# whether a given run-shell sits under a command-prompt, so a literal
+			# %% in an unrelated shell string (a printf format, say) would trip it
+			# too. Zero such cases exist in the conf today; if you hit one, that is
+			# the reason, and the fix is to rewrite the format, not to weaken this.
+			record_violation "$lineno" "${str:i:2}" "$excerpt"
+			i=$((i + 2))
 		else
 			i=$((i + 1))
 		fi
@@ -363,6 +383,7 @@ bind Q if-shell -F '#{@gate}' { run-shell "/bin/x #{session_name}" }
 run-shell "/bin/x #{q:#{session_name}}"
 bind V if-shell '/bin/gate' 'set -g @x y ; run-shell "/bin/x #{window_name}"' 'display-message no'
 bind U run-shell '/bin/x #{?client_name,--client #{client_name},}'
+bind E run-shell '/bin/x #{qe:@window_bridge_name}'
 EOF
 	run check_conf_quoting "$BATS_TEST_TMPDIR/bad.conf"
 	[ "$status" -eq 1 ]
@@ -377,13 +398,33 @@ EOF
 	# a conditional's BRANCH is emitted into the shell, so it is held to the
 	# same rule even though the condition itself never reaches sh
 	[[ $output == *'#{client_name}'* ]]
-	[ "$count" -eq 7 ]
+	# #{qe:} is STYLE quoting (format_quote_style doubles '#' only) -- accepting
+	# #{qs:} must not widen the predicate to every #{q*:} modifier
+	[[ $output == *'#{qe:@window_bridge_name}'* ]]
+	[ "$count" -eq 8 ]
+}
+
+@test "flags a %% or %N command-prompt placeholder inside a shell string" {
+	cat >"$BATS_TEST_TMPDIR/pct.conf" <<'EOF'
+bind , command-prompt { run-shell "/bin/ctl rename #{q:@bridge_pane} '%%'" }
+bind . command-prompt { run-shell "/bin/ctl rename #{q:@bridge_pane} #{q:1}%2" }
+EOF
+	run check_conf_quoting "$BATS_TEST_TMPDIR/pct.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'%%'* ]]
+	[[ $output == *'%2'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 2 ]
 }
 
 @test "does not flag non-shell contexts" {
+	# The `,` line is the real bind's shape: #{qs:1} is an accepted shell-quoting
+	# form, while the trailing %1 ARGUMENT token and the else branch's
+	# `rename-window -- '%%'` are tmux-command positions, not shell strings, and
+	# so is `new-session -s '%%'` on the next line.
 	cat >"$BATS_TEST_TMPDIR/good.conf" <<'EOF'
 bind Q if-shell -F '#{&&:#{@bridge_win},#{@bridge_pane}}' { run-shell "/bin/x #{q:@bridge_pane}" }
-bind , command-prompt -I'#{@window_bridge_name}' { run-shell "/bin/x #{q:@bridge_pane}" }
+bind , if-shell -F '#{@gate}' { command-prompt -I'#{@window_bridge_name}' { run-shell "/bin/ctl rename #{q:@bridge_pane} #{qs:1}" %1 } } { command-prompt -I'#W' { rename-window -- '%%' } }
+bind N command-prompt -p "New session name:" "new-session -s '%%'"
 bind x confirm-before -p "kill #{@bridge_pane}? (y/n)" { run-shell "/bin/x #{q:@bridge_pane}" }
 bind | if-shell -F '#{@gate}' { run-shell "/bin/x #{q:@bridge_pane}" } { split-window -h -c "#{pane_current_path}" }
 set -g status-format[0] "#{session_name}"

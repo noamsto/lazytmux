@@ -1252,3 +1252,77 @@ $pane 1" ]; then
 	# The bridge owns what it wrote: SIGTERM teardown takes it away again.
 	[ ! -f "$pane_file" ]
 }
+
+# run_detach runs lztmux-remote-detach against $1 under a `tmux` that is pinned
+# to the DST server: the script calls a bare `tmux` (correct in production), and
+# the absolute path inside the stub keeps it from re-entering itself. DETACH is
+# the store path of the script; only tests/ exists in the check sandbox.
+run_detach() {
+	local real_tmux stub detach
+	real_tmux="$(command -v tmux)"
+	stub="$BATS_TEST_TMPDIR/detachbin"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\nexec %s -L m2dst "$@"\n' "$real_tmux" >"$stub/tmux"
+	chmod +x "$stub/tmux"
+	detach="${DETACH:-$BATS_TEST_DIRNAME/../scripts/lztmux-remote-detach.sh}"
+	run env PATH="$stub:$PATH" bash "$detach" "$1"
+}
+
+@test "detach drops the mirror and leaves the REMOTE session running" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c12
+
+	run_detach host-sess
+	[ "$status" -eq 0 ]
+
+	for _ in $(seq 1 60); do
+		kill -0 "$daemon_pid" 2>/dev/null || break
+		sleep 0.15
+	done
+
+	# Read the mirror's fate BEFORE the cleanup kill: that kill would run the
+	# very teardown under test, so asserting after it passes either way — and an
+	# unconditional `wait` on a daemon that ignored the detach hangs the test
+	# instead of failing it.
+	daemon_alive=1
+	kill -0 "$daemon_pid" 2>/dev/null || daemon_alive=0
+	mirror_gone=0
+	$DST has-session -t =host-sess 2>/dev/null || mirror_gone=1
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$daemon_alive" -eq 0 ]
+	# A killed last session takes the DST server with it, which fails has-session
+	# the same way.
+	[ "$mirror_gone" -eq 1 ]
+
+	# The remote kept its session and both panes: teardown closed a control-mode
+	# client, it did not kill anything over there.
+	run $SRC has-session -t =rem
+	[ "$status" -eq 0 ]
+	[ "$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)" -eq 2 ]
+}
+
+@test "detach drops the mirror even when the daemon can no longer tear itself down" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 1 c13
+
+	# SIGKILL leaves the socket, the pidfile and the mirror session behind: the
+	# state a wedged daemon presents, minus the wait.
+	kill -KILL "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	run_detach host-sess
+	[ "$status" -eq 0 ]
+
+	mirror_gone=0
+	$DST has-session -t =host-sess 2>/dev/null || mirror_gone=1
+	[ "$mirror_gone" -eq 1 ]
+
+	run $SRC has-session -t =rem
+	[ "$status" -eq 0 ]
+}

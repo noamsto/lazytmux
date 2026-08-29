@@ -179,7 +179,12 @@ var verbs = map[string]verb{
 	// @window_bridge_name optimistically is the local-first mutation the mirror
 	// invariant forbids.
 	"rename": {args: 1, windows: true, build: func(_, win, _ string, a []string) ([]string, error) {
-		name := sanitizeWindowName(a[0])
+		// The prompt prefills from @window_bridge_name, so the value handed back is
+		// already in that option's escaped dialect — re-encoding it without decoding
+		// first is a double-encode. The re-encode is still kept: the remote's own
+		// rename-window format-expands its argument, so a user-typed 'a#(x)' must
+		// not reach it bare.
+		name := sanitizeWindowName(decodeWindowName(a[0]))
 		if name == "" {
 			return nil, fmt.Errorf("rename: empty name")
 		}

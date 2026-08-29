@@ -1193,10 +1193,11 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		// ssh prompts for itself and the secret never passes through this
 		// process.
 		if item.remoteNeedsAuth {
-			cmd := exec.Command("lztmux-remote-auth", item.remoteHost)
+			authBin := envOrMap("REMOTE_AUTH_BIN", m.tmuxOpts, "@remote_auth_bin", "lztmux-remote-auth")
+			cmd := exec.Command(authBin, item.remoteHost)
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return remoteAuthDoneMsg{err: err} })
 		}
-		if err := openRemoteBridge(item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
+		if err := openRemoteBridge(m.tmuxOpts, item.remoteHost, item.remoteSess, item.remoteRestore); err != nil {
 			m.statusMsg = err.Error()
 			return m, nil
 		}

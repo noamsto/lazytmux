@@ -69,9 +69,9 @@ cleanup_stale_panes() {
 
 	# Build lookup: pane_id (without %) -> 1 for every pane that still exists
 	declare -A pane_exists
-	while IFS=$'\t' read -r pid _; do
+	while IFS='|' read -r pid _; do
 		pane_exists["${pid#%}"]=1
-	done < <(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}' 2>/dev/null || true)
+	done < <(tmux list-panes -a -F '#{pane_id}|#{pane_current_command}' 2>/dev/null || true)
 
 	# A successful query always lists at least this hook's own pane, so an empty
 	# map means list-panes failed (server hiccup) or hit the wrong/no server (CC
@@ -102,6 +102,7 @@ cleanup_stale_panes() {
 state="${1:-}"
 pane_id="${TMUX_PANE:-}"
 session_name=""
+win_target=""
 force=0
 transcript_path=""
 
@@ -355,6 +356,10 @@ while [[ $# -gt 0 ]]; do
 		session_name="$2"
 		shift 2
 		;;
+	--window)
+		win_target="$2"
+		shift 2
+		;;
 	--force)
 		force=1
 		shift
@@ -362,6 +367,10 @@ while [[ $# -gt 0 ]]; do
 	--transcript)
 		transcript_path="$2"
 		shift 2
+		;;
+	--*)
+		echo "Error: Unknown option '$1'" >&2
+		exit 1
 		;;
 	*)
 		shift
@@ -392,22 +401,6 @@ fi
 # Called by tmux hooks on window/session switch.
 # Usage: claude-status-update mark-seen --session <name> --window <index>
 if [[ $state == "mark-seen" ]]; then
-	win_target=""
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--session)
-			shift
-			session_name="$1"
-			shift
-			;;
-		--window)
-			shift
-			win_target="$1"
-			shift
-			;;
-		*) shift ;;
-		esac
-	done
 	[[ -n $session_name && -n $win_target ]] || exit 0
 	[[ -d $PANES_DIR ]] || exit 0
 	# Get pane IDs in the target window

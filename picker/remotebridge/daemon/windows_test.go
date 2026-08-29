@@ -100,3 +100,102 @@ func TestSanitizeWindowName(t *testing.T) {
 		}
 	}
 }
+
+// nameFixtures are raw remote names r with their measured sanitize (E) and
+// strip (S) images. Deliberately raw inputs rather than "the image of E": the
+// round trip that matters starts at whatever the remote reports. Rows 4-8 are
+// the '#'/'['/'|' adjacency cases that drift without the drop-before-strip
+// order and the fixed-point iteration.
+var nameFixtures = []struct {
+	r, e, s string
+}{
+	{"pr#367", "pr##367", "pr#367"},
+	{"a##b", "a####b", "a##b"},
+	{"plain-name", "plain-name", "plain-name"},
+	{"x#[fg=red", "x", "x"},
+	{"a##[x]b", "a##b", "a#b"},
+	{"#|[x]", "", ""},
+	{"a#|[x]b", "ab", "ab"},
+	{"##[a][", "", ""},
+	{"a|b\nc", "abc", "abc"},
+	{"|||", "", ""},
+	{"it's", "it's", "it's"},
+	{"~/src", "~/src", "~/src"},
+	{"[nix-amd-ai 🧠 #[fg=#94e2d5]󰪣#[fg=default] 󰘭 #46]", "[nix-amd-ai 🧠 󰪣 󰘭 ##46]", "[nix-amd-ai 🧠 󰪣 󰘭 #46]"},
+}
+
+// TestWindowNameFixtures pins E and S against the measured table. The
+// tmux-level inverse (rename-window of E(r) yielding S(r)) hardcodes these same
+// strings, so pinning them here in Go is what keeps that pair from being
+// tautological.
+func TestWindowNameFixtures(t *testing.T) {
+	for _, f := range nameFixtures {
+		if got := sanitizeWindowName(f.r); got != f.e {
+			t.Errorf("sanitizeWindowName(%q) = %q, want %q", f.r, got, f.e)
+		}
+		if got := stripWindowName(f.r); got != f.s {
+			t.Errorf("stripWindowName(%q) = %q, want %q", f.r, got, f.s)
+		}
+	}
+}
+
+// TestWindowNameRoundTrip is the property the prompt prefill depends on: a name
+// read back out of @window_bridge_name and re-sanitized must land where it
+// started, or every rename grows the '#'-run.
+func TestWindowNameRoundTrip(t *testing.T) {
+	for _, f := range nameFixtures {
+		e := sanitizeWindowName(f.r)
+		if got := sanitizeWindowName(decodeWindowName(e)); got != e {
+			t.Errorf("E(D(E(%q))) = %q, want %q", f.r, got, e)
+		}
+	}
+}
+
+// TestSanitizedNameHasNoHashBeforeBracket is the invariant behind the round
+// trip: format_expand collapses '##' pairwise but passes a '#'-run followed by
+// '[' through verbatim, so such a run must never survive sanitizing.
+func TestSanitizedNameHasNoHashBeforeBracket(t *testing.T) {
+	for _, f := range nameFixtures {
+		e := sanitizeWindowName(f.r)
+		for i := 0; i < len(e); i++ {
+			if e[i] != '#' {
+				continue
+			}
+			j := i
+			for j < len(e) && e[j] == '#' {
+				j++
+			}
+			if j < len(e) && e[j] == '[' {
+				t.Errorf("sanitizeWindowName(%q) = %q has a #-run before '[' at %d", f.r, e, i)
+			}
+			i = j - 1
+		}
+	}
+}
+
+func TestStripWindowNameIdempotent(t *testing.T) {
+	for _, f := range nameFixtures {
+		s := stripWindowName(f.r)
+		if got := stripWindowName(s); got != s {
+			t.Errorf("stripWindowName(stripWindowName(%q)) = %q, want %q", f.r, got, s)
+		}
+	}
+}
+
+func TestDecodeWindowName(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"plain", "plain"},
+		{"pr##367", "pr#367"},
+		{"a####b", "a##b"},
+		{"###", "##"}, // odd run: ceil(n/2), same either scan direction
+		{"#", "#"},    // a lone # is not an escape
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := decodeWindowName(tc.in); got != tc.want {
+			t.Errorf("decodeWindowName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -1,6 +1,28 @@
 package screen
 
-import "testing"
+import (
+	"os"
+	"testing"
+	"time"
+)
+
+func TestFeedDoesNotBlockOnTerminalQueries(t *testing.T) {
+	data, err := os.ReadFile("testdata/codex_startup_queries.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		s := New(100, 30)
+		s.Feed(data)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Feed blocked on terminal queries for >5s")
+	}
+}
 
 func TestFeedRendersText(t *testing.T) {
 	s := New(80, 24)
