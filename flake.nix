@@ -100,8 +100,20 @@
             processIcons = import ./config/process-icons.nix;
             fallbackIcon = "";
             maxIconsPicker = "5";
-          }).overrideAttrs (_old: {
+          }).overrideAttrs (old: {
             doCheck = true;
+            # tmux: TestReflowRunShellArgsSurvivesFormatInjection (#368) drives a
+            # real run-shell call, same private config-less pattern as
+            # reflow-fanout-tests. Kept here rather than picker/default.nix so it's
+            # scoped to this check alone — the package itself is reused for
+            # prebuilt binaries by the remote bridge integration checks, which
+            # don't need a test-only dependency.
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.tmux];
+            # Tells TestReflowRunShellArgsSurvivesFormatInjection (#368) to fail
+            # rather than skip if tmux is somehow still missing, so pruning the
+            # nativeBuildInputs entry above breaks loudly instead of silently
+            # dropping the regression check.
+            LAZYTMUX_REQUIRE_TMUX = "1";
             checkPhase = ''
               runHook preCheck
               export GOFLAGS=''${GOFLAGS//-trimpath/}
