@@ -919,6 +919,10 @@
     # brand-new script would resolve to nothing until then. An option repoints on
     # a config reload alone (#336).
     set -g @remote_pick_bin "${script.lztmux-remote-picker}/bin/lztmux-remote-picker"
+    # Same, and these two are never on PATH at any point: of the remote scripts
+    # only lztmux-remote-picker reaches home.packages (remote.exposePickOnPath).
+    set -g @remote_open_bin "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+    set -g @remote_auth_bin "${script.lztmux-remote-auth}/bin/lztmux-remote-auth"
     set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
