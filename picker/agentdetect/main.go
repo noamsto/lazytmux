@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,12 @@ const (
 	// of seconds is fine for a backstop that only exists to bound the worst
 	// case.
 	livenessInterval = 30 * time.Second
+	// Geometry poll: cheap enough (one display-message fork per watcher per
+	// tick) and bounds how long a pane resize can desync the emulator — the
+	// emulator never resizes itself, and a grown pane's repaint either panics
+	// the parser (feedSafe re-seeds) or silently clamps the rows where the
+	// idle signal lives (#251).
+	geometryInterval = 5 * time.Second
 	watcherRegDir    = "/tmp/claude-status/watchers"
 )
 
@@ -43,7 +50,7 @@ func main() {
 	}
 	paneID := os.Args[1] // already sans '%'
 
-	cols, rows, cmd := paneInfo(paneID)
+	_, _, cmd, _ := paneInfo(paneID)
 	ms, err := manifest.Load()
 	if err != nil {
 		return
@@ -58,7 +65,7 @@ func main() {
 		return
 	}
 
-	scr := seededScreen(paneID, cols, rows)
+	scr, curCols, curRows := seededScreen(paneID)
 	deb := debounce.New(debounceWindow, sampleCeiling)
 	w := statefile.New(stateDir, paneID)
 	emit(scr, m, w) // report what is already on screen, before any new output
@@ -70,6 +77,13 @@ func main() {
 	defer ticker.Stop()
 	liveness := time.NewTicker(livenessInterval)
 	defer liveness.Stop()
+	geometry := time.NewTicker(geometryInterval)
+	defer geometry.Stop()
+
+	reseed := func() {
+		scr.Close()
+		scr, curCols, curRows = seededScreen(paneID)
+	}
 
 	for {
 		select {
@@ -80,10 +94,12 @@ func main() {
 				// can't linger. Seeding rather than blanking matters for an
 				// agent that only ever repaints a few cells — a blank screen
 				// would never be filled back in.
-				scr = seededScreen(paneID, cols, rows)
+				reseed()
 			}
 			if len(data) > 0 {
-				scr.Feed(data)
+				if !feedSafe(scr, data) {
+					reseed()
+				}
 				deb.Mark(time.Now())
 			}
 			if closed {
@@ -102,6 +118,14 @@ func main() {
 			if deb.Due(time.Now()) {
 				emit(scr, m, w)
 			}
+		case <-geometry.C:
+			if !stillOwner(watcherRegDir, paneID, myPID) {
+				return
+			}
+			if c, r, _, ok := paneInfo(paneID); ok && (c != curCols || r != curRows) {
+				reseed()
+				emit(scr, m, w)
+			}
 		case <-liveness.C:
 			// Backstop for the case EOF never arrives: dead pane, or the
 			// tmux server gone outright.
@@ -113,18 +137,40 @@ func main() {
 	}
 }
 
-// seededScreen returns an emulator primed with the pane's current contents.
-// pipe-pane only delivers bytes written after it is armed, so an emulator that
-// starts blank shows whatever the agent happens to repaint next. Agents that
-// redraw a whole frame converge within a frame or two; codex animates a few
-// cells at a time, so the line we match on ("esc to interrupt") is never
-// rewritten and a blank-start emulator never sees it at all (#238).
-func seededScreen(paneID string, cols, rows int) screen.Screen {
+// seedBytes converts capture-pane's bare-LF row separators to CR+LF. A raw LF
+// moves the cursor down without returning to column 0, so feeding capture-pane
+// output unmodified drifts every line right of the last and garbles the seed
+// (#251).
+func seedBytes(out []byte) []byte {
+	return bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+}
+
+// seededScreen returns an emulator primed with the pane's current contents,
+// plus the geometry it was created with. pipe-pane only delivers bytes written
+// after it is armed, so an emulator that starts blank shows whatever the agent
+// happens to repaint next. Agents that redraw a whole frame converge within a
+// frame or two; codex animates a few cells at a time, so the line we match on
+// ("esc to interrupt") is never rewritten and a blank-start emulator never
+// sees it at all (#238). Re-reads geometry so a re-seed also re-syncs the
+// emulator size with the pane (#251).
+func seededScreen(paneID string) (screen.Screen, int, int) {
+	cols, rows, _, _ := paneInfo(paneID)
 	scr := screen.New(cols, rows)
 	if out, err := exec.Command("tmux", "capture-pane", "-p", "-e", "-t", "%"+paneID).Output(); err == nil {
-		scr.Feed(out)
+		scr.Feed(seedBytes(out))
 	}
-	return scr
+	return scr, cols, rows
+}
+
+// feedSafe isolates vt emulator panics: an agent addressing rows outside the
+// emulator's geometry — the pane grew after the watcher started, and the
+// emulator never resizes — panics inside ultraviolet (#251). Dying would
+// freeze the pane's last state until the sweep re-arms; recovering and
+// re-seeding self-corrects both the parser state and the geometry.
+func feedSafe(scr screen.Screen, data []byte) (ok bool) {
+	defer func() { ok = recover() == nil }()
+	scr.Feed(data)
+	return true
 }
 
 func emit(scr screen.Screen, m manifest.Manifest, w *statefile.Writer) {
@@ -157,26 +203,39 @@ func readStdin(buf *drainbuf.Buffer) {
 	}
 }
 
-func paneInfo(paneID string) (cols, rows int, cmd string) {
+func paneInfo(paneID string) (cols, rows int, cmd string, ok bool) {
 	cols, rows = 80, 24
 	out, err := exec.Command("tmux", "display", "-p", "-t", "%"+paneID,
 		"#{pane_width} #{pane_height} #{pane_current_command}").Output()
 	if err != nil {
 		return
 	}
-	f := strings.Fields(strings.TrimSpace(string(out)))
-	if len(f) >= 2 {
-		if c, e := strconv.Atoi(f[0]); e == nil {
-			cols = c
-		}
-		if r, e := strconv.Atoi(f[1]); e == nil {
-			rows = r
-		}
+	c, r, cmd, ok := parsePaneInfo(string(out))
+	if !ok {
+		return // keep 80×24 defaults; callers must check ok before acting
+	}
+	return c, r, cmd, true
+}
+
+// parsePaneInfo is the pure half of paneInfo: ok is true only when width and
+// height both parse from a non-empty reply. tmux display-message is
+// CANFAIL-tolerant (exits 0 against a dead pane), so callers must never act
+// on a failed read — never re-seed to the 80×24 default on a transient miss
+// (#251).
+func parsePaneInfo(out string) (cols, rows int, cmd string, ok bool) {
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) < 2 {
+		return 0, 0, "", false
+	}
+	c, errC := strconv.Atoi(f[0])
+	r, errR := strconv.Atoi(f[1])
+	if errC != nil || errR != nil {
+		return 0, 0, "", false
 	}
 	if len(f) >= 3 {
 		cmd = f[2]
 	}
-	return
+	return c, r, cmd, true
 }
 
 // registerWatcher atomically claims paneID for pid, replacing whatever a

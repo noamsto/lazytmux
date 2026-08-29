@@ -9,17 +9,22 @@ import (
 
 // replayMatch feeds raw capture-pane bytes through the VT emulator (same path as
 // agent-detect's pipe-pane watcher) and returns Match's verdict.
-func replayMatch(t *testing.T, capture []byte, cols, rows int) (string, bool) {
+func replayMatch(t *testing.T, capture []byte, cols, rows int, cmd string) (string, bool) {
 	t.Helper()
 	scr := screen.New(cols, rows)
 	scr.Feed(capture)
+	return matchScreen(t, scr, cmd)
+}
+
+func matchScreen(t *testing.T, scr screen.Screen, cmd string) (string, bool) {
+	t.Helper()
 	ms, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := ForCommand(ms, "cursor-agent")
+	m, ok := ForCommand(ms, cmd)
 	if !ok {
-		t.Fatal("no manifest for cursor-agent")
+		t.Fatalf("no manifest for %s", cmd)
 	}
 	return Match(m, scr.Text(), scr.Title(), scr.AltScreen())
 }
@@ -37,12 +42,39 @@ func TestCursorCaptureReplay(t *testing.T) {
 	// Pane geometry from the live captures (100×30 tmux pane).
 	const cols, rows = 100, 30
 
-	got, ok := replayMatch(t, working, cols, rows)
+	got, ok := replayMatch(t, working, cols, rows, "cursor-agent")
 	if !ok || got != "processing" {
 		t.Fatalf("working capture replay = (%q,%v), want (processing,true)", got, ok)
 	}
 
-	got, ok = replayMatch(t, idle, cols, rows)
+	got, ok = replayMatch(t, idle, cols, rows, "cursor-agent")
+	if !ok || got != "idle" {
+		t.Fatalf("idle capture replay = (%q,%v), want (idle,true)", got, ok)
+	}
+}
+
+func TestCodexCaptureReplay(t *testing.T) {
+	working, err := os.ReadFile("testdata/codex_working_capture.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := os.ReadFile("testdata/codex_idle_capture.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pane geometry from the live captures (100×30 tmux pane).
+	const cols, rows = 100, 30
+
+	scr := screen.New(cols, rows)
+	scr.Feed(working)
+	got, ok := matchScreen(t, scr, "codex")
+	if !ok || got != "processing" {
+		t.Fatalf("working capture replay = (%q,%v), want (processing,true)", got, ok)
+	}
+
+	scr.Feed(idle)
+	got, ok = matchScreen(t, scr, "codex")
 	if !ok || got != "idle" {
 		t.Fatalf("idle capture replay = (%q,%v), want (idle,true)", got, ok)
 	}

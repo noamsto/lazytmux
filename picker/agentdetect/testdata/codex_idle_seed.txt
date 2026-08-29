@@ -1,0 +1,30 @@
+  (except !).
+
+⚠ The figma MCP server is not logged in. Run `codex mcp login figma`.
+
+⚠ MCP startup incomplete (failed: figma)
+
+
+[1;2m› [0mhell command: sleep 20; echo done. Then reply ok.
+
+
+• SessionStart hook (completed)
+  hook context: This session has an image carousel. When a diagram would clarify your
+    explanation — architecture, data flow, state machines, pipelines, entity
+    [2m… +13 lines (ctrl + t to view transcript)[0m
+
+[2m• [0mRunning the requested shell command now.
+
+• [1mRan[0m sleep 20; echo done
+[2m  └ done[0m
+
+[2m────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• [0mok
+
+[2m────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+[0;1m›[0m [2mFind and fix a bug in @filename[0m
+
+  gpt-5.6-luna xhigh · /tmp/codex251-work                                              Vim: Normal
