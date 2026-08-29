@@ -47,7 +47,8 @@ tmux new-session -d -s "$SCRATCH" 2>/dev/null || true
 TITLE=" #[fg=#{@thm_lavender}]scratch: ${SESSION}#[fg=#{@thm_overlay_1}]  ·  #[fg=#{@thm_lavender}]\`d#[fg=#{@thm_overlay_1}] hide  ·  #[fg=#{@thm_lavender}]exit#[fg=#{@thm_overlay_1}] close "
 
 # Pin the client: unpinned, tmux re-resolves to the session's most-recently-active
-# client, which on a bridged host can be the tty-less control client (#346).
+# client, which on a bridged host can be the tty-less control client (#346,
+# reported upstream as tmux/tmux#5551 — drop the pin once that ships).
 POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
 # display-popup -E runs its argument through a shell, so both halves have to be
