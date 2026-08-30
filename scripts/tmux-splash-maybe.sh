@@ -14,8 +14,9 @@ if [ "$(tmux show-option -gqv @splash_shown)" = "1" ]; then exit 0; fi
 
 # The remote bridge attaches a -CC control-mode client. It has no tty, so a
 # second popup on it dereferences NULL inside tmux and takes the whole server
-# down (#346) — and a mirror has no business showing a splash. Deliberately
-# without setting @splash_shown: a later real attach must still get it.
+# down (#346, upstream tmux/tmux#5551) — and a mirror has no business showing
+# a splash. Deliberately without setting @splash_shown: a later real attach
+# must still get it.
 client="${2:-}"
 control=""
 while read -r mode name; do

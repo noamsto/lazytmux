@@ -14,7 +14,8 @@ BORDER_FG=$(tmux show -gv @thm_overlay_1 2>/dev/null || echo "#7f849c")
 HEIGHT=85%
 [[ $(tmux show -gv @picker_layout 2>/dev/null) == list ]] && HEIGHT=60%
 # Pin the client: unpinned, tmux re-resolves to the session's most-recently-active
-# client, which on a bridged host can be the tty-less control client (#346).
+# client, which on a bridged host can be the tty-less control client (#346,
+# reported upstream as tmux/tmux#5551 — drop the pin once that ships).
 POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
 tmux display-popup "${POPUP_CLIENT[@]}" -E -w 90% -h "$HEIGHT" -b rounded -T " Sessions " \
