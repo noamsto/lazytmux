@@ -15,11 +15,17 @@ if [[ ${1:-} == "--agent" ]]; then
 	TITLE=" Agent Windows "
 fi
 
-BORDER_FG=$(tmux show -gv @thm_overlay_1 2>/dev/null || echo "#7f849c")
+# Both options in one round-trip: the popup's open latency is dominated by
+# forks queued behind the (single-threaded) tmux server, and these run before
+# anything paints. Both are only ever `set -g`, so resolving them through the
+# option chain rather than `show -gv` picks the same values.
+OPTS=$(tmux display -p '#{@thm_overlay_1}|#{@picker_layout}' 2>/dev/null || true)
+BORDER_FG=${OPTS%%|*}
+[[ -n $BORDER_FG ]] || BORDER_FG="#7f849c"
 # List-only wants a shorter popup so a full-height list isn't mostly blank;
 # a popup can't be resized after creation, so the height is chosen here.
 HEIGHT=85%
-[[ $(tmux show -gv @picker_layout 2>/dev/null) == list ]] && HEIGHT=60%
+[[ ${OPTS#*|} == list ]] && HEIGHT=60%
 # Pin the client: unpinned, tmux re-resolves to the session's most-recently-active
 # client, which on a bridged host can be the tty-less control client (#346,
 # reported upstream as tmux/tmux#5551 — drop the pin once that ships).

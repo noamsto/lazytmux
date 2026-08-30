@@ -121,16 +121,32 @@ func main() {
 // Data collection
 // ---------------------------------------------------------------------------
 
-func collectSessions() []sessionData {
+// panesSnapshot is one `tmux list-panes -a` shared by the collectors that would
+// otherwise each fork their own. The picker's open latency is dominated by
+// round-trips queued behind the single-threaded tmux server, and session mode
+// needs both derivations before it can paint.
+type panesSnapshot []string
+
+// collectPanesSnapshot fetches the union of the fields sessions() and paneMap()
+// read. @bridge_host sits mid-format on purpose: the trailing field must be one
+// that is never empty (the TrimSpace in each parser would eat the last line's
+// tab, and with it that line's whole pane).
+func collectPanesSnapshot() panesSnapshot {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		// @bridge_host sits mid-format on purpose: the trailing field must be one
-		// that is never empty (TrimSpace below would eat the last line's tab, and
-		// with it that line's whole pane).
-		"#{session_name}\t#{session_path}\t#{session_last_attached}\t#{@bridge_host}\t#{pane_current_command}\t#{pane_pid}").Output()
+		"#{pane_id}\t#{session_name}\t#{window_index}\t#{session_path}\t#{session_last_attached}\t#{@bridge_host}\t#{pane_current_command}\t#{pane_pid}").Output()
 	if err != nil {
 		return nil
 	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n")
+}
 
+// collectSessions is the standalone form, for the async callers that hold no
+// snapshot of their own (the remote probe and zoxide's exclusion set).
+func collectSessions() []sessionData {
+	return collectPanesSnapshot().sessions()
+}
+
+func (snap panesSnapshot) sessions() []sessionData {
 	type sessInfo struct {
 		path       string
 		activity   int64
@@ -141,12 +157,12 @@ func collectSessions() []sessionData {
 	}
 	m := make(map[string]*sessInfo)
 
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) < 6 {
+	for _, line := range snap {
+		parts := strings.SplitN(line, "\t", 8)
+		if len(parts) < 8 {
 			continue
 		}
-		name, path, actStr, proc := parts[0], parts[1], parts[2], parts[4]
+		name, path, actStr, proc := parts[1], parts[3], parts[4], parts[6]
 		// Expand %h (tmux may store literal %h for home dir)
 		if home := os.Getenv("HOME"); home != "" {
 			path = strings.Replace(path, "%h", home, 1)
@@ -155,7 +171,7 @@ func collectSessions() []sessionData {
 
 		si, ok := m[name]
 		if !ok {
-			si = &sessInfo{path: path, activity: act, seen: make(map[string]bool), bridgeHost: parts[3]}
+			si = &sessInfo{path: path, activity: act, seen: make(map[string]bool), bridgeHost: parts[5]}
 			m[name] = si
 		}
 		if act > si.activity {
@@ -165,7 +181,7 @@ func collectSessions() []sessionData {
 			si.seen[proc] = true
 			si.procs = append(si.procs, proc)
 		}
-		if pid, err := strconv.Atoi(parts[5]); err == nil && pid > 0 {
+		if pid, err := strconv.Atoi(parts[7]); err == nil && pid > 0 {
 			si.panePIDs = append(si.panePIDs, pid)
 		}
 	}
@@ -643,10 +659,10 @@ func screenOverrideMaxAge(state string) int64 {
 // read_pane_state, a screen override re-resolves session from the live pane
 // map instead of blanking it — this picker's session/window aggregation both
 // key off the same field, so blanking it would drop the pane entirely.
-func collectAgentPanes() []agentPaneInfo {
+func collectAgentPanes(snap panesSnapshot) []agentPaneInfo {
 	return collectAgentPanesFrom(
 		"/tmp/claude-status/panes", "/tmp/claude-status/screen", "/tmp/claude-status/issues",
-		buildPaneMap(), time.Now().Unix(),
+		snap.paneMap(), time.Now().Unix(),
 	)
 }
 
@@ -750,16 +766,11 @@ type paneMapping struct {
 	winIdx  int
 }
 
-func buildPaneMap() map[string]paneMapping {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}\t#{session_name}\t#{window_index}").Output()
-	if err != nil {
-		return nil
-	}
+func (snap panesSnapshot) paneMap() map[string]paneMapping {
 	m := make(map[string]paneMapping)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
+	for _, line := range snap {
+		parts := strings.SplitN(line, "\t", 8)
+		if len(parts) < 8 {
 			continue
 		}
 		paneID := strings.TrimPrefix(parts[0], "%")

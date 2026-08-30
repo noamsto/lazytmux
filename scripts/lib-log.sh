@@ -15,10 +15,24 @@ LAZYTMUX_DEBUG_SENTINEL="${LAZYTMUX_DEBUG_SENTINEL:-/tmp/lazytmux-debug.on}"
 log_enabled() { [[ -f $LAZYTMUX_DEBUG_SENTINEL ]]; }
 
 # file_size / file_mtime FILE -> bytes / mtime-epoch on stdout (0 if absent).
-# Portable: GNU `stat -c` first, BSD/macOS `stat -f` fallback. Home is lib-log
-# because every stat-using script already sources it.
-file_size() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
-file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+# Home is lib-log because every stat-using script already sources it.
+#
+# GNU `stat -c` and BSD `stat -f` are mutually exclusive, so asking for both in
+# one expression costs a doomed fork per call on whichever platform loses —
+# always macOS, where forks are dearest and these run on the 1s status tick.
+# Nix picks the form at build time; an unsubstituted placeholder (raw script
+# under bats) probes once here instead of on every call.
+LAZYTMUX_STAT_BSD="@stat_bsd@"
+if [[ $LAZYTMUX_STAT_BSD == @* ]]; then
+	if stat -c %Y . >/dev/null 2>&1; then LAZYTMUX_STAT_BSD=0; else LAZYTMUX_STAT_BSD=1; fi
+fi
+if ((LAZYTMUX_STAT_BSD)); then
+	file_size() { stat -f %z "$1" 2>/dev/null || echo 0; }
+	file_mtime() { stat -f %m "$1" 2>/dev/null || echo 0; }
+else
+	file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
+	file_mtime() { stat -c %Y "$1" 2>/dev/null || echo 0; }
+fi
 
 # acquire_lock DIR — non-blocking lock via atomic mkdir; `flock` is Linux-only
 # (absent on macOS), so it can't be the primitive. Call INSIDE the subshell

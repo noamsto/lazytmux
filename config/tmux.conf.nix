@@ -181,8 +181,17 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
-  # lib-log has no build-time placeholders of its own; a plain writeShellScript.
-  lib-log = pkgs.writeShellScript "lib-log" (builtins.readFile ../scripts/lib-log.sh);
+  # lib-log's only placeholder: which `stat` dialect file_size/file_mtime speak.
+  # Resolved here so those two never pay a doomed probe fork per call.
+  lib-log = pkgs.writeShellScript "lib-log" (
+    builtins.replaceStrings ["@stat_bsd@"] [
+      (
+        if pkgs.stdenv.hostPlatform.isDarwin
+        then "1"
+        else "0"
+      )
+    ] (builtins.readFile ../scripts/lib-log.sh)
+  );
 
   # lib-reflow has no build-time placeholders of its own either.
   lib-reflow = pkgs.writeShellScript "lib-reflow" (builtins.readFile ../scripts/lib-reflow.sh);

@@ -41,7 +41,8 @@ setup_lib_claude() {
 }
 
 setup_lib_log() {
-	# lib-log.sh has no Nix placeholders; source directly.
+	# Sourced raw: @stat_bsd@ stays unsubstituted, which lib-log handles by
+	# probing `stat` once at source time. No other placeholders.
 	# shellcheck source=/dev/null
 	source scripts/lib-log.sh
 }
