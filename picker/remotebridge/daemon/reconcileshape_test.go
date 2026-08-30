@@ -1,0 +1,82 @@
+package daemon
+
+import (
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+)
+
+// Pins the ordering #408 fixed: the appended pane's geometry is applied before
+// applyPaneOps waits on the renderer hello. The splits are always -h and the
+// hello wait costs an ssh round-trip, so shaping afterwards leaves the wrong
+// layout on screen for the whole handshake.
+func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
+	var mu sync.Mutex
+	var trace []string
+	rec := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		trace = append(trace, s)
+	}
+	seen := func(s string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, e := range trace {
+			if e == s {
+				return true
+			}
+		}
+		return false
+	}
+
+	cfg := Config{LocalTmux: func(argv ...string) error {
+		rec(argv[0])
+		return nil
+	}}
+
+	cli, srv := net.Pipe()
+	defer cli.Close()
+	defer srv.Close()
+
+	// Hand the hello over as soon as the shape lands, so a correct run is fast;
+	// the deadline makes a regressed run fail rather than hang for helloTimeout.
+	connCh := make(chan helloConn)
+	go func() {
+		for deadline := time.Now().Add(2 * time.Second); !seen("select-layout") && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		connCh <- helloConn{paneID: "%9", conn: srv}
+		rec("hello")
+	}()
+
+	w := &mirrorWindow{remoteID: "@1", localWin: "$0:@1", remotePanes: []string{"%1"}, conns: map[string]net.Conn{}}
+	L := controlmode.Layout{W: 80, H: 24, Raw: "abcd,80x24,0,0", Panes: []controlmode.PaneCell{{W: 80, H: 12}, {W: 80, H: 11}}}
+	// A failing round-trip makes the seed error out, so the renderer wiring ends
+	// right after the hello instead of pumping a pipe nobody reads.
+	rt := func(string) (controlmode.Line, bool) { return controlmode.Line{}, false }
+
+	if err := applyPaneOps(cfg, w, paneOps{Append: []string{"%9"}}, L,
+		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, NewRouter(), connCh, rt); err != nil {
+		t.Fatalf("applyPaneOps: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	idx := map[string]int{}
+	for i, e := range trace {
+		if _, ok := idx[e]; !ok {
+			idx[e] = i
+		}
+	}
+	for _, want := range []string{"split-window", "select-layout", "hello"} {
+		if _, ok := idx[want]; !ok {
+			t.Fatalf("trace %v missing %q", trace, want)
+		}
+	}
+	if !(idx["split-window"] < idx["select-layout"] && idx["select-layout"] < idx["hello"]) {
+		t.Fatalf("want split-window < select-layout < hello, got %v", trace)
+	}
+}
