@@ -235,16 +235,13 @@ var verbs = map[string]verb{
 			pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
-	// A local toggle re-themes only the local half of a mirror: the pane content
-	// is bytes the remote's programs coloured from the remote's own theme state.
-	// This asks the remote for the same theme, so content drawn after the toggle
-	// matches the frame around it. Already-running full-screen apps keep their
-	// palette until they redraw, exactly as they do on a local toggle.
+	// A mirror's pane content is bytes the remote's programs coloured from the
+	// remote's own theme state, so a local toggle cannot reach it: this asks the
+	// remote for the same theme.
 	//
 	// run-shell, not a split: nothing should appear on screen. A remote without
 	// theme-toggle (any headless host — it ships from the desktop profile) is
-	// silent for the same reason, so this is the one remote-executed verb with
-	// no visible failure mode.
+	// silent for the same reason.
 	"theme": {args: 1, build: func(pane, _, _ string, a []string) ([]string, error) {
 		if !remoteThemes[a[0]] {
 			return nil, fmt.Errorf("theme: unknown theme %q", a[0])
