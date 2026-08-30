@@ -27,9 +27,10 @@ const (
 // the caller's PATH and is long-lived, while ctl's path is baked into the tmux
 // config and swaps on `prefix + r` — so a config reload or a lazytmux bump can
 // point a new ctl at an already-running old daemon. Bump this whenever the verb
-// table's wire meaning changes, so the mismatch is a message rather than a
-// silently-ignored gesture.
-const CtlProtocolVersion = "2"
+// table changes at all — a new verb included, since an old daemon answers one
+// with "unknown verb" and the new keybind looks broken rather than stale — so
+// the mismatch is a message rather than a silently-ignored gesture.
+const CtlProtocolVersion = "3"
 
 // EncodeArgv packs argv as NUL-separated fields. NUL-separated rather than
 // space-joined so a window name containing spaces or quotes survives without a

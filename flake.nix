@@ -820,6 +820,28 @@
               grep -qE 'bind I if-shell -F .*--display-error.*client_name' "$CONF"
               touch $out
             '';
+
+          # The cwd-bound tool binds must keep BOTH branches: the bridged one
+          # (the remote's cwd, via the ctl tool verb) and the local float body
+          # the brace block replaced — a `\;` chain flattened into a brace list
+          # is exactly the edit that silently drops the trailing commands.
+          bridge-tool-bind-assertions =
+            pkgs.runCommand "bridge-tool-bind-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              for k in p g G y; do
+                grep -qE "bind-key $k if-shell -F .*@bridge_win" "$CONF"
+                grep -qE "bind-key $k if-shell -F .*bridge-ctl .*tool #\{q:@bridge_pane\}" "$CONF"
+              done
+              # The local branch still opens the float and still stamps both
+              # pane options.
+              grep -qE "new-pane -c '#\{pane_current_path\}'.*prdash" "$CONF"
+              for label in prdash lazygit gh-dash yazi; do
+                grep -qE "set -p @pane_label $label" "$CONF"
+              done
+              touch $out
+            '';
         };
 
         packages = {

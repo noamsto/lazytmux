@@ -243,7 +243,10 @@ if remote_daemon_alive "${sock}.pid"; then
 	# A stale pidfile can be recycled by an unrelated process. Only the daemon's
 	# deterministic old-protocol replies establish that the PID owns this socket;
 	# an unreachable socket goes straight to cleanup/recreate without signalling.
-	elif [[ $probe_error == *'ctl protocol version "2", this daemon speaks "1" — reopen the bridge'* || $probe_error == *'this bridge daemon does not speak the ctl protocol — reopen the bridge'* ]]; then
+	# Matched on the shared suffix, not on a version pair: both replies end in it,
+	# and pinning the digits meant every protocol bump silently stopped reaping
+	# the daemon it obsoletes.
+	elif [[ $probe_error == *'— reopen the bridge'* ]]; then
 		daemon_pid="$(<"${sock}.pid")"
 		[[ $daemon_pid =~ ^[0-9]+$ ]] && reap_daemon "$daemon_pid"
 	fi
