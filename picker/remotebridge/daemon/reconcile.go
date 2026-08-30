@@ -62,16 +62,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			}
 		}
 
-		// Re-fit before select-layout: a geometry-only change is usually the
-		// remote resizing under us (the other client resized, or our own cap
-		// landed), and an unfitted window would rescale the layout to the local
-		// client's size instead of taking the remote's.
-		if err := cfg.LocalTmux(FitWindowCmd(w.localWin, L)...); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: layout-change resize-window: %v\n", err)
-		}
-		if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
-		}
+		applyLayout(cfg, w.localWin, L)
 		// select-layout reshapes every surviving pane, so push each its new
 		// dims (layout is daemon-authoritative — renderers only record them).
 		for i, id := range newRemote {
@@ -113,6 +104,19 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 	w.remotePanes = remote
 }
 
+// applyLayout fits the local mirror window to the remote's geometry and then
+// shapes it into L. The fit comes first: an unfitted window would make
+// select-layout rescale the remote's layout to the local client's size instead
+// of taking the remote's.
+func applyLayout(cfg Config, target string, L controlmode.Layout) {
+	if err := cfg.LocalTmux(FitWindowCmd(target, L)...); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: layout-change resize-window: %v\n", err)
+	}
+	if err := cfg.LocalTmux("select-layout", "-t", target, L.Raw); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+	}
+}
+
 // applyPaneOps performs the local pane surgery ops describes: kill the panes
 // whose remote pane is gone, split new ones off the tail and wire a renderer to
 // each, then swap the local panes into the remote's order.
@@ -144,6 +148,14 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 	}
 
 	if len(ops.Append) > 0 {
+		// Before the hello wait below, not after: the splits above are always -h,
+		// and collectHellos blocks for an ssh round-trip, so leaving the geometry
+		// until the caller's trailing pass puts the wrong shape on screen for the
+		// whole handshake rather than for a frame (#408). The swaps below exchange
+		// panes between cells without changing cell geometry, so this stays
+		// correct and the caller's pass becomes idempotent.
+		applyLayout(cfg, w.localWin, L)
+
 		// Seeding is sequential over the single control stream, so every new
 		// renderer must be connected first (mirrors setupWindow).
 		added, err := collectHellos(connCh, len(ops.Append), helloTimeout)
