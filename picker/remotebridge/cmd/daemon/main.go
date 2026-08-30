@@ -41,6 +41,7 @@ func main() {
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
 	reflowBin := flag.String("reflow", os.Getenv("LZTMUX_DAEMON_REFLOW"), "absolute path to tmux-reflow-windows (empty = never force a reflow)")
+	remoteOpenBin := flag.String("remote-open", os.Getenv("LZTMUX_DAEMON_REMOTE_OPEN"), "absolute path to lztmux-remote-open (empty = a remote switch-client is pinned back but never handed off)")
 	baseIndex := flag.Int("base-index", envIntDefault("LZTMUX_DAEMON_BASE_INDEX", 1), "local tmux base-index for daemon-created windows")
 	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
@@ -161,6 +162,20 @@ func main() {
 		runLocalTmux(reflowRunShellArgs(*reflowBin, *localSess)...)
 	}
 	panes := func() map[string]string { return localPaneMap(localTmuxArgv, *localSess) }
+	// A remote switch-client that moved this client is pinned back; handOff then
+	// opens the session it named as a mirror of its own, so `sesh connect` from a
+	// bridged shell lands somewhere instead of no-opping. The launcher switches
+	// the local client to the new mirror itself.
+	var handOff func(string)
+	if *remoteOpenBin != "" {
+		handOff = func(sess string) {
+			cmd := exec.Command(*remoteOpenBin, *host, sess)
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "daemon: hand off %s:%s: %v\n", *host, sess, err)
+			}
+		}
+	}
 
 	cfg := daemon.Config{
 		Ctl:            rwc{stdout, stdin},
@@ -176,6 +191,7 @@ func main() {
 		LocalArea:      area,
 		Reflow:         reflow,
 		LocalPanes:     panes,
+		HandOff:        handOff,
 		NewGraphics: func(string) *graphics.Proxy {
 			if ctlSock == "" {
 				return nil // --test-local / local-tmux transport: no remote filesystem

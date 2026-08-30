@@ -281,6 +281,10 @@ export LZTMUX_DAEMON_LOCAL_SESS="$local_sess"
 export LZTMUX_DAEMON_SOCK="$sock"
 export LZTMUX_DAEMON_RENDERER="$renderer"
 export LZTMUX_DAEMON_REFLOW="$reflow"
+# This very script, so a hand-off (a remote switch-client the daemon pinned back)
+# re-enters the launcher at the revision the daemon itself came from, never
+# whatever a later home-manager switch left on PATH (#336).
+export LZTMUX_DAEMON_REMOTE_OPEN="${BASH_SOURCE[0]}"
 
 # The remote viewer picks its graphics backend from #{client_termname}, which is
 # whatever the daemon's ssh advertises — so hand it the termname of the terminal

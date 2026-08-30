@@ -269,6 +269,42 @@ option.
   split mirrored back like any other structural change.
 - Remote host needs `tmux-claude-images` and `resvg` on PATH.
 
+### Bridge Session Pinning
+
+A control-mode client receives `%output` **only for the session it is currently
+attached to**. A mirror pane's keystrokes reach the *remote* shell, where `$TMUX`
+is set, so `sesh connect` — or any `switch-client` from a bridged shell — runs
+`switch-client` with no `-c`, and tmux resolves "current client" to the daemon:
+the only client the bridged session has. Every `%output` for the mirror's panes
+stops from that instant, while input still lands and the remote command
+completes, so the mirror reads as *frozen* rather than dead (#396).
+
+`daemon/sessionpin.go` closes it:
+
+- The mirrored session's id is read from the remote at startup, never learned
+  from the first `%session-changed` — stream order is not evidence of which
+  session the bridge is supposed to be on. A reply that isn't a `$N` id leaves
+  pinning off rather than interpolating it into a command.
+- A `%session-changed` naming any other id is an excursion: the daemon sends
+  `switch-client -t '$N'` **with no `-c`** (a command sent over this stream
+  resolves "current client" to the control client itself, which is exactly the
+  one that was switched) and the stream resumes.
+- **The reseed is not optional.** Output produced during the excursion is
+  dropped by the server, not buffered, so the switch back alone leaves live
+  panes showing a stale screen — the excursion typically swallows the very
+  command that caused it and the prompt that followed. `capture-pane` restores
+  the visible screen, not the scrollback.
+- The session we were switched to is then handed to `lztmux-remote-open <host>
+  <sess>` (`Config.HandOff`, wired from `LZTMUX_DAEMON_REMOTE_OPEN`, which the
+  launcher sets to `${BASH_SOURCE[0]}` so a hand-off re-enters the launcher at
+  the daemon's own revision), which reuses a live bridge for that session or
+  starts one and switches the local client to it. So `sesh connect` inside a
+  mirror opens the target as a second mirror instead of no-opping.
+
+Not done: rebuilding the mirror windows for the new session in place. That would
+break the one-local-session ↔ one-remote-session invariant `@bridge_host`,
+`@bridge_win` and `lztmux-remote-detach` all assume.
+
 ### What the Remote Host Needs on PATH
 
 Each bridge feature that runs code on the *remote* names its own requirement, and

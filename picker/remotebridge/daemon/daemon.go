@@ -43,6 +43,9 @@ type Config struct {
 	// payloads crossing the bridge. nil disables proxying entirely (tests, and
 	// any transport where there is no remote filesystem to fetch from).
 	NewGraphics func(paneID string) *graphics.Proxy
+	// HandOff opens a remote session this bridge was switched to as a mirror of
+	// its own (injected; prod = lztmux-remote-open, nil = off). See sessionPin.
+	HandOff func(remoteSession string)
 }
 
 func (c Config) graphicsFor(paneID string) *graphics.Proxy {
@@ -237,6 +240,7 @@ func Run(cfg Config) error {
 	if len(remoteWins) == 0 {
 		return fmt.Errorf("daemon: remote session %s has no windows", cfg.RemoteSession)
 	}
+	pin := newSessionPin(cfg, rt)
 
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
@@ -383,6 +387,8 @@ func Run(cfg Config) error {
 					cfg.reflow()
 				}
 			}
+		case controlmode.SessionChanged:
+			pin.apply(l, reg, router, rt)
 		case controlmode.SessionWindowChanged:
 			if argv, ok := translateWindowNotification(l, reg); ok {
 				cfg.LocalTmux(argv...)

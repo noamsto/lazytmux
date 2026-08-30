@@ -1326,3 +1326,68 @@ run_detach() {
 	run $SRC has-session -t =rem
 	[ "$status" -eq 0 ]
 }
+
+# #396: a control-mode client only receives %output for the session it is
+# attached to. A mirror pane's keystrokes reach the REMOTE shell, where $TMUX is
+# set, so `sesh connect` runs switch-client with no -c and tmux resolves
+# "current client" to the daemon — the only client the bridged session has. The
+# mirror then freezes: input still lands, nothing repaints. The daemon must pin
+# itself back, and hand the session it was switched to off to a mirror of its
+# own.
+@test "a remote switch-client is pinned back, the mirror repaints, and the session hands off" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$SRC new-session -d -s other -x 100 -y 30 # what `sesh connect` would land on
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	# Stub stands in for lztmux-remote-open: records the hand-off argv instead
+	# of starting a second daemon. /bin/sh, not /usr/bin/env: the nix build
+	# sandbox has no /usr/bin, so an env shebang never execs.
+	open_stub="$BATS_TEST_TMPDIR/remote-open-stub"
+	cat >"$open_stub" <<EOF
+#!/bin/sh
+printf '%s\n' "\$@" >"$BATS_TEST_TMPDIR/handoff.args"
+EOF
+	chmod +x "$open_stub"
+
+	bridge_up 1 pin --host lab --remote-open "$open_stub"
+
+	# The excursion, exactly as sesh performs it.
+	$SRC switch-client -t other
+
+	back=no
+	for _ in $(seq 1 60); do
+		[[ "$($SRC list-clients -F '#{client_session}' | head -1)" == rem ]] && {
+			back=yes
+			break
+		}
+		sleep 0.1
+	done
+
+	# Output produced after the pin: only a live stream restored to our session
+	# can paint it.
+	$SRC send-keys -t rem 'echo PINNED_7K2M' Enter
+	painted=no
+	for _ in $(seq 1 60); do
+		mirror_contains 1 PINNED_7K2M && {
+			painted=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	handoff=""
+	for _ in $(seq 1 40); do
+		[[ -s "$BATS_TEST_TMPDIR/handoff.args" ]] && {
+			handoff="$(tr '\n' ' ' <"$BATS_TEST_TMPDIR/handoff.args")"
+			break
+		}
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$back" = yes ]
+	[ "$painted" = yes ]
+	[ "$handoff" = "lab other " ]
+}
