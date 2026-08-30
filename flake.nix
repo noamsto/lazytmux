@@ -802,6 +802,12 @@
               cp -r ${./tests} tests
               export HOME=$TMPDIR/home
               mkdir -p "$HOME"
+              # argv[0] of every ctl frame, read from the one source of truth so a
+              # protocol bump doesn't read as a wire-shape regression.
+              protocol_go=${./picker/remotebridge/wire/protocol.go}
+              CTL_PROTOCOL_VERSION=$(sed -n 's/^const CtlProtocolVersion = "\(.*\)"$/\1/p' "$protocol_go")
+              [ -n "$CTL_PROTOCOL_VERSION" ] || { echo "no CtlProtocolVersion in $protocol_go" >&2; exit 1; }
+              export CTL_PROTOCOL_VERSION
               bats tests/rename-bind-integration.bats
               touch $out
             '';
