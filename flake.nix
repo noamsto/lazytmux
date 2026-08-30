@@ -730,6 +730,7 @@
               bats tests/remote-cold-start.bats
               bats tests/remote-picker.bats
               bats tests/remote-auth.bats
+              bats tests/remote-theme.bats
               touch $out
             '';
 
