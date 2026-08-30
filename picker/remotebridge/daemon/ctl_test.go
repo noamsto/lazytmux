@@ -399,3 +399,49 @@ func TestToolVerbRejectsUnlistedTool(t *testing.T) {
 		}
 	}
 }
+
+func TestThemeVerbBuildsSilentRemoteApply(t *testing.T) {
+	v, ok := verbs["theme"]
+	if !ok {
+		t.Fatal("no theme verb")
+	}
+	cmds, err := v.build("%5", "@2", "sess", []string{"light"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 1 {
+		t.Fatalf("want one command, got %v", cmds)
+	}
+	script := themeApplyScript("light")
+	if strings.Contains(script, "'") {
+		t.Fatalf("apply script must have zero single quotes: %q", script)
+	}
+	wantCmd := fmt.Sprintf("run-shell -b -t %%5 %s", tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+	if cmds[0] != wantCmd {
+		t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
+	}
+	// A remote without theme-toggle must stay silent: nothing may open a pane or
+	// write where a mirror would repaint it.
+	for _, ban := range []string{"split-window", "display-message", "echo"} {
+		if strings.Contains(cmds[0], ban) {
+			t.Fatalf("command %q must not contain %q", cmds[0], ban)
+		}
+	}
+	if v.moves || v.layout || v.windows {
+		t.Fatal("applying a theme changes no remote structure: no reconcile intent")
+	}
+}
+
+func TestThemeVerbRejectsUnlistedTheme(t *testing.T) {
+	v := verbs["theme"]
+	for _, theme := range []string{"", "mocha", "dark; id", "Light"} {
+		if _, err := v.build("%5", "@2", "sess", []string{theme}); err == nil {
+			t.Fatalf("theme %q was accepted", theme)
+		}
+	}
+	for theme := range remoteThemes {
+		if _, err := v.build("%5", "@2", "sess", []string{theme}); err != nil {
+			t.Fatalf("theme %q rejected: %v", theme, err)
+		}
+	}
+}
