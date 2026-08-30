@@ -350,6 +350,7 @@
     "lztmux-remote-picker"
     "lztmux-remote-detach"
     "lztmux-remote-auth"
+    "lztmux-remote-theme"
     "lztmux-notify"
     "lztmux-notify-center"
     "tmux-agent-usage"
@@ -452,7 +453,7 @@
   # Scripts that source lib-remote get its store path substituted, plus the
   # bridge binaries the launcher probes and spawns — pinned for the same reason
   # as @reflow@ above, which the launcher spells out.
-  scriptsWithRemote = ["lztmux-remote-open" "lztmux-remote-auth"];
+  scriptsWithRemote = ["lztmux-remote-open" "lztmux-remote-auth" "lztmux-remote-theme"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
@@ -1177,6 +1178,10 @@
     # its own config.json, so the styles must be set first or fingers renders
     # the previous theme's colors until the next toggle).
     run-shell "${script.tmux-apply-theme-colors}/bin/tmux-apply-theme-colors"
+    # A toggle re-sources this config, which is the only signal a mirror gets
+    # that the theme moved; the script itself is a no-op unless the flavor
+    # actually changed, so `prefix + r` costs nothing.
+    run-shell -b "${script.lztmux-remote-theme}/bin/lztmux-remote-theme"
 
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 

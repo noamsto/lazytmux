@@ -132,7 +132,8 @@ var (
 	// The closed set of tools a bind may launch on the remote: a name reaches a
 	// remote shell only by being a key here, so the socket peer cannot smuggle
 	// one in.
-	remoteTools = map[string]bool{"prdash": true, "lazygit": true, "tmux-gh-dash": true, "yazi": true}
+	remoteTools  = map[string]bool{"prdash": true, "lazygit": true, "tmux-gh-dash": true, "yazi": true}
+	remoteThemes = map[string]bool{"dark": true, "light": true}
 )
 
 var verbs = map[string]verb{
@@ -234,6 +235,31 @@ var verbs = map[string]verb{
 			pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
+	// A local toggle re-themes only the local half of a mirror: the pane content
+	// is bytes the remote's programs coloured from the remote's own theme state.
+	// This asks the remote for the same theme, so content drawn after the toggle
+	// matches the frame around it. Already-running full-screen apps keep their
+	// palette until they redraw, exactly as they do on a local toggle.
+	//
+	// run-shell, not a split: nothing should appear on screen. A remote without
+	// theme-toggle (any headless host — it ships from the desktop profile) is
+	// silent for the same reason, so this is the one remote-executed verb with
+	// no visible failure mode.
+	"theme": {args: 1, build: func(pane, _, _ string, a []string) ([]string, error) {
+		if !remoteThemes[a[0]] {
+			return nil, fmt.Errorf("theme: unknown theme %q", a[0])
+		}
+		script := themeApplyScript(a[0])
+		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		return []string{cmd}, nil
+	}},
+}
+
+// themeApplyScript is the POSIX body run under exec /bin/sh -c. Like the two
+// scripts below it must contain zero single-quote characters so double tmuxQuote
+// only wraps. theme is a remoteThemes key, so it needs no quoting of its own.
+func themeApplyScript(theme string) string {
+	return fmt.Sprintf("command -v theme-toggle >/dev/null 2>&1 && exec theme-toggle apply %s", theme)
 }
 
 // toolResolveScript is the POSIX body run under exec /bin/sh -c: split-window
