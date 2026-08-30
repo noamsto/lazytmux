@@ -349,3 +349,53 @@ func TestCarouselSrcValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestToolVerbBuildsRemoteSplitInRemoteCwd(t *testing.T) {
+	v, ok := verbs["tool"]
+	if !ok {
+		t.Fatal("no tool verb")
+	}
+	cmds, err := v.build("%5", "@2", "sess", []string{"prdash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 1 {
+		t.Fatalf("want one command, got %v", cmds)
+	}
+	script := toolResolveScript("prdash")
+	if strings.Contains(script, "'") {
+		t.Fatalf("resolve script must have zero single quotes: %q", script)
+	}
+	wantCmd := fmt.Sprintf("split-window -t %%5 -c '#{pane_current_path}' %s",
+		tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+	if cmds[0] != wantCmd {
+		t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
+	}
+	// The cwd must stay a format for the remote to expand, and the tool must be
+	// resolved off the remote PATH rather than a local store path.
+	for _, want := range []string{"-c '#{pane_current_path}'", "command -v prdash", "exec prdash"} {
+		if !strings.Contains(cmds[0], want) {
+			t.Fatalf("command %q missing %q", cmds[0], want)
+		}
+	}
+	if strings.Contains(cmds[0], "/nix/store") {
+		t.Fatalf("command %q must not carry a local store path", cmds[0])
+	}
+	if !v.moves || !v.layout {
+		t.Fatal("the verb opens a split that takes focus: needs moves+layout")
+	}
+}
+
+func TestToolVerbRejectsUnlistedTool(t *testing.T) {
+	v := verbs["tool"]
+	for _, tool := range []string{"", "rm -rf /", "prdash; id", "PRDASH", "sh"} {
+		if _, err := v.build("%5", "@2", "sess", []string{tool}); err == nil {
+			t.Fatalf("tool %q was accepted", tool)
+		}
+	}
+	for tool := range remoteTools {
+		if _, err := v.build("%5", "@2", "sess", []string{tool}); err != nil {
+			t.Fatalf("tool %q rejected: %v", tool, err)
+		}
+	}
+}

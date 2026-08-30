@@ -28,6 +28,10 @@ setup() {
 	# write_argv() builds the expected wire payload from it, so they cannot drift.
 	BRIDGE_PANE='%42'
 	CTL="${CTL:?set CTL to the built lztmux-remote-bridge-ctl}"
+	# argv[0] of every ctl frame. Read from wire.CtlProtocolVersion by the check
+	# derivation rather than pinned here: the assertions below are about the
+	# EncodeArgv shape, and a protocol bump is not a regression in it.
+	CTL_PROTOCOL_VERSION="${CTL_PROTOCOL_VERSION:?set CTL_PROTOCOL_VERSION to wire.CtlProtocolVersion}"
 
 	TEST_HOME="$BATS_TEST_TMPDIR/home"
 	mkdir -p "$TEST_HOME"
@@ -187,13 +191,13 @@ sole_payload() {
 # The EncodeArgv payload for one rename request, written straight to a file: bash
 # cannot hold a NUL, so it never touches a variable.
 write_argv() { # file name
-	printf '2\000rename\000%s\000%s' "$BRIDGE_PANE" "$2" >"$1"
+	printf '%s\000rename\000%s\000%s' "$CTL_PROTOCOL_VERSION" "$BRIDGE_PANE" "$2" >"$1"
 }
 
 # Byte-exact comparison against the EncodeArgv shape: NUL-separated, no trailing
 # separator of its own. An empty name is therefore a trailing NUL and nothing
-# after it — the only thing that distinguishes argv ["2","rename","%42",""] (13
-# bytes) from ["2","rename","%42"] (12), which every field-splitting reading
+# after it — the only thing that distinguishes argv [ver,"rename","%42",""] from
+# [ver,"rename","%42"], one byte shorter, which every field-splitting reading
 # collapses into the same three fields.
 assert_wire_argv() { # payload_file name
 	local want="$BATS_TEST_TMPDIR/want"
@@ -344,8 +348,8 @@ assert_wire_argv() { # payload_file name
 	p="$(sole_payload)"
 	assert_wire_argv "$p" ""
 	# Spelled out, because this is the assertion a field-splitting reading fakes:
-	# "2\0rename\0%42\0" is 13 bytes with 3 NULs; dropping the empty word leaves
-	# 12 bytes with 2, and both split into the same three fields.
-	[ "$(stat -c %s "$p")" -eq 13 ]
+	# "<ver>\0rename\0%42\0" carries 3 NULs; dropping the empty word leaves 2 and
+	# one byte fewer, and both split into the same three fields.
+	[ "$(stat -c %s "$p")" -eq $((${#CTL_PROTOCOL_VERSION} + 12)) ]
 	[ "$(tr -dc '\000' <"$p" | wc -c)" -eq 3 ]
 }

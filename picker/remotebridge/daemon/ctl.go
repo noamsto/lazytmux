@@ -129,6 +129,10 @@ type verb struct {
 var (
 	resizeDirs = map[string]string{"U": "-U", "D": "-D", "L": "-L", "R": "-R"}
 	swapDirs   = map[string]string{"U": "-U", "D": "-D"}
+	// The closed set of tools a bind may launch on the remote: a name reaches a
+	// remote shell only by being a key here, so the socket peer cannot smuggle
+	// one in.
+	remoteTools = map[string]bool{"prdash": true, "lazygit": true, "tmux-gh-dash": true, "yazi": true}
 )
 
 var verbs = map[string]verb{
@@ -212,6 +216,36 @@ var verbs = map[string]verb{
 		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
+	// The tool binds (prefix p/g/G/y) open a float locally, but a float created
+	// on the remote is pruned out of the tiled tree and never mirrored
+	// (controlmode.Layout.Floats has no consumer), so the remote leg is a split,
+	// as carousel's is. The cwd has to be the remote tmux's own expansion: the
+	// mirror pane's cwd is the daemon's, not the worktree on screen.
+	//
+	// A bare command name, never the local ${tool}/bin/tool store path, which
+	// exists on this host only. A remote missing the tool degrades to a
+	// short-lived message pane, as carousel does.
+	"tool": {args: 1, layout: true, moves: true, build: func(pane, _, _ string, a []string) ([]string, error) {
+		if !remoteTools[a[0]] {
+			return nil, fmt.Errorf("tool: unknown tool %q", a[0])
+		}
+		script := toolResolveScript(a[0])
+		cmd := fmt.Sprintf("split-window -t %s -c '#{pane_current_path}' %s",
+			pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		return []string{cmd}, nil
+	}},
+}
+
+// toolResolveScript is the POSIX body run under exec /bin/sh -c: split-window
+// runs its command through the remote's default shell (fish on the normal host),
+// and this is POSIX. Like carouselResolveScript it must contain zero single-quote
+// characters so double tmuxQuote only wraps. tool is a remoteTools key, so it is
+// [a-z-] and needs no quoting of its own.
+func toolResolveScript(tool string) string {
+	return fmt.Sprintf(
+		"command -v %s >/dev/null 2>&1 && exec %s; "+
+			"echo lazytmux: %s is not on PATH on this host; sleep 5",
+		tool, tool, tool)
 }
 
 // carouselResolveScript is the POSIX body run under exec /bin/sh -c. It must

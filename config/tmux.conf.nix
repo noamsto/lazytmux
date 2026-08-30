@@ -606,6 +606,17 @@
   # are percentages, and those are what walk off a shrinking window.
   floatCard = mkFloat "64" "18" "20%" "15%";
 
+  # Inside a mirror window #{pane_current_path} expands on the renderer pane —
+  # the daemon's cwd, not the remote worktree on screen — so the bridged branch
+  # hands the tool to the ctl `tool` verb, which resolves the cwd on the remote.
+  #
+  # A brace block is a command list: local's commands separate on newlines and
+  # take no `\;`.
+  bridgedTool = key: tool: local: ''
+    bind-key ${key} if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} tool #{q:@bridge_pane} ${tool}" } {
+      ${local}
+    }'';
+
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
   # switches when the pane closes.
@@ -614,7 +625,10 @@
   # and the cascade counter survives kill-pane. @pane_label → mauve border title.
   prdashBind =
     lib.optionalString (prdash != null)
-    "bind-key p new-pane -c '#{pane_current_path}' ${floatShort.flags} ${prdash}/bin/prdash \\; set -p @pane_label prdash \\; ${floatShort.stamp}";
+    (bridgedTool "p" "prdash" ''
+      new-pane -c '#{pane_current_path}' ${floatShort.flags} ${prdash}/bin/prdash
+      set -p @pane_label prdash
+      ${floatShort.stamp}'');
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
@@ -857,9 +871,15 @@
     # Floating panes (window-scoped; see the yazi comment below for why floats
     # over popups — full escape-sequence passthrough, and a pane is mirrorable
     # across the remote bridge in principle where a popup can never be).
-    bind-key "g" new-pane -c '#{pane_current_path}' ${floatFull.flags} lazygit \; set -p @pane_label lazygit \; ${floatFull.stamp}
+    ${bridgedTool "g" "lazygit" ''
+      new-pane -c '#{pane_current_path}' ${floatFull.flags} lazygit
+      set -p @pane_label lazygit
+      ${floatFull.stamp}''}
     bind-key "b" new-pane ${floatFull.flags} btop \; set -p @pane_label btop \; ${floatFull.stamp}
-    bind-key "G" new-pane -c '#{pane_current_path}' ${floatFull.flags} ${script.tmux-gh-dash}/bin/tmux-gh-dash \; set -p @pane_label gh-dash \; ${floatFull.stamp}
+    ${bridgedTool "G" "tmux-gh-dash" ''
+      new-pane -c '#{pane_current_path}' ${floatFull.flags} ${script.tmux-gh-dash}/bin/tmux-gh-dash
+      set -p @pane_label gh-dash
+      ${floatFull.stamp}''}
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
@@ -869,7 +889,10 @@
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
     # full escape-sequence passthrough, so yazi's image preview / terminal
     # detection work. Scoped to the launching window (no window-line entry).
-    bind-key "y" new-pane -c '#{pane_current_path}' ${floatShort.flags} yazi \; set -p @pane_label yazi \; ${floatShort.stamp}
+    ${bridgedTool "y" "yazi" ''
+      new-pane -c '#{pane_current_path}' ${floatShort.flags} yazi
+      set -p @pane_label yazi
+      ${floatShort.stamp}''}
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"

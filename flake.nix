@@ -802,6 +802,12 @@
               cp -r ${./tests} tests
               export HOME=$TMPDIR/home
               mkdir -p "$HOME"
+              # argv[0] of every ctl frame, read from the one source of truth so a
+              # protocol bump doesn't read as a wire-shape regression.
+              protocol_go=${./picker/remotebridge/wire/protocol.go}
+              CTL_PROTOCOL_VERSION=$(sed -n 's/^const CtlProtocolVersion = "\(.*\)"$/\1/p' "$protocol_go")
+              [ -n "$CTL_PROTOCOL_VERSION" ] || { echo "no CtlProtocolVersion in $protocol_go" >&2; exit 1; }
+              export CTL_PROTOCOL_VERSION
               bats tests/rename-bind-integration.bats
               touch $out
             '';
@@ -818,6 +824,26 @@
             } ''
               grep -qE 'bind I if-shell -F .*@bridge_win' "$CONF"
               grep -qE 'bind I if-shell -F .*--display-error.*client_name' "$CONF"
+              touch $out
+            '';
+
+          # The cwd-bound tool binds must keep BOTH branches: the bridged one
+          # (the remote's cwd, via the ctl tool verb) and the local float body
+          # the brace block replaced — a `\;` chain flattened into a brace list
+          # is exactly the edit that silently drops the trailing commands.
+          bridge-tool-bind-assertions =
+            pkgs.runCommand "bridge-tool-bind-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              for k in p g G y; do
+                grep -qE "bind-key $k if-shell -F .*@bridge_win" "$CONF"
+                grep -qE "bind-key $k if-shell -F .*bridge-ctl .*tool #\{q:@bridge_pane\}" "$CONF"
+              done
+              grep -qE "new-pane -c '#\{pane_current_path\}'.*prdash" "$CONF"
+              for label in prdash lazygit gh-dash yazi; do
+                grep -qE "set -p @pane_label $label" "$CONF"
+              done
               touch $out
             '';
         };
