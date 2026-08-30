@@ -1340,10 +1340,11 @@ run_detach() {
 	$DST new-session -d -s host-sess -x 100 -y 30
 
 	# Stub stands in for lztmux-remote-open: records the hand-off argv instead
-	# of starting a second daemon.
+	# of starting a second daemon. /bin/sh, not /usr/bin/env: the nix build
+	# sandbox has no /usr/bin, so an env shebang never execs.
 	open_stub="$BATS_TEST_TMPDIR/remote-open-stub"
 	cat >"$open_stub" <<EOF
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' "\$@" >"$BATS_TEST_TMPDIR/handoff.args"
 EOF
 	chmod +x "$open_stub"
