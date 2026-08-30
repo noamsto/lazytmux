@@ -246,13 +246,14 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 
 	theme := detectTheme()
 	opts := readTmuxOpts()
-	panes := collectAgentPanes()
+	snap := collectPanesSnapshot()
+	panes := collectAgentPanes(snap)
 
 	var items []listItem
 	if windowMode {
 		items = buildWindowItems(opts, panes, theme, 0, false)
 	} else {
-		items = buildSessionItems(opts, panes, theme, false)
+		items = buildSessionItems(opts, snap, panes, theme, false)
 	}
 
 	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items, emitPath)
@@ -1511,12 +1512,13 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 	theme := m.theme
 	lw := m.listWidth() // capture the value; the closure runs off-thread
 	return func() tea.Msg {
-		panes := collectAgentPanes()
+		snap := collectPanesSnapshot()
+		panes := collectAgentPanes(snap)
 		var items []listItem
 		if wm {
 			items = buildWindowItems(opts, panes, theme, lw, sg)
 		} else {
-			items = buildSessionItems(opts, panes, theme, true)
+			items = buildSessionItems(opts, snap, panes, theme, true)
 		}
 		// Always send — spinners need to animate even without structural changes.
 		return refreshMsg{items: items}
@@ -1632,8 +1634,8 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 // padding stays aligned (multibyte glyphs measure wide in bytes, narrow in cells).
 const resourcePlaceholder = "-"
 
-func buildSessionItems(tmuxOpts map[string]string, agentPanes []agentPaneInfo, theme string, withResources bool) []listItem {
-	sessions := collectSessions()
+func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPanes []agentPaneInfo, theme string, withResources bool) []listItem {
+	sessions := snap.sessions()
 	agentMap := aggregateAgentBySession(agentPanes)
 	mergeAgent(sessions, agentMap)
 

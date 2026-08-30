@@ -10,12 +10,14 @@ setup() {
 	mkdir -p "$FAKEBIN"
 	export ARGS_LOG="$BATS_TEST_TMPDIR/popup-args"
 
-	# Fake tmux: `show -gv @picker_layout` returns $FAKE_LAYOUT; display-popup
+	# Fake tmux: the pickers read border colour and layout in one `display -p`,
+	# the wall still uses `show -gv`; both report $FAKE_LAYOUT. display-popup
 	# records its argv so the test can read back the -h value. /bin/sh, not
 	# /usr/bin/env bash — the nix check sandbox has no /usr/bin/env.
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
 		case "$1" in
+		display) printf '%s\n' "#7f849c|${FAKE_LAYOUT:-}"; exit 0 ;;
 		show) [ "$3" = "@picker_layout" ] && printf '%s\n' "${FAKE_LAYOUT:-}"; exit 0 ;;
 		display-popup) printf '%s\n' "$*" >"$ARGS_LOG"; exit 0 ;;
 		esac
