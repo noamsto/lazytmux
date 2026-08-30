@@ -606,15 +606,12 @@
   # are percentages, and those are what walk off a shrinking window.
   floatCard = mkFloat "64" "18" "20%" "15%";
 
-  # A cwd-bound tool bind opens a float rooted at #{pane_current_path}. Inside a
-  # mirror window that format expands on the renderer pane, whose cwd is the
-  # daemon's rather than the remote worktree on screen — so the bridged branch
-  # hands the tool to the ctl `tool` verb, which splits on the remote with the
-  # remote's own cwd. A remote float would be pruned from the layout and never
-  # mirrored, which is why that side is a split.
+  # Inside a mirror window #{pane_current_path} expands on the renderer pane —
+  # the daemon's cwd, not the remote worktree on screen — so the bridged branch
+  # hands the tool to the ctl `tool` verb, which resolves the cwd on the remote.
   #
-  # local is the unchanged bind body, newline-separated inside the braces: a
-  # brace block is a command list, so it takes no `\;` separators.
+  # A brace block is a command list: local's commands separate on newlines and
+  # take no `\;`.
   bridgedTool = key: tool: local: ''
     bind-key ${key} if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} tool #{q:@bridge_pane} ${tool}" } {
       ${local}

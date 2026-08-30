@@ -129,9 +129,9 @@ type verb struct {
 var (
 	resizeDirs = map[string]string{"U": "-U", "D": "-D", "L": "-L", "R": "-R"}
 	swapDirs   = map[string]string{"U": "-U", "D": "-D"}
-	// The cwd-bound tool binds, keyed by the command each resolves off the
-	// remote's PATH. A tool name reaches a remote shell only by being a key
-	// here, so the socket peer cannot smuggle one in.
+	// The closed set of tools a bind may launch on the remote: a name reaches a
+	// remote shell only by being a key here, so the socket peer cannot smuggle
+	// one in.
 	remoteTools = map[string]bool{"prdash": true, "lazygit": true, "tmux-gh-dash": true, "yazi": true}
 )
 
@@ -218,14 +218,13 @@ var verbs = map[string]verb{
 	}},
 	// The tool binds (prefix p/g/G/y) open a float locally, but a float created
 	// on the remote is pruned out of the tiled tree and never mirrored
-	// (controlmode.Layout.Floats has no consumer), so the remote leg is a split
-	// — the same trade carousel makes. -c is what the whole verb exists for: the
-	// mirror pane's own cwd is the daemon's, not the worktree on screen, so the
-	// path has to be the one the remote tmux expands.
+	// (controlmode.Layout.Floats has no consumer), so the remote leg is a split,
+	// as carousel's is. The cwd has to be the remote tmux's own expansion: the
+	// mirror pane's cwd is the daemon's, not the worktree on screen.
 	//
-	// The bare command name, never the local ${tool}/bin/tool store path: that
-	// path exists on this host only. A remote without the tool degrades to a
-	// short-lived message pane, matching carousel's missing-binary behaviour.
+	// A bare command name, never the local ${tool}/bin/tool store path, which
+	// exists on this host only. A remote missing the tool degrades to a
+	// short-lived message pane, as carousel does.
 	"tool": {args: 1, layout: true, moves: true, build: func(pane, _, _ string, a []string) ([]string, error) {
 		if !remoteTools[a[0]] {
 			return nil, fmt.Errorf("tool: unknown tool %q", a[0])

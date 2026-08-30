@@ -834,8 +834,6 @@
                 grep -qE "bind-key $k if-shell -F .*@bridge_win" "$CONF"
                 grep -qE "bind-key $k if-shell -F .*bridge-ctl .*tool #\{q:@bridge_pane\}" "$CONF"
               done
-              # The local branch still opens the float and still stamps both
-              # pane options.
               grep -qE "new-pane -c '#\{pane_current_path\}'.*prdash" "$CONF"
               for label in prdash lazygit gh-dash yazi; do
                 grep -qE "set -p @pane_label $label" "$CONF"
