@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"fmt"
 	"io"
+	"os"
+	"sort"
 	"sync"
 )
 
@@ -43,6 +46,28 @@ func (r *Router) Route(paneID string, data []byte) {
 // or the registered writer is a test fake. A read accessor — it leaves
 // Register/Unregister/Route unchanged — used by %pause/%continue to gate and
 // re-seed the pane's serialized frame stream.
+// dirtyPanes returns, sorted, the panes whose sink dropped frames and has since
+// drained, clearing each one's count as it goes. A drop is recorded on the
+// sink because it happens on the routing path, which must never block; this is
+// how it reaches the main loop, the only place the re-seed round-trip may run.
+func (r *Router) dirtyPanes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []string
+	for id, w := range r.sinks {
+		s, ok := w.(*outputSink)
+		if !ok {
+			continue
+		}
+		if n, dirty := s.takeDirty(); dirty {
+			fmt.Fprintf(os.Stderr, "daemon: %s: re-seeding after %d dropped frame(s)\n", id, n)
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (r *Router) sink(paneID string) *outputSink {
 	r.mu.Lock()
 	defer r.mu.Unlock()
