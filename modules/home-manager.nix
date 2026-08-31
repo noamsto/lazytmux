@@ -77,69 +77,48 @@
     then "${cfg.persist.package}/bin/tmux-remux"
     else null;
 
-  # Persist (tmux-remux) tmux.conf snippet. Empty string when disabled — appended
-  # verbatim to the generated tmux.conf via extraConfText. The hooks fire
-  # `tmux-remux save` on structural change and `capture-event` on close so the
-  # daemon can correlate (window closed at T, last save at T-2s ⇒ replay row).
+  # Renders and sources the tmux-remux hook wiring at config load
+  # (`tmux-remux triggers`, noamsto/tmux-remux#65) instead of hand-writing it.
+  # `triggers` self-gates the tmux 3.8 monitor-hook periodic save (`set-hook -g
+  # -B`) on the tmux version it's told about — pass it `#{version}`, the LIVE
+  # server's own reported version, not a fresh `tmux -V` subprocess: a server
+  # predating a nix switch keeps its old binary resident (#407), and a store
+  # rebuild only changes the tmux -V a *new* process would report. Piped
+  # straight through source-file, its `set-hook -g <event>` lines land on the
+  # default index (0), which would clobber lazytmux's own index-0 hooks on the
+  # same events (e.g. tmux-reflow-windows on window-unlinked) — rewrite them
+  # onto [99], same as the hand-written snippet this replaces. The `-B` named
+  # monitor hook has no event-name index to collide on, so it's left alone.
+  # A live server still on pre-3.8 gets no periodic-save floor at all (only
+  # structural/close hooks), so warn on the pane rather than leave it silent.
+  tmuxRemuxWireScript =
+    if tmuxStateBin == null
+    then null
+    else
+      pkgs.writeShellScript "tmux-remux-wire" ''
+        out=$("${tmuxStateBin}" triggers --bin="${tmuxStateBin}" \
+          --auto-restore=${
+          if cfg.persist.restoreMode == "auto"
+          then "on"
+          else "off"
+        } --tmux-version="$1")
+        printf '%s\n' "$out" \
+          | sed -E 's/^(set-hook -g [A-Za-z][A-Za-z-]*)( )/\1[99]\2/' \
+          | tmux source-file -
+        if ! printf '%s\n' "$out" | grep -q '@remux-save'; then
+          tmux display-message "tmux-remux: server is pre-3.8 ($1) — no periodic-save floor, only structural/close saves. Restart the server to pick up the tmux 3.8 monitor hook."
+        fi
+      '';
+
+  # Persist (tmux-remux) tmux.conf snippet. Empty string when disabled —
+  # appended verbatim to the generated tmux.conf via extraConfText.
   tmuxStateConf =
     if tmuxStateBin == null
     then ""
     else ''
 
       # === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===
-      # Use index [99] so persist hooks coexist with lazytmux's index-0 hooks
-      # (e.g. tmux-reflow-windows on window-unlinked). Same pattern as
-      # claude-status-update + tmux-fingers in config/tmux.conf.nix.
-      set-hook -g session-created[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:session-created"'
-      set-hook -g window-linked[99]         'run-shell -b "${tmuxStateBin} save --reason=hook:window-linked"'
-      set-hook -g client-detached[99]       'run-shell -b "${tmuxStateBin} save --reason=hook:client-detached"'
-
-      # tmux has no pane-created hook, so a split pane reached no snapshot until
-      # the next window/session event — and undo can only restore what a
-      # snapshot recorded. after-split-window is the stand-in.
-      set-hook -g after-split-window[99]    'run-shell -b "${tmuxStateBin} save --reason=hook:after-split-window"'
-
-      # Hook pane-exited, not pane-died: pane-died only fires when remain-on-exit
-      # is on (off by default), so it never caught a normal close. Capture happens
-      # after the pane is gone (tmux-remux diffs against the prior snapshot), so
-      # the live pane isn't needed. Kind stays "pane-died" — tmux-remux's diff
-      # switches on it.
-      set-hook -g pane-exited[99]           'run-shell -b "${tmuxStateBin} capture-event pane-died          --pane=#{hook_pane}    --window=#{hook_window} --session=#{hook_session}"'
-
-      # prefix+x kills the pane without its program exiting, so pane-exited never
-      # fires and the close went unrecorded. after-kill-pane is a command hook and
-      # carries no hook_pane; tmux-remux recovers the id by diffing the survivors
-      # against the last snapshot, and records nothing when that's ambiguous.
-      set-hook -g after-kill-pane[99]       'run-shell -b "${tmuxStateBin} capture-event pane-died"'
-      set-hook -g window-unlinked[99]       'run-shell -b "${tmuxStateBin} capture-event window-unlinked    --window=#{hook_window} --session=#{hook_session}"'
-      set-hook -g session-closed[99]        'run-shell -b "${tmuxStateBin} capture-event session-closed     --session=#{hook_session}"'
-
-      # Issue #100 asked for a reconcile-all sweep here, on the premise that a
-      # restored window has no @worktree until the user navigates into it. That
-      # premise doesn't hold for the currently pinned tmux-remux: restore/undo/
-      # pick all build their plan via the same restore.Apply (internal/restore/
-      # apply.go), which passes -c <historical cwd> directly to new-session/
-      # new-window/split-window — so the after-new-window[10]/after-new-session[10]
-      # creation hooks (config/tmux.conf.nix) already tag every restored window
-      # correctly, synchronously, with no async cd to race. Verified empirically
-      # (isolated tmux server, real tmux-remux save/restore, tag present
-      # immediately), not just by reading source. No sweep added. If a future
-      # tmux-remux bump ever stops passing -c at creation, this would need
-      # revisiting (see CLAUDE.md's Persist section).
-      ${lib.optionalString (cfg.persist.restoreMode == "auto") ''
-        run-shell -b '${tmuxStateBin} restore --auto'
-      ''}
-
-      # Surface tmux-remux's own error (e.g. "nothing to undo — no recoverable
-      # close event") instead of a blanket "Nothing to undo" that hides why.
-      bind   u    run-shell 'err=$(${tmuxStateBin} undo --pop 2>&1) || tmux display-message "undo: $err"'
-      # The picker is a bubbletea TUI (tmux-remux >= 0.2.0); launching it through
-      # the `env` binary breaks its TTY init and renders a blank popup, so invoke
-      # it directly. (The old `env -u FZF_DEFAULT_OPTS` wrapper was only needed for
-      # the fzf-based picker, which no longer exists.)
-      bind   U    display-popup -E -w 90% -h 85% -b rounded -T " Close events " '${tmuxStateBin} pick --kind=close'
-      bind   R    display-popup -E -w 90% -h 85% -b rounded -T " Snapshots "     '${tmuxStateBin} pick --kind=snapshot'
-      bind C-s    run-shell '${tmuxStateBin} save --reason=keybinding'
+      run-shell "${tmuxRemuxWireScript} #{q:version}"
     '';
 
   tmuxConfig = import ../config/tmux.conf.nix {
@@ -254,6 +233,9 @@ in {
     (lib.mkRemovedOptionModule
       ["programs" "lazytmux" "remote" "trustedHosts"]
       "The arch-C RemoteForward block was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
+    (lib.mkRemovedOptionModule
+      ["programs" "lazytmux" "persist" "saveInterval"]
+      "The lazytmux-remux-save timer was dropped in favour of tmux-remux's own tmux 3.8 monitor hook (#344), which fires on the session's own clock rather than a configurable cadence.")
   ];
 
   options.programs.lazytmux = {
@@ -409,12 +391,6 @@ in {
           Whether to enable tmux-remux persistence (snapshots, undo, auto-restore).
           Replaces tmux-resurrect/tmux-continuum.
         '';
-      };
-
-      saveInterval = lib.mkOption {
-        type = lib.types.int;
-        default = 60;
-        description = "Seconds between periodic saves (systemd timer cadence).";
       };
 
       restoreMode = lib.mkOption {
@@ -1480,26 +1456,10 @@ in {
             };
           };
 
-          # Periodic snapshot — fires `tmux-remux save --reason=timer` so the
-          # daemon has a recent baseline even between structural-change hooks.
-          #
-          # TMUX_TMPDIR points tmux-remux at the user's actual socket
-          # ($XDG_RUNTIME_DIR/tmux-$UID/default) instead of tmux's compiled-in
-          # /tmp default; without it the timer queried a stale socket and
-          # bailed. (tmux-remux >= 7f8c820 also synthesizes the TMUX env var
-          # internally so format-string control bytes survive — no need to set
-          # TMUX here.)
-          lazytmux-remux-save = lib.mkIf persistEnabled {
-            Unit.Description = "Save tmux-remux snapshot";
-            Service = {
-              Type = "oneshot";
-              Environment = ["TMUX_TMPDIR=%t"];
-              ExecStart = "${cfg.persist.package}/bin/tmux-remux save --reason=timer";
-            };
-          };
-
           # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
           # was already pruned). Cheap to run; safe to skip on missed firings.
+          # Periodic snapshot saves now come from tmux-remux's own tmux 3.8
+          # monitor hook (see tmuxStateConf above), not a timer unit.
           lazytmux-remux-gc = lib.mkIf persistEnabled {
             Unit.Description = "tmux-remux garbage collection";
             Service = {
@@ -1510,16 +1470,6 @@ in {
         };
 
         timers = {
-          lazytmux-remux-save = lib.mkIf persistEnabled {
-            Unit.Description = "Periodic tmux-remux snapshot";
-            Timer = {
-              OnBootSec = "2min";
-              OnUnitActiveSec = "${toString cfg.persist.saveInterval}s";
-              Unit = "lazytmux-remux-save.service";
-            };
-            Install.WantedBy = ["timers.target"];
-          };
-
           lazytmux-remux-gc = lib.mkIf persistEnabled {
             Unit.Description = "tmux-remux GC (orphan scrollback files)";
             Timer = {
@@ -1559,25 +1509,8 @@ in {
           };
         }
         // lib.optionalAttrs persistEnabled {
-          # Periodic snapshot. No TMUX_TMPDIR: darwin tmux uses its default
-          # /tmp/tmux-$UID socket, which tmux-remux also resolves to by default.
-          #
-          # PATH is load-bearing: launchd hands an agent a bare
-          # /usr/bin:/bin:/usr/sbin:/sbin, so a nix-store tmux is invisible and
-          # every firing died with `exec: "tmux": executable file not found in
-          # $PATH` — silently, since the timer is fire-and-forget. That left
-          # snapshots to the tmux hooks alone, and anything closed between two
-          # hooks was unrecoverable. The systemd unit is unaffected: it inherits
-          # the user's session PATH.
-          lazytmux-remux-save = {
-            enable = true;
-            config = {
-              ProgramArguments = ["${cfg.persist.package}/bin/tmux-remux" "save" "--reason=timer"];
-              EnvironmentVariables.PATH = "${cfg.tmuxPackage}/bin:/usr/bin:/bin";
-              StartInterval = cfg.persist.saveInterval;
-            };
-          };
-          # Weekly GC of orphaned scrollback files.
+          # Weekly GC of orphaned scrollback files. The periodic save agent is
+          # gone (#344) — see the systemd block above for why.
           lazytmux-remux-gc = {
             enable = true;
             config = {
