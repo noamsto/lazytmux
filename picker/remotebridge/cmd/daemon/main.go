@@ -152,6 +152,12 @@ func main() {
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	}
+	runLocalTmuxOut := func(args ...string) (string, error) {
+		cmd := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...), args...)...)
+		cmd.Stderr = os.Stderr
+		out, err := cmd.Output()
+		return string(out), err
+	}
 	area := func() (int, int) { return localArea(localTmuxArgv, *localSess) }
 	// -b so the reflow's own tmux round-trips stay off the command queue the
 	// daemon is about to use again.
@@ -188,6 +194,7 @@ func main() {
 		PauseAfterSecs: *pauseAfter,
 		RendererBin:    *rendererBin,
 		LocalTmux:      runLocalTmux,
+		LocalTmuxOut:   runLocalTmuxOut,
 		LocalArea:      area,
 		Reflow:         reflow,
 		LocalPanes:     panes,
