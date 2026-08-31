@@ -93,6 +93,7 @@ sorted_dims() {
 	src_dims="$(sorted_dims "$SRC" rem)"
 	dst_dims="$(sorted_dims "$DST" host-sess:1)"
 	dst_panes="$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)"
+	[ "$($DST show-options -v -t host-sess @bridge_session)" = rem ]
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true

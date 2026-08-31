@@ -444,6 +444,7 @@ func Run(cfg Config) error {
 		// @bridge_host is what the session picker's Host column reads; the local
 		// session name can't be split back into host+session (either may hold a "-").
 		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_host", cfg.RemoteHost)
+		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_session", cfg.RemoteSession)
 	}
 
 	reg := newRegistry()

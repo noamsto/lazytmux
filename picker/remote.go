@@ -243,11 +243,51 @@ func localBridgeSession(host, sess string) string {
 	return host + "-" + sess
 }
 
+func bridgeSessionKey(host, sess string) string {
+	return "pair\x00" + host + "\x00" + sess
+}
+
+func bridgeSessionLegacyKey(name string) string {
+	return "legacy\x00" + name
+}
+
+// parseBridgeSessions reads the session options that identify local mirror
+// sessions. Ordinary local sessions are deliberately ignored, even when their
+// names happen to equal the old <host>-<session> convention.
+func parseBridgeSessions(raw string) map[string]bool {
+	bridges := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) < 2 || parts[1] == "" {
+			continue
+		}
+		if len(parts) == 3 && parts[2] != "" {
+			bridges[bridgeSessionKey(parts[1], parts[2])] = true
+			continue
+		}
+		bridges[bridgeSessionLegacyKey(parts[0])] = true
+	}
+	return bridges
+}
+
+func collectBridgeSessions() map[string]bool {
+	out, err := exec.Command("tmux", "list-sessions", "-F",
+		"#{session_name}|#{@bridge_host}|#{@bridge_session}").Output()
+	if err != nil {
+		return nil
+	}
+	return parseBridgeSessions(string(out))
+}
+
+func bridgeSessionPresent(bridges map[string]bool, host, sess string) bool {
+	return bridges[bridgeSessionKey(host, sess)] || bridges[bridgeSessionLegacyKey(localBridgeSession(host, sess))]
+}
+
 // remoteSessionsForHost probes one host for live tmux session names. On
 // remoteProbeOK the returned list is the remote sessions not already bridged
-// locally as <host>-<sess> (may be empty when every session is already open).
+// locally (may be empty when every session is already open).
 // An empty list with no error means the remote has no server to list.
-func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) (remoteProbeResult, error)) ([]string, remoteProbeState) {
+func remoteSessionsForHost(host string, bridges map[string]bool, probe func(string) (remoteProbeResult, error)) ([]string, remoteProbeState) {
 	result, err := probe(host)
 	if err != nil {
 		switch {
@@ -268,7 +308,7 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 		if sess == "" {
 			continue
 		}
-		if localSessions[localBridgeSession(host, sess)] {
+		if bridgeSessionPresent(bridges, host, sess) {
 			continue
 		}
 		out = append(out, sess)
@@ -644,7 +684,7 @@ func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
 // sessions) by probing every configured host over ssh. Runs off the
 // first-paint path; the result merges via remoteMsg, replacing
 // pendingRemoteItems's synchronous placeholder (#312).
-func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) (remoteProbeResult, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
+func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, probe func(string) (remoteProbeResult, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
 	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
 	if len(hosts) == 0 {
 		return nil
@@ -655,10 +695,6 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	if restoreProbe == nil {
 		restoreProbe = sshListRestorableSessions
 	}
-	if localSessionNames == nil {
-		localSessionNames = map[string]bool{}
-	}
-
 	localID := readLocalRemoteIdentity()
 
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
@@ -687,7 +723,7 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 			if isCachedRemoteSelfAlias(h) && result.Identity.MachineID != "" && result.Identity.User != "" {
 				clearCachedRemoteSelfAlias(h)
 			}
-			sess, state := remoteSessionsForHost(h, localSessionNames, func(string) (remoteProbeResult, error) {
+			sess, state := remoteSessionsForHost(h, bridges, func(string) (remoteProbeResult, error) {
 				if err != nil {
 					return result, err
 				}

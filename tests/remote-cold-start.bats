@@ -120,7 +120,33 @@ setup() {
 		echo "$*" >>"$TMUX_LOG"
 		case "$*" in
 		has-session*)
+			if [ -n "${FAKE_LOCAL_SESSION:-}" ]; then
+				case "$*" in
+				*"=$FAKE_LOCAL_SESSION") exit 0 ;;
+				*) exit 1 ;;
+				esac
+			fi
+			if [ -n "${FAKE_DAEMON_SESSION:-}" ]; then
+				case "$*" in
+				*"=$FAKE_DAEMON_SESSION") exit 0 ;;
+				*) exit 1 ;;
+				esac
+			fi
 			[ -n "${FAKE_SESSION_GONE:-}" ] && exit 1
+			exit 1
+			;;
+			display-message*)
+			case "$*" in
+			*"#{client_width} #{client_height} #{status}"*)
+				[ -n "${FAKE_CLIENT_SIZE:-}" ] && printf '%s\n' "$FAKE_CLIENT_SIZE"
+				;;
+			esac
+			;;
+		show-options*)
+			case "$*" in
+			*"@bridge_host"*) [ -n "${FAKE_BRIDGE_HOST:-}" ] && printf '%s\n' "$FAKE_BRIDGE_HOST" ;;
+			*"@bridge_session"*) [ -n "${FAKE_BRIDGE_SESSION:-}" ] && printf '%s\n' "$FAKE_BRIDGE_SESSION" ;;
+			esac
 			;;
 		esac
 		exit 0
@@ -179,6 +205,26 @@ teardown() {
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }
 
+@test "mirror session starts at the invoking client's content size" {
+	export FAKE_CLIENT_SIZE='200 50 off'
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q 'new-session -d -s tp-g6-workstation -n workstation -x 200 -y 50' "$TMUX_LOG"
+}
+
+@test "an ordinary local session survives a colliding mirror name" {
+	export REMOTE_SESSION=config
+	export FAKE_LOCAL_SESSION=nix-config
+
+	run bash "$LAUNCHER" nix
+	[ "$status" -eq 0 ]
+
+	grep -q 'new-session -d -s nix-config-remote -n config' "$TMUX_LOG"
+	run ! grep -q 'kill-session -t =nix-config$' "$TMUX_LOG"
+}
+
 @test "cold start: a host with no startup unit fails by name and bridges nothing" {
 	export FAKE_UNIT_MISSING=1
 
@@ -203,6 +249,7 @@ teardown() {
 
 @test "live compatible daemon is reused only after its ping succeeds" {
 	touch "$REMOTE_SERVER"
+	export FAKE_DAEMON_SESSION=tp-g6-workstation FAKE_BRIDGE_HOST=tp-g6
 	sleep 30 &
 	DAEMON_PID=$!
 	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
