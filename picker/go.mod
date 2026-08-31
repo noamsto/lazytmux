@@ -1,6 +1,6 @@
 module github.com/noamsto/lazytmux/picker
 
-go 1.25.0
+go 1.26.3
 
 require (
 	charm.land/bubbles/v2 v2.0.0
@@ -9,6 +9,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/x/vt v0.0.0-20260705004817-2cc9a8fe1146
 	github.com/mattn/go-runewidth v0.0.23
+	github.com/noamsto/themestate v0.1.0
 	golang.org/x/term v0.45.0
 )
 

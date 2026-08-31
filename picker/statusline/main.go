@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/noamsto/themestate"
 )
 
 // gitOutput runs git with a short timeout so a stalled repo (NFS, held
@@ -355,7 +357,7 @@ func main() {
 	// would leave just the fragment after it on line 0. Collapse before this
 	// escapes to stdout or the cache.
 	line := strings.ReplaceAll(
-		renderLine(a, claudeDir, detectTheme(), prefixActive, time.Now().Unix(), usage), "\n", " ")
+		renderLine(a, claudeDir, themestate.Detect(), prefixActive, time.Now().Unix(), usage), "\n", " ")
 	if ok {
 		writeLastGood(statuslineCacheDir, a.session, line)
 	}

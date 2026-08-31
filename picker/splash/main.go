@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/noamsto/themestate"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	// --static: single already-resolved frame, no periodic redraw (for
 	// bandwidth-light remote/SSH attaches).
 	static := slices.Contains(os.Args[1:], "--static")
-	m := newModel(detectTheme(), splashTips, splashPrefix, timeout, static)
+	m := newModel(themestate.Detect(), splashTips, splashPrefix, timeout, static)
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		os.Exit(1)
 	}
