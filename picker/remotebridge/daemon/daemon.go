@@ -166,26 +166,62 @@ type helloConn struct {
 // drains to do that is Run's alone.
 type helloWaiter func(n int) (map[string]net.Conn, error)
 
-// resizePollInterval is how often the resize watcher re-checks the local
-// client area. A human terminal resize is discrete and infrequent, so a 1s
-// poll is responsive enough and cheap (one LocalArea query/sec).
+// resizePollInterval is how often the resize watcher re-checks the nudge
+// file's mtime (an os.Stat, not a fork). It only forks LocalArea's
+// display-message/list-clients calls when that mtime has advanced (#433).
 const resizePollInterval = time.Second
+
+// resizeNudgeSuffix names the per-bridge file a session-scoped client-resized
+// hook touches (see registerResizeHook). Its mtime is the event watchResize
+// polls for instead of forking a query every tick.
+const resizeNudgeSuffix = ".resize"
+
+// resizeFallbackInterval bounds staleness on top of the mtime nudge: a
+// filesystem with coarse mtime resolution can make a real touch
+// indistinguishable from one already observed (two resizes landing in the
+// same rounded second read back as the same mtime), which would otherwise
+// leave the mirror capped at a stale size forever if no further resize ever
+// lands in a distinguishable bucket. Every tick where the interval has
+// elapsed since the last check forces one regardless of the nudge, same as
+// the unconditional poll this replaces — just far less often.
+const resizeFallbackInterval = 30 * time.Second
 
 // watchResize re-asserts every mirrored window's cap whenever the local client
 // area changes. A local terminal/client resize emits no control-stream event,
-// so the daemon must poll: on a change it re-pushes ConvergeCmd per mirrored
-// window, which resizes the remote and makes it emit %layout-change per
-// window, driving the existing reconcile + re-seed (and the re-fit of the
-// local window to the remote's new size). send is the same mutex-guarded,
-// no-op-when-closed sender the main loop uses; this only injects
-// fire-and-forget commands (their %begin/%end acks are consumed harmlessly by
-// the main loop's own nextLine read).
-func watchResize(area func() (int, int), reg *registry, cv *converger, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
+// so the daemon polls — but cheaply: nudged reports the resize-hook file's
+// mtime via a plain os.Stat, and LocalArea's fork-per-call query only runs
+// once that mtime has advanced past the last one observed, collapsing the
+// steady-state cost from one fork/sec to one stat/sec (plus one fork every
+// resizeFallbackInterval as a safety net — see its doc). A tick whose stat
+// misses a touch is not lost: mtime persists on disk, so the next tick's stat
+// still sees it and converges — one poll cycle later than the hook itself.
+//
+// On a change it re-pushes ConvergeCmd per mirrored window, which resizes the
+// remote and makes it emit %layout-change per window, driving the existing
+// reconcile + re-seed (and the re-fit of the local window to the remote's new
+// size). send is the same mutex-guarded, no-op-when-closed sender the main
+// loop uses; this only injects fire-and-forget commands (their %begin/%end
+// acks are consumed harmlessly by the main loop's own nextLine read).
+func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *registry, cv *converger, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
+	var lastNudge time.Time
+	lastCheck := time.Now()
 	for {
 		select {
 		case <-stop:
 			return
-		case <-tick:
+		case now := <-tick:
+			due := false
+			if mtime, ok := nudged(); ok && mtime.After(lastNudge) {
+				lastNudge = mtime
+				due = true
+			}
+			if !due && now.Sub(lastCheck) >= resizeFallbackInterval {
+				due = true
+			}
+			if !due {
+				continue
+			}
+			lastCheck = now
 			w, h := area()
 			for _, remoteID := range reg.remoteIDs() {
 				if cv.need(remoteID, w, h) {
@@ -193,6 +229,40 @@ func watchResize(area func() (int, int), reg *registry, cv *converger, send func
 				}
 			}
 		}
+	}
+}
+
+// resizeHookEvents are the two events that can grow the mirror session's
+// window: client-resized fires for an attached client's terminal resize,
+// window-resized for any window resize including a programmatic one against a
+// detached session (window-size is "latest", so the mirror stays detached
+// between launcher switches — #433's own reproduction resizes it that way).
+var resizeHookEvents = [...]string{"client-resized", "window-resized"}
+
+// registerResizeHook wires session-scoped hooks that touch nudgePath — no
+// fork on the daemon's side, just a stat once a tick sees the touch.
+// Session-scoped (not the global config's hooks) so the lifecycle stays owned
+// by the bridge: registered here, removed in unregisterResizeHook.
+func registerResizeHook(cfg Config, nudgePath string) {
+	if cfg.LocalSess == "" {
+		return
+	}
+	touch := "touch -- " + tmuxQuote(nudgePath)
+	hook := fmt.Sprintf("run-shell -b %s", tmuxQuote(touch))
+	for _, event := range resizeHookEvents {
+		cfg.LocalTmux("set-hook", "-t", cfg.LocalSess, event, hook)
+	}
+}
+
+// unregisterResizeHook removes the hooks registerResizeHook set, so a dead
+// bridge's session (or one reused for a later daemon) carries none of its
+// hooks forward.
+func unregisterResizeHook(cfg Config) {
+	if cfg.LocalSess == "" {
+		return
+	}
+	for _, event := range resizeHookEvents {
+		cfg.LocalTmux("set-hook", "-u", "-t", cfg.LocalSess, event)
 	}
 }
 
@@ -340,6 +410,11 @@ func Run(cfg Config) error {
 
 	reg := newRegistry()
 	cv := newConverger()
+	// nudgePath is the file registerResizeHook's client-resized hook touches;
+	// removed here so a stale touch from a prior daemon on this same socket
+	// path can't be mistaken for a resize before the hook ever fires again.
+	nudgePath := cfg.SockPath + resizeNudgeSuffix
+	os.Remove(nudgePath)
 	// stopWatch stops the resize watcher (started just before the main loop).
 	// Declared here so teardown can close it; teardown runs exactly once per
 	// Run return path, so a plain close is safe.
@@ -349,6 +424,8 @@ func Run(cfg Config) error {
 	var agents *agentShipper
 	teardown := func() {
 		close(stopWatch)
+		unregisterResizeHook(cfg)
+		os.Remove(nudgePath)
 		if agents != nil {
 			agents.clear()
 		}
@@ -418,9 +495,23 @@ func Run(cfg Config) error {
 	}
 
 	// Re-converge the remote whenever the local client resizes. A local resize
-	// emits no control-stream event, so poll; teardown closes stopWatch.
+	// emits no control-stream event, so poll (cheaply — see watchResize);
+	// teardown closes stopWatch and removes the hook this registers. A resize
+	// landing between the last per-window setup convergence above and this
+	// registration is caught by resizeFallbackInterval rather than lost.
+	registerResizeHook(cfg, nudgePath)
+	nudged := func() (time.Time, bool) {
+		fi, err := os.Stat(nudgePath)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return fi.ModTime(), true
+	}
 	ticker := time.NewTicker(resizePollInterval)
-	go func() { defer ticker.Stop(); watchResize(cfg.LocalArea, reg, cv, send, stopWatch, ticker.C) }()
+	go func() {
+		defer ticker.Stop()
+		watchResize(cfg.LocalArea, nudged, reg, cv, send, stopWatch, ticker.C)
+	}()
 
 	// Ship the remote's agent state into the local claude-status tree.
 	agents = newAgentShipper(cfg.LocalSess, remoteClockSkew(rt))

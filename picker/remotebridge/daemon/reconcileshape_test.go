@@ -49,7 +49,9 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 	// Hand the hello over as soon as the shape lands, so a correct run is fast;
 	// the deadline makes a regressed run fail rather than hang for helloTimeout.
 	connCh := make(chan helloConn)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for deadline := time.Now().Add(2 * time.Second); !seen("select-layout") && time.Now().Before(deadline); {
 			time.Sleep(time.Millisecond)
 		}
@@ -81,6 +83,7 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, NewRouter(), waiter, rt); err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
 	}
+	<-done // wait for the sender's rec("hello") to land before asserting on trace
 
 	mu.Lock()
 	defer mu.Unlock()
