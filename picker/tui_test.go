@@ -659,11 +659,11 @@ func TestRemoteMsgPreservesCursor(t *testing.T) {
 	// "lab" resolves with two unbridged sessions — its row grows by two tree
 	// rows, shifting everything that came after "lab" in the old list,
 	// including "dead"'s row.
-	probe := func(host string) ([]string, error) {
+	probe := func(host string) (remoteProbeResult, error) {
 		if host == "dead" {
-			return nil, errors.New("unreachable")
+			return remoteProbeResult{}, errors.New("unreachable")
 		}
-		return []string{"mono", "other"}, nil
+		return probeWithSessions("mono", "other"), nil
 	}
 	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
@@ -693,7 +693,7 @@ func TestRemoteMsgPreservesQuery(t *testing.T) {
 	}
 	m = m.recombine().withFilter()
 
-	probe := func(string) ([]string, error) { return nil, nil }
+	probe := func(string) (remoteProbeResult, error) { return remoteProbeResult{}, nil }
 	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	next, _ := m.Update(remoteMsg{items: resolved})
@@ -718,7 +718,7 @@ func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 	}
 	m = m.recombine().withFilter()
 
-	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
+	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("mono"), nil }
 	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
 	next, _ := m.Update(remoteMsg{items: resolved})

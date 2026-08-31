@@ -19,6 +19,14 @@ func noRestore(string) (remuxManifest, error) {
 	return remuxManifest{}, errors.New("no snapshot")
 }
 
+func probeWithSessions(sessions ...string) remoteProbeResult {
+	return remoteProbeResult{Sessions: sessions}
+}
+
+func probeWithIdentity(id remoteIdentity, sessions ...string) remoteProbeResult {
+	return remoteProbeResult{Identity: id, Sessions: sessions}
+}
+
 func TestParseRemoteHosts(t *testing.T) {
 	got := parseRemoteHosts("  tp-g6   lab\ttp-g6 ")
 	want := []string{"tp-g6", "lab"}
@@ -36,16 +44,16 @@ func TestParseRemoteHosts(t *testing.T) {
 }
 
 func TestRemoteSessionsForHost(t *testing.T) {
-	probe := func(host string) ([]string, error) {
+	probe := func(host string) (remoteProbeResult, error) {
 		switch host {
 		case "down":
-			return nil, errors.New("ssh failed")
+			return remoteProbeResult{}, errors.New("ssh failed")
 		case "serverless":
-			return nil, errRemoteNoServer
+			return remoteProbeResult{}, errRemoteNoServer
 		case "empty":
-			return nil, nil
+			return remoteProbeResult{}, nil
 		}
-		return []string{"mono", "nix-config", ""}, nil
+		return probeWithSessions("mono", "nix-config", ""), nil
 	}
 	local := map[string]bool{"lab-mono": true}
 
@@ -73,11 +81,11 @@ func TestRemoteSessionsForHost(t *testing.T) {
 
 func TestCollectRemoteItems(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
-	probe := func(host string) ([]string, error) {
+	probe := func(host string) (remoteProbeResult, error) {
 		if host == "dead" {
-			return nil, errors.New("unreachable")
+			return remoteProbeResult{}, errors.New("unreachable")
 		}
-		return []string{"mono", "other"}, nil
+		return probeWithSessions("mono", "other"), nil
 	}
 	local := map[string]bool{"lab-mono": true}
 
@@ -115,7 +123,7 @@ func TestCollectRemoteItems(t *testing.T) {
 // selectable, because the launcher cold-starts the host's startup session (#287).
 func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
-	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
+	probe := func(string) (remoteProbeResult, error) { return remoteProbeResult{}, errRemoteNoServer }
 
 	items := collectRemoteItems(opts, nil, probe, noRestore)
 	if len(items) != 2 {
@@ -141,7 +149,7 @@ func TestCollectRemoteItemsNoServerRow(t *testing.T) {
 
 func TestCollectRemoteItemsRestorableSessions(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
-	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
+	probe := func(string) (remoteProbeResult, error) { return remoteProbeResult{}, errRemoteNoServer }
 	savedAt := time.Now().Add(-2 * time.Hour).UnixMilli()
 	restoreProbe := func(host string) (remuxManifest, error) {
 		if host != "tp-g6" {
@@ -181,7 +189,7 @@ func TestCollectRemoteItemsRestorableSessions(t *testing.T) {
 
 func TestCollectRemoteItemsNoServerRowUnchangedWhenNoManifest(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "tp-g6"}
-	probe := func(string) ([]string, error) { return nil, errRemoteNoServer }
+	probe := func(string) (remoteProbeResult, error) { return remoteProbeResult{}, errRemoteNoServer }
 
 	items := collectRemoteItems(opts, nil, probe, noRestore)
 	if len(items) != 2 {
@@ -306,7 +314,7 @@ func TestRemoteAuthStartFailure(t *testing.T) {
 // one can't make the section disappear.
 func TestCollectRemoteItemsAllBridged(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
-	probe := func(string) ([]string, error) { return []string{"mono"}, nil }
+	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("mono"), nil }
 
 	items := collectRemoteItems(opts, map[string]bool{"lab-mono": true}, probe, noRestore)
 	if len(items) != 2 {
@@ -336,8 +344,16 @@ func TestLocalBridgeSession(t *testing.T) {
 // reachable remotes show as "(unreachable — open default)". Guard the probe
 // command against regressing to bash-only assignment syntax.
 func TestRemoteListSessionsCmdFishSafe(t *testing.T) {
-	if strings.Contains(remoteListSessionsCmd, "td=") || strings.Contains(remoteListSessionsCmd, "; t=") {
-		t.Fatalf("probe must not use shell assignments (fish-incompatible): %q", remoteListSessionsCmd)
+	for _, cmd := range []string{remoteIdentityPreamble, remoteListSessionsCmd} {
+		if strings.Contains(cmd, "td=") || strings.Contains(cmd, "; t=") {
+			t.Fatalf("probe must not use shell assignments (fish-incompatible): %q", cmd)
+		}
+	}
+	if !strings.Contains(remoteListSessionsCmd, "cat /etc/machine-id") {
+		t.Fatalf("probe should print machine-id first: %q", remoteListSessionsCmd)
+	}
+	if !strings.Contains(remoteListSessionsCmd, "id -un") {
+		t.Fatalf("probe should print username: %q", remoteListSessionsCmd)
 	}
 	if !strings.Contains(remoteListSessionsCmd, "env TMUX_TMPDIR=") {
 		t.Fatalf("probe should set TMUX_TMPDIR via env(1): %q", remoteListSessionsCmd)
@@ -425,11 +441,11 @@ func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	pending := pendingRemoteItems(opts)
 
-	probe := func(host string) ([]string, error) {
+	probe := func(host string) (remoteProbeResult, error) {
 		if host == "dead" {
-			return nil, errors.New("unreachable")
+			return remoteProbeResult{}, errors.New("unreachable")
 		}
-		return nil, nil // lab: reachable, nothing new to show
+		return remoteProbeResult{}, nil // lab: reachable, nothing new to show
 	}
 	resolved := collectRemoteItems(opts, nil, probe, noRestore)
 
@@ -559,8 +575,8 @@ func TestRestorableFromProbeOutput(t *testing.T) {
 // its own note and an actionable row (#357).
 func TestCollectRemoteItemsNeedsAuth(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
-	probe := func(string) ([]string, error) {
-		return nil, fmt.Errorf("%w: exit status 255", errRemoteNeedsAuth)
+	probe := func(string) (remoteProbeResult, error) {
+		return remoteProbeResult{}, fmt.Errorf("%w: exit status 255", errRemoteNeedsAuth)
 	}
 	items := collectRemoteItems(opts, nil, probe, nil)
 
@@ -584,8 +600,8 @@ func TestCollectRemoteItemsNeedsAuth(t *testing.T) {
 // to accept key changes without checking a fingerprint.
 func TestCollectRemoteItemsHostKeyChanged(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "mbp"}
-	probe := func(string) ([]string, error) {
-		return nil, fmt.Errorf("%w: exit status 255", errRemoteHostKeyChanged)
+	probe := func(string) (remoteProbeResult, error) {
+		return remoteProbeResult{}, fmt.Errorf("%w: exit status 255", errRemoteHostKeyChanged)
 	}
 	items := collectRemoteItems(opts, nil, probe, nil)
 
@@ -615,7 +631,7 @@ func TestRemoteSessionsForHostNewStates(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			probe := func(string) ([]string, error) { return nil, tc.err }
+			probe := func(string) (remoteProbeResult, error) { return remoteProbeResult{}, tc.err }
 			if _, got := remoteSessionsForHost("h", nil, probe); got != tc.want {
 				t.Errorf("state = %v, want %v", got, tc.want)
 			}
@@ -644,5 +660,120 @@ func TestOpenRemoteBridgeUsesConfiguredBin(t *testing.T) {
 	}
 	if want := "lab\nwork\n"; string(got) != want {
 		t.Errorf("args = %q, want %q", got, want)
+	}
+}
+
+func TestParseRemoteProbeOutput(t *testing.T) {
+	stdout := "abc123\nnoams\nmono\nother\n"
+	got := parseRemoteProbeOutput(stdout)
+	if got.Identity.MachineID != "abc123" || got.Identity.User != "noams" {
+		t.Fatalf("identity = %+v", got.Identity)
+	}
+	if len(got.Sessions) != 2 || got.Sessions[0] != "mono" || got.Sessions[1] != "other" {
+		t.Fatalf("sessions = %v", got.Sessions)
+	}
+}
+
+func TestCollectRemoteItemsDropsSelfHost(t *testing.T) {
+	const selfID = "test-machine-id-self"
+	local := remoteIdentity{MachineID: selfID, User: "noams"}
+	readLocalRemoteIdentity = func() remoteIdentity { return local }
+	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+	} })
+
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
+	probe := func(host string) (remoteProbeResult, error) {
+		switch host {
+		case "localhost":
+			return probeWithIdentity(local), nil
+		case "lab":
+			return probeWithIdentity(remoteIdentity{MachineID: "other-id", User: "noams"}, "work"), nil
+		}
+		return remoteProbeResult{}, errors.New("unexpected host")
+	}
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if len(items) != 3 {
+		t.Fatalf("expected header + lab + work, got %d: %+v", len(items), items)
+	}
+	for _, it := range items {
+		if it.remoteHost == "localhost" {
+			t.Fatalf("self alias should be dropped; got %+v", it)
+		}
+	}
+	if !isCachedRemoteSelfAlias("localhost") {
+		t.Fatal("self alias should be cached after probe")
+	}
+}
+
+func TestCollectRemoteItemsKeepsSameMachineDifferentUser(t *testing.T) {
+	const sharedID = "shared-machine-id"
+	readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: sharedID, User: "noams"}
+	}
+	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+	} })
+
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	opts := map[string]string{"@remote_bridge_hosts": "root-local"}
+	probe := func(string) (remoteProbeResult, error) {
+		return probeWithIdentity(remoteIdentity{MachineID: sharedID, User: "root"}, "admin"), nil
+	}
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if len(items) != 3 {
+		t.Fatalf("expected header + host + session, got %d: %+v", len(items), items)
+	}
+	if items[1].remoteHost != "root-local" {
+		t.Fatalf("same machine, different user must be kept: %+v", items[1])
+	}
+}
+
+func TestCollectRemoteItemsDropsSelfOnNoServer(t *testing.T) {
+	const selfID = "test-machine-id-noserver"
+	local := remoteIdentity{MachineID: selfID, User: "noams"}
+	readLocalRemoteIdentity = func() remoteIdentity { return local }
+	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+	} })
+
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	opts := map[string]string{"@remote_bridge_hosts": "localhost"}
+	probe := func(string) (remoteProbeResult, error) {
+		return probeWithIdentity(local), fmt.Errorf("%w: no server", errRemoteNoServer)
+	}
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if items != nil {
+		t.Fatalf("self host with no server should be dropped entirely, got %+v", items)
+	}
+}
+
+func TestPendingRemoteItemsSkipsCachedSelfAlias(t *testing.T) {
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	markCachedRemoteSelfAlias("localhost")
+	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
+
+	items := pendingRemoteItems(opts)
+	if len(items) != 2 {
+		t.Fatalf("expected header + lab only, got %d: %+v", len(items), items)
+	}
+	if items[1].remoteHost != "lab" {
+		t.Fatalf("cached self alias should be omitted from first paint; got %+v", items[1])
 	}
 }

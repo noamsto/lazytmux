@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,14 +21,26 @@ import (
 // host cannot stall the session picker's async remote section.
 const remoteProbeTimeout = 3 * time.Second
 
+// remoteIdentityPreamble prints machine-id (or uuid/hostname fallback) and the
+// remote username on separate lines. Folded into remoteListSessionsCmd so
+// identity rides the existing ssh probe with no extra round trip.
+const remoteIdentityPreamble = `cat /etc/machine-id 2>/dev/null || sysctl -n kern.uuid 2>/dev/null || hostname; id -un`
+
 // remoteListSessionsCmd lists remote tmux sessions under the same TMUX_TMPDIR /
 // binary resolution as lztmux-remote-open. The socket dir is OS-dependent:
 // /run/user/<uid> on Linux, tmux's default /tmp/tmux-<uid> on macOS (no
 // $XDG_RUNTIME_DIR) — try Linux first, then macOS; a missing socket dir fails
 // fast, so the wrong guess costs a local stat. Must stay fish-safe: no
 // `var=value` shell assignments — fish login shells reject them and the picker
-// would mark a reachable host unreachable.
-const remoteListSessionsCmd = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null || env TMUX_TMPDIR=/tmp/tmux-$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+// would mark a reachable host unreachable. Stdout begins with the identity
+// preamble (machine-id line, username line), then session names.
+const remoteListSessionsBody = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null || env TMUX_TMPDIR=/tmp/tmux-$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+
+const remoteListSessionsCmd = remoteIdentityPreamble + `; ` + remoteListSessionsBody
+
+// remoteSelfCacheDir holds alias→self verdicts so pendingRemoteItems can omit
+// known-self hosts on the first paint without another ssh probe.
+var remoteSelfCacheDir = "/tmp/lazytmux-remote-self"
 
 // remoteRestorableCmd emits the remote host's own hostname (line 1, used to
 // verify a fetched snapshot really belongs to this host) followed by
@@ -81,6 +95,113 @@ func parseRemoteHosts(raw string) []string {
 	return out
 }
 
+// remoteIdentity is a host's machine-id (or uuid/hostname fallback) plus the
+// username the ssh probe ran as.
+type remoteIdentity struct {
+	MachineID string
+	User      string
+}
+
+// remoteProbeResult is stdout from remoteListSessionsCmd: identity on the first
+// two lines, session names after.
+type remoteProbeResult struct {
+	Identity remoteIdentity
+	Sessions []string
+}
+
+// readLocalRemoteIdentity returns this machine's identity using the same
+// resolution order as remoteIdentityPreamble.
+var readLocalRemoteIdentity = func() remoteIdentity {
+	return remoteIdentity{
+		MachineID: readLocalMachineID(),
+		User:      localUsername(),
+	}
+}
+
+func readLocalMachineID() string {
+	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
+		if id := strings.TrimSpace(string(b)); id != "" {
+			return id
+		}
+	}
+	if out, err := exec.Command("sysctl", "-n", "kern.uuid").Output(); err == nil {
+		if id := strings.TrimSpace(string(out)); id != "" {
+			return id
+		}
+	}
+	hostname, _ := os.Hostname()
+	return strings.TrimSpace(hostname)
+}
+
+func localUsername() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.Username
+}
+
+// parseRemoteProbeOutput splits probe stdout into identity and session names.
+func parseRemoteProbeOutput(stdout string) remoteProbeResult {
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	var res remoteProbeResult
+	if len(lines) >= 1 {
+		res.Identity.MachineID = strings.TrimSpace(lines[0])
+	}
+	if len(lines) >= 2 {
+		res.Identity.User = strings.TrimSpace(lines[1])
+	}
+	for _, line := range lines[2:] {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			res.Sessions = append(res.Sessions, line)
+		}
+	}
+	return res
+}
+
+// isRemoteSelf reports whether remote resolved to this machine as the same user.
+func isRemoteSelf(local, remote remoteIdentity) bool {
+	if local.MachineID == "" || local.User == "" || remote.MachineID == "" || remote.User == "" {
+		return false
+	}
+	// Cloned VMs can share /etc/machine-id; not a concern for physical fleets.
+	return local.MachineID == remote.MachineID && local.User == remote.User
+}
+
+func remoteSelfCachePath(host string) string {
+	safe := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			return r
+		}
+		return '_'
+	}, host)
+	return filepath.Join(remoteSelfCacheDir, safe)
+}
+
+func markCachedRemoteSelfAlias(host string) {
+	_ = os.MkdirAll(remoteSelfCacheDir, 0o755)
+	_ = os.WriteFile(remoteSelfCachePath(host), []byte("1\n"), 0o644)
+}
+
+func isCachedRemoteSelfAlias(host string) bool {
+	_, err := os.Stat(remoteSelfCachePath(host))
+	return err == nil
+}
+
+func dropCachedSelfAliases(hosts []string) []string {
+	if len(hosts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if !isCachedRemoteSelfAlias(h) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // localBridgeSession is the local mirror name for a remote host+session pair.
 func localBridgeSession(host, sess string) string {
 	return host + "-" + sess
@@ -90,8 +211,8 @@ func localBridgeSession(host, sess string) string {
 // remoteProbeOK the returned list is the remote sessions not already bridged
 // locally as <host>-<sess> (may be empty when every session is already open).
 // An empty list with no error means the remote has no server to list.
-func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) ([]string, error)) ([]string, remoteProbeState) {
-	names, err := probe(host)
+func remoteSessionsForHost(host string, localSessions map[string]bool, probe func(string) (remoteProbeResult, error)) ([]string, remoteProbeState) {
+	result, err := probe(host)
 	if err != nil {
 		switch {
 		case errors.Is(err, errRemoteNoServer):
@@ -103,11 +224,11 @@ func remoteSessionsForHost(host string, localSessions map[string]bool, probe fun
 		}
 		return nil, remoteProbeUnreachable
 	}
-	if len(names) == 0 {
+	if len(result.Sessions) == 0 {
 		return nil, remoteProbeNoServer
 	}
-	out := make([]string, 0, len(names))
-	for _, sess := range names {
+	out := make([]string, 0, len(result.Sessions))
+	for _, sess := range result.Sessions {
 		if sess == "" {
 			continue
 		}
@@ -190,7 +311,7 @@ func remoteAuthStartFailure(err error) (string, bool) {
 // lztmux-remote-open so a remote without tmux on the non-interactive PATH still
 // lists. Returns session names, or an error wrapping errRemoteUnreachable /
 // errRemoteNoServer.
-func sshListRemoteSessions(host string) ([]string, error) {
+func sshListRemoteSessions(host string) (remoteProbeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteProbeTimeout)
 	defer cancel()
 
@@ -205,18 +326,11 @@ func sshListRemoteSessions(host string) ([]string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	parsed := parseRemoteProbeOutput(stdout.String())
 	if err := cmd.Run(); err != nil {
-		return nil, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
+		return parsed, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
-	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	return out, nil
+	return parsed, nil
 }
 
 // remuxManifestSession is the subset of a tmux-remux snapshot session the
@@ -477,7 +591,7 @@ const remotePendingNote = "…"
 // resolve. remoteMsg (collectRemoteItems's result) replaces this slice
 // wholesale once every host's probe returns.
 func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
-	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
+	hosts := dropCachedSelfAliases(parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", "")))
 	if len(hosts) == 0 {
 		return nil
 	}
@@ -493,8 +607,8 @@ func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
 // sessions) by probing every configured host over ssh. Runs off the
 // first-paint path; the result merges via remoteMsg, replacing
 // pendingRemoteItems's synchronous placeholder (#312).
-func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) ([]string, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
-	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
+func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) (remoteProbeResult, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
+	hosts := dropCachedSelfAliases(parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", "")))
 	if len(hosts) == 0 {
 		return nil
 	}
@@ -508,6 +622,8 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		localSessionNames = map[string]bool{}
 	}
 
+	localID := readLocalRemoteIdentity()
+
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
 	reset := "\033[0m"
 
@@ -517,6 +633,7 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		state           remoteProbeState
 		restorable      []remuxManifestSession
 		manifestSavedAt int64
+		drop            bool
 	}
 	results := make([]hostResult, len(hosts))
 	var wg sync.WaitGroup
@@ -524,7 +641,18 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 		wg.Add(1)
 		go func(i int, h string) {
 			defer wg.Done()
-			sess, state := remoteSessionsForHost(h, localSessionNames, probe)
+			result, err := probe(h)
+			if isRemoteSelf(localID, result.Identity) {
+				markCachedRemoteSelfAlias(h)
+				results[i] = hostResult{host: h, drop: true}
+				return
+			}
+			sess, state := remoteSessionsForHost(h, localSessionNames, func(string) (remoteProbeResult, error) {
+				if err != nil {
+					return result, err
+				}
+				return result, nil
+			})
 			res := hostResult{host: h, sess: sess, state: state}
 			if state == remoteProbeNoServer {
 				if m, err := restoreProbe(h); err == nil && len(m.Sessions) > 0 {
@@ -538,9 +666,15 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 	wg.Wait()
 
 	items := make([]listItem, 0, len(hosts)+1)
-	items = append(items, remoteHeaderItem(tmuxOpts))
-
+	hasHosts := false
 	for _, r := range results {
+		if r.drop {
+			continue
+		}
+		if !hasHosts {
+			items = append(items, remoteHeaderItem(tmuxOpts))
+			hasHosts = true
+		}
 		note := ""
 		switch r.state {
 		case remoteProbeUnreachable:
@@ -599,6 +733,9 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				searchText:    r.host + "/" + s.Name + " " + r.host + " " + s.Name,
 			})
 		}
+	}
+	if !hasHosts {
+		return nil
 	}
 	return items
 }
