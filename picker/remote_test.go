@@ -777,3 +777,89 @@ func TestPendingRemoteItemsSkipsCachedSelfAlias(t *testing.T) {
 		t.Fatalf("cached self alias should be omitted from first paint; got %+v", items[1])
 	}
 }
+
+func TestCollectRemoteItemsRevalidatesCachedSelfAlias(t *testing.T) {
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	markCachedRemoteSelfAlias("localhost")
+	if !isCachedRemoteSelfAlias("localhost") {
+		t.Fatal("setup: localhost should be cached")
+	}
+
+	readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: "local-id", User: "noams"}
+	}
+	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
+		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+	} })
+
+	probed := make(map[string]bool)
+	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
+	probe := func(host string) (remoteProbeResult, error) {
+		probed[host] = true
+		switch host {
+		case "localhost":
+			return probeWithIdentity(remoteIdentity{MachineID: "repointed-id", User: "noams"}, "work"), nil
+		case "lab":
+			return probeWithSessions("mono"), nil
+		}
+		return remoteProbeResult{}, errors.New("unexpected host")
+	}
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if !probed["localhost"] {
+		t.Fatal("collect must probe cached self aliases, not skip them")
+	}
+	if isCachedRemoteSelfAlias("localhost") {
+		t.Fatal("stale self cache should be cleared when alias resolves elsewhere")
+	}
+	if len(items) != 5 {
+		t.Fatalf("expected header + localhost + work + lab + mono, got %d: %+v", len(items), items)
+	}
+	if items[1].remoteHost != "localhost" {
+		t.Fatalf("repointed alias should appear after revalidation; got %+v", items[1])
+	}
+}
+
+func TestCollectRemoteItemsKeepsCachedSelfAliasWhenProbeFails(t *testing.T) {
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	markCachedRemoteSelfAlias("localhost")
+
+	opts := map[string]string{"@remote_bridge_hosts": "localhost"}
+	probe := func(string) (remoteProbeResult, error) {
+		return remoteProbeResult{}, errors.New("unreachable")
+	}
+
+	items := collectRemoteItems(opts, nil, probe, noRestore)
+	if items == nil || len(items) != 2 {
+		t.Fatalf("expected header + unreachable row, got %+v", items)
+	}
+	if !isCachedRemoteSelfAlias("localhost") {
+		t.Fatal("cache must stay when probe yields no identity to revalidate against")
+	}
+}
+
+func TestIsCachedRemoteSelfAliasRejectsUntrustedMarker(t *testing.T) {
+	cacheDir := t.TempDir()
+	remoteSelfCacheDir = cacheDir
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := remoteSelfCachePath("localhost")
+	if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isCachedRemoteSelfAlias("localhost") {
+		t.Fatal("world-writable cache dir must not count as cached")
+	}
+}

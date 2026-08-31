@@ -180,13 +180,49 @@ func remoteSelfCachePath(host string) string {
 }
 
 func markCachedRemoteSelfAlias(host string) {
-	_ = os.MkdirAll(remoteSelfCacheDir, 0o755)
-	_ = os.WriteFile(remoteSelfCachePath(host), []byte("1\n"), 0o644)
+	_ = os.MkdirAll(remoteSelfCacheDir, 0o700)
+	_ = os.WriteFile(remoteSelfCachePath(host), []byte("1\n"), 0o600)
+}
+
+func clearCachedRemoteSelfAlias(host string) {
+	_ = os.Remove(remoteSelfCachePath(host))
 }
 
 func isCachedRemoteSelfAlias(host string) bool {
-	_, err := os.Stat(remoteSelfCachePath(host))
-	return err == nil
+	if !remoteSelfCacheDirTrusted() {
+		return false
+	}
+	path := remoteSelfCachePath(host)
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	return true
+}
+
+func remoteSelfCacheDirTrusted() bool {
+	info, err := os.Stat(remoteSelfCacheDir)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	if info.Mode().Perm()&0o002 != 0 {
+		return false
+	}
+	return true
 }
 
 func dropCachedSelfAliases(hosts []string) []string {
@@ -326,8 +362,9 @@ func sshListRemoteSessions(host string) (remoteProbeResult, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	err := cmd.Run()
 	parsed := parseRemoteProbeOutput(stdout.String())
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return parsed, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
 	}
 	return parsed, nil
@@ -608,7 +645,7 @@ func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
 // first-paint path; the result merges via remoteMsg, replacing
 // pendingRemoteItems's synchronous placeholder (#312).
 func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string]bool, probe func(string) (remoteProbeResult, error), restoreProbe func(string) (remuxManifest, error)) []listItem {
-	hosts := dropCachedSelfAliases(parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", "")))
+	hosts := parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", ""))
 	if len(hosts) == 0 {
 		return nil
 	}
@@ -646,6 +683,9 @@ func collectRemoteItems(tmuxOpts map[string]string, localSessionNames map[string
 				markCachedRemoteSelfAlias(h)
 				results[i] = hostResult{host: h, drop: true}
 				return
+			}
+			if isCachedRemoteSelfAlias(h) && result.Identity.MachineID != "" && result.Identity.User != "" {
+				clearCachedRemoteSelfAlias(h)
 			}
 			sess, state := remoteSessionsForHost(h, localSessionNames, func(string) (remoteProbeResult, error) {
 				if err != nil {
