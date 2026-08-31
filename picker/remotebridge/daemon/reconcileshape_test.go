@@ -56,6 +56,16 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 		connCh <- helloConn{paneID: "%9", conn: srv}
 		rec("hello")
 	}()
+	// Blocks on connCh exactly as the real waiter does — the ordering this test
+	// pins only exists because the wait is what applyPaneOps stops on.
+	waiter := func(n int) (map[string]net.Conn, error) {
+		out := map[string]net.Conn{}
+		for i := 0; i < n; i++ {
+			hc := <-connCh
+			out[hc.paneID] = hc.conn
+		}
+		return out, nil
+	}
 
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "$0:@1",
@@ -68,7 +78,7 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 	rt := func(string) (controlmode.Line, bool) { return controlmode.Line{}, false }
 
 	if err := applyPaneOps(cfg, w, paneOps{Append: []string{"%9"}}, L,
-		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, NewRouter(), connCh, rt); err != nil {
+		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, NewRouter(), waiter, rt); err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
 	}
 

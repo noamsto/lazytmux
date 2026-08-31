@@ -16,7 +16,7 @@ import (
 // but that notification arrives with the mirror mid-gesture. Re-reading ground
 // truth covers add, close and rename with one round-trip, and self-heals a
 // notification lost for any other reason.
-func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+func reconcileWindows(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
 	// Every return path reflows: the round-trip below can bail, and Run's
 	// startup batch has no other forced reflow — skipping it leaves those
 	// windows on the label the after-new-window hook raced in (#196).
@@ -45,7 +45,7 @@ func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan
 		}
 		mw, known := reg.byRemoteID(rw.id)
 		if !known {
-			if mirrorNewWindow(cfg, send, router, connCh, cst, reg, cv, rt, rw) {
+			if mirrorNewWindow(cfg, send, router, waitHellos, cst, reg, cv, rt, rw) {
 				added = true
 			}
 			continue
@@ -74,7 +74,7 @@ func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan
 
 // mirrorNewWindow creates and wires the local mirror for one remote window,
 // reporting whether it succeeded. Shared by reconcileWindows and addWindow.
-func mirrorNewWindow(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip, rw remoteWindow) bool {
+func mirrorNewWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip, rw remoteWindow) bool {
 	localWin, err := createMirrorWindow(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: mirror %s: %v\n", rw.id, err)
@@ -82,7 +82,7 @@ func mirrorNewWindow(cfg Config, send func(string), router *Router, connCh chan 
 	}
 	stampMirrorWindow(cfg, localWin, rw.name)
 	mw := reg.add(rw.id, localWin)
-	if err := setupWindow(cfg, send, router, connCh, cst, mw, cv, rt); err != nil {
+	if err := setupWindow(cfg, send, router, waitHellos, cst, mw, cv, rt); err != nil {
 		// Drop the half-created entry + local window so a later retry for this id
 		// is not blocked by the already-registered guard.
 		fmt.Fprintf(os.Stderr, "daemon: mirror %s: %v\n", rw.id, err)
