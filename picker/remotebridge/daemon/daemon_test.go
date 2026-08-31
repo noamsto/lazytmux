@@ -346,15 +346,25 @@ func TestWaitHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	}
 }
 
+// nudgeResult is TestWatchResizeReconvergesOnChange's fake for the resize
+// hook's nudge file: ok mirrors os.Stat failing (no touch yet), t its mtime.
+type nudgeResult struct {
+	t  time.Time
+	ok bool
+}
+
 // TestWatchResizeReconvergesOnChange drives watchResize deterministically (no
-// time.Sleep): area reads from sizeCh so the test controls exactly when the
-// watcher observes each size, and each tick sent on `tick` blocks until the
-// watcher is back at its select — so sending the next tick is a barrier that
-// proves the previous iteration (including any send) has fully completed.
+// time.Sleep): nudged and area read from channels so the test controls
+// exactly what the watcher observes each tick, and each tick sent on `tick`
+// blocks until the watcher is back at its select — so sending the next tick is
+// a barrier that proves the previous iteration (including any nudge/area read
+// and send) has fully completed.
 func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	tick := make(chan time.Time)
 	stop := make(chan struct{})
+	nudgeCh := make(chan nudgeResult)
 	sizeCh := make(chan [2]int)
+	nudged := func() (time.Time, bool) { n := <-nudgeCh; return n.t, n.ok }
 	area := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
 
 	reg := newRegistry()
@@ -369,21 +379,34 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	send := func(s string) { sent = append(sent, s) }
 
 	done := make(chan struct{})
-	go func() { watchResize(area, reg, cv, send, stop, tick); close(done) }()
+	go func() { watchResize(area, nudged, reg, cv, send, stop, tick); close(done) }()
 
-	// Tick 1 — unchanged (100x30): no send.
+	t1 := time.Now()
+	t2 := t1.Add(time.Second)
+
+	// Tick 1 — nudge file not yet created (no hook has fired): no stat, no
+	// send.
 	tick <- time.Now()
+	nudgeCh <- nudgeResult{ok: false}
+
+	// Tick 2 — first-ever touch, but the resize left the size unchanged
+	// (100x30): area is polled (nudged, so no fork skipped) but must NOT
+	// resend.
+	tick <- time.Now()
+	nudgeCh <- nudgeResult{t: t1, ok: true}
 	sizeCh <- [2]int{100, 30}
 
-	// Tick 2 — changed (120x40): one send per mirrored window. This tick's
-	// sends block the goroutine from re-selecting, so the next tick can't
-	// unblock until they land.
+	// Tick 3 — mtime advanced and the size changed (120x40): one send per
+	// mirrored window. This tick's sends block the goroutine from
+	// re-selecting, so the next tick can't unblock until they land.
 	tick <- time.Now()
+	nudgeCh <- nudgeResult{t: t2, ok: true}
 	sizeCh <- [2]int{120, 40}
 
-	// Tick 3 — same as the new size (120x40): must NOT resend (tracks new size).
+	// Tick 4 — same mtime as tick 3 (no new touch): area must NOT be polled at
+	// all, so no send even though a stale sizeCh value would mismatch.
 	tick <- time.Now()
-	sizeCh <- [2]int{120, 40}
+	nudgeCh <- nudgeResult{t: t2, ok: true}
 
 	close(stop)
 	select {
