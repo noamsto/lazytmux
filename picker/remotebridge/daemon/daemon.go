@@ -473,6 +473,7 @@ func Run(cfg Config) error {
 		// Same wake-up: an agent that changes state redraws its pane first, so
 		// the output that ended a turn has already brought us here.
 		agents.poll(cfg, rt)
+		reseedDropped(router, rt)
 		// Enable pause-after only now that every window is set up and the loop
 		// is draining the async stream — setup does blocking collectHellos/seed
 		// round-trips without draining, so arming it earlier would let a pane
@@ -726,6 +727,34 @@ func handleContinue(router *Router, rt roundTrip, paneID string) {
 	s.resume()
 }
 
+// reseedDropped repaints every pane that lost frames to a full buffer.
+//
+// The drop itself is deliberate: blocking the control-stream loop on one
+// stalled renderer would stall every other pane with it. But terminal output is
+// positional, so a frame lost mid-repaint leaves those cells wrong until
+// something happens to overwrite them — for an agent pane that has just
+// finished a turn, that can be a very long time, and what the human sees is
+// debris that never clears (#412). capture-pane is ground truth, so the re-seed
+// takes the debris with it.
+//
+// Called from the main loop, which is the only place a round-trip may run, and
+// reached without a timer for the same reason everything else here is: the
+// output that caused the drop has already woken the loop.
+func reseedDropped(router *Router, rt roundTrip) {
+	for _, paneID := range router.dirtyPanes() {
+		s := router.sink(paneID)
+		if s == nil {
+			continue
+		}
+		seed, err := PaneSeed(rt, paneID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: re-seed after drop for %s: %v\n", paneID, err)
+			continue
+		}
+		s.enqueue(wire.FrameSeed, seed)
+	}
+}
+
 // remoteWinTarget builds the tmux target for a remote window by its id (@N),
 // quoting the session name so a name with spaces (e.g. "my proj") stays one
 // token. The id is used verbatim — never TrimPrefix'd to a bare N, which tmux
@@ -885,13 +914,20 @@ type sinkFrame struct {
 // outputSink serializes all daemon->renderer frames for one pane through a
 // single pump goroutine so a slow reader can't block Router.Route (which runs
 // on the single main control-stream loop) and the seed/resize/output writers
-// never race. A full buffer or a paused pane drops the frame; state is
-// recovered by the mandatory fresh FrameSeed that every %continue enqueues.
+// never race. A full buffer or a paused pane drops the frame; a paused pane's
+// state is recovered by the mandatory fresh FrameSeed that every %continue
+// enqueues, an overflow's by reseedDropped (dropped, below).
 type outputSink struct {
 	mu     sync.Mutex
 	ch     chan sinkFrame
 	closed bool
 	paused bool
+	// dropped counts frames lost to a full buffer since the last re-seed.
+	// Nonzero means this pane's screen no longer follows from what it was
+	// sent, and only a re-seed can put that right — terminal output is
+	// positional, so the bytes that would have repaired those cells are the
+	// ones that went missing.
+	dropped int
 }
 
 // newOutputSink constructs the sink and starts its pump immediately; see
@@ -1012,6 +1048,7 @@ func (s *outputSink) Write(p []byte) (int, error) {
 	select {
 	case s.ch <- sinkFrame{typ: wire.FrameOutput, payload: append([]byte(nil), p...)}:
 	default:
+		s.dropped++
 	}
 	return len(p), nil
 }
@@ -1029,7 +1066,24 @@ func (s *outputSink) enqueue(typ wire.FrameType, payload []byte) {
 	select {
 	case s.ch <- sinkFrame{typ: typ, payload: append([]byte(nil), payload...)}:
 	default:
+		s.dropped++
 	}
+}
+
+// takeDirty reports how many frames this sink dropped, and clears the count, but
+// only once the sink has drained: while a pane is still congested a re-seed
+// would be dropped in its turn, and it is a whole extra screen on a queue that
+// is already behind. A paused pane is left alone too — its %continue owes it a
+// seed already.
+func (s *outputSink) takeDirty() (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dropped == 0 || s.closed || s.paused || len(s.ch) > 0 {
+		return 0, false
+	}
+	n := s.dropped
+	s.dropped = 0
+	return n, true
 }
 
 func (s *outputSink) pause()  { s.mu.Lock(); s.paused = true; s.mu.Unlock() }
