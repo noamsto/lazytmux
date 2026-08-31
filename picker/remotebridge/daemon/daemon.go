@@ -37,9 +37,6 @@ type Config struct {
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
 	// LocalTmuxOut runs local tmux and captures stdout (injected; prod = exec).
-	// The mirror needs pane *identity*, not just pane commands: a floating pane
-	// takes an ordinal slot and can sit mid-order, so addressing local panes by
-	// window.index is only correct for a window that has never held a float.
 	LocalTmuxOut func(args ...string) (string, error)
 	LocalArea    func() (int, int)        // content area the local mirror session's clients can show (injected)
 	Reflow       func()                   // forces a status-bar reflow of the mirror session (injected; nil = off)
@@ -530,9 +527,8 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 	mw.layout = L.Raw // PlanWindow's last command is this select-layout
 	cst.setWindowPanes(mw.remoteID, mw.remotePanes)
 
-	// Read the pane ids back before spawning: PlanWindow's splits create panes
-	// in RemotePaneOrder position (see mirror.go), so the tiled list lines up
-	// index-for-index here, but every later command addresses them by id.
+	// PlanWindow's splits create panes in RemotePaneOrder position (see
+	// mirror.go), so the tiled list lines up index-for-index with remotePanes.
 	if err := refreshLocalPanes(cfg, mw); err != nil {
 		return fmt.Errorf("daemon: mirror panes for %s: %w", mw.remoteID, err)
 	}
@@ -768,9 +764,8 @@ func readLayout(rt roundTrip, target string) (controlmode.Layout, string, error)
 	return L, active, err
 }
 
-// spawnRenderer respawns the local pane target (a %N pane id, never a
-// window.index ordinal — a float would shift that) with the renderer binary,
-// wired to dial back with remotePane's id.
+// spawnRenderer respawns the local pane target (a %N pane id) with the
+// renderer binary, wired to dial back with remotePane's id.
 //
 // It also stamps the pane's remote id into the @bridge_pane pane option: that
 // is the carrier a local keybind reads to tell the daemon which remote pane a

@@ -137,8 +137,8 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 	// Every op below reshapes the window, so what it carries is no longer the
 	// layout last applied to it.
 	w.layout = ""
-	// Kills are resolved to pane ids up front: each one shortens w.localPanes,
-	// so an index read after the first kill names a different pane.
+	// Each kill renumbers the window's remaining panes, so the targets are pane
+	// ids: they survive the kills ahead of them, an ordinal does not.
 	for _, i := range ops.Remove {
 		removed := remote[i]
 		router.Unregister(removed)
@@ -250,11 +250,8 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 
 // dropMirroredPanes kills every mirrored pane but the first, which resetWindow
 // leaves for setupWindow to re-shape and respawn, and clears w's belief about
-// what the window holds.
-//
-// By pane id: a float the window also holds is not this daemon's to reap, and
-// an ordinal loop bounded by the mirrored pane count would reach one as soon as
-// the float sits ahead of it in tmux's order.
+// what the window holds. Only the panes this daemon created: a float the window
+// also holds is not its to reap.
 func dropMirroredPanes(cfg Config, w *mirrorWindow) {
 	for i := len(w.localPanes) - 1; i > 0; i-- {
 		if err := cfg.LocalTmux("kill-pane", "-t", w.localPanes[i]); err != nil {
