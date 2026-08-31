@@ -10,6 +10,10 @@ status_provision() {
 	sed -n '/provisionCodexStatusHooks =/,/^[[:space:]]*);$/p' "$MODULE"
 }
 
+resume_provision() {
+	sed -n '/provisionCodexResumeHook =/,/provisionCodexStatusHooks =/p' "$MODULE"
+}
+
 commands_for_event() {
 	local event="$1"
 	hook_block | awk -v event="$event" '
@@ -50,6 +54,23 @@ assert_event_command() {
 	[[ $output == *"$config_path"* ]]
 	[[ $output == *"MARKER='# lazytmux-managed: codex status-line hooks'"* ]]
 	[[ $output == *"$profile_binary"* ]]
+}
+
+@test "Codex resume hook uses the stable profile binary and migrates old paths" {
+	run resume_provision
+	[ "$status" -eq 0 ]
+	# shellcheck disable=SC2016
+	local replacement='s#^command = .*codex-relaunch-stamp.*#command = \"${resumeBinary}\"#'
+	# shellcheck disable=SC2016
+	[[ $output == *'resumeBinary = "${config.home.profileDirectory}/bin/codex-relaunch-stamp";'* ]]
+	# shellcheck disable=SC2016
+	[[ $output == *'if grep -qF "$MARKER" "$CONFIG"; then'* ]]
+	[[ $output == *"$replacement"* ]]
+	# shellcheck disable=SC2016
+	[[ $output != *'${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp'* ]]
+
+	run grep -F '++ lib.optionals resumeCodexEnable [tmuxConfig.script.codex-relaunch-stamp]' "$MODULE"
+	[ "$status" -eq 0 ]
 }
 
 @test "Codex hook events map to the supported status states" {

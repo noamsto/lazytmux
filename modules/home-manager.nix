@@ -1019,6 +1019,7 @@ in {
             tmuxConfig.script.cursor-status-hook
             tmuxConfig.script.cursor-hooks-install
           ]
+          ++ lib.optionals resumeCodexEnable [tmuxConfig.script.codex-relaunch-stamp]
           ++ lib.optionals resumeCursorEnable [tmuxConfig.script.cursor-relaunch-stamp tmuxConfig.script.cursor-relaunch-hooks-install]
           ++ lib.optionals cfg.enrich.enable [
             tmuxConfig.script.tmux-issue-stamp
@@ -1102,37 +1103,42 @@ in {
             fi
           '';
 
-          # Idempotently ensure the codex SessionStart hook block exists in the
-          # user's ~/.codex/config.toml. Codex only auto-loads that one file
-          # globally (confirmed via `codex --help`'s -c flag doc and the #140
-          # spike notes: no drop-in dir, no CODEX_HOME layered profile without
-          # `-p`); a real config.toml can carry substantial hand-edited content
-          # (model, mcp_servers, per-project trust), so home.file would clobber
-          # it — this appends the block once, guarded by a marker, and never
-          # touches existing content. Trust for the hook itself still requires a
-          # one-time manual `/hooks` -> "Trust all" per machine (see the
-          # resumeCodex option doc) — that step cannot be pre-seeded (the trust
-          # hash is an undocumented, versioned, content-based digest).
+          # Ensure the codex SessionStart hook block exists in the user's
+          # ~/.codex/config.toml. Codex only auto-loads that one file globally
+          # (confirmed via `codex --help`'s -c flag doc and the #140 spike notes:
+          # no drop-in dir, no CODEX_HOME layered profile without `-p`); a real
+          # config.toml can carry substantial hand-edited content (model,
+          # mcp_servers, per-project trust), so home.file would clobber it.
+          # Existing lazytmux blocks are updated in place so the command stays on
+          # the rebuild-stable profile path after a Nix package update. Trust for
+          # the hook itself still requires a one-time manual `/hooks` -> "Trust
+          # all" per machine (see the resumeCodex option doc).
           provisionCodexResumeHook = lib.mkIf resumeCodexEnable (
-            lib.hm.dag.entryAfter ["writeBoundary"] ''
-              CONFIG="$HOME/.codex/config.toml"
-              MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
-              mkdir -p "$(dirname "$CONFIG")"
-              touch "$CONFIG"
-              if ! grep -qF "$MARKER" "$CONFIG"; then
-                {
-                  echo ""
-                  echo "$MARKER"
-                  echo '[[hooks.SessionStart]]'
-                  echo 'matcher = "startup|resume"'
-                  echo ""
-                  echo '[[hooks.SessionStart.hooks]]'
-                  echo 'type = "command"'
-                  echo "command = \"${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp\""
-                  echo 'timeout = 30'
-                } >> "$CONFIG"
-              fi
-            ''
+            lib.hm.dag.entryAfter ["writeBoundary"] (
+              let
+                resumeBinary = "${config.home.profileDirectory}/bin/codex-relaunch-stamp";
+              in ''
+                CONFIG="$HOME/.codex/config.toml"
+                MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
+                mkdir -p "$(dirname "$CONFIG")"
+                touch "$CONFIG"
+                if grep -qF "$MARKER" "$CONFIG"; then
+                  run sed -i "/^$MARKER$/,/^timeout = 30$/ s#^command = .*codex-relaunch-stamp.*#command = \"${resumeBinary}\"#" "$CONFIG"
+                else
+                  {
+                    echo ""
+                    echo "$MARKER"
+                    echo '[[hooks.SessionStart]]'
+                    echo 'matcher = "startup|resume"'
+                    echo ""
+                    echo '[[hooks.SessionStart.hooks]]'
+                    echo 'type = "command"'
+                    echo 'command = "${resumeBinary}"'
+                    echo 'timeout = 30'
+                  } >> "$CONFIG"
+                fi
+              ''
+            )
           );
 
           # Idempotently append codex status-line hook blocks to config.toml.
