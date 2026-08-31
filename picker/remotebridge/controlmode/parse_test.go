@@ -122,3 +122,26 @@ func TestReaderNextNoBufferAliasing(t *testing.T) {
 		t.Errorf("l2.Data = %q, want %q", l2.Data, "second")
 	}
 }
+
+// TestReaderNextNoBufferAliasingRenamedName is TestReaderNextNoBufferAliasing
+// for the other aliasing-risk seam: %window-renamed and %session-changed rely
+// on an explicit bytes.Clone(name) rather than an implicit fresh-alloc like
+// Unescape, so a dropped Clone would silently corrupt an earlier Line's Data
+// once the scanner's buffer is reused.
+func TestReaderNextNoBufferAliasingRenamedName(t *testing.T) {
+	rd := NewReader(strings.NewReader("%window-renamed @1 first\n%window-renamed @2 second\n"))
+	l1, ok := rd.Next()
+	if !ok || l1.Kind != WindowRenamed {
+		t.Fatalf("first Next() = %+v, ok=%v", l1, ok)
+	}
+	l2, ok := rd.Next()
+	if !ok || l2.Kind != WindowRenamed {
+		t.Fatalf("second Next() = %+v, ok=%v", l2, ok)
+	}
+	if string(l1.Data) != "first" {
+		t.Errorf("l1.Data corrupted by second Next(): got %q, want %q", l1.Data, "first")
+	}
+	if string(l2.Data) != "second" {
+		t.Errorf("l2.Data = %q, want %q", l2.Data, "second")
+	}
+}

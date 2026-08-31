@@ -42,7 +42,7 @@ func BenchmarkOutputPipeline(b *testing.B) {
 	b.SetBytes(int64(len(stream)))
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		local, remote := net.Pipe()
 		sink := newOutputSink(local, nil)
 		router := NewRouter()

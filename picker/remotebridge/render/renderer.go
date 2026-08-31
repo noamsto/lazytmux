@@ -43,6 +43,10 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 	// daemon frames -> paint
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(out)
+	// The in-loop flush below only fires when the loop keeps going; an abrupt
+	// exit (read error, EOF mid-frame-burst) must still flush whatever the
+	// last iteration already painted but hadn't flushed yet, or it's lost.
+	defer writer.Flush()
 	for {
 		f, err := wire.ReadFrame(reader)
 		if err != nil {

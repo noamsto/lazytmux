@@ -36,7 +36,7 @@ func BenchmarkControlmodeReaderNext(b *testing.B) {
 	b.SetBytes(int64(len(stream)))
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		r := NewReader(strings.NewReader(stream))
 		for {
 			_, ok := r.Next()
