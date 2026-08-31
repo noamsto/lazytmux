@@ -1083,24 +1083,29 @@ func drainOutput(ch chan sinkFrame, buf []byte) ([]byte, *sinkFrame) {
 	}
 }
 
+// writeOwned enqueues p as a FrameOutput without copying. Callers must
+// guarantee p is freshly allocated and never retained or mutated after this
+// call returns. Non-blocking, like Write: a full buffer or a paused/closed
+// sink drops the frame.
+func (s *outputSink) writeOwned(p []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.paused {
+		return
+	}
+	select {
+	case s.ch <- sinkFrame{typ: wire.FrameOutput, payload: p}:
+	default:
+		s.dropped++
+	}
+}
+
 // Write is the router-facing io.Writer path: it enqueues a FrameOutput. While
 // paused, output is dropped (tmux is discarding it remote-side anyway) and
 // recovered by the fresh FrameSeed on the paired %continue. A full buffer drops
 // the frame too; the pane self-heals on its next %output or the next re-seed.
 func (s *outputSink) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return len(p), nil
-	}
-	if s.paused {
-		return len(p), nil
-	}
-	select {
-	case s.ch <- sinkFrame{typ: wire.FrameOutput, payload: append([]byte(nil), p...)}:
-	default:
-		s.dropped++
-	}
+	s.writeOwned(append([]byte(nil), p...))
 	return len(p), nil
 }
 

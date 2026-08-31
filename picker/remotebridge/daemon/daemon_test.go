@@ -391,6 +391,60 @@ func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
 	}
 }
 
+// TestDrainOutputCoalescesConsecutiveStopsAtBoundary pins drainOutput's two
+// obligations in isolation, without the pump goroutine or a net.Pipe: it must
+// concatenate consecutive queued FrameOutput payloads in order, and it must
+// stop at the first non-output frame and hand that frame back as "pending"
+// rather than merging it in — the frozen wire invariant that a seed or resize
+// never gets reordered past output (sinkFrame's doc comment).
+func TestDrainOutputCoalescesConsecutiveStopsAtBoundary(t *testing.T) {
+	boundary := func(t *testing.T, typ wire.FrameType, payload []byte) {
+		t.Helper()
+		ch := make(chan sinkFrame, 8)
+		ch <- sinkFrame{typ: wire.FrameOutput, payload: []byte("AB")}
+		ch <- sinkFrame{typ: wire.FrameOutput, payload: []byte("CD")}
+		ch <- sinkFrame{typ: typ, payload: payload}
+		ch <- sinkFrame{typ: wire.FrameOutput, payload: []byte("EF")}
+
+		// start() seeds buf with the first frame's payload before calling
+		// drainOutput; mirror that call shape here.
+		first := <-ch
+		buf := append([]byte(nil), first.payload...)
+		buf, pending := drainOutput(ch, buf)
+
+		if got, want := string(buf), "AB"+"CD"; got != want {
+			t.Fatalf("drained buf = %q, want %q", got, want)
+		}
+		if pending == nil {
+			t.Fatal("pending = nil, want the boundary frame returned")
+		}
+		if pending.typ != typ {
+			t.Fatalf("pending.typ = %d, want %d", pending.typ, typ)
+		}
+		if !bytes.Equal(pending.payload, payload) {
+			t.Fatalf("pending.payload = %q, want %q", pending.payload, payload)
+		}
+
+		// The trailing FrameOutput must still be sitting unread on ch: drainOutput
+		// must not have looked past the boundary frame.
+		select {
+		case v := <-ch:
+			if v.typ != wire.FrameOutput || string(v.payload) != "EF" {
+				t.Fatalf("trailing frame = %+v, want FrameOutput %q", v, "EF")
+			}
+		default:
+			t.Fatal("trailing FrameOutput frame was consumed by drainOutput, want it left on ch")
+		}
+	}
+
+	t.Run("FrameResize boundary", func(t *testing.T) {
+		boundary(t, wire.FrameResize, wire.EncodeResize(80, 24))
+	})
+	t.Run("FrameSeed boundary", func(t *testing.T) {
+		boundary(t, wire.FrameSeed, []byte("seed-payload"))
+	})
+}
+
 // graphics.Proxy.Close() flushes a partial sequence the Scanner was still
 // holding — but it's only reachable if newOutputSink's pump actually calls it
 // on teardown. gfx is a value captured by the pump closure, not a field
