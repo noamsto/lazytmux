@@ -75,20 +75,18 @@ fi
 # Prints the host's most-recent session name, or nothing when the remote has no
 # tmux server: list-sessions fails into `head`, so the remote pipeline still
 # exits 0 with empty output. Used both inside the combined probe below and to
-# re-check after a cold start (#429: that round-trip stays separate — the
-# server didn't exist yet when the probe ran).
+# re-check after a cold start — that round-trip stays separate, since the
+# server didn't exist yet when the probe ran.
 first_remote_session() {
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1"
 }
 
-# One round-trip for everything the launcher can know before it has to act:
-# remote OS (tmpdir default + cold-start service manager), the tmux binary
-# path, and — for whichever of session/window the caller didn't already name —
-# the live session and its active window. Four sequential probes each cost a
-# full SSH handshake; collapsing them into one compound remote command removes
-# three round-trips from every bridge open (#429). Marker line first so a test
-# double can recognize this call without parsing full shell semantics. Every
+# One round-trip for everything the launcher needs before it can act: remote
+# OS (tmpdir default + cold-start service manager), the tmux binary path, and
+# — for whichever of session/window the caller didn't already name — the live
+# session and its active window. Marker line first so a test double can
+# recognize this call without parsing full shell semantics. Every
 # single-quoted probe_script segment below is intentional: it's the
 # remote-evaluated half of the command and must not expand locally.
 # shellcheck disable=SC2016

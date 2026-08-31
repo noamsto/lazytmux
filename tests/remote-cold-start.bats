@@ -33,15 +33,13 @@ setup() {
 		#!/bin/sh
 		# One marker line per invocation (independent of how many lines the
 		# command itself spans) so a test can count actual ssh round-trips, not
-		# just substring hits — #429's whole point is collapsing several of those
-		# into one.
+		# just substring hits.
 		printf '===SSH-CALL===\n' >>"$SSH_LOG"
 		echo "$*" >>"$SSH_LOG"
-		# The combined probe (#429): one compound remote command replaces the four
-		# sequential ones (os+uid, tmux path, list-sessions, list-windows), marked
-		# by a fixed leading no-op so this fake can recognize it without actually
-		# interpreting the shell it received. Session/window resolve here only
-		# when the caller didn't already name them (embedded as *_lit literals).
+		# The launcher's combined probe is recognized by its fixed leading no-op,
+		# without actually interpreting the shell it received. Session/window
+		# resolve here only when the caller didn't already name them (embedded as
+		# *_lit literals).
 		case "$*" in
 		*": lztmux-probe;"*)
 			os="${FAKE_UNAME:-Linux}"
@@ -532,8 +530,8 @@ teardown() {
 
 	run grep -c new-session "$TMUX_LOG"
 	[ "$status" -ne 0 ]
-	# Rejected before the value ever rides into the combined probe (#429) — not
-	# merely before the daemon launches.
+	# Rejected before the value ever rides into the combined probe — not merely
+	# before the daemon launches.
 	[ ! -s "$SSH_LOG" ]
 
 	export LZTMUX_REMOTE_TMPDIR='/run/user/$(id -u)'
@@ -613,10 +611,9 @@ teardown() {
 	fi
 }
 
-# #429: the launcher used to make up to four sequential ssh probes (uid, tmux
-# path, list-sessions, list-windows) before ever reaching the daemon. These
-# assert the collapse into one round-trip, for each combination of what the
-# caller already knows.
+# The launcher makes at most one combined ssh probe (resolving whichever of
+# session/window the caller didn't already name) before ever reaching the
+# daemon. These assert that, for each combination of what the caller knows.
 
 @test "combined probe: neither session nor window given -> exactly one ssh call before the daemon" {
 	touch "$REMOTE_SERVER"
