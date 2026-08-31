@@ -159,6 +159,19 @@ var verbs = map[string]verb{
 		}
 		return []string{fmt.Sprintf("resize-pane -t %s %s %d", pane, dir, n)}, nil
 	}},
+	// Zoom has to happen on the remote, because that is where the pane whose
+	// size must change lives. A local resize-pane -Z does grow the renderer
+	// pane, and it sticks — but the remote pane keeps its size, so the remote
+	// program goes on rendering at the old one and the rows the pane gained are
+	// dead space (measured: dst 150x39 against src 150x19), until some
+	// unrelated remote layout change reconciles the zoom away. The
+	// mirror learns the new flag from the layout reconcile, so a zoom made by
+	// any other client on the remote follows too (verified): tmux emits
+	// %layout-change for a zoom, even though #{window_layout} itself is
+	// unchanged by one.
+	"zoom": {layout: true, moves: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
+		return []string{fmt.Sprintf("resize-pane -Z -t %s", pane)}, nil
+	}},
 	// No -d: without it the active pane rides with the swap, so the remote keeps
 	// the same pane focused (verified). The local reconcile swaps WITH -d, and
 	// that pairing is what keeps both sides focused on the same remote pane.

@@ -835,6 +835,80 @@ remote_pane_of() {
 	[ "$src_dims" = "$dst_dims" ]
 }
 
+@test "ctl zoom zooms the REMOTE window and the mirror zooms with it" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -v -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 c1
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+
+	run "$CTL" --sock "$sock" zoom "$pane"
+	[ "$status" -eq 0 ]
+
+	# Both observables in one wait: the flag AND the dims. The dims are the point
+	# of routing zoom to the remote — the REMOTE pane is what grew, so the
+	# program in it renders at the new size, where a local-only zoom leaves the
+	# mirror pane bigger than the remote pane it renders (measured: dst 150x39
+	# against src 150x19) and those extra rows are dead space. They settle a beat
+	# after the flag does, so asserting them outside the loop races the reconcile.
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		[ "$src_z" = 1 ] && [ "$dst_z" = 1 ] && [ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 1 ]
+	[ "$dst_z" = 1 ]
+	[ "$src_dims" = "$dst_dims" ]
+
+	# A zoom made directly on the remote — no ctl request, so nothing schedules
+	# a reconcile but the %layout-change tmux emits for it — follows too.
+	$SRC resize-pane -Z -t rem:1.1
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		[ "$src_z" = 0 ] && [ "$dst_z" = 0 ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 0 ]
+	[ "$dst_z" = 0 ]
+
+	# ...and the bind's own toggle still works, rather than latching.
+	run "$CTL" --sock "$sock" zoom "$pane"
+	[ "$status" -eq 0 ]
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		[ "$src_z" = 1 ] && [ "$dst_z" = 1 ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 1 ]
+	[ "$dst_z" = 1 ]
+
+	run "$CTL" --sock "$sock" zoom "$pane"
+	[ "$status" -eq 0 ]
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		[ "$src_z" = 0 ] && [ "$dst_z" = 0 ] && break
+		sleep 0.15
+	done
+
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_z" = 0 ]
+	[ "$dst_z" = 0 ]
+	[ "$src_dims" = "$dst_dims" ]
+}
+
 @test "ctl resize resizes the REMOTE pane and the mirror converges" {
 	$SRC new-session -d -s rem -x 150 -y 40
 	$SRC split-window -v -t rem

@@ -42,3 +42,29 @@ func TestReconcileWindowsReflowsOnEarlyReturn(t *testing.T) {
 		})
 	}
 }
+
+// TestReadLayoutCarriesTheZoomFlag pins the third field: zoom emits no
+// notification of its own, so the flag has to ride on the layout read that a
+// ctl zoom's reconcile performs.
+func TestReadLayoutCarriesTheZoomFlag(t *testing.T) {
+	for _, tc := range []struct {
+		reply string
+		want  bool
+	}{
+		{"bd67,190x45,0,0,3 %7 1", true},
+		{"bd67,190x45,0,0,3 %7 0", false},
+		{"bd67,190x45,0,0,3 %7", false}, // no flag: never guess a zoom
+	} {
+		rt, _ := scriptedRT("%begin 1 1 1\n" + tc.reply + "\n%end 1 1 1\n")
+		_, active, zoomed, err := readLayout(rt, "sess:@1")
+		if err != nil {
+			t.Fatalf("readLayout(%q): %v", tc.reply, err)
+		}
+		if active != "%7" {
+			t.Errorf("readLayout(%q) active = %q, want %%7", tc.reply, active)
+		}
+		if zoomed != tc.want {
+			t.Errorf("readLayout(%q) zoomed = %v, want %v", tc.reply, zoomed, tc.want)
+		}
+	}
+}

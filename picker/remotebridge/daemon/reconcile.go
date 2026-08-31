@@ -26,7 +26,7 @@ const maxReconcilePasses = 5
 func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, connCh chan helloConn, cst *ctlState, rt roundTrip) {
 	target := remoteWinTarget(cfg, w.remoteID)
 
-	L, remoteActive, err := readLayout(rt, target)
+	L, remoteActive, zoomed, err := readLayout(rt, target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 		return
@@ -85,6 +85,20 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
 			}
 		}
+		// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
+		// have cleared a local one first: applyLayout skips select-layout when the
+		// tiled layout string is unchanged, which is exactly what a zoom-only
+		// reconcile is. So read both sides and toggle only on a mismatch —
+		// applying the remote's flag outright would turn an unzoom into a zoom.
+		// The zoomed pane is by definition the active one.
+		if local, ok := localZoomed(cfg, w.localWin); ok && local != zoomed {
+			if target, ok := localPaneAt(w, indexOf(newRemote, remoteActive)); ok {
+				if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
+				}
+			}
+		}
+
 		// Follow the remote's active pane, but only when the pane set or order
 		// moved: a pure resize must not yank local focus. remoteActive comes
 		// from the same round-trip as the layout, so it is ground truth rather
@@ -96,11 +110,11 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 		w.remotePanes = remote
 		cst.setWindowPanes(w.remoteID, remote)
 
-		fresh, freshActive, err := readLayout(rt, target)
-		if err != nil || fresh.Raw == L.Raw {
+		fresh, freshActive, freshZoom, err := readLayout(rt, target)
+		if err != nil || (fresh.Raw == L.Raw && freshZoom == zoomed) {
 			return
 		}
-		L, remoteActive = fresh, freshActive
+		L, remoteActive, zoomed = fresh, freshActive, freshZoom
 	}
 	fmt.Fprintf(os.Stderr, "daemon: layout-change: didn't converge after %d passes, stopping at %v\n", maxReconcilePasses, remote)
 	w.remotePanes = remote
