@@ -25,10 +25,11 @@ func TestSSHListRemoteSessionsLive(t *testing.T) {
 			"env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) kill-session -t probe-verify").Run()
 	})
 
-	names, err := sshListRemoteSessions(host)
+	result, err := sshListRemoteSessions(host)
 	if err != nil {
 		t.Fatalf("sshListRemoteSessions(%q): %v", host, err)
 	}
+	names := result.Sessions
 	found := false
 	for _, n := range names {
 		if n == "probe-verify" {
