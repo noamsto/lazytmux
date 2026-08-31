@@ -32,6 +32,18 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 		return
 	}
 
+	// Nothing to do: same panes, same geometry, same zoom state. A resize
+	// burst or a spurious/duplicate %layout-change then pays only this one
+	// cheap readLayout round-trip instead of the FitWindowCmd + per-pane
+	// resize/reseed below. L.Raw alone isn't enough — #{window_layout} is
+	// deliberately the unzoomed geometry (see readLayout's doc comment), so a
+	// zoom-only change must still fall through.
+	if L.Raw == w.layout {
+		if local, ok := localZoomed(cfg, w.localWin); ok && local == zoomed {
+			return
+		}
+	}
+
 	remote := w.remotePanes
 	for pass := 0; pass < maxReconcilePasses; pass++ {
 		newRemote := RemotePaneOrder(L)

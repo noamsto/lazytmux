@@ -115,6 +115,33 @@ func TestReadReplyRoutingQueuesNotifications(t *testing.T) {
 	}
 }
 
+// TestCoalesceLayoutChangesKeepsLastPerWindow is #431: a resize burst can
+// queue many %layout-change notifications for the same window while a single
+// reconcileLayout call's own round-trips are in flight. reconcileLayout always
+// re-reads the remote's current layout fresh, so only the last queued
+// notification per window can still matter — coalesceLayoutChanges must drop
+// the rest while leaving every other notification kind, and the relative
+// order of what survives, untouched.
+func TestCoalesceLayoutChangesKeepsLastPerWindow(t *testing.T) {
+	lines := []controlmode.Line{
+		{Kind: controlmode.LayoutChange, Args: []string{"@1"}, Data: []byte("first")},
+		{Kind: controlmode.WindowRenamed, Args: []string{"@3"}, Data: []byte("renamed")},
+		{Kind: controlmode.LayoutChange, Args: []string{"@2"}, Data: []byte("only")},
+		{Kind: controlmode.LayoutChange, Args: []string{"@1"}, Data: []byte("last")},
+	}
+
+	got := coalesceLayoutChanges(lines)
+
+	want := []controlmode.Line{
+		{Kind: controlmode.WindowRenamed, Args: []string{"@3"}, Data: []byte("renamed")},
+		{Kind: controlmode.LayoutChange, Args: []string{"@2"}, Data: []byte("only")},
+		{Kind: controlmode.LayoutChange, Args: []string{"@1"}, Data: []byte("last")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("coalesceLayoutChanges = %+v, want %+v", got, want)
+	}
+}
+
 // fakeSink is a Close()-tracking sink, for asserting closeWindow unregisters
 // (and thereby closes) every pane it tears down.
 type fakeSink struct{ closed bool }
