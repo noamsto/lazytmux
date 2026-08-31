@@ -95,7 +95,7 @@ func (a *agentShipper) poll(cfg Config, rt roundTrip) {
 		return
 	}
 	a.lastPoll = time.Now()
-	l, ok := rt(fmt.Sprintf("list-panes -s -t %s -F %s", tmuxQuote(cfg.RemoteSession), agentStatusFormat))
+	l, ok := one(rt, fmt.Sprintf("list-panes -s -t %s -F %s", tmuxQuote(cfg.RemoteSession), agentStatusFormat))
 	if !ok || l.Kind == controlmode.Error {
 		return
 	}
@@ -213,7 +213,7 @@ func writeStatusFile(path, body string) {
 // readout, and two hosts' clocks are never exactly equal. Measured once: NTP
 // drift over a session is far below the fade's resolution.
 func remoteClockSkew(rt roundTrip) int64 {
-	l, ok := rt("display-message -p '%s'")
+	l, ok := one(rt, "display-message -p '%s'")
 	if !ok || l.Kind == controlmode.Error {
 		return 0
 	}

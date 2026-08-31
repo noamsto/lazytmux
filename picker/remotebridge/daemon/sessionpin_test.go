@@ -14,17 +14,7 @@ import (
 // command the pin sends. Blocks in script must be numbered from seq 1.
 func scriptedRT(script string) (rt roundTrip, sent *bytes.Buffer) {
 	sent = &bytes.Buffer{}
-	reader := newTestReader(script)
-	st := newStream(sent)
-	router := NewRouter()
-	async := &asyncQueue{}
-	return func(cmd string) (controlmode.Line, bool) {
-		seq, ok := st.stamp(cmd)
-		if !ok {
-			return controlmode.Line{}, false
-		}
-		return readReplyRouting(reader, router, async, st, seq)
-	}, sent
+	return newRoundTrip(newTestReader(script), NewRouter(), &asyncQueue{}, newStream(sent)), sent
 }
 
 func TestParseSessionChanged(t *testing.T) {
@@ -143,4 +133,61 @@ func TestNewSessionPinReadsID(t *testing.T) {
 	if !strings.Contains(sent.String(), "-t 'my proj'") {
 		t.Errorf("sent %q, want the session name quoted as one token", sent.String())
 	}
+}
+
+// TestSessionPinReseedRoutesEachPaneItsOwnCapture pins the parallel ids/sinks
+// mapping of the cross-window reseed batch. A seed handed to the wrong sink
+// paints one window's screen into another window's renderer and nothing errors
+// — both are valid seeds — so only distinct captures catch it.
+func TestSessionPinReseedRoutesEachPaneItsOwnCapture(t *testing.T) {
+	peers := map[string]net.Conn{}
+	router := NewRouter()
+	reg := newRegistry()
+	for _, w := range []struct{ remoteWin, localWin, pane string }{
+		{"@1", "@101", "%1"},
+		{"@2", "@102", "%2"},
+	} {
+		local, peer := net.Pipe()
+		defer local.Close()
+		defer peer.Close()
+		peers[w.pane] = peer
+		router.Register(w.pane, newOutputSink(local, nil))
+		reg.add(w.remoteWin, w.localWin).remotePanes = []string{w.pane}
+	}
+
+	// Two cursor+capture pairs, in issue order.
+	rt, sent := scriptedRT(strings.Join([]string{
+		"%begin 1 1 1", "0 0 0 0", "%end 1 1 1",
+		"%begin 1 2 1", "FRESH-A", "%end 1 2 1",
+		"%begin 1 3 1", "0 0 0 0", "%end 1 3 1",
+		"%begin 1 4 1", "FRESH-B", "%end 1 4 1",
+	}, "\n") + "\n")
+
+	(&sessionPin{id: "$0"}).reseed(reg, router, rt)
+
+	// reg.all() walks a map, so the issue order is whatever it gave us; the
+	// commands on the wire are the record of it.
+	order := capturedPanes(sent.String())
+	want := map[string]string{order[0]: "FRESH-A", order[1]: "FRESH-B"}
+	for pane, peer := range peers {
+		f, err := wire.ReadFrame(peer)
+		if err != nil {
+			t.Fatalf("read frame for %s: %v", pane, err)
+		}
+		if !bytes.Contains(f.Payload, []byte(want[pane])) {
+			t.Errorf("%s got seed %q, want the one carrying %s", pane, f.Payload, want[pane])
+		}
+	}
+}
+
+// capturedPanes lists the pane ids of the capture-pane commands on the wire, in
+// the order they were issued.
+func capturedPanes(sent string) []string {
+	var ids []string
+	for _, line := range strings.Split(sent, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "capture-pane" {
+			ids = append(ids, fields[len(fields)-1])
+		}
+	}
+	return ids
 }

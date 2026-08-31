@@ -22,7 +22,7 @@ func reconcileWindows(cfg Config, send func(string), router *Router, waitHellos 
 	// windows on the label the after-new-window hook raced in (#196).
 	defer cfg.reflow()
 
-	lw, ok := rt(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
+	lw, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: reconcile-windows: list-windows failed\n")
 		return

@@ -108,7 +108,9 @@ func TestApplyPaneOpsRoutesSiblingOutputDuringHelloWait(t *testing.T) {
 	L := controlmode.Layout{W: 80, H: 24, Raw: "abcd,80x24,0,0", Panes: []controlmode.PaneCell{{W: 80, H: 12}, {W: 80, H: 11}}}
 	// A failing round-trip makes the seed error out, so the renderer wiring ends
 	// right after the hello instead of pumping a pipe nobody reads.
-	rt := func(string) (controlmode.Line, bool) { return controlmode.Line{}, false }
+	rt := func(...string) replies {
+		return func() (controlmode.Line, bool) { return controlmode.Line{}, false }
+	}
 
 	if err := applyPaneOps(cfg, w, paneOps{Append: []string{"%9"}}, L,
 		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, router, waiter, rt); err != nil {
@@ -139,8 +141,8 @@ func TestApplyPaneOpsRoutesSiblingOutputDuringHelloWait(t *testing.T) {
 // was already claimed by the time the hello is delivered.
 func TestWaitHellosKeepsReplyOrdinalsInIssueOrder(t *testing.T) {
 	st := testStream()
-	seq1, _ := st.stamp("list-panes -t @1")
-	seq2, _ := st.stamp("capture-pane -p -t %1")
+	seqs, _ := st.stampAll("list-panes -t @1", "capture-pane -p -t %1")
+	seq1, seq2 := seqs[0], seqs[1]
 
 	lines := make(chan controlmode.Line, 2)
 	lines <- controlmode.Line{Kind: controlmode.End, Flags: controlmode.ClientCommandFlag, Data: []byte("reply to " + fmt.Sprint(seq1))}

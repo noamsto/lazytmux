@@ -55,8 +55,8 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 		for deadline := time.Now().Add(2 * time.Second); !seen("select-layout") && time.Now().Before(deadline); {
 			time.Sleep(time.Millisecond)
 		}
-		connCh <- helloConn{paneID: "%9", conn: srv}
 		rec("hello")
+		connCh <- helloConn{paneID: "%9", conn: srv}
 	}()
 	// Blocks on connCh exactly as the real waiter does — the ordering this test
 	// pins only exists because the wait is what applyPaneOps stops on.
@@ -77,7 +77,9 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 	L := controlmode.Layout{W: 80, H: 24, Raw: "abcd,80x24,0,0", Panes: []controlmode.PaneCell{{W: 80, H: 12}, {W: 80, H: 11}}}
 	// A failing round-trip makes the seed error out, so the renderer wiring ends
 	// right after the hello instead of pumping a pipe nobody reads.
-	rt := func(string) (controlmode.Line, bool) { return controlmode.Line{}, false }
+	rt := func(...string) replies {
+		return func() (controlmode.Line, bool) { return controlmode.Line{}, false }
+	}
 
 	if err := applyPaneOps(cfg, w, paneOps{Append: []string{"%9"}}, L,
 		[]string{"%1"}, []string{"%1", "%9"}, func(string) {}, NewRouter(), waiter, rt); err != nil {

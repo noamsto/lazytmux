@@ -287,24 +287,47 @@ type stream struct {
 
 func newStream(w io.Writer) *stream { return &stream{w: bufio.NewWriter(w)} }
 
-// stamp writes cmd and returns its ordinal. ok is false once the daemon is
-// tearing down: a ctl request that loses that race must not be acked as
-// accepted, or the keybind reports success for a gesture that never happened.
-func (s *stream) stamp(cmd string) (seq uint64, ok bool) {
+// stampAll writes every command in cmds and returns their ordinals. ok is false
+// once the daemon is tearing down: a ctl request that loses that race must not
+// be acked as accepted, or the keybind reports success for a gesture that never
+// happened.
+//
+// One lock for the whole batch, so no foreign command from pumpInput, a ctl
+// request or watchResize lands between ours — correctness doesn't need it (the
+// ordinals are assigned under the lock either way), but a contiguous batch keeps
+// a wire trace legible. The lock is never held across a read: this returns
+// before any reply is read, which is what keeps those three deadlock-free while
+// a batch is in flight.
+func (s *stream) stampAll(cmds ...string) (seqs []uint64, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return 0, false
+		return nil, false
 	}
-	fmt.Fprintf(s.w, "%s\n", cmd)
-	s.w.Flush()
-	s.sent++
-	return s.sent, true
+	for _, cmd := range cmds {
+		fmt.Fprintf(s.w, "%s\n", cmd)
+		s.sent++
+		seqs = append(seqs, s.sent)
+	}
+	// bufio.Writer latches its first write error and no-ops every later write,
+	// so a half-closed ssh stdin mid-batch has to fail the whole batch: s.sent
+	// would otherwise keep advancing for commands tmux never received, and the
+	// matching next() would block in readReplyRouting awaiting a reply block
+	// that can never arrive, freezing the main loop. Closing bars every later
+	// ordinal, so the gap is inert by construction. The prefix that did reach
+	// tmux leaves reply blocks nobody reads, which desyncs nothing:
+	// readReplyRouting walks past any ordinal it isn't waiting for, and s.seen
+	// advances in nextLine regardless of who reads.
+	if err := s.w.Flush(); err != nil {
+		s.closed = true
+		return nil, false
+	}
+	return seqs, true
 }
 
-// send is stamp for callers that don't read the reply.
+// send writes cmd for callers that don't read the reply.
 func (s *stream) send(cmd string) bool {
-	_, ok := s.stamp(cmd)
+	_, ok := s.stampAll(cmd)
 	return ok
 }
 
@@ -323,6 +346,29 @@ func (s *stream) close() {
 	s.mu.Unlock()
 }
 
+// newRoundTrip builds the roundTrip seam over one control connection: the whole
+// batch is written first, then each next() reads the reply block of the next
+// command in issue order.
+func newRoundTrip(reader lineReader, router *Router, async *asyncQueue, st *stream) roundTrip {
+	return func(cmds ...string) replies {
+		seqs, ok := st.stampAll(cmds...)
+		if !ok {
+			return func() (controlmode.Line, bool) { return controlmode.Line{}, false }
+		}
+		i := 0
+		return func() (controlmode.Line, bool) {
+			// An index-out-of-range panic in a long-running daemon is worse than
+			// one dead-batch report.
+			if i >= len(seqs) {
+				return controlmode.Line{}, false
+			}
+			seq := seqs[i]
+			i++
+			return readReplyRouting(reader, router, async, st, seq)
+		}
+	}
+}
+
 // Run mirrors every window of the bridged remote session, each into its own
 // local window, over the single -CC connection, until %exit or the control
 // connection drops.
@@ -335,22 +381,14 @@ func Run(cfg Config) error {
 
 	router := NewRouter()
 	async := &asyncQueue{}
-	// rt is the only way a mirror path asks the remote a question: it sends the
-	// command and reads that command's own reply block.
-	rt := func(cmd string) (controlmode.Line, bool) {
-		seq, ok := st.stamp(cmd)
-		if !ok {
-			return controlmode.Line{}, false
-		}
-		return readReplyRouting(pump, router, async, st, seq)
-	}
+	rt := newRoundTrip(pump, router, async, st)
 
 	// The implicit attach reply needs no draining: it is flagged 0, so the reply
 	// reader skips it like any other block we did not ask for.
 	//
 	// Enumerate every window of the bridged remote session. Read BOTH index
 	// and id: --window is an *index*, the registry is keyed by *id* (@N).
-	lw, ok := rt(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
+	lw, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
 		return fmt.Errorf("daemon: list-windows for %s failed", cfg.RemoteSession)
 	}
@@ -657,7 +695,7 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 	// Cap the remote window at what the local clients can show before reading
 	// its layout, so the layout that gets mirrored is the converged one.
 	if w, h := cfg.LocalArea(); cv.need(mw.remoteID, w, h) {
-		rt(ConvergeCmd(mw.remoteID, w, h))
+		one(rt, ConvergeCmd(mw.remoteID, w, h))
 	}
 
 	L, _, _, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
@@ -702,22 +740,39 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		mw.conns[id] = c
 	}
 
-	// Seed each pane and wire it into the router. seedRenderer registers the
-	// sink first, then enqueues the seed (FIFO keeps it ahead of any routed
-	// output), then starts the input pump.
+	// Seed every connected pane in one batch. Panes that never hello'd are
+	// filtered out rather than skipped in the loop, so no command is issued for
+	// a pane nobody will wire; idxs carries each batch entry back to its
+	// position in remotePanes, which is the index space L.Panes uses.
+	paneIDs := make([]string, 0, len(mw.remotePanes))
+	idxs := make([]int, 0, len(mw.remotePanes))
 	for i, remotePane := range mw.remotePanes {
-		conn := mw.conns[remotePane]
-		if conn == nil {
+		if mw.conns[remotePane] == nil {
 			continue // didn't connect; the hello wait reported the shortfall
 		}
-		if !seedRenderer(rt, router, conn, remotePane, L.Panes[i], cfg.graphicsFor(remotePane)) {
-			if len(mw.remotePanes) == 1 {
-				return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
-			}
-			delete(mw.conns, remotePane)
+		paneIDs = append(paneIDs, remotePane)
+		idxs = append(idxs, i)
+	}
+	wired := make([]bool, len(paneIDs))
+	PaneSeeds(rt, paneIDs, func(i int, seed []byte, err error) {
+		idx := idxs[i]
+		remotePane := paneIDs[i]
+		wired[i] = wireRenderer(router, mw.conns[remotePane], remotePane, seed, err,
+			L.Panes[idx], cfg.graphicsFor(remotePane))
+	})
+
+	for i, remotePane := range paneIDs {
+		if wired[i] {
+			go pumpInput(mw.conns[remotePane], remotePane, send)
 			continue
 		}
-		go pumpInput(conn, remotePane, send)
+		// A sole pane's failure is fatal: this error is what makes addWindow /
+		// mirrorNewWindow tear the half-created mirror window down instead of
+		// leaving a blank one behind a live registry entry.
+		if len(mw.remotePanes) == 1 {
+			return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
+		}
+		delete(mw.conns, remotePane)
 	}
 	return nil
 }
@@ -732,7 +787,7 @@ func addWindow(cfg Config, send func(string), router *Router, waitHellos helloWa
 		return
 	}
 
-	lw, ok := rt(fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
+	lw, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: list-windows failed\n", remoteID)
 		return
@@ -980,18 +1035,22 @@ func handleContinue(router *Router, rt roundTrip, paneID string) {
 // reached without a timer for the same reason everything else here is: the
 // output that caused the drop has already woken the loop.
 func reseedDropped(router *Router, rt roundTrip) {
-	for _, paneID := range router.dirtyPanes() {
-		s := router.sink(paneID)
-		if s == nil {
-			continue
+	dirty := router.dirtyPanes()
+	ids := make([]string, 0, len(dirty))
+	sinks := make([]*outputSink, 0, len(dirty))
+	for _, paneID := range dirty {
+		if s := router.sink(paneID); s != nil {
+			ids = append(ids, paneID)
+			sinks = append(sinks, s)
 		}
-		seed, err := PaneSeed(rt, paneID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: re-seed after drop for %s: %v\n", paneID, err)
-			continue
-		}
-		s.enqueue(wire.FrameSeed, seed)
 	}
+	PaneSeeds(rt, ids, func(i int, seed []byte, err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: re-seed after drop for %s: %v\n", ids[i], err)
+			return
+		}
+		sinks[i].enqueue(wire.FrameSeed, seed)
+	})
 }
 
 // remoteWinTarget builds the tmux target for a remote window by its id (@N),
@@ -1019,7 +1078,7 @@ func tmuxQuote(s string) string {
 // hidden panes as closed and kill their renderers on every zoom toggle; the
 // flag rides alongside instead, and zoom is applied locally as zoom (#413).
 func readLayout(rt roundTrip, target string) (l0 controlmode.Layout, active string, zoomed bool, err error) {
-	l, ok := rt(fmt.Sprintf("display-message -p -t %s -F '#{window_layout} #{pane_id} #{window_zoomed_flag}'", target))
+	l, ok := one(rt, fmt.Sprintf("display-message -p -t %s -F '#{window_layout} #{pane_id} #{window_zoomed_flag}'", target))
 	if !ok {
 		return controlmode.Layout{}, "", false, fmt.Errorf("daemon: control connection closed reading layout for %s", target)
 	}
@@ -1140,16 +1199,23 @@ func closeConns(conns map[string]net.Conn) {
 	}
 }
 
-// seedRenderer produces the initial screen for remotePane and (only on
-// success) registers conn's output sink with router, then enqueues the
-// FrameSeed followed by a FrameResize (dims from the pane's layout cell)
-// through that sink. Register-then-enqueue keeps the seed the sink's first
-// frame (FIFO), so it precedes any routed output — no frame bypasses the sink
-// (frozen wire invariant). Returns false — logging to stderr rather than
-// crashing — if the pane closed between listing and seeding: the caller decides
-// whether that's fatal (sole pane) or just leaves that pane unwired.
+// seedRenderer produces the initial screen for remotePane and wires it in.
+// The halves are separable so a batched caller can wire each pane from inside
+// onSeed instead.
 func seedRenderer(rt roundTrip, router *Router, conn net.Conn, remotePane string, dims controlmode.PaneCell, gfx *graphics.Proxy) bool {
 	seed, err := PaneSeed(rt, remotePane)
+	return wireRenderer(router, conn, remotePane, seed, err, dims, gfx)
+}
+
+// wireRenderer, on a successful seed, registers conn's output sink with router,
+// then enqueues the FrameSeed followed by a FrameResize (dims from the pane's
+// layout cell) through that sink. Register-then-enqueue keeps the seed the
+// sink's first frame (FIFO), so it precedes any routed output — no frame
+// bypasses the sink (frozen wire invariant). Returns false — logging to stderr
+// rather than crashing — if the pane closed between listing and seeding: the
+// caller decides whether that's fatal (sole pane) or just leaves that pane
+// unwired.
+func wireRenderer(router *Router, conn net.Conn, remotePane string, seed []byte, err error, dims controlmode.PaneCell, gfx *graphics.Proxy) bool {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (skipping renderer)\n", remotePane, err)
 		conn.Close()

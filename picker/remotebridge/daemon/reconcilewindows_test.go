@@ -28,7 +28,9 @@ func TestReconcileWindowsReflowsOnEarlyReturn(t *testing.T) {
 			}
 			reg := newRegistry()
 			reg.add("@1", "@101")
-			rt := func(string) (controlmode.Line, bool) { return c.reply, c.ok }
+			rt := func(...string) replies {
+				return func() (controlmode.Line, bool) { return c.reply, c.ok }
+			}
 
 			reconcileWindows(cfg, func(string) {}, NewRouter(),
 				noHellos, newCtlState(), reg, newConverger(), rt)
