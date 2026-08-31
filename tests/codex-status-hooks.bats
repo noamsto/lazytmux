@@ -59,10 +59,14 @@ assert_event_command() {
 @test "Codex resume hook uses the stable profile binary and migrates old paths" {
 	run resume_provision
 	[ "$status" -eq 0 ]
+	# shellcheck disable=SC2016
 	local replacement='s#^command = .*codex-relaunch-stamp.*#command = \"${resumeBinary}\"#'
+	# shellcheck disable=SC2016
 	[[ $output == *'resumeBinary = "${config.home.profileDirectory}/bin/codex-relaunch-stamp";'* ]]
+	# shellcheck disable=SC2016
 	[[ $output == *'if grep -qF "$MARKER" "$CONFIG"; then'* ]]
 	[[ $output == *"$replacement"* ]]
+	# shellcheck disable=SC2016
 	[[ $output != *'${tmuxConfig.script.codex-relaunch-stamp}/bin/codex-relaunch-stamp'* ]]
 
 	run grep -F '++ lib.optionals resumeCodexEnable [tmuxConfig.script.codex-relaunch-stamp]' "$MODULE"
