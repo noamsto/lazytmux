@@ -31,7 +31,39 @@ setup() {
 
 	cat >"$FAKEBIN/ssh" <<-'EOF'
 		#!/bin/sh
+		# One marker line per invocation (independent of how many lines the
+		# command itself spans) so a test can count actual ssh round-trips, not
+		# just substring hits — #429's whole point is collapsing several of those
+		# into one.
+		printf '===SSH-CALL===\n' >>"$SSH_LOG"
 		echo "$*" >>"$SSH_LOG"
+		# The combined probe (#429): one compound remote command replaces the four
+		# sequential ones (os+uid, tmux path, list-sessions, list-windows), marked
+		# by a fixed leading no-op so this fake can recognize it without actually
+		# interpreting the shell it received. Session/window resolve here only
+		# when the caller didn't already name them (embedded as *_lit literals).
+		case "$*" in
+		*": lztmux-probe;"*)
+			os="${FAKE_UNAME:-Linux}"
+			uid=1000
+			if [ "$os" = Darwin ]; then tmpdir="/tmp/tmux-$uid"; else tmpdir="/run/user/$uid"; fi
+			case "$*" in
+			*"tmpdir_lit="*) tmpdir=$(printf '%s\n' "$*" | sed -n "s/.*tmpdir_lit='\([^']*\)'.*/\1/p") ;;
+			esac
+			sess=""
+			case "$*" in
+			*"sess_lit="*) sess=$(printf '%s\n' "$*" | sed -n "s/.*sess_lit='\([^']*\)'.*/\1/p") ;;
+			*) [ -f "$REMOTE_SERVER" ] && sess="$REMOTE_SESSION" ;;
+			esac
+			win=""
+			case "$*" in
+			*"win_lit="*) win=$(printf '%s\n' "$*" | sed -n "s/.*win_lit='\([^']*\)'.*/\1/p") ;;
+			*) [ -n "$sess" ] && [ -z "${FAKE_NO_WINDOW:-}" ] && win=1 ;;
+			esac
+			printf 'os=%s\nuid=%s\ntmux=%s\ntmpdir=%s\nsess=%s\nwin=%s\n' "$os" "$uid" /usr/bin/tmux "$tmpdir" "$sess" "$win"
+			exit 0
+			;;
+		esac
 		case "$*" in
 		*"command -v tmux-remux"*) echo /usr/bin/tmux-remux ;;
 		*"tmux-remux restore"*)
@@ -60,8 +92,6 @@ setup() {
 			[ -f "$NEWDIR_MARKER" ] && exit 0
 			exit 1
 			;;
-		*"command -v tmux"*) echo /usr/bin/tmux ;;
-		*"uname -s; id -u"*) printf '%s\n%s\n' "${FAKE_UNAME:-Linux}" 1000 ;;
 		*"systemctl --user restart"*)
 			if [ -n "${FAKE_UNIT_MISSING:-}" ]; then
 				echo "Failed to restart tmux-startup.service: Unit not found." >&2
@@ -577,4 +607,62 @@ teardown() {
 		result="$(fish -c "echo $quoted")"
 		[ "$result" = "$input" ]
 	fi
+}
+
+# #429: the launcher used to make up to four sequential ssh probes (uid, tmux
+# path, list-sessions, list-windows) before ever reaching the daemon. These
+# assert the collapse into one round-trip, for each combination of what the
+# caller already knows.
+
+@test "combined probe: neither session nor window given -> exactly one ssh call before the daemon" {
+	touch "$REMOTE_SERVER"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	[ "$(grep -c '===SSH-CALL===' "$SSH_LOG")" -eq 1 ]
+	grep -q ': lztmux-probe;' "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "combined probe: session given, window not -> exactly one ssh call before the daemon" {
+	touch "$REMOTE_SERVER"
+
+	run bash "$LAUNCHER" tp-g6 workstation
+	[ "$status" -eq 0 ]
+
+	[ "$(grep -c '===SSH-CALL===' "$SSH_LOG")" -eq 1 ]
+	grep -q "sess_lit='workstation'" "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "combined probe: session and window both given -> exactly one ssh call before the daemon" {
+	run bash "$LAUNCHER" tp-g6 workstation 3
+	[ "$status" -eq 0 ]
+
+	[ "$(grep -c '===SSH-CALL===' "$SSH_LOG")" -eq 1 ]
+	grep -q "sess_lit='workstation'" "$SSH_LOG"
+	grep -q "win_lit='3'" "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "combined probe: LZTMUX_REMOTE_TMPDIR unset still resolves in one ssh call" {
+	unset LZTMUX_REMOTE_TMPDIR
+	touch "$REMOTE_SERVER"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	[ "$(grep -c '===SSH-CALL===' "$SSH_LOG")" -eq 1 ]
+	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
+}
+
+@test "a session name with spaces survives the combined probe end-to-end" {
+	run bash "$LAUNCHER" tp-g6 'my session'
+	[ "$status" -eq 0 ]
+
+	# The whole name rides through shell_quote as one single-quoted literal,
+	# never split on the embedded space.
+	grep -q "sess_lit='my session'" "$SSH_LOG"
+	grep -q 'switch-client -t =tp-g6-my session' "$TMUX_LOG"
 }

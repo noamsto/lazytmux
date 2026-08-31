@@ -56,30 +56,108 @@ if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} ]] && ! shell_quotable "$LZTMUX_REMOTE_NEW_D
 	exit 1
 fi
 
-# One round-trip for the remote's OS + uid: the OS decides the tmux socket dir
-# (/run/user/<uid> on Linux; tmux's default /tmp/tmux-<uid> on macOS, which has
-# no $XDG_RUNTIME_DIR) and the service manager that can cold-start a server.
-read -r remote_os remote_uid <<<"$(ssh "$host" 'uname -s; id -u' | paste -sd' ' -)"
-if [[ $remote_os == Darwin ]]; then
-	default_tmpdir="/tmp/tmux-$remote_uid"
-else
-	default_tmpdir="/run/user/$remote_uid"
-fi
-remote_tmpdir="${LZTMUX_REMOTE_TMPDIR:-$default_tmpdir}"
-if ! valid_remote_path "$remote_tmpdir"; then
-	echo "lztmux-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
+# The session-name quoting discipline (shell_quote is unsafe for a value
+# containing a backslash) applies here too: check before a caller-given $sess
+# rides into the probe below, not only after a remote-derived one comes back.
+if [[ -n $sess ]] && ! shell_quotable "$sess"; then
+	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
 	exit 1
 fi
-# single-quoted: $(id -un) expands on the remote side (NixOS profile fallback)
-remote_tmux="$(ssh "$host" 'command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux')"
 
 # Prints the host's most-recent session name, or nothing when the remote has no
 # tmux server: list-sessions fails into `head`, so the remote pipeline still
-# exits 0 with empty output.
+# exits 0 with empty output. Used both inside the combined probe below and to
+# re-check after a cold start (#429: that round-trip stays separate — the
+# server didn't exist yet when the probe ran).
 first_remote_session() {
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-sessions -F '#{session_name}' | head -1"
 }
+
+# One round-trip for everything the launcher can know before it has to act:
+# remote OS (tmpdir default + cold-start service manager), the tmux binary
+# path, and — for whichever of session/window the caller didn't already name —
+# the live session and its active window. Four sequential probes each cost a
+# full SSH handshake; collapsing them into one compound remote command removes
+# three round-trips from every bridge open (#429). Marker line first so a test
+# double can recognize this call without parsing full shell semantics. Every
+# single-quoted probe_script segment below is intentional: it's the
+# remote-evaluated half of the command and must not expand locally.
+# shellcheck disable=SC2016
+probe_script=': lztmux-probe;
+os=$(uname -s)
+uid=$(id -u)
+tmux_bin=$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux)'
+
+if [[ -n ${LZTMUX_REMOTE_TMPDIR:-} ]]; then
+	probe_script+="
+tmpdir_lit=$(shell_quote "$LZTMUX_REMOTE_TMPDIR")
+tmpdir=\"\$tmpdir_lit\""
+else
+	# shellcheck disable=SC2016
+	probe_script+='
+case "$os" in
+	Darwin) tmpdir="/tmp/tmux-$uid" ;;
+	*) tmpdir="/run/user/$uid" ;;
+esac'
+fi
+
+if [[ -n $sess ]]; then
+	probe_script+="
+sess_lit=$(shell_quote "$sess")
+sess=\"\$sess_lit\""
+else
+	# shellcheck disable=SC2016
+	probe_script+='
+sess=$(env TMUX_TMPDIR="$tmpdir" "$tmux_bin" list-sessions -F '"'"'#{session_name}'"'"' | head -1)'
+fi
+
+if [[ -n $win ]]; then
+	probe_script+="
+win_lit=$(shell_quote "$win")
+win=\"\$win_lit\""
+else
+	# shellcheck disable=SC2016
+	probe_script+='
+win=""
+if [ -n "$sess" ]; then
+	win=$(env TMUX_TMPDIR="$tmpdir" "$tmux_bin" list-windows -t "$sess" -F '"'"'#{window_index} #{window_active}'"'"' | awk '"'"'$2==1{print $1; exit}'"'"')
+fi'
+fi
+
+# shellcheck disable=SC2016
+probe_script+='
+printf '"'"'os=%s\nuid=%s\ntmux=%s\ntmpdir=%s\nsess=%s\nwin=%s\n'"'"' "$os" "$uid" "$tmux_bin" "$tmpdir" "$sess" "$win"'
+
+# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
+probe_out="$(ssh "$host" "$probe_script")"
+
+remote_os="" remote_uid="" remote_tmux="" remote_tmpdir="" probe_sess="" probe_win=""
+while IFS= read -r probe_line; do
+	case "$probe_line" in
+	os=*) remote_os="${probe_line#os=}" ;;
+	uid=*) remote_uid="${probe_line#uid=}" ;;
+	tmux=*) remote_tmux="${probe_line#tmux=}" ;;
+	tmpdir=*) remote_tmpdir="${probe_line#tmpdir=}" ;;
+	sess=*) probe_sess="${probe_line#sess=}" ;;
+	win=*) probe_win="${probe_line#win=}" ;;
+	esac
+done <<<"$probe_out"
+[[ -z $sess ]] && sess="$probe_sess"
+[[ -z $win ]] && win="$probe_win"
+
+# A session already live on the remote (the common case) is named here, by
+# the probe above, not by the caller — so it hasn't run the backslash check
+# above yet.
+if [[ -n $sess ]] && ! shell_quotable "$sess"; then
+	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+	exit 1
+fi
+
+if ! valid_remote_path "$remote_tmpdir"; then
+	echo "lztmux-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
+	exit 1
+fi
 
 # Starts the host's OWN startup session — the remote's tmux-startup unit
 # carries its configured session name and directory, so nothing is invented
@@ -111,21 +189,18 @@ start_remote_server() {
 }
 
 if [[ -z $sess ]]; then
-	sess="$(first_remote_session)"
-fi
-
-if [[ -z $sess ]]; then
 	start_remote_server
 	sess="$(first_remote_session)"
 	if [[ -z $sess ]]; then
 		echo "lztmux-remote-open: started $start_desc on $host but no session appeared" >&2
 		exit 1
 	fi
-fi
-
-if ! shell_quotable "$sess"; then
-	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
-	exit 1
+	# A remote-derived name gets the same backslash check the caller-given path
+	# already ran above — this is the only route it could have skipped it.
+	if ! shell_quotable "$sess"; then
+		echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+		exit 1
+	fi
 fi
 
 # The picker's row came from a tmux-remux snapshot, not a live probe (#268):
