@@ -783,6 +783,11 @@
     unbind '"'
     bind _ if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} split-v #{q:@bridge_pane}" } { split-window -v -c "#{pane_current_path}" }
     bind c if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} new-window #{q:@bridge_pane}" } { if-shell -F '#{m:scratch-*,#{session_name}}' 'display-message "scratchpad: new windows disabled"' 'new-window -c "#{pane_current_path}"' }
+    # Zoom, like every other structural gesture, happens on the remote in a
+    # mirror: zooming the local renderer pane grows it without growing the
+    # remote pane, so the remote program keeps rendering at its old size and
+    # the rows gained are dead space.
+    bind z if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} zoom #{q:@bridge_pane}" } { resize-pane -Z }
     # #{q:} and NOT \"...\", as at client-attached[50]. Bare #{q:client_name}
     # would be zero words when no client exists, sliding the session name into
     # --client's slot; #{?...} emits the flag and its value together or neither,

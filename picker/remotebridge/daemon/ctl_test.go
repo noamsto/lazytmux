@@ -55,6 +55,14 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 			layout: "@1",
 		},
 		{
+			// Zoom is the remote's, not the local renderer pane's; the mirror picks
+			// the flag up from the layout reconcile this schedules.
+			name:   "zoom toggles on the remote pane",
+			argv:   []string{wire.CtlProtocolVersion, "zoom", "%3"},
+			want:   []string{"resize-pane -Z -t %3"},
+			layout: "@1",
+		},
+		{
 			// No -d: the remote keeps the same pane active, which is what lets the
 			// local reconcile's -d swap agree with it.
 			name:   "swap sends no -d",

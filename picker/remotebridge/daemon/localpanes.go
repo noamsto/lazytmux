@@ -53,3 +53,19 @@ func localPaneAt(w *mirrorWindow, i int) (string, bool) {
 	}
 	return w.localPanes[i], true
 }
+
+// localZoomed reads the mirror window's own zoom state, reporting false with
+// ok=false when it cannot be established (no read seam wired, or the window is
+// gone). tmux exposes zoom only as a toggle, so the caller has to know the
+// current state before it can set one — and must not guess: toggling on a
+// wrong belief inverts the zoom instead of matching it.
+func localZoomed(cfg Config, localWin string) (zoomed, ok bool) {
+	if cfg.LocalTmuxOut == nil {
+		return false, false
+	}
+	out, err := cfg.LocalTmuxOut("display-message", "-p", "-t", localWin, "-F", "#{window_zoomed_flag}")
+	if err != nil {
+		return false, false
+	}
+	return strings.TrimSpace(out) == "1", true
+}

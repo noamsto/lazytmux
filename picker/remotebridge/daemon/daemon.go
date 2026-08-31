@@ -512,7 +512,7 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 		rt(ConvergeCmd(mw.remoteID, w, h))
 	}
 
-	L, _, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
+	L, _, _, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
 	if err != nil {
 		return err
 	}
@@ -770,27 +770,33 @@ func tmuxQuote(s string) string {
 }
 
 // readLayout reads target's layout string and, in the same round-trip, the
-// remote window's active pane id — #{pane_id} in window scope. Layout strings
-// contain no spaces, so one space-separated reply carries both, and every
-// reconcile gets the remote's focus from ground truth instead of a belief.
-func readLayout(rt roundTrip, target string) (controlmode.Layout, string, error) {
-	l, ok := rt(fmt.Sprintf("display-message -p -t %s -F '#{window_layout} #{pane_id}'", target))
+// remote window's active pane id — #{pane_id} in window scope — and whether it
+// is zoomed. Layout strings contain no spaces, so one space-separated reply
+// carries all three, and every reconcile gets the remote's focus and zoom from
+// ground truth instead of a belief.
+//
+// #{window_layout} is deliberately the UNZOOMED geometry. #{window_visible_layout}
+// would report a zoomed window as single-pane, and reconcile would read the
+// hidden panes as closed and kill their renderers on every zoom toggle; the
+// flag rides alongside instead, and zoom is applied locally as zoom (#413).
+func readLayout(rt roundTrip, target string) (l0 controlmode.Layout, active string, zoomed bool, err error) {
+	l, ok := rt(fmt.Sprintf("display-message -p -t %s -F '#{window_layout} #{pane_id} #{window_zoomed_flag}'", target))
 	if !ok {
-		return controlmode.Layout{}, "", fmt.Errorf("daemon: control connection closed reading layout for %s", target)
+		return controlmode.Layout{}, "", false, fmt.Errorf("daemon: control connection closed reading layout for %s", target)
 	}
 	if l.Kind == controlmode.Error {
-		return controlmode.Layout{}, "", fmt.Errorf("daemon: display-message window_layout -t %s: %s", target, l.Data)
+		return controlmode.Layout{}, "", false, fmt.Errorf("daemon: display-message window_layout -t %s: %s", target, l.Data)
 	}
 	fields := strings.Fields(string(l.Data))
 	if len(fields) == 0 {
-		return controlmode.Layout{}, "", fmt.Errorf("daemon: empty layout reply for %s", target)
+		return controlmode.Layout{}, "", false, fmt.Errorf("daemon: empty layout reply for %s", target)
 	}
-	active := ""
 	if len(fields) > 1 {
 		active = fields[1]
 	}
+	zoomed = len(fields) > 2 && fields[2] == "1"
 	L, err := controlmode.ParseLayout(fields[0])
-	return L, active, err
+	return L, active, zoomed, err
 }
 
 // spawnRenderer respawns the local pane target (a %N pane id) with the
