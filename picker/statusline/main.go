@@ -50,18 +50,18 @@ var volatileFields = []string{
 // roundtrip to the session's active pane. It reports whether prefix is active
 // and whether the fetch succeeded; a failed fetch leaves the fields empty (the
 // caller re-paints the cached last-good line instead of that degraded frame).
-// Fields are joined by US (0x1f), a byte no tmux value contains.
+// Fields are pipe-delimited; wrong field count fails closed (paths/titles may contain |).
 func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	format := strings.Join(volatileFields, "\x1f")
+	format := strings.Join(volatileFields, "|")
 	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", a.session, "-F", format).Output()
 	if err != nil {
 		return false, false
 	}
-	f := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
-	for len(f) < len(volatileFields) {
-		f = append(f, "")
+	f := strings.Split(strings.TrimRight(string(out), "\n"), "|")
+	if len(f) != len(volatileFields) {
+		return false, false
 	}
 	a.issueID, a.issueBranch, a.issueProvider, a.issueTitle = f[1], f[2], f[3], f[4]
 	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]

@@ -128,12 +128,12 @@ func main() {
 type panesSnapshot []string
 
 // collectPanesSnapshot fetches the union of the fields sessions() and paneMap()
-// read. @bridge_host sits mid-format on purpose: the trailing field must be one
-// that is never empty (the TrimSpace in each parser would eat the last line's
-// tab, and with it that line's whole pane).
+// read. Fields are pipe-delimited; wrong field count fails closed (session_path
+// and pane_current_command may contain |). @bridge_host is mid-format; pane_pid
+// is the trailing field and is never empty on a live pane.
 func collectPanesSnapshot() panesSnapshot {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}\t#{session_name}\t#{window_index}\t#{session_path}\t#{session_last_attached}\t#{@bridge_host}\t#{pane_current_command}\t#{pane_pid}").Output()
+		"#{pane_id}|#{session_name}|#{window_index}|#{session_path}|#{session_last_attached}|#{@bridge_host}|#{pane_current_command}|#{pane_pid}").Output()
 	if err != nil {
 		return nil
 	}
@@ -158,8 +158,8 @@ func (snap panesSnapshot) sessions() []sessionData {
 	m := make(map[string]*sessInfo)
 
 	for _, line := range snap {
-		parts := strings.SplitN(line, "\t", 8)
-		if len(parts) < 8 {
+		parts := strings.Split(line, "|")
+		if len(parts) != 8 {
 			continue
 		}
 		name, path, actStr, proc := parts[1], parts[3], parts[4], parts[6]
@@ -202,14 +202,14 @@ func (snap panesSnapshot) sessions() []sessionData {
 
 func collectSessionActivity() map[string]int64 {
 	out, err := exec.Command("tmux", "list-sessions", "-F",
-		"#{session_name}\t#{session_last_attached}").Output()
+		"#{session_name}|#{session_last_attached}").Output()
 	if err != nil {
 		return nil
 	}
 	m := make(map[string]int64)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 2 {
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 {
 			continue
 		}
 		act, _ := strconv.ParseInt(parts[1], 10, 64)
@@ -241,7 +241,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}\t#{window_index}\t#{b:pane_current_path}\t#{window_zoomed_flag}\t#{pane_current_command}\t#{window_active}\t#{@branch}\t#{pane_current_path}\t#{@window_label_id}\t#{@window_label_rest_long}\t#{@window_pr_plain}\t#{@pr_state}\t#{@pr_check_state}\t#{@pr_mergeable}\t#{@crew_name}\t#{@crew_color}\t#{@window_bridge_name}\t#{@bridge_pane}\t#{@bridge_sock}").Output()
+		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}").Output()
 	if err != nil {
 		return nil
 	}
@@ -281,8 +281,8 @@ func collectWindows() []windowData {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 19)
-		if len(parts) < 6 {
+		parts := strings.Split(line, "|")
+		if len(parts) != 19 {
 			continue
 		}
 		sess := parts[0]
@@ -769,8 +769,8 @@ type paneMapping struct {
 func (snap panesSnapshot) paneMap() map[string]paneMapping {
 	m := make(map[string]paneMapping)
 	for _, line := range snap {
-		parts := strings.SplitN(line, "\t", 8)
-		if len(parts) < 8 {
+		parts := strings.Split(line, "|")
+		if len(parts) != 8 {
 			continue
 		}
 		paneID := strings.TrimPrefix(parts[0], "%")

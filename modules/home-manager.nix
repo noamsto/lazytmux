@@ -1348,8 +1348,9 @@ in {
               case "$CUR_CMD" in
                 wt | fish | bash | zsh | sh)
                   if [ "$CUR_PANES" = "1" ]; then
-                    DUP=$(tmux list-windows -t "$CUR_SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
-                      | awk -F'\t' -v cw="$CUR_WIN" -v cwt="$CUR_WT" -v cp="$CUR_PATH" '
+                    DUP=$(tmux list-windows -t "$CUR_SESSION" -F '#{window_index}|#{@worktree}|#{pane_current_path}' \
+                      | awk -F'|' -v cw="$CUR_WIN" -v cwt="$CUR_WT" -v cp="$CUR_PATH" '
+                          NF != 3 { next }
                           $1 == cw { next }
                           (cwt != "" && $2 == cwt) || $3 == cp { print "dup"; exit }')
                   fi
@@ -1403,8 +1404,8 @@ in {
             [ -n "$CLAUDECODE" ] && exit 0
             [ -n "$CURSOR_AGENT" ] && exit 0
             SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}')
-            WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}\t#{@worktree}\t#{pane_current_path}' \
-              | awk -F'\t' '$2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
+            WIN=$(tmux list-windows -t "$SESSION" -F '#{window_index}|#{@worktree}|#{pane_current_path}' \
+              | awk -F'|' 'NF != 3 { next } $2 == "{{ worktree_path }}" || $3 == "{{ worktree_path }}" { print $1; exit }')
             [ -n "$WIN" ] && tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
             """
           '';

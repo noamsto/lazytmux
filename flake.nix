@@ -117,6 +117,7 @@
             checkPhase = ''
               runHook preCheck
               export GOFLAGS=''${GOFLAGS//-trimpath/}
+              go test ./tmuxformat/...
               go test ./agentdetect/...
               go test ./statusline/...
               go test -race ./remotebridge/...
@@ -446,9 +447,8 @@
 
           # A control byte is invisible in review and only misbehaves for clients
           # without a UTF-8 locale, so the delimiter rule needs a build-time gate
-          # rather than vigilance (#373). Scoped to scripts/ + config/ — modules/
-          # and picker/ still carry tab-delimited formats, tracked in #378, and a
-          # check that scanned them would have to fail today.
+          # rather than vigilance (#373). Shell sources: scripts/, config/, modules/.
+          # picker/ is gated by go test ./tmuxformat/... inside picker-go-tests.
           tmux-format-delimiter-assertions =
             pkgs.runCommand "tmux-format-delimiter-assertions" {
               nativeBuildInputs = [pkgs.bash pkgs.coreutils pkgs.findutils];
@@ -458,6 +458,7 @@
               scan=${./tests/check-tmux-format-delimiters.sh}
               bash "$scan" ${./scripts}
               bash "$scan" ${./config}
+              bash "$scan" ${./modules}
 
               # Prove the scanner can actually fail, and that EACH rule pulls its
               # weight: a single non-zero exit would let an inverted rule ship.

@@ -107,9 +107,8 @@ done
 
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
-# --- Single pass: collect window data + pane processes ---
+# --- Single pass: collect window data ---
 declare -a indices
-declare -A win_procs # keyed by window_index, space-separated unique procs
 total=0
 has_zoom=0
 
@@ -211,17 +210,6 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 [[ $total -eq 0 ]] && exit 0
-
-# Collect all pane processes in one call, bucket by window index
-declare -A win_seen # keyed by "idx:proc"
-while IFS='|' read -r win_idx proc; do
-	[[ -n $proc ]] || continue
-	if [[ -z ${win_seen["${win_idx}:${proc}"]+x} ]]; then
-		win_seen["${win_idx}:${proc}"]=1
-		win_procs[$win_idx]+="${win_procs[$win_idx]:+ }$proc"
-	fi
-done < <(tmux list-panes -s -t "$SESSION" -F '#{window_index}|#{pane_current_command}')
-unset win_seen
 
 # Fixed icon-column width for the slot math below. The icon *content*
 # (@window_icon_padded) is owned solely by tmux-update-icons — don't write it
