@@ -237,6 +237,15 @@ func stripTmuxColors(s string) string {
 	return strings.TrimSpace(sb.String())
 }
 
+// decodeBridgeName undoes the daemon's escape of @window_bridge_name. The daemon
+// doubles every '#' because tmux collapses the pair again when it draws the
+// status line; a '#{@window_bridge_name}' read hands back the stored value with
+// the doubling intact, so a caller that renders the name itself — the picker
+// draws its own rows — must undo it or every '#' shows up twice.
+func decodeBridgeName(s string) string {
+	return strings.ReplaceAll(s, "##", "#")
+}
+
 func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
@@ -307,7 +316,7 @@ func collectWindows() []windowData {
 				prMergeable: field(parts, 13),
 				crewName:    field(parts, 14),
 				crewColor:   field(parts, 15),
-				bridgeName:  field(parts, 16),
+				bridgeName:  decodeBridgeName(field(parts, 16)),
 				bridgePane:  field(parts, 17),
 				bridgeSock:  field(parts, 18),
 				seen:        make(map[string]bool),

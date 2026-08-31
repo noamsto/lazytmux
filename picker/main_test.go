@@ -44,3 +44,21 @@ func TestAgentStateOrderMatchesPriority(t *testing.T) {
 		}
 	}
 }
+
+// A remote window name reaches us through @window_bridge_name in the daemon's
+// escaped form, because the status line collapses the doubling when it draws.
+// The picker draws its own rows, so it has to undo the escape first.
+func TestDecodeBridgeName(t *testing.T) {
+	cases := map[string]string{
+		"pr##367":               "pr#367",
+		"a####b":                "a##b",
+		"plain-name":            "plain-name",
+		"":                      "",
+		"[nix-amd-ai 󰪣 󰘭 ##46]": "[nix-amd-ai 󰪣 󰘭 #46]",
+	}
+	for in, want := range cases {
+		if got := decodeBridgeName(in); got != want {
+			t.Errorf("decodeBridgeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

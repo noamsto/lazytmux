@@ -125,7 +125,8 @@ func TestWindowNameFixtures(t *testing.T) {
 
 // TestWindowNameRoundTrip is the property the prompt prefill depends on: a name
 // read back out of @window_bridge_name and re-sanitized must land where it
-// started, or every rename grows the '#'-run.
+// started. Without the decode, re-escaping doubles every '#' each pass — which
+// is what any escape applied twice does, not anything specific to '#['.
 func TestWindowNameRoundTrip(t *testing.T) {
 	for _, f := range nameFixtures {
 		e := sanitizeWindowName(f.r)

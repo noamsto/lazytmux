@@ -150,17 +150,24 @@ func localWinForRemoteIndex(wins []remoteWindow, reg *registry, remoteIdx string
 
 // stripWindowName drops what must never reach a tmux command line — '|' (the
 // reflow FMT delimiter), newlines and control chars — and then strips tmux
-// #[...] style sequences. Both orderings here are load-bearing, and both guard
-// the same failure: a '#'-run immediately followed by '[' is what tmux's
-// format_expand passes through verbatim instead of collapsing pairwise
-// (format.c:6671-6694), so the rename round trip drifts unboundedly.
+// #[...] style sequences.
+//
+// The style sequences are dropped rather than escaped. Escaping them would in
+// fact render safely (sanitizeWindowName doubles the '#', and the status line
+// collapses "##[" back to a literal "#["), but a remote name that carries style
+// markup carries it *as markup* — see the nix-amd-ai fixture, whose #[fg=...]
+// runs wrap its glyphs — so keeping it would paint the user's status line with
+// raw escape text instead of the name they recognise. Dropping loses nothing a
+// reader wanted; leaving it unescaped would let a remote host style our status
+// line, which is the one option that is actually unsafe.
+//
+// Both orderings below are load-bearing:
 //   - The drop runs FIRST because it can join a '#' to a '[' that a strip scan
 //     never saw together: "a#|[x]b" would otherwise survive as "a##[x]b".
 //   - The strip iterates to a fixed point because one pass can likewise join a
 //     surviving '#' to a later '[': "##[a][" collapses to "#[".
 //
-// An unterminated "#[" (no ']' anywhere after it) drops to end-of-string; there
-// is no way to escape it into something a later expansion reads as literal.
+// An unterminated "#[" (no ']' anywhere after it) drops to end-of-string.
 func stripWindowName(s string) string {
 	var dropped strings.Builder
 	for _, r := range s {

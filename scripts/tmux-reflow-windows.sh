@@ -150,7 +150,11 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 		win_id[$idx]=""
 		win_rest_short[$idx]="$bwname"
 		win_pr[$idx]=""
-		measure_display_width "$bwname"
+		# The daemon stores @window_bridge_name with every '#' doubled, and a
+		# '#{@opt}' read hands that back verbatim — but the status line draws it
+		# collapsed. Measure what will be drawn, or a '#' in a remote name buys
+		# the column a cell it never uses.
+		measure_display_width "${bwname//##/#}"
 		win_short_dw[$idx]=$REPLY_DW
 		win_id_dw[$idx]=0
 		win_pr_dw[$idx]=0
