@@ -55,7 +55,7 @@ func TestRemoteSessionsForHost(t *testing.T) {
 		}
 		return probeWithSessions("mono", "nix-config", ""), nil
 	}
-	local := parseBridgeSessions("lab-mono\tlab\tmono\n")
+	local := parseBridgeSessions("lab-mono|lab|mono\n")
 
 	sess, state := remoteSessionsForHost("lab", local, probe)
 	if state != remoteProbeOK {
@@ -80,7 +80,7 @@ func TestRemoteSessionsForHost(t *testing.T) {
 }
 
 func TestParseBridgeSessionsIgnoresOrdinaryLocalNames(t *testing.T) {
-	bridges := parseBridgeSessions("nix-config\t\t\nnix-config-remote\tnix\tconfig\nold-nix-config\tnix\t\n")
+	bridges := parseBridgeSessions("nix-config||\nnix-config-remote|nix|config\nold-nix-config|nix|\n")
 
 	if !bridges[bridgeSessionKey("nix", "config")] {
 		t.Fatalf("new bridge was not indexed: %+v", bridges)
@@ -96,7 +96,7 @@ func TestParseBridgeSessionsIgnoresOrdinaryLocalNames(t *testing.T) {
 func TestCollectRemoteItemsKeepsOrdinaryLocalCollision(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "nix"}
 	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("config"), nil }
-	bridges := parseBridgeSessions("nix-config\t\t\n")
+	bridges := parseBridgeSessions("nix-config||\n")
 
 	items := collectRemoteItems(opts, bridges, probe, noRestore)
 	if len(items) != 3 {
@@ -115,7 +115,7 @@ func TestCollectRemoteItems(t *testing.T) {
 		}
 		return probeWithSessions("mono", "other"), nil
 	}
-	local := parseBridgeSessions("lab-mono\tlab\tmono\n")
+	local := parseBridgeSessions("lab-mono|lab|mono\n")
 
 	items := collectRemoteItems(opts, local, probe, noRestore)
 	if len(items) != 4 {
@@ -344,7 +344,7 @@ func TestCollectRemoteItemsAllBridged(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("mono"), nil }
 
-	items := collectRemoteItems(opts, parseBridgeSessions("lab-mono\tlab\tmono\n"), probe, noRestore)
+	items := collectRemoteItems(opts, parseBridgeSessions("lab-mono|lab|mono\n"), probe, noRestore)
 	if len(items) != 2 {
 		t.Fatalf("expected header + lab host row, got %d: %+v", len(items), items)
 	}

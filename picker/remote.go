@@ -257,7 +257,7 @@ func bridgeSessionLegacyKey(name string) string {
 func parseBridgeSessions(raw string) map[string]bool {
 	bridges := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
+		parts := strings.SplitN(line, "|", 3)
 		if len(parts) < 2 || parts[1] == "" {
 			continue
 		}
@@ -272,7 +272,7 @@ func parseBridgeSessions(raw string) map[string]bool {
 
 func collectBridgeSessions() map[string]bool {
 	out, err := exec.Command("tmux", "list-sessions", "-F",
-		"#{session_name}\t#{@bridge_host}\t#{@bridge_session}").Output()
+		"#{session_name}|#{@bridge_host}|#{@bridge_session}").Output()
 	if err != nil {
 		return nil
 	}
