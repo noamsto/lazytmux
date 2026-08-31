@@ -50,10 +50,10 @@ func TestRouterDemuxAcrossWindows(t *testing.T) {
 }
 
 func TestCloseWindowUnregistersOnlyItsPanes(t *testing.T) {
-	reg := newRegistry(1)
-	w1 := reg.add("@1", "h-s:1")
+	reg := newRegistry()
+	w1 := reg.add("@1", "@101")
 	w1.remotePanes = []string{"%1", "%2"}
-	w2 := reg.add("@2", "h-s:2")
+	w2 := reg.add("@2", "@102")
 	w2.remotePanes = []string{"%9"}
 	router := NewRouter()
 	var s1, s2, s9 capBuf

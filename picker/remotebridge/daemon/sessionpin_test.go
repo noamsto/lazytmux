@@ -49,7 +49,7 @@ func TestSessionPinIgnoresOwnSession(t *testing.T) {
 	handedOff := false
 	p := &sessionPin{id: "$0", handOff: func(string) { handedOff = true }}
 
-	p.apply(controlmode.ParseLine("%session-changed $0 A"), newRegistry(1), NewRouter(), rt)
+	p.apply(controlmode.ParseLine("%session-changed $0 A"), newRegistry(), NewRouter(), rt)
 
 	if sent.Len() != 0 {
 		t.Errorf("sent %q, want nothing", sent.String())
@@ -65,7 +65,7 @@ func TestSessionPinDisabledWithoutID(t *testing.T) {
 	rt, sent := scriptedRT("%exit\n")
 	p := &sessionPin{}
 
-	p.apply(controlmode.ParseLine("%session-changed $5 other"), newRegistry(1), NewRouter(), rt)
+	p.apply(controlmode.ParseLine("%session-changed $5 other"), newRegistry(), NewRouter(), rt)
 
 	if sent.Len() != 0 {
 		t.Errorf("sent %q, want nothing", sent.String())
@@ -83,8 +83,8 @@ func TestSessionPinSwitchesBackReseedsAndHandsOff(t *testing.T) {
 
 	router := NewRouter()
 	router.Register("%1", newOutputSink(local, nil))
-	reg := newRegistry(1)
-	mw := reg.add("@1", "h-s:1")
+	reg := newRegistry()
+	mw := reg.add("@1", "@101")
 	mw.remotePanes = []string{"%1"}
 
 	// Three replies: switch-client, then PaneSeed's cursor + capture.

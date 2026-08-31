@@ -2,27 +2,11 @@ package daemon
 
 import "testing"
 
-func TestRegistryMonotonicIndices(t *testing.T) {
-	r := newRegistry(1)
-	if got := r.allocLocalWin("h-s"); got != "h-s:1" {
-		t.Fatalf("first alloc = %q, want h-s:1", got)
-	}
-	if got := r.allocLocalWin("h-s"); got != "h-s:2" {
-		t.Fatalf("second alloc = %q, want h-s:2", got)
-	}
-	// A close must not free an index for reuse: the next alloc still advances.
-	r.add("@1", "h-s:1")
-	r.remove("@1")
-	if got := r.allocLocalWin("h-s"); got != "h-s:3" {
-		t.Fatalf("post-remove alloc = %q, want h-s:3 (no reuse)", got)
-	}
-}
-
 func TestRegistryLookup(t *testing.T) {
-	r := newRegistry(1)
-	w := r.add("@5", "h-s:1")
+	r := newRegistry()
+	w := r.add("@5", "@101")
 	w.remotePanes = []string{"%3", "%4"}
-	if got, ok := r.byRemoteID("@5"); !ok || got.localWin != "h-s:1" {
+	if got, ok := r.byRemoteID("@5"); !ok || got.localWin != "@101" {
 		t.Fatalf("byRemoteID(@5) = %+v %v", got, ok)
 	}
 	if _, ok := r.byRemoteID("@99"); ok {
@@ -66,14 +50,14 @@ func TestParseWindowList(t *testing.T) {
 // window at index 1).
 func TestInitialWindowSelectsByIndexNotID(t *testing.T) {
 	wins := []remoteWindow{{"1", "@2", false, ""}, {"2", "@7", false, ""}} // index 1 -> @2, index 2 -> @7
-	reg := newRegistry(1)
-	reg.add("@2", "h-s:1")
-	reg.add("@7", "h-s:2")
-	if got, ok := localWinForRemoteIndex(wins, reg, "2"); !ok || got != "h-s:2" {
-		t.Fatalf("--window 2 selected %q ok=%v, want h-s:2 (mirror of @7, not @2)", got, ok)
+	reg := newRegistry()
+	reg.add("@2", "@101")
+	reg.add("@7", "@102")
+	if got, ok := localWinForRemoteIndex(wins, reg, "2"); !ok || got != "@102" {
+		t.Fatalf("--window 2 selected %q ok=%v, want @102 (mirror of @7, not @2)", got, ok)
 	}
-	if got, ok := localWinForRemoteIndex(wins, reg, "1"); !ok || got != "h-s:1" {
-		t.Fatalf("--window 1 selected %q ok=%v, want h-s:1", got, ok)
+	if got, ok := localWinForRemoteIndex(wins, reg, "1"); !ok || got != "@101" {
+		t.Fatalf("--window 1 selected %q ok=%v, want @101", got, ok)
 	}
 	if _, ok := localWinForRemoteIndex(wins, reg, "9"); ok {
 		t.Fatal("out-of-range index must not select")
@@ -91,7 +75,7 @@ func TestSanitizeWindowName(t *testing.T) {
 		{"tab\tend", "tabend"},     // control char stripped
 		// Observed remote name: style sequences stripped, bare # escaped.
 		{"[nix-amd-ai 🧠 #[fg=#94e2d5]󰪣#[fg=default] 󰘭 #46]", "[nix-amd-ai 🧠 󰪣 󰘭 ##46]"},
-		{"PR #46", "PR ##46"}, // bare # with no style sequence
+		{"PR #46", "PR ##46"},                       // bare # with no style sequence
 		{"#[fg=red]PR #46#[fg=default]", "PR ##46"}, // styles + bare #
 	}
 	for _, tc := range cases {

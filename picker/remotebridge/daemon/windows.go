@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -16,7 +15,11 @@ import (
 // *tiled* panes: a float takes an ordinal slot of its own, so the local pane
 // rendering remotePanes[i] is not reliably the window's i'th pane.
 type mirrorWindow struct {
-	remoteID    string
+	remoteID string
+	// localWin is a local tmux window ID ("@7"), never "<sess>:<index>":
+	// renumber-windows is on, so closing one mirror window renumbers every
+	// window above it and an index captured at creation silently starts
+	// addressing its neighbour (#411).
 	localWin    string
 	remotePanes []string
 	localPanes  []string
@@ -24,30 +27,17 @@ type mirrorWindow struct {
 	conns       map[string]net.Conn
 }
 
-// registry maps remote window ids (@N) to their local mirror windows and hands
-// out monotonically-increasing local window indices. LocalTmux can't capture a
-// created window's index, so the daemon assigns indices rather than reading
-// them back; the counter never decrements, so a closed window's index is never
-// reused and a stale @N->index mapping can't collide.
+// registry maps remote window ids (@N) to their local mirror windows.
 //
 // The main loop mutates it while the resize watcher reads the mirrored ids
 // each tick, so every access takes mu.
 type registry struct {
 	mu       sync.Mutex
 	byRemote map[string]*mirrorWindow
-	nextIdx  int
 }
 
-func newRegistry(baseIdx int) *registry {
-	return &registry{byRemote: map[string]*mirrorWindow{}, nextIdx: baseIdx}
-}
-
-func (r *registry) allocLocalWin(sess string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	win := fmt.Sprintf("%s:%d", sess, r.nextIdx)
-	r.nextIdx++
-	return win
+func newRegistry() *registry {
+	return &registry{byRemote: map[string]*mirrorWindow{}}
 }
 
 func (r *registry) add(remoteID, localWin string) *mirrorWindow {
