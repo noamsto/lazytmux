@@ -23,7 +23,7 @@ const maxReconcilePasses = 5
 // already stale. Re-reading once more right after applying catches it: the
 // round-trips above give the remote plenty of time to settle, so a still-
 // different layout means something changed underneath us and needs its own pass.
-func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, connCh chan helloConn, cst *ctlState, rt roundTrip) {
+func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) {
 	target := remoteWinTarget(cfg, w.remoteID)
 
 	L, remoteActive, zoomed, err := readLayout(rt, target)
@@ -52,7 +52,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 
 		switch {
 		case ops.Reset:
-			if err := resetWindow(cfg, w, send, router, connCh, cst, rt); err != nil {
+			if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 				w.remotePanes = remote
 				return
@@ -60,7 +60,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			// setupWindow re-read the layout and re-shaped the window itself.
 			return
 		case structural:
-			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, connCh, rt); err != nil {
+			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, waitHellos, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 				w.remotePanes = remote
 				return
@@ -159,7 +159,7 @@ func applyLayout(cfg Config, w *mirrorWindow, L controlmode.Layout) {
 // applyPaneOps performs the local pane surgery ops describes: kill the panes
 // whose remote pane is gone, split new ones off the tail and wire a renderer to
 // each, then swap the local panes into the remote's order.
-func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, send func(string), router *Router, connCh chan helloConn, rt roundTrip) error {
+func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, send func(string), router *Router, waitHellos helloWaiter, rt roundTrip) error {
 	// Every op below reshapes the window, so what it carries is no longer the
 	// layout last applied to it.
 	w.layout = ""
@@ -212,16 +212,16 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 
 	if len(ops.Append) > 0 {
 		// Before the hello wait below, not after: the splits above are always -h,
-		// and collectHellos blocks for an ssh round-trip, so leaving the geometry
-		// until the caller's trailing pass puts the wrong shape on screen for the
-		// whole handshake rather than for a frame (#408). The swaps below exchange
+		// and the wait costs a renderer spawn, so leaving the geometry until the
+		// caller's trailing pass puts the wrong shape on screen for the whole
+		// handshake rather than for a frame (#408). The swaps below exchange
 		// panes between cells without changing cell geometry, so this stays
 		// correct and the caller's pass becomes idempotent.
 		applyLayout(cfg, w, L)
 
 		// Seeding is sequential over the single control stream, so every new
 		// renderer must be connected first (mirrors setupWindow).
-		added, err := collectHellos(connCh, len(ops.Append), helloTimeout)
+		added, err := waitHellos(len(ops.Append))
 		if err != nil {
 			return fmt.Errorf("reconcile: %w", err)
 		}
@@ -262,7 +262,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // resetWindow rebuilds w from scratch, for the case where no current pane
 // survives (planPaneOps.Reset). Killing every pane instead would make tmux
 // destroy the mirror window and leave a registry entry pointing at nothing.
-func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, connCh chan helloConn, cst *ctlState, rt roundTrip) error {
+func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) error {
 	for _, id := range w.remotePanes {
 		router.Unregister(id)
 		if c := w.conns[id]; c != nil {
@@ -271,7 +271,7 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 		}
 	}
 	dropMirroredPanes(cfg, w)
-	return setupWindow(cfg, send, router, connCh, cst, w, newConverger(), rt)
+	return setupWindow(cfg, send, router, waitHellos, cst, w, newConverger(), rt)
 }
 
 // dropMirroredPanes kills every mirrored pane but the first, which resetWindow

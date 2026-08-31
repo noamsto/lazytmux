@@ -31,7 +31,7 @@ func TestReconcileWindowsReflowsOnEarlyReturn(t *testing.T) {
 			rt := func(string) (controlmode.Line, bool) { return c.reply, c.ok }
 
 			reconcileWindows(cfg, func(string) {}, NewRouter(),
-				make(chan helloConn, 1), newCtlState(), reg, newConverger(), rt)
+				noHellos, newCtlState(), reg, newConverger(), rt)
 
 			if reflowed != 1 {
 				t.Fatalf("reflow called %d times, want 1", reflowed)

@@ -28,6 +28,10 @@ func newTestReader(s string) *controlmode.Reader {
 // reader against a scripted response stream.
 func testStream() *stream { return newStream(io.Discard) }
 
+// noHellos is the waiter for the mirror paths that append no pane, and so never
+// reach a hello wait. Calling it at all is the bug it would expose.
+func noHellos(int) (map[string]net.Conn, error) { return nil, nil }
+
 // TestLoopRoutesAndExits, TestLoopStopsOnWindowClose, and
 // TestLoopReturnsFalseOnEOF (M2.1) drove the extracted runLoop/handleLine
 // helpers, which are gone: Task 4 deletes them as dead code (Run's real main
@@ -309,10 +313,14 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 	}
 }
 
-// TestCollectHellosTimesOutWhenRenderersDontConnect uses a real listener
+// TestWaitHellosTimesOutWhenRenderersDontConnect uses a real listener
 // that nobody dials: a spawned renderer that never connects back (bad
-// RendererBin, exec failure, crash) must not wedge collectHellos forever.
-func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
+// RendererBin, exec failure, crash) must not wedge the wait forever.
+//
+// The pump reads a pipe nothing is written to, so the deadline is the only arm
+// that can fire — a reader over an already-ended stream would end the wait on
+// the pump-close arm instead and prove nothing about the timeout.
+func TestWaitHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -322,15 +330,19 @@ func TestCollectHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	connCh := make(chan helloConn, 16)
 	go acceptConns(l, connCh, func([]string) error { return nil })
 
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	pump := startCtlPump(controlmode.NewReader(pr))
+
 	start := time.Now()
-	_, err = collectHellos(connCh, 1, 100*time.Millisecond)
+	_, err = waitHellos(pump.lines, NewRouter(), &asyncQueue{}, testStream(), connCh, 1, 100*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
-		t.Fatal("collectHellos: want an error when no renderer connects, got nil")
+		t.Fatal("waitHellos: want an error when no renderer connects, got nil")
 	}
 	if elapsed > 2*time.Second {
-		t.Fatalf("collectHellos blocked for %s, want it to return near the 100ms deadline", elapsed)
+		t.Fatalf("waitHellos blocked for %s, want it to return near the 100ms deadline", elapsed)
 	}
 }
 

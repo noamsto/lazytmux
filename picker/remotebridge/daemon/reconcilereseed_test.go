@@ -41,7 +41,7 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 		LocalTmux:    func(...string) error { return nil },
 		LocalTmuxOut: func(...string) (string, error) { return "%l3 0\n", nil },
 	}
-	go reconcileLayout(cfg, w, func(string) {}, router, make(chan helloConn), newCtlState(), rt)
+	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), rt)
 
 	// The resize lands first (dims are pushed right after select-layout), then
 	// the repaint. Both matter, and the order is the point: a seed sized for the

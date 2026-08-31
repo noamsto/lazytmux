@@ -114,7 +114,7 @@ func TestApplyPaneOpsTargetsPaneIDsPastAFloat(t *testing.T) {
 	ops := paneOps{Remove: []int{1}}
 
 	err := applyPaneOps(cfg, w, ops, controlmode.Layout{}, remote, []string{"%r1", "%r3"},
-		func(string) {}, NewRouter(), make(chan helloConn), nil)
+		func(string) {}, NewRouter(), noHellos, nil)
 	if err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestApplyPaneOpsSwapKeepsLocalPanesParallel(t *testing.T) {
 	ops := paneOps{Swaps: [][2]int{{0, 1}}}
 
 	if err := applyPaneOps(cfg, w, ops, controlmode.Layout{}, []string{"%r1", "%r2"},
-		[]string{"%r2", "%r1"}, func(string) {}, NewRouter(), make(chan helloConn), nil); err != nil {
+		[]string{"%r2", "%r1"}, func(string) {}, NewRouter(), noHellos, nil); err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
 	}
 

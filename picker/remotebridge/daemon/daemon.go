@@ -145,12 +145,12 @@ func applyMirrorName(cfg Config, localWin, remoteName string) {
 // its next %output, or on the fresh FrameSeed any %continue sends.
 const outputSinkBuf = 4096
 
-// helloTimeout bounds how long collectHellos waits for renderers to dial
+// helloTimeout bounds how long waitHellos blocks for renderers to dial
 // back. A spawned renderer that never connects (bad RendererBin, exec
 // failure, crash before it dials) doesn't surface as a LocalTmux error —
-// respawn-pane itself succeeds — so without a deadline the wait blocks Run
-// forever (startup never proceeds; reconcile blocks the main loop, so the
-// control stream stops draining).
+// respawn-pane itself succeeds — so without a deadline the wait blocks its
+// caller forever: startup never proceeds, and reconcile never returns the main
+// loop to dispatching.
 const helloTimeout = 10 * time.Second
 
 // helloConn pairs an accepted renderer connection with the remote pane id it
@@ -159,6 +159,12 @@ type helloConn struct {
 	paneID string
 	conn   net.Conn
 }
+
+// helloWaiter collects the n renderer connections a caller just spawned. Every
+// mirror path takes one of these rather than the connection channel itself: the
+// wait has to keep the control stream moving (see waitHellos), and the pump it
+// drains to do that is Run's alone.
+type helloWaiter func(n int) (map[string]net.Conn, error)
 
 // resizePollInterval is how often the resize watcher re-checks the local
 // client area. A human terminal resize is discrete and infrequent, so a 1s
@@ -173,7 +179,7 @@ const resizePollInterval = time.Second
 // local window to the remote's new size). send is the same mutex-guarded,
 // no-op-when-closed sender the main loop uses; this only injects
 // fire-and-forget commands (their %begin/%end acks are consumed harmlessly by
-// the main loop's top-level reader.Next()).
+// the main loop's own nextLine read).
 func watchResize(area func() (int, int), reg *registry, cv *converger, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
 	for {
 		select {
@@ -251,7 +257,7 @@ func (s *stream) close() {
 // local window, over the single -CC connection, until %exit or the control
 // connection drops.
 func Run(cfg Config) error {
-	reader := controlmode.NewReader(cfg.Ctl)
+	pump := startCtlPump(controlmode.NewReader(cfg.Ctl))
 	st := newStream(cfg.Ctl)
 	// send is the fire-and-forget form the mirror paths use; the ctl path takes
 	// st.send directly, since it has to report whether the line was written.
@@ -266,7 +272,7 @@ func Run(cfg Config) error {
 		if !ok {
 			return controlmode.Line{}, false
 		}
-		return readReplyRouting(reader, router, async, st, seq)
+		return readReplyRouting(pump, router, async, st, seq)
 	}
 
 	// The implicit attach reply needs no draining: it is flagged 0, so the reply
@@ -303,6 +309,12 @@ func Run(cfg Config) error {
 		fmt.Fprintf(os.Stderr, "daemon: write pidfile %s: %v\n", pidFile, err)
 	}
 	connCh := make(chan helloConn, 64)
+	// The one waiter every mirror path gets. connCh goes no further than this
+	// closure: draining the stream while waiting needs the pump, and only Run
+	// has it.
+	waitHellosFn := func(n int) (map[string]net.Conn, error) {
+		return waitHellos(pump.lines, router, async, st, connCh, n, helloTimeout)
+	}
 	cst := newCtlState()
 	go acceptConns(listener, connCh, func(argv []string) error {
 		req, err := cst.parseCtl(argv, cfg.RemoteSession)
@@ -378,7 +390,7 @@ func Run(cfg Config) error {
 		}
 		stampMirrorWindow(cfg, localWin, rw.name)
 		mw := reg.add(rw.id, localWin)
-		if err := setupWindow(cfg, send, router, connCh, cst, mw, cv, rt); err != nil {
+		if err := setupWindow(cfg, send, router, waitHellosFn, cst, mw, cv, rt); err != nil {
 			teardown()
 			return err
 		}
@@ -399,7 +411,7 @@ func Run(cfg Config) error {
 	// lazytmux host, on every automatic-rename tick) would otherwise keep the
 	// name it happened to have at attach for the life of the mirror. Reconcile
 	// re-asserts each name from ground truth, and ends in a reflow.
-	reconcileWindows(cfg, send, router, connCh, cst, reg, cv, rt)
+	reconcileWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 	if reg.empty() {
 		teardown()
 		return nil
@@ -424,7 +436,7 @@ func Run(cfg Config) error {
 		case controlmode.LayoutChange:
 			if len(l.Args) > 0 {
 				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
-					reconcileLayout(cfg, mw, send, router, connCh, cst, rt)
+					reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, rt)
 				}
 			}
 		case controlmode.WindowRenamed:
@@ -442,7 +454,7 @@ func Run(cfg Config) error {
 			}
 		case controlmode.WindowAdd:
 			if len(l.Args) > 0 {
-				addWindow(cfg, send, router, connCh, cst, reg, cv, rt, l.Args[0])
+				addWindow(cfg, send, router, waitHellosFn, cst, reg, cv, rt, l.Args[0])
 			}
 		case controlmode.WindowClose:
 			if len(l.Args) > 0 {
@@ -490,7 +502,7 @@ func Run(cfg Config) error {
 				}
 			}
 			if wantWindows {
-				reconcileWindows(cfg, send, router, connCh, cst, reg, cv, rt)
+				reconcileWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 				if reg.empty() {
 					return true
 				}
@@ -499,7 +511,7 @@ func Run(cfg Config) error {
 				// A layout intent for a window reconcileWindows just closed has
 				// nothing to reconcile.
 				if mw, ok := reg.byRemoteID(remoteID); ok {
-					reconcileLayout(cfg, mw, send, router, connCh, cst, rt)
+					reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, rt)
 				}
 			}
 		}
@@ -509,7 +521,7 @@ func Run(cfg Config) error {
 	pauseAfterSet := false
 	for {
 		// Settling before the blocking read is what makes a ctl gesture land
-		// without a timer: reader.Next() wakes on any line, and by the time it
+		// without a timer: nextLine wakes on any line, and by the time it
 		// returns the intent is already registered, so the next pass through here
 		// drains it. It also picks up whatever window setup queued.
 		if settle() {
@@ -519,18 +531,18 @@ func Run(cfg Config) error {
 		// the output that ended a turn has already brought us here.
 		agents.poll(cfg, rt)
 		reseedDropped(router, rt)
-		// Enable pause-after only now that every window is set up and the loop
-		// is draining the async stream — setup does blocking collectHellos/seed
-		// round-trips without draining, so arming it earlier would let a pane
-		// get %pause'd mid-setup with no %continue re-seed to answer it (a
-		// deadlock offline bats can't catch).
+		// Enable pause-after only now that every window is set up. Setup does
+		// drain the stream (its round-trips route, and so does the hello wait),
+		// but only dispatch runs handlePause — so a %pause arriving mid-setup is
+		// merely queued, and its pane would sit paused with no %continue re-seed
+		// until setup finished (a deadlock offline bats can't catch).
 		if !pauseAfterSet {
 			pauseAfterSet = true
 			if cfg.PauseAfterSecs > 0 {
 				send(fmt.Sprintf("refresh-client -f pause-after=%d", cfg.PauseAfterSecs))
 			}
 		}
-		l, _, ok := nextLine(reader, st)
+		l, _, ok := nextLine(pump, st)
 		if !ok {
 			break // control-stream EOF
 		}
@@ -550,7 +562,7 @@ func Run(cfg Config) error {
 // For a 1-pane remote window this is exactly M1's behavior — no split, one
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
-func setupWindow(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, mw *mirrorWindow, cv *converger, rt roundTrip) error {
+func setupWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, mw *mirrorWindow, cv *converger, rt roundTrip) error {
 	// Cap the remote window at what the local clients can show before reading
 	// its layout, so the layout that gets mirrored is the converged one.
 	if w, h := cfg.LocalArea(); cv.need(mw.remoteID, w, h) {
@@ -591,7 +603,7 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 	// Collect exactly len(remotePanes) Hellos (any order) before seeding —
 	// seeding is sequential over the single control stream, so all renderers
 	// must be connected (and hence writable) first.
-	byRemote, err := collectHellos(connCh, len(mw.remotePanes), helloTimeout)
+	byRemote, err := waitHellos(len(mw.remotePanes))
 	if err != nil {
 		return err
 	}
@@ -605,7 +617,7 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 	for i, remotePane := range mw.remotePanes {
 		conn := mw.conns[remotePane]
 		if conn == nil {
-			continue // didn't connect; already logged by collectHellos caller
+			continue // didn't connect; the hello wait reported the shortfall
 		}
 		if !seedRenderer(rt, router, conn, remotePane, L.Panes[i], cfg.graphicsFor(remotePane)) {
 			if len(mw.remotePanes) == 1 {
@@ -624,7 +636,7 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 // the same plan/spawn/hello/seed pipeline as startup. Otherwise (the window
 // belongs elsewhere, or a duplicate notification for an already-registered
 // window) it's a no-op.
-func addWindow(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip, remoteID string) {
+func addWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip, remoteID string) {
 	if _, already := reg.byRemoteID(remoteID); already {
 		return
 	}
@@ -654,7 +666,7 @@ func addWindow(cfg Config, send func(string), router *Router, connCh chan helloC
 	}
 	stampMirrorWindow(cfg, localWin, addedName)
 	mw := reg.add(remoteID, localWin)
-	if err := setupWindow(cfg, send, router, connCh, cst, mw, cv, rt); err != nil {
+	if err := setupWindow(cfg, send, router, waitHellos, cst, mw, cv, rt); err != nil {
 		// Drop the half-created entry + local window so the already-registered
 		// guard doesn't block a later %window-add retry for this id.
 		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)
@@ -727,47 +739,112 @@ func coalesceLayoutChanges(lines []controlmode.Line) []controlmode.Line {
 	return out
 }
 
-// nextLine is the daemon's only read of the control stream. For a reply block
-// one of our own commands produced it returns that command's ordinal; seq is 0
-// for everything else. Every read goes through here so the count stays exact:
-// most of our commands are fire-and-forget and their reply blocks are consumed
-// by the main loop, so counting only inside round-trips would let seen fall
-// behind sent and no round-trip would ever recognise its reply again.
-func nextLine(reader *controlmode.Reader, st *stream) (l controlmode.Line, seq uint64, ok bool) {
+// lineReader is the control stream as its consumers see it: one blocking read
+// that ends with the stream. Both *controlmode.Reader and *ctlPump satisfy it.
+type lineReader interface {
+	Next() (controlmode.Line, bool)
+}
+
+// ctlPumpBuf is the depth of the pump's line channel. It is slack for every
+// stretch where the consuming goroutine is busy rather than reading — LocalTmux
+// execs, window shaping, per-pane seeding, the hello wait — which is what keeps
+// the remote's output moving out of the socket and so keeps a pane below tmux's
+// pause-after age. Deliberately looser than the one-line-at-a-time backpressure
+// a synchronous reader gave: the slack IS the fix. Once it is full the pump
+// blocks on the send and the remote feels the stall as it always did.
+//
+// The bound is a line count, so what it costs is 256 × one control-mode line —
+// an %output chunk, or a reply block's joined body. Both are small in practice;
+// the scanner's 4MB ceiling sizes a pathological reply body, not a routine one.
+const ctlPumpBuf = 256
+
+// ctlPump is the daemon's one caller of controlmode.Reader.Next(), for the life
+// of the process. Reading on a goroutine of its own is what lets a consumer
+// select over the stream alongside other events (see waitHellos) — Next()
+// blocks, so a select cannot include it directly.
+//
+// The goroutine ends when the stream does, and otherwise dies with the process:
+// teardown's cfg.Ctl.Close() closes only the ssh stdin, so a pump parked on a
+// send to a channel nobody is draining is not woken by it. Harmless — Run
+// returning means the process is on its way out.
+type ctlPump struct {
+	lines chan controlmode.Line
+}
+
+func startCtlPump(rd *controlmode.Reader) *ctlPump {
+	p := &ctlPump{lines: make(chan controlmode.Line, ctlPumpBuf)}
+	go func() {
+		defer close(p.lines)
+		for {
+			l, ok := rd.Next()
+			if !ok {
+				return
+			}
+			p.lines <- l
+		}
+	}()
+	return p
+}
+
+func (p *ctlPump) Next() (controlmode.Line, bool) {
+	l, ok := <-p.lines
+	return l, ok
+}
+
+// claimSeq gives a reply block the ordinal of the command it answers, and 0 to
+// everything else. Every line a consumer takes off the stream must pass through
+// here so the count stays exact: most of our commands are fire-and-forget and
+// their reply blocks are consumed by the main loop, so counting only inside
+// round-trips would let seen fall behind sent and no round-trip would ever
+// recognise its reply again.
+func claimSeq(l controlmode.Line, st *stream) uint64 {
+	// A block flagged 0 answers a command we never sent, so it takes no ordinal.
+	if (l.Kind == controlmode.End || l.Kind == controlmode.Error) && l.Flags == controlmode.ClientCommandFlag {
+		return st.claim()
+	}
+	return 0
+}
+
+// handleAsideLine disposes of a line nobody is waiting for. %output is routed as
+// it goes past, so a wait for one pane never drops live output for another (B3);
+// every other notification is queued for the main loop rather than dropped,
+// since a swallowed %pause leaves its pane paused on the remote with no
+// %continue ever answered. A reply block is dropped whatever its ordinal: it
+// answers a command whose caller has already moved on.
+func handleAsideLine(l controlmode.Line, router *Router, async *asyncQueue) {
+	switch l.Kind {
+	case controlmode.End, controlmode.Error:
+	case controlmode.Output:
+		router.Route(l.Pane, l.Data)
+	case controlmode.Other:
+	default:
+		async.push(l)
+	}
+}
+
+// nextLine reads one line and claims its ordinal. For a reply block one of our
+// own commands produced it returns that command's ordinal; seq is 0 for
+// everything else.
+func nextLine(reader lineReader, st *stream) (l controlmode.Line, seq uint64, ok bool) {
 	l, ok = reader.Next()
 	if !ok {
 		return controlmode.Line{}, 0, false
 	}
-	// A block flagged 0 answers a command we never sent, so it takes no ordinal.
-	if (l.Kind == controlmode.End || l.Kind == controlmode.Error) && l.Flags == controlmode.ClientCommandFlag {
-		seq = st.claim()
-	}
-	return l, seq, true
+	return l, claimSeq(l, st), true
 }
 
-// readReplyRouting returns the reply block to command number want, passing over
-// the blocks that answer commands nobody is waiting for. %output is routed as it
-// goes past, so a round-trip for one pane never drops live output for another
-// (B3); every other notification is queued for the main loop rather than
-// dropped, since a swallowed %pause leaves its pane paused on the remote with
-// no %continue ever answered.
-func readReplyRouting(reader *controlmode.Reader, router *Router, async *asyncQueue, st *stream, want uint64) (controlmode.Line, bool) {
+// readReplyRouting returns the reply block to command number want, passing every
+// other line to handleAsideLine.
+func readReplyRouting(reader lineReader, router *Router, async *asyncQueue, st *stream, want uint64) (controlmode.Line, bool) {
 	for {
 		l, seq, ok := nextLine(reader, st)
 		if !ok {
 			return controlmode.Line{}, false
 		}
-		switch l.Kind {
-		case controlmode.End, controlmode.Error:
-			if seq == want {
-				return l, true
-			}
-		case controlmode.Output:
-			router.Route(l.Pane, l.Data)
-		case controlmode.Other:
-		default:
-			async.push(l)
+		if (l.Kind == controlmode.End || l.Kind == controlmode.Error) && seq == want {
+			return l, true
 		}
+		handleAsideLine(l, router, async)
 	}
 }
 
@@ -926,25 +1003,41 @@ func acceptConns(l net.Listener, out chan<- helloConn, onCtl func(argv []string)
 	}
 }
 
-// collectHellos reads exactly n renderer connections off connCh, keyed by
-// the remote pane id each announced. Bounded by timeout so a renderer that
-// never dials back can't wedge the caller forever (see helloTimeout); on
-// timeout any connections already collected are closed here (nothing else
-// owns them yet) and an error is returned.
-func collectHellos(connCh <-chan helloConn, n int, timeout time.Duration) (map[string]net.Conn, error) {
+// waitHellos reads exactly n renderer connections off connCh, keyed by the
+// remote pane id each announced, while keeping the control stream draining:
+// every mirror path that waits here runs on the goroutine that owns the stream,
+// so a wait that only watched connCh would let the remote's output back up for
+// its whole duration and tmux would %pause every busy pane behind it (#434).
+//
+// Bounded by timeout so a renderer that never dials back can't wedge the caller
+// forever (see helloTimeout); on timeout, or once the stream ends, any
+// connections already collected are closed here (nothing else owns them yet)
+// and an error is returned.
+//
+// got counts connections received rather than len(out), since two hellos naming
+// the same pane collapse to one entry.
+func waitHellos(lines <-chan controlmode.Line, router *Router, async *asyncQueue, st *stream, connCh <-chan helloConn, n int, timeout time.Duration) (map[string]net.Conn, error) {
 	out := map[string]net.Conn{}
 	deadline := time.After(timeout)
-	for i := 0; i < n; i++ {
+	for got := 0; got < n; {
 		select {
 		case hc, ok := <-connCh:
 			if !ok {
 				closeConns(out)
-				return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", i, n)
+				return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", got, n)
 			}
 			out[hc.paneID] = hc.conn
+			got++
+		case l, ok := <-lines:
+			if !ok {
+				closeConns(out)
+				return nil, fmt.Errorf("daemon: control stream ended after %d/%d connections", got, n)
+			}
+			claimSeq(l, st)
+			handleAsideLine(l, router, async)
 		case <-deadline:
 			closeConns(out)
-			return nil, fmt.Errorf("daemon: timed out after %s waiting for renderers (%d/%d connected)", timeout, i, n)
+			return nil, fmt.Errorf("daemon: timed out after %s waiting for renderers (%d/%d connected)", timeout, got, n)
 		}
 	}
 	return out, nil
