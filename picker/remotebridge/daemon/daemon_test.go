@@ -32,6 +32,54 @@ func testStream() *stream { return newStream(io.Discard) }
 // reach a hello wait. Calling it at all is the bug it would expose.
 func noHellos(int) (map[string]net.Conn, error) { return nil, nil }
 
+// errWriter stands in for a half-closed ssh stdin — io.Discard never errors, so
+// the flush guard has nothing to trip on without it.
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// TestStampAllFailsTheBatchOnFlushError pins the guard between a dead command
+// side and a frozen main loop: ordinals handed out for commands tmux never
+// received leave every next() waiting on a reply block that cannot arrive.
+func TestStampAllFailsTheBatchOnFlushError(t *testing.T) {
+	st := newStream(errWriter{})
+	if seqs, ok := st.stampAll("a", "b"); ok {
+		t.Fatalf("stampAll = %v, %v; want the whole batch failed", seqs, ok)
+	}
+
+	// A reader that never yields, so a batch believed to be in flight hangs
+	// here exactly as it would against a live remote.
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	rt := newRoundTrip(controlmode.NewReader(pr), NewRouter(), &asyncQueue{}, st)
+
+	yielded := make(chan bool, 1)
+	go func() { _, ok := rt("a", "b")(); yielded <- ok }()
+	select {
+	case ok := <-yielded:
+		if ok {
+			t.Error("iterator yielded a reply for a batch tmux never received")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("iterator blocked on a lost batch; the main loop would freeze")
+	}
+
+	// The consequence one level up: every pane still owed a reply reports the
+	// loss rather than hanging.
+	seeded := make(chan error, 2)
+	go PaneSeeds(rt, []string{"%1", "%2"}, func(_ int, _ []byte, err error) { seeded <- err })
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-seeded:
+			if err == nil {
+				t.Errorf("pane %d seeded over a lost batch", i)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("PaneSeeds blocked on a lost batch")
+		}
+	}
+}
+
 // TestLoopRoutesAndExits, TestLoopStopsOnWindowClose, and
 // TestLoopReturnsFalseOnEOF (M2.1) drove the extracted runLoop/handleLine
 // helpers, which are gone: Task 4 deletes them as dead code (Run's real main
@@ -259,13 +307,7 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 	reader := newTestReader(s)
 	st := newStream(io.Discard)
 	async := &asyncQueue{}
-	rt := func(cmd string) (controlmode.Line, bool) {
-		seq, ok := st.stamp(cmd)
-		if !ok {
-			return controlmode.Line{}, false
-		}
-		return readReplyRouting(reader, router, async, st, seq)
-	}
+	rt := newRoundTrip(reader, router, async, st)
 	send := func(string) {}
 	for {
 		l, ok := reader.Next()

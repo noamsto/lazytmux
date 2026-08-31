@@ -86,17 +86,21 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 		// After the reshape, never before (#233): a seed sized for the new
 		// geometry painted into a pane still at the old size leaves the mirror
 		// blank.
+		reseedIDs := make([]string, 0, len(newRemote))
+		sinks := make([]*outputSink, 0, len(newRemote))
 		for _, id := range newRemote {
-			s := router.sink(id)
-			if s == nil {
-				continue
-			}
-			if seed, err := PaneSeed(rt, id); err == nil {
-				s.enqueue(wire.FrameSeed, seed)
-			} else {
-				fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
+			if s := router.sink(id); s != nil {
+				reseedIDs = append(reseedIDs, id)
+				sinks = append(sinks, s)
 			}
 		}
+		PaneSeeds(rt, reseedIDs, func(i int, seed []byte, err error) {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", reseedIDs[i], err)
+				return
+			}
+			sinks[i].enqueue(wire.FrameSeed, seed)
+		})
 		// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
 		// have cleared a local one first: applyLayout skips select-layout when the
 		// tiled layout string is unchanged, which is exactly what a zoom-only

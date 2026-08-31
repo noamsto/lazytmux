@@ -175,10 +175,13 @@ type seed struct {
 
 // seedFlow issues the startup commands (list-panes, optional refresh-client,
 // display-message, capture-pane) and reads exactly one reply block per
-// command. On a real tty (hasTTY) refresh-client is sent and its own reply
-// consumed, so the display-message/capture-pane replies stay aligned with
-// their commands on both the tty and non-tty paths. The implicit attach reply
-// needs no draining: readReply skips every block we did not ask for.
+// command. list-panes resolves the pane id the other two commands target, so
+// it keeps its own wait; refresh-client (tty only) keeps its own wait too,
+// since pipelining it with the capture would make the captured screen size
+// depend on tmux having applied the client resize by the time the queued
+// capture-pane runs. display-message and capture-pane depend on neither each
+// other nor anything between them, so both are written before either reply is
+// read.
 func seedFlow(reader *controlmode.Reader, send func(string), session string, window int, hasTTY bool, w, h int) (seed, error) {
 	send(fmt.Sprintf("list-panes -t %s:%d -F '#{pane_active} #{pane_id}'", tmuxQuote(session), window))
 	pane := readActivePane(reader)
@@ -192,10 +195,12 @@ func seedFlow(reader *controlmode.Reader, send func(string), session string, win
 	}
 
 	send(fmt.Sprintf("display-message -p -t %s -F '#{cursor_x} #{cursor_y} #{alternate_on} #{keypad_cursor_flag}'", pane))
-	cx, cy, alt, appck := readCursor(reader)
-
 	send(fmt.Sprintf("capture-pane -e -p -t %s", pane))
-	return seed{pane, cx, cy, alt, appck, readCapture(reader)}, nil
+	cursorLine, cursorOK := readReply(reader)
+	captureLine, _ := readReply(reader)
+	cx, cy, alt, appck := readCursor(cursorLine, cursorOK)
+
+	return seed{pane, cx, cy, alt, appck, readCapture(captureLine)}, nil
 }
 
 // readReply returns the next reply block to a command we sent (Kind End or
@@ -231,10 +236,11 @@ func readActivePane(reader *controlmode.Reader) string {
 	return ""
 }
 
-// readCursor reads the display-message reply and parses
-// "cursor_x cursor_y alternate_on keypad_cursor_flag".
-func readCursor(reader *controlmode.Reader) (cx, cy int, alt, appCursorKeys bool) {
-	l, ok := readReply(reader)
+// readCursor parses a display-message reply already read via readReply:
+// "cursor_x cursor_y alternate_on keypad_cursor_flag". An error reply or a
+// lost stream (ok == false) degrades to (0,0,false,false) rather than failing
+// the seed.
+func readCursor(l controlmode.Line, ok bool) (cx, cy int, alt, appCursorKeys bool) {
 	if !ok || l.Kind == controlmode.Error {
 		return 0, 0, false, false
 	}
@@ -247,10 +253,12 @@ func readCursor(reader *controlmode.Reader) (cx, cy int, alt, appCursorKeys bool
 	return cx, cy, fields[2] == "1", fields[3] == "1"
 }
 
-// readCapture reads the capture-pane reply and returns its body (pane
-// content, already newline-joined by the Reader).
-func readCapture(reader *controlmode.Reader) []byte {
-	l, _ := readReply(reader)
+// readCapture returns a capture-pane reply's body (pane content, already
+// newline-joined by the Reader) already read via readReply. It ignores ok and
+// Kind: an %error reply (the pane closed between list-panes and the capture)
+// is not distinguished from a genuinely blank pane, and a lost stream yields
+// the zero Line's nil Data.
+func readCapture(l controlmode.Line) []byte {
 	return l.Data
 }
 

@@ -36,7 +36,7 @@ type sessionPin struct {
 
 func newSessionPin(cfg Config, rt roundTrip) *sessionPin {
 	p := &sessionPin{handOff: cfg.HandOff}
-	l, ok := rt(fmt.Sprintf("display-message -p -t %s -F '#{session_id}'", tmuxQuote(cfg.RemoteSession)))
+	l, ok := one(rt, fmt.Sprintf("display-message -p -t %s -F '#{session_id}'", tmuxQuote(cfg.RemoteSession)))
 	if !ok || l.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: cannot read session id for %s; session pinning is off\n", cfg.RemoteSession)
 		return p
@@ -59,7 +59,7 @@ func (p *sessionPin) apply(l controlmode.Line, reg *registry, router *Router, rt
 	away := string(l.Data)
 	// No -c: a command sent over this stream resolves "current client" to this
 	// control client, which is exactly the one that was switched away.
-	if r, ok := rt(fmt.Sprintf("switch-client -t '%s'", p.id)); !ok || r.Kind == controlmode.Error {
+	if r, ok := one(rt, fmt.Sprintf("switch-client -t '%s'", p.id)); !ok || r.Kind == controlmode.Error {
 		fmt.Fprintf(os.Stderr, "daemon: switch back to %s failed; mirror stays frozen\n", p.id)
 		return
 	}
@@ -74,18 +74,26 @@ func (p *sessionPin) apply(l controlmode.Line, reg *registry, router *Router, rt
 // alone leaves live panes showing a stale screen — the excursion swallows the
 // very command that caused it and the prompt that followed.
 func (p *sessionPin) reseed(reg *registry, router *Router, rt roundTrip) {
-	for _, mw := range reg.all() {
+	wins := reg.all()
+	n := 0
+	for _, mw := range wins {
+		n += len(mw.remotePanes)
+	}
+	ids := make([]string, 0, n)
+	sinks := make([]*outputSink, 0, n)
+	for _, mw := range wins {
 		for _, id := range mw.remotePanes {
-			s := router.sink(id)
-			if s == nil {
-				continue
+			if s := router.sink(id); s != nil {
+				ids = append(ids, id)
+				sinks = append(sinks, s)
 			}
-			seed, err := PaneSeed(rt, id)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "daemon: reseed %s after session change: %v\n", id, err)
-				continue
-			}
-			s.enqueue(wire.FrameSeed, seed)
 		}
 	}
+	PaneSeeds(rt, ids, func(i int, seed []byte, err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: reseed %s after session change: %v\n", ids[i], err)
+			return
+		}
+		sinks[i].enqueue(wire.FrameSeed, seed)
+	})
 }
