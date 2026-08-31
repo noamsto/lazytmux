@@ -55,7 +55,7 @@ func TestRemoteSessionsForHost(t *testing.T) {
 		}
 		return probeWithSessions("mono", "nix-config", ""), nil
 	}
-	local := map[string]bool{"lab-mono": true}
+	local := parseBridgeSessions("lab-mono\tlab\tmono\n")
 
 	sess, state := remoteSessionsForHost("lab", local, probe)
 	if state != remoteProbeOK {
@@ -79,6 +79,34 @@ func TestRemoteSessionsForHost(t *testing.T) {
 	}
 }
 
+func TestParseBridgeSessionsIgnoresOrdinaryLocalNames(t *testing.T) {
+	bridges := parseBridgeSessions("nix-config\t\t\nnix-config-remote\tnix\tconfig\nold-nix-config\tnix\t\n")
+
+	if !bridges[bridgeSessionKey("nix", "config")] {
+		t.Fatalf("new bridge was not indexed: %+v", bridges)
+	}
+	if !bridges[bridgeSessionLegacyKey("old-nix-config")] {
+		t.Fatalf("legacy bridge was not indexed: %+v", bridges)
+	}
+	if len(bridges) != 2 {
+		t.Fatalf("ordinary local session was treated as a bridge: %+v", bridges)
+	}
+}
+
+func TestCollectRemoteItemsKeepsOrdinaryLocalCollision(t *testing.T) {
+	opts := map[string]string{"@remote_bridge_hosts": "nix"}
+	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("config"), nil }
+	bridges := parseBridgeSessions("nix-config\t\t\n")
+
+	items := collectRemoteItems(opts, bridges, probe, noRestore)
+	if len(items) != 3 {
+		t.Fatalf("expected header + nix + config, got %d: %+v", len(items), items)
+	}
+	if items[2].remoteSess != "config" {
+		t.Fatalf("ordinary local nix-config should not suppress remote config: %+v", items[2])
+	}
+}
+
 func TestCollectRemoteItems(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	probe := func(host string) (remoteProbeResult, error) {
@@ -87,7 +115,7 @@ func TestCollectRemoteItems(t *testing.T) {
 		}
 		return probeWithSessions("mono", "other"), nil
 	}
-	local := map[string]bool{"lab-mono": true}
+	local := parseBridgeSessions("lab-mono\tlab\tmono\n")
 
 	items := collectRemoteItems(opts, local, probe, noRestore)
 	if len(items) != 4 {
@@ -316,7 +344,7 @@ func TestCollectRemoteItemsAllBridged(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	probe := func(string) (remoteProbeResult, error) { return probeWithSessions("mono"), nil }
 
-	items := collectRemoteItems(opts, map[string]bool{"lab-mono": true}, probe, noRestore)
+	items := collectRemoteItems(opts, parseBridgeSessions("lab-mono\tlab\tmono\n"), probe, noRestore)
 	if len(items) != 2 {
 		t.Fatalf("expected header + lab host row, got %d: %+v", len(items), items)
 	}

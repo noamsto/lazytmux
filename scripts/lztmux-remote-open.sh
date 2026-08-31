@@ -20,6 +20,39 @@ shell_quote() {
 	printf "'%s'" "$s"
 }
 
+# The detached mirror has no client yet, so tmux otherwise gives its first
+# window a small default size. Claude can start before the daemon's resize poll
+# observes the real client, and some terminal UIs do not repaint after that
+# first undersized PTY geometry. Seed the window with the invoking client's
+# content area before launching the daemon.
+initial_mirror_area() {
+	local raw width height status status_rows
+	local client_target=()
+	if [[ -n ${TMUX_PANE:-} ]]; then
+		client_target=(-t "$TMUX_PANE")
+	fi
+	raw="$(tmux display-message -p "${client_target[@]}" '#{client_width} #{client_height} #{status}' 2>/dev/null || true)"
+	read -r width height status <<<"$raw"
+	if [[ ! $width =~ ^[1-9][0-9]*$ || ! $height =~ ^[1-9][0-9]*$ ]]; then
+		return 0
+	fi
+
+	if [[ $status == off ]]; then
+		status_rows=0
+	elif [[ $status == on ]]; then
+		status_rows=1
+	elif [[ $status =~ ^[0-9]+$ ]]; then
+		status_rows=$status
+	else
+		status_rows=1
+	fi
+
+	height=$((height - status_rows))
+	if ((height > 0)); then
+		printf '%s %s\n' "$width" "$height"
+	fi
+}
+
 # reap_daemon SIGTERMs pid, waits up to 2s, then SIGKILLs if it's still
 # alive. Used whenever a live daemon has been proven stale so its socket +
 # pidfile can be safely removed and a fresh one started.
@@ -287,7 +320,30 @@ if [[ -z $win ]]; then
 	fi
 fi
 
-local_sess="${host}-${sess}"
+base_local_sess="${host}-${sess}"
+local_sess="$base_local_sess"
+
+# Keep a real local session with the old deterministic name. New mirrors use a
+# stable suffix only when that name is occupied by something other than this
+# host/session bridge. @bridge_session makes the choice unambiguous even when
+# either side contains a hyphen; the host-only fallback keeps old mirrors
+# reusable while they are upgraded.
+collision=0
+while tmux has-session -t "=$local_sess" 2>/dev/null; do
+	existing_bridge_host="$(tmux show-options -t "=$local_sess" -qv @bridge_host 2>/dev/null || true)"
+	existing_bridge_session="$(tmux show-options -t "=$local_sess" -qv @bridge_session 2>/dev/null || true)"
+	if [[ $existing_bridge_host == "$host" && $existing_bridge_session == "$sess" ]] ||
+		[[ $existing_bridge_host == "$host" && -z $existing_bridge_session && $local_sess == "$base_local_sess" ]]; then
+		break
+	fi
+	collision=$((collision + 1))
+	if ((collision == 1)); then
+		local_sess="${base_local_sess}-remote"
+	else
+		local_sess="${base_local_sess}-remote-${collision}"
+	fi
+done
+
 sock_dir="${TMUX_TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
 sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
 sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
@@ -337,18 +393,24 @@ fi
 rm -f "$sock" "${sock}.pid"
 
 # The <host>-<sess> session is an ephemeral mirror (the remote is the source of
-# truth). Discard any pre-existing one — a stale bridge from a prior run, or a
+# truth). Discard a pre-existing bridge — a stale bridge from a prior run, or a
 # ghost resurrected by tmux-remux on restore — so it can't collide with
 # new-session ("duplicate session"); =-prefix is exact-match (numeric names).
 tmux kill-session -t "=$local_sess" 2>/dev/null || true
 
 # Create the local session with a single initial window; the daemon reuses it
 # for the first remote window and creates the rest.
-tmux new-session -d -s "$local_sess" -n "$sess"
+new_session_args=(new-session -d -s "$local_sess" -n "$sess")
+initial_area="$(initial_mirror_area)"
+if [[ $initial_area =~ ^([1-9][0-9]*)[[:space:]]+([1-9][0-9]*)$ ]]; then
+	new_session_args+=(-x "${BASH_REMATCH[1]}" -y "${BASH_REMATCH[2]}")
+fi
+tmux "${new_session_args[@]}"
 
 # Read by tmux-statusline to name the machine on line 0. Session-scoped, so it
 # survives the daemon replacing every window under it.
 tmux set-option -t "$local_sess" @bridge_host "$host"
+tmux set-option -t "$local_sess" @bridge_session "$sess"
 
 # Pass the (remote-derived, untrusted) params through the environment instead
 # of interpolating them into a shell/command string tmux/ssh would re-parse,

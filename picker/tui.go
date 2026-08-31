@@ -1559,11 +1559,7 @@ func (m tuiModel) zoxideCmd() tea.Cmd {
 func (m tuiModel) remoteCmd() tea.Cmd {
 	opts := m.tmuxOpts
 	return func() tea.Msg {
-		local := map[string]bool{}
-		for _, s := range collectSessions() {
-			local[s.name] = true
-		}
-		return remoteMsg{items: collectRemoteItems(opts, local, nil, nil)}
+		return remoteMsg{items: collectRemoteItems(opts, collectBridgeSessions(), nil, nil)}
 	}
 }
 
