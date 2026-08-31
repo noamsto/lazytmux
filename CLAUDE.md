@@ -155,10 +155,25 @@ The [tmux-remux](https://github.com/noamsto/tmux-remux) Go binary is the persist
 layer (replaces tmux-resurrect/tmux-continuum). Enabled by default via
 `programs.lazytmux.persist.enable`; set to `false` to opt out.
 
+- The hook wiring is rendered at tmux config-load time by `tmux-remux triggers`
+  (noamsto/tmux-remux#65) rather than hand-written: `tmuxRemuxWireScript`
+  (`modules/home-manager.nix`) runs it with `--tmux-version` set to `#{version}`
+  — the LIVE server's own reported version, not a fresh `tmux -V` subprocess,
+  since a server predating a nix switch keeps its old binary resident (#407) —
+  reindexes its bare `set-hook -g <event>` lines onto `[99]` (a sed pass, to
+  avoid colliding with lazytmux's own index-0 hooks on the same events, e.g.
+  tmux-reflow-windows on `window-unlinked`), and sources the result.
 - tmux hooks fire `tmux-remux save` on structural change and
-  `tmux-remux capture-event` on close.
-- systemd user timer runs `tmux-remux save --reason=timer` every 60s; weekly GC
-  drops orphan scrollback files.
+  `tmux-remux capture-event` on close, on any tmux version.
+- On tmux 3.8+, `triggers` also emits a `set-hook -g -B` monitor hook
+  (`@remux-save:session:...`) that fires `tmux-remux save --reason=timer` on
+  its own clock — this replaced the `lazytmux-remux-save` systemd
+  timer/service (and macOS launchd agent) removed in #344. A **live** server
+  that's still pre-3.8 (#407) gets no periodic-save floor at all — only the
+  structural/close hooks above — and the wire script warns on the pane via
+  `tmux display-message` in that case rather than leaving it silently off;
+  restarting the server onto 3.8+ resolves it. Weekly GC (`lazytmux-remux-gc`,
+  kept on both platforms) drops orphan scrollback files.
 - Keybindings: `prefix + u` (undo pop), `prefix + U` (close-event picker),
   `prefix + R` (snapshot picker), `prefix + Ctrl-s` (immediate save).
 - Storage: `$XDG_DATA_HOME/tmux-remux/state.db` + scrollbacks dir.
