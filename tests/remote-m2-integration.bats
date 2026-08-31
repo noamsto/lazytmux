@@ -8,8 +8,9 @@
 # TMUX_TMPDIR is a short, fixed /tmp dir rather than $BATS_TEST_TMPDIR: tmux
 # -L resolves to "$TMUX_TMPDIR/tmux-<uid>/<name>", and a long bats tmpdir
 # path pushes that past the unix socket 108-char limit ("File name too
-# long"). DST_CONF sets base-index 1 (the daemon hardcodes local window
-# ":1", matching the real lazytmux host convention) and remain-on-exit on:
+# long"). DST_CONF sets base-index 1 and renumber-windows on (the real
+# lazytmux host convention, and what makes an index-keyed mirror go stale —
+# #411) plus remain-on-exit on:
 # once the daemon exits (timeout/kill), every renderer's socket connection
 # drops and its pane's command exits, and without remain-on-exit the pane —
 # then the window, then the last-session server — would tear itself down
@@ -27,7 +28,7 @@ setup() {
 	# alone still eats a row per pane regardless of pane-base-index, so DST
 	# needs it to match SRC's dims.
 	DST_CONF="$BATS_TEST_TMPDIR/dst.conf"
-	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit on\n' >"$DST_CONF"
+	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit on\nset -g renumber-windows on\n' >"$DST_CONF"
 	SRC_CONF="$BATS_TEST_TMPDIR/src.conf"
 	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\n' >"$SRC_CONF"
 	SRC="tmux -L m2src -f $SRC_CONF" # stands in for the "remote", full render config
@@ -293,6 +294,68 @@ sorted_dims() {
 		sleep 0.1
 	done
 	[ "$n" -eq 1 ]
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+}
+
+@test "a mirror window closing re-indexes the rest without stranding them" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$SRC new-window -t rem
+	$SRC new-window -t rem
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/dr.sock" \
+		>"$BATS_TEST_TMPDIR/dr.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate on the same observable and budget bridge_up uses — @bridge_pane
+	# stamped on every mirror pane. A hand-rolled shorter wait is how this test
+	# first failed on the macOS runner: three windows do not come up inside the
+	# few seconds a one-window mirror does.
+	stamped=0
+	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		stamped="$($DST list-panes -s -t host-sess -F '#{@bridge_pane}' 2>/dev/null | grep -c '^%' || true)"
+		[ "$stamped" -eq 3 ] && break
+		sleep 0.15
+	done
+	[ "$stamped" -eq 3 ]
+
+	middle="$($SRC list-windows -t rem -F '#{window_id}' | sed -n 2p)"
+	last="$($SRC list-windows -t rem -F '#{window_id}' | sed -n 3p)"
+	# Kill a NON-active window, for the clean-%window-close reason the
+	# new-window/rename/kill-window test above spells out.
+	$SRC select-window -t rem:1
+	$SRC kill-window -t "$middle"
+	for _ in $(seq 1 60); do
+		n="$($DST list-windows -t host-sess -F '#{window_id}' 2>/dev/null | wc -l)"
+		[ "$n" -eq 2 ] && break
+		sleep 0.15
+	done
+	[ "$n" -eq 2 ]
+
+	# The survivor moved from local index 3 to 2 under renumber-windows. An
+	# index-keyed registry would still be addressing 3, so this rename would
+	# land nowhere.
+	$SRC rename-window -t "$last" survivor
+	for _ in $(seq 1 60); do
+		name="$($DST display-message -p -t host-sess:2 '#{@window_bridge_name}' 2>/dev/null)"
+		[ "$name" = survivor ] && break
+		sleep 0.15
+	done
+	[ "$name" = survivor ]
+
+	# And the next window appends at 3, not past the hole the close left.
+	$SRC new-window -t rem
+	for _ in $(seq 1 60); do
+		idx="$($DST list-windows -t host-sess -F '#{window_index}' 2>/dev/null | tr '\n' ' ')"
+		[ "$idx" = "1 2 3 " ] && break
+		sleep 0.15
+	done
+	[ "$idx" = "1 2 3 " ]
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true

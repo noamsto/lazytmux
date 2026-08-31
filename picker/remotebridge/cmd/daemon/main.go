@@ -42,7 +42,6 @@ func main() {
 	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
 	reflowBin := flag.String("reflow", os.Getenv("LZTMUX_DAEMON_REFLOW"), "absolute path to tmux-reflow-windows (empty = never force a reflow)")
 	remoteOpenBin := flag.String("remote-open", os.Getenv("LZTMUX_DAEMON_REMOTE_OPEN"), "absolute path to lztmux-remote-open (empty = a remote switch-client is pinned back but never handed off)")
-	baseIndex := flag.Int("base-index", envIntDefault("LZTMUX_DAEMON_BASE_INDEX", 1), "local tmux base-index for daemon-created windows")
 	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
 	// "local" are separate local tmux servers on their own -L sockets, so the
@@ -190,7 +189,6 @@ func main() {
 		RemoteHost:     *host,
 		RemoteSession:  *session,
 		RemoteWindow:   strconv.Itoa(*window),
-		BaseIndex:      *baseIndex,
 		PauseAfterSecs: *pauseAfter,
 		RendererBin:    *rendererBin,
 		LocalTmux:      runLocalTmux,

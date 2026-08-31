@@ -75,9 +75,9 @@ func reconcileWindows(cfg Config, send func(string), router *Router, connCh chan
 // mirrorNewWindow creates and wires the local mirror for one remote window,
 // reporting whether it succeeded. Shared by reconcileWindows and addWindow.
 func mirrorNewWindow(cfg Config, send func(string), router *Router, connCh chan helloConn, cst *ctlState, reg *registry, cv *converger, rt roundTrip, rw remoteWindow) bool {
-	localWin := reg.allocLocalWin(cfg.LocalSess)
-	if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: mirror %s: new-window %s: %v\n", rw.id, localWin, err)
+	localWin, err := createMirrorWindow(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: mirror %s: %v\n", rw.id, err)
 		return false
 	}
 	stampMirrorWindow(cfg, localWin, rw.name)

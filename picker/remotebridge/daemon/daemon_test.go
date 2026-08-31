@@ -127,10 +127,10 @@ func (s *fakeSink) Close()                      { s.closed = true }
 // one of its panes' sinks, close its renderer conns, and kill-window the local
 // mirror — without touching any other registered window.
 func TestCloseWindowTearsDownOnlyItsWindow(t *testing.T) {
-	reg := newRegistry(1)
-	mw := reg.add("@1", "h-s:1")
+	reg := newRegistry()
+	mw := reg.add("@1", "@101")
 	mw.remotePanes = []string{"%1", "%2"}
-	other := reg.add("@2", "h-s:2")
+	other := reg.add("@2", "@102")
 	router := NewRouter()
 	sink1, sink2 := &fakeSink{}, &fakeSink{}
 	router.Register("%1", sink1)
@@ -159,10 +159,10 @@ func TestCloseWindowTearsDownOnlyItsWindow(t *testing.T) {
 	if _, ok := reg.byRemoteID("@1"); ok {
 		t.Fatal("closeWindow must remove the closed window from the registry")
 	}
-	if _, ok := reg.byRemoteID("@2"); !ok || other.localWin != "h-s:2" {
+	if _, ok := reg.byRemoteID("@2"); !ok || other.localWin != "@102" {
 		t.Fatal("closeWindow must not touch an unrelated registered window")
 	}
-	want := []string{"kill-window", "-t", "h-s:1"}
+	want := []string{"kill-window", "-t", "@101"}
 	if !reflect.DeepEqual(gotArgs, want) {
 		t.Errorf("LocalTmux called with %v, want %v", gotArgs, want)
 	}
@@ -174,8 +174,8 @@ func TestCloseWindowTearsDownOnlyItsWindow(t *testing.T) {
 // TestCloseWindowOutOfRegistryIsNoop is the B2 filter: a %window-close for a
 // window this daemon doesn't own must never touch tmux or the registry.
 func TestCloseWindowOutOfRegistryIsNoop(t *testing.T) {
-	reg := newRegistry(1)
-	reg.add("@1", "h-s:1")
+	reg := newRegistry()
+	reg.add("@1", "@101")
 	router := NewRouter()
 	called := false
 	cfg := Config{LocalTmux: func(args ...string) error { called = true; return nil }}
@@ -318,8 +318,8 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	sizeCh := make(chan [2]int)
 	area := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
 
-	reg := newRegistry(1)
-	reg.add("@1", "host-sess:1")
+	reg := newRegistry()
+	reg.add("@1", "@101")
 	reg.add("@2", "host-sess:2")
 	cv := newConverger()
 	// The setup path already asserted the startup size for both windows.
@@ -432,5 +432,52 @@ func readAllFrames(t *testing.T, conn net.Conn, quiet time.Duration) string {
 			return string(out)
 		}
 		out = append(out, f.Payload...)
+	}
+}
+
+// TestCreateMirrorWindowReturnsAnID pins the two halves of #411's fix: the
+// window is appended at {end} (so tmux's own renumbering keeps the mirror
+// contiguous) and what the registry stores is the id tmux printed, not an
+// index this daemon guessed.
+func TestCreateMirrorWindowReturnsAnID(t *testing.T) {
+	var gotArgs []string
+	cfg := Config{
+		LocalSess: "h-s",
+		LocalTmuxOut: func(args ...string) (string, error) {
+			gotArgs = args
+			return "@42\n", nil
+		},
+	}
+	got, err := createMirrorWindow(cfg)
+	if err != nil || got != "@42" {
+		t.Fatalf("createMirrorWindow = %q, %v; want @42", got, err)
+	}
+	want := []string{"new-window", "-d", "-P", "-F", "#{window_id}", "-a", "-t", "h-s:{end}"}
+	if !reflect.DeepEqual(gotArgs, want) {
+		t.Errorf("LocalTmuxOut called with %v, want %v", gotArgs, want)
+	}
+}
+
+// TestFirstMirrorWindowTakesTheFirstLine covers the window the launcher left
+// behind, which the first remote window reuses.
+func TestFirstMirrorWindowTakesTheFirstLine(t *testing.T) {
+	cfg := Config{
+		LocalSess:    "h-s",
+		LocalTmuxOut: func(...string) (string, error) { return "@7\n@8\n", nil },
+	}
+	got, err := firstMirrorWindow(cfg)
+	if err != nil || got != "@7" {
+		t.Fatalf("firstMirrorWindow = %q, %v; want @7", got, err)
+	}
+}
+
+// TestParseWindowIDRejectsAnIndex is the guard that matters: tmux reads a bare
+// "7" in a target-window slot as INDEX 7, so accepting one would reintroduce
+// exactly the addressing #411 removed.
+func TestParseWindowIDRejectsAnIndex(t *testing.T) {
+	for _, in := range []string{"7", "", "@", "h-s:1"} {
+		if got, err := parseWindowID(in); err == nil {
+			t.Errorf("parseWindowID(%q) = %q, want an error", in, got)
+		}
 	}
 }

@@ -26,8 +26,8 @@ func TestReconcileWindowsReflowsOnEarlyReturn(t *testing.T) {
 				LocalTmux:     func(...string) error { return nil },
 				Reflow:        func() { reflowed++ },
 			}
-			reg := newRegistry(1)
-			reg.add("@1", "h-s:1")
+			reg := newRegistry()
+			reg.add("@1", "@101")
 			rt := func(string) (controlmode.Line, bool) { return c.reply, c.ok }
 
 			reconcileWindows(cfg, func(string) {}, NewRouter(),

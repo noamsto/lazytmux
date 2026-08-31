@@ -32,7 +32,6 @@ type Config struct {
 	RemoteHost     string                     // ssh host being mirrored (picker's Host column)
 	RemoteSession  string                     // remote session name (may contain spaces)
 	RemoteWindow   string                     // initially-selected remote window INDEX (not a mirror filter)
-	BaseIndex      int                        // local base-index for daemon-created windows (default 1)
 	PauseAfterSecs int                        // refresh-client -f pause-after=N (0 disables); backpressure insurance answered by a %continue re-seed
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
@@ -66,6 +65,47 @@ func (c Config) reflow() {
 	if c.Reflow != nil {
 		c.Reflow()
 	}
+}
+
+// createMirrorWindow appends a window to the mirror session and returns its
+// tmux window ID.
+//
+// The ID, not the index, is what every later command targets. renumber-windows
+// is on, so closing one mirror window renumbers the rest — an index captured at
+// creation would silently start addressing its neighbour (#411). Appending at
+// {end} rather than at an index of our own choosing is what leaves the
+// re-indexing to tmux, so a mirror never grows the gaps a local session can't.
+func createMirrorWindow(cfg Config) (string, error) {
+	out, err := cfg.LocalTmuxOut("new-window", "-d", "-P", "-F", "#{window_id}",
+		"-a", "-t", cfg.LocalSess+":{end}")
+	if err != nil {
+		return "", fmt.Errorf("daemon: new-window in %s: %w", cfg.LocalSess, err)
+	}
+	return parseWindowID(out)
+}
+
+// firstMirrorWindow is the ID of the window the launcher created the mirror
+// session with, which the first remote window reuses rather than adding a
+// second one beside it.
+func firstMirrorWindow(cfg Config) (string, error) {
+	out, err := cfg.LocalTmuxOut("list-windows", "-t", cfg.LocalSess, "-F", "#{window_id}")
+	if err != nil {
+		return "", fmt.Errorf("daemon: list-windows %s: %w", cfg.LocalSess, err)
+	}
+	first, _, _ := strings.Cut(out, "\n")
+	return parseWindowID(first)
+}
+
+// parseWindowID validates a window id read back from tmux. A reply that isn't
+// one is an error rather than something to interpolate into a target: tmux
+// would read a bare "7" as window INDEX 7, which is exactly the addressing this
+// change exists to remove.
+func parseWindowID(s string) (string, error) {
+	id := strings.TrimSpace(s)
+	if !strings.HasPrefix(id, "@") || len(id) == 1 {
+		return "", fmt.Errorf("daemon: %q is not a tmux window id", id)
+	}
+	return id, nil
 }
 
 // stampMirrorWindow marks localWin as this daemon's mirror of a remote window
@@ -286,7 +326,7 @@ func Run(cfg Config) error {
 		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_host", cfg.RemoteHost)
 	}
 
-	reg := newRegistry(cfg.BaseIndex)
+	reg := newRegistry()
 	cv := newConverger()
 	// stopWatch stops the resize watcher (started just before the main loop).
 	// Declared here so teardown can close it; teardown runs exactly once per
@@ -320,16 +360,21 @@ func Run(cfg Config) error {
 		}
 	}
 
-	// Mirror each remote window into its own local window. The first reuses
-	// the launcher's initial window (base-index); the rest are created at an
-	// explicit monotonically-increasing index.
+	// Mirror each remote window into its own local window. The first reuses the
+	// launcher's initial window; the rest are appended.
 	for i, rw := range remoteWins {
-		localWin := reg.allocLocalWin(cfg.LocalSess)
-		if i > 0 {
-			if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
-				teardown()
-				return fmt.Errorf("daemon: new-window %s: %w", localWin, err)
-			}
+		var (
+			localWin string
+			err      error
+		)
+		if i == 0 {
+			localWin, err = firstMirrorWindow(cfg)
+		} else {
+			localWin, err = createMirrorWindow(cfg)
+		}
+		if err != nil {
+			teardown()
+			return err
 		}
 		stampMirrorWindow(cfg, localWin, rw.name)
 		mw := reg.add(rw.id, localWin)
@@ -602,9 +647,9 @@ func addWindow(cfg Config, send func(string), router *Router, connCh chan helloC
 		return
 	}
 
-	localWin := reg.allocLocalWin(cfg.LocalSess)
-	if err := cfg.LocalTmux("new-window", "-d", "-t", localWin); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: window-add %s: new-window %s: %v\n", remoteID, localWin, err)
+	localWin, err := createMirrorWindow(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: window-add %s: %v\n", remoteID, err)
 		return
 	}
 	stampMirrorWindow(cfg, localWin, addedName)
