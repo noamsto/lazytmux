@@ -64,6 +64,14 @@ if [[ -n $sess ]] && ! shell_quotable "$sess"; then
 	exit 1
 fi
 
+# Validated here, before it ever rides into probe_script below — not after the
+# probe has already shipped it to the remote. valid_remote_path's charset also
+# rejects a backslash, so this doubles as this value's shell_quotable check.
+if [[ -n ${LZTMUX_REMOTE_TMPDIR:-} ]] && ! valid_remote_path "$LZTMUX_REMOTE_TMPDIR"; then
+	echo "lztmux-remote-open: unusable remote tmpdir: $LZTMUX_REMOTE_TMPDIR" >&2
+	exit 1
+fi
+
 # Prints the host's most-recent session name, or nothing when the remote has no
 # tmux server: list-sessions fails into `head`, so the remote pipeline still
 # exits 0 with empty output. Used both inside the combined probe below and to

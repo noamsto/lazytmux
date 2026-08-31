@@ -532,6 +532,9 @@ teardown() {
 
 	run grep -c new-session "$TMUX_LOG"
 	[ "$status" -ne 0 ]
+	# Rejected before the value ever rides into the combined probe (#429) — not
+	# merely before the daemon launches.
+	[ ! -s "$SSH_LOG" ]
 
 	export LZTMUX_REMOTE_TMPDIR='/run/user/$(id -u)'
 
@@ -541,6 +544,7 @@ teardown() {
 
 	run grep -c new-session "$TMUX_LOG"
 	[ "$status" -ne 0 ]
+	[ ! -s "$SSH_LOG" ]
 }
 
 @test "LZTMUX_REMOTE_NEW_DIR containing a backslash is rejected before any round trip" {
