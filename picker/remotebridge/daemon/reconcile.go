@@ -47,14 +47,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			}
 			// setupWindow re-read the layout and re-shaped the window itself.
 			return
-		case !structural:
-			// Geometry-only change (typically a client/terminal resize propagated
-			// to the remote): same pane set, new dims. The painters hold no
-			// back-buffer to reflow, so the pane needs a fresh screen — but the
-			// re-seed happens *after* the reshape below (#233), because a seed
-			// sized for the new geometry painted into a pane that is still the old
-			// size leaves the mirror blank.
-		default:
+		case structural:
 			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, connCh, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 				w.remotePanes = remote
@@ -70,17 +63,26 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
 			}
 		}
-		if !structural {
-			for _, id := range newRemote {
-				s := router.sink(id)
-				if s == nil {
-					continue
-				}
-				if seed, err := PaneSeed(rt, id); err == nil {
-					s.enqueue(wire.FrameSeed, seed)
-				} else {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
-				}
+		// Every pane gets a fresh screen once the reshape has landed. The
+		// painters hold no back-buffer to reflow, so a pane whose dims moved has
+		// to be repainted from the remote — and that is as true of a pane that
+		// survived a close or a split as of one whose window merely resized
+		// (#417). A newly appended pane is re-seeded too: applyPaneOps enqueued
+		// its first seed before the reshape, into a pane that was still the old
+		// size.
+		//
+		// After the reshape, never before (#233): a seed sized for the new
+		// geometry painted into a pane still at the old size leaves the mirror
+		// blank.
+		for _, id := range newRemote {
+			s := router.sink(id)
+			if s == nil {
+				continue
+			}
+			if seed, err := PaneSeed(rt, id); err == nil {
+				s.enqueue(wire.FrameSeed, seed)
+			} else {
+				fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", id, err)
 			}
 		}
 		// Follow the remote's active pane, but only when the pane set or order
