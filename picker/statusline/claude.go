@@ -81,43 +81,6 @@ func hexBytes(h string) (int, int, int) {
 	return int(r), int(g), int(b)
 }
 
-// detectTheme reads $XDG_STATE_HOME/theme-state.json (default ~/.local/state),
-// returning "light" or "dark" (the default). Matches lib-claude.sh.
-func detectTheme() string {
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		stateHome = os.Getenv("HOME") + "/.local/state"
-	}
-	data, err := os.ReadFile(stateHome + "/theme-state.json")
-	if err != nil {
-		return "dark"
-	}
-	s := string(data)
-	i := strings.Index(s, "\"theme\"")
-	if i < 0 {
-		return "dark"
-	}
-	rest := s[i+7:]
-	c := strings.Index(rest, ":")
-	if c < 0 {
-		return "dark"
-	}
-	rest = rest[c+1:]
-	q1 := strings.Index(rest, "\"")
-	if q1 < 0 {
-		return "dark"
-	}
-	rest = rest[q1+1:]
-	q2 := strings.Index(rest, "\"")
-	if q2 < 0 {
-		return "dark"
-	}
-	if rest[:q2] == "light" {
-		return "light"
-	}
-	return "dark"
-}
-
 type counts struct {
 	processing, waiting, compacting, done, idle, errorN, denied, total int
 }

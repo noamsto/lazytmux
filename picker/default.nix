@@ -63,7 +63,7 @@ in
     pname = "lazytmux-go-tools";
     version = "0.1.0";
     inherit src;
-    vendorHash = "sha256-uUNLLsshY8sO3CAOnanhSpEk5GlgR0Z41EIWd/d4MSw=";
+    vendorHash = "sha256-Z72w5oQsXFFqvkK1ndOTtu7AonXtxAM55JhzgJV5Usc=";
     subPackages = ["." "splash" "statusline" "enrichcard" "agentdetect" "remotebridge" "remotebridge/cmd/daemon" "remotebridge/cmd/renderer" "remotebridge/cmd/ctl"];
     ldflags = ["-s" "-w"]; # strip debug info for smaller binary + faster startup
     # Binary name matches pname (Go module produces "picker" by default)
