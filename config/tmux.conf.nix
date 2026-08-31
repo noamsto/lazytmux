@@ -605,11 +605,21 @@
   # floating cells), so a float outlives the client size it was made for —
   # @float_geom carries the percentages forward for tmux-float-refit to reassert
   # on window-resized. Both come from one source here so they cannot drift.
-  # -A keeps a float visible above a zoomed pane.
-  mkFloat = w: h: x: y: {
-    flags = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy -A";
+  # -A keeps a float visible above a zoomed pane. String-form if-shell defers
+  # parsing so an older server never sees the unknown flag at source (#407).
+  mkFloat = w: h: x: y: let
+    base = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy";
+  in {
+    flags = "${base} -A";
+    flagsNoA = base;
     stamp = "set -p @float_geom '${w} ${h} ${x} ${y}'";
   };
+  # String-form if-shell — brace blocks parse every branch at source time.
+  floatNewPaneGuard = float: prefix: suffix: let
+    esc = builtins.replaceStrings ["\""] ["\\\""];
+    mk = flags: esc "new-pane ${prefix}${flags} ${suffix} \\; ${float.stamp}";
+  in "if-shell \"tmux list-commands new-pane | grep -q -- -A\" \"${mk float.flags}\" \"${mk float.flagsNoA}\"";
+  floatBind = key: float: prefix: suffix: "bind-key ${key} ${floatNewPaneGuard float prefix suffix}";
   floatFull = mkFloat "90%" "90%" "5%" "5%";
   floatShort = mkFloat "90%" "85%" "5%" "8%";
   # The enrich card sizes to its contents, not to the client; only its offsets
@@ -619,13 +629,7 @@
   # Inside a mirror window #{pane_current_path} expands on the renderer pane —
   # the daemon's cwd, not the remote worktree on screen — so the bridged branch
   # hands the tool to the ctl `tool` verb, which resolves the cwd on the remote.
-  #
-  # A brace block is a command list: local's commands separate on newlines and
-  # take no `\;`.
-  bridgedTool = key: tool: local: ''
-    bind-key ${key} if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} tool #{q:@bridge_pane} ${tool}" } {
-      ${local}
-    }'';
+  bridgedFloatTool = key: tool: float: prefix: suffix: "bind-key ${key} if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} tool #{q:@bridge_pane} ${tool}\" } { ${floatNewPaneGuard float prefix suffix} }";
 
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window
@@ -635,10 +639,8 @@
   # and the cascade counter survives kill-pane. @pane_label → mauve border title.
   prdashBind =
     lib.optionalString (prdash != null)
-    (bridgedTool "p" "prdash" ''
-      new-pane -c '#{pane_current_path}' ${floatShort.flags} ${prdash}/bin/prdash
-      set -p @pane_label prdash
-      ${floatShort.stamp}'');
+    (bridgedFloatTool "p" "prdash" floatShort "-c '#{pane_current_path}' "
+      "${prdash}/bin/prdash \\; set -p @pane_label prdash");
 
   # In kitty-pane mode (AEYE_HOST=kitty) the carousel is a kitty split that doesn't
   # know about tmux focus, so reconcile it whenever the on-screen window changes —
@@ -860,18 +862,18 @@
       # yazi/prdash below (it reads the *current window's* @issue_*/@pr_*, so
       # window scope is correct). Icons use the RAW set: the card's stdout is
       # not re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
-      bind-key i new-pane ${floatCard.flags} "${picker-card-bin} \
-        --target '#{session_id}:#{window_id}' \
-        --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
-        --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
-        --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
-        --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \
-        --thm-subtext0 '#{@thm_subtext_0}' \
-        --icon-linear '${enrichIconSetRaw.linear}' --icon-github '${enrichIconSetRaw.github}' \
-        --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
-        --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
-        --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}' \
-        --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich \; ${floatCard.stamp}
+      ${floatBind "i" floatCard "" ''        "${picker-card-bin} \
+                --target '#{session_id}:#{window_id}' \
+                --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
+                --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
+                --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
+                --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \
+                --thm-subtext0 '#{@thm_subtext_0}' \
+                --icon-linear '${enrichIconSetRaw.linear}' --icon-github '${enrichIconSetRaw.github}' \
+                --icon-pending '${enrichIconSetRaw.pending}' --icon-success '${enrichIconSetRaw.success}' \
+                --icon-failure '${enrichIconSetRaw.failure}' --icon-merged '${enrichIconSetRaw.merged}' \
+                --icon-closed '${enrichIconSetRaw.closed}' --icon-conflict '${enrichIconSetRaw.conflict}' \
+                --icon-draft '${enrichIconSetRaw.draft}'" \; set -p @pane_label enrich''}
     ''}
 
     ${lib.optionalString notifyEnable ''
@@ -886,28 +888,19 @@
     # Floating panes (window-scoped; see the yazi comment below for why floats
     # over popups — full escape-sequence passthrough, and a pane is mirrorable
     # across the remote bridge in principle where a popup can never be).
-    ${bridgedTool "g" "lazygit" ''
-      new-pane -c '#{pane_current_path}' ${floatFull.flags} lazygit
-      set -p @pane_label lazygit
-      ${floatFull.stamp}''}
-    bind-key "b" new-pane ${floatFull.flags} btop \; set -p @pane_label btop \; ${floatFull.stamp}
-    ${bridgedTool "G" "tmux-gh-dash" ''
-      new-pane -c '#{pane_current_path}' ${floatFull.flags} ${script.tmux-gh-dash}/bin/tmux-gh-dash
-      set -p @pane_label gh-dash
-      ${floatFull.stamp}''}
+    ${bridgedFloatTool "g" "lazygit" floatFull "-c '#{pane_current_path}' " "lazygit \\; set -p @pane_label lazygit"}
+    ${floatBind "b" floatFull "" "btop \\; set -p @pane_label btop"}
+    ${bridgedFloatTool "G" "tmux-gh-dash" floatFull "-c '#{pane_current_path}' " "${script.tmux-gh-dash}/bin/tmux-gh-dash \\; set -p @pane_label gh-dash"}
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
-    bind-key "k" new-pane ${floatFull.flags} "command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s \; ${floatFull.stamp}
+    ${floatBind "k" floatFull "" ''"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s''}
     ${prdashBind}
     bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
     # full escape-sequence passthrough, so yazi's image preview / terminal
     # detection work. Scoped to the launching window (no window-line entry).
-    ${bridgedTool "y" "yazi" ''
-      new-pane -c '#{pane_current_path}' ${floatShort.flags} yazi
-      set -p @pane_label yazi
-      ${floatShort.stamp}''}
+    ${bridgedFloatTool "y" "yazi" floatShort "-c '#{pane_current_path}' " "yazi \\; set -p @pane_label yazi"}
 
     # New session prompt
     bind N command-prompt -p "New session name:" "new-session -s '%%'"

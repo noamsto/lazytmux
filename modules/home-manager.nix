@@ -1109,15 +1109,20 @@ in {
             if $TMUX info &>/dev/null 2>&1; then
               # Source config (restoreTheme may have already done this, but it's
               # idempotent and handles the case where restoreTheme doesn't exist)
-              $TMUX source-file ${tmuxConfig.tmuxConf} || true
-              # Wait for async run-shell plugin commands to finish
-              sleep 1
-              # Reflow ALL sessions
-              WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
-              WIDTH=''${WIDTH:-200}
-              while read -r sess; do
-                [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
-              done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
+              if SOURCE_ERR=$($TMUX source-file ${tmuxConfig.tmuxConf} 2>&1); then
+                # Wait for async run-shell plugin commands to finish
+                sleep 1
+                # Reflow ALL sessions
+                WIDTH=$($TMUX list-clients -F '#{client_width}' 2>/dev/null | head -1)
+                WIDTH=''${WIDTH:-200}
+                while read -r sess; do
+                  [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
+                done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
+              else
+                echo "lazytmux: tmux rejected the new config during home-manager switch:" >&2
+                echo "$SOURCE_ERR" >&2
+                echo "lazytmux: restart the tmux server to pick up this generation." >&2
+              fi
             fi
           '';
 
