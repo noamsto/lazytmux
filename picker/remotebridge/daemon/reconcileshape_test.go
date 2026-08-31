@@ -32,10 +32,15 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 		return false
 	}
 
-	cfg := Config{LocalTmux: func(argv ...string) error {
-		rec(argv[0])
-		return nil
-	}}
+	// The split lands the local pane %9local; applyPaneOps reads the window back
+	// to learn its id, since a split reports nothing through LocalTmux.
+	cfg := Config{
+		LocalTmux: func(argv ...string) error {
+			rec(argv[0])
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) { return "%1 0\n%9local 0\n", nil },
+	}
 
 	cli, srv := net.Pipe()
 	defer cli.Close()
@@ -52,7 +57,11 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 		rec("hello")
 	}()
 
-	w := &mirrorWindow{remoteID: "@1", localWin: "$0:@1", remotePanes: []string{"%1"}, conns: map[string]net.Conn{}}
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "$0:@1",
+		remotePanes: []string{"%1"}, localPanes: []string{"%1"},
+		conns: map[string]net.Conn{},
+	}
 	L := controlmode.Layout{W: 80, H: 24, Raw: "abcd,80x24,0,0", Panes: []controlmode.PaneCell{{W: 80, H: 12}, {W: 80, H: 11}}}
 	// A failing round-trip makes the seed error out, so the renderer wiring ends
 	// right after the hello instead of pumping a pipe nobody reads.

@@ -9,11 +9,18 @@ import (
 
 // mirrorWindow is one remote window's local mirror: the remote window id it
 // tracks, the local tmux window target it renders into, the remote pane ids in
-// creation order, and the renderer conns keyed by remote pane id.
+// creation order, the local pane ids rendering them, and the renderer conns
+// keyed by remote pane id.
+//
+// localPanes is index-parallel to remotePanes and holds only the window's
+// *tiled* panes: a float takes an ordinal slot of its own, so the local pane
+// rendering remotePanes[i] is not reliably the window's i'th pane.
 type mirrorWindow struct {
 	remoteID    string
 	localWin    string
 	remotePanes []string
+	localPanes  []string
+	layout      string // last tiled layout string applied locally, "" = none yet
 	conns       map[string]net.Conn
 }
 

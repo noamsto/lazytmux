@@ -22,7 +22,10 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 	router := NewRouter()
 	router.Register("%3", newOutputSink(local, nil))
 
-	w := &mirrorWindow{remoteID: "@1", localWin: "@101", remotePanes: []string{"%3", "%4"}}
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%3", "%4"}, localPanes: []string{"%l3", "%l4"},
+	}
 
 	// A one-pane layout: %4 is gone, %3 survives and fills the window.
 	const onePane = "bd67,190x45,0,0,3"
@@ -33,7 +36,11 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 		"%begin 1 4 1", onePane + " %3 0", "%end 1 4 1", // trailing re-read: unchanged, stop
 	}, "\n") + "\n")
 
-	cfg := Config{LocalTmux: func(...string) error { return nil }}
+	// %l4 is killed with its remote pane, leaving the survivor alone.
+	cfg := Config{
+		LocalTmux:    func(...string) error { return nil },
+		LocalTmuxOut: func(...string) (string, error) { return "%l3 0\n", nil },
+	}
 	go reconcileLayout(cfg, w, func(string) {}, router, make(chan helloConn), newCtlState(), rt)
 
 	// The resize lands first (dims are pushed right after select-layout), then

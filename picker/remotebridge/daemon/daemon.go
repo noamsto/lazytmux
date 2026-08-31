@@ -36,9 +36,11 @@ type Config struct {
 	PauseAfterSecs int                        // refresh-client -f pause-after=N (0 disables); backpressure insurance answered by a %continue re-seed
 	RendererBin    string                     // absolute store path to cmd/renderer
 	LocalTmux      func(args ...string) error // runs local tmux (injected; prod = exec)
-	LocalArea      func() (int, int)          // content area the local mirror session's clients can show (injected)
-	Reflow         func()                     // forces a status-bar reflow of the mirror session (injected; nil = off)
-	LocalPanes     func() map[string]string   // remote pane id -> local pane id, read back from @bridge_pane (injected)
+	// LocalTmuxOut runs local tmux and captures stdout (injected; prod = exec).
+	LocalTmuxOut func(args ...string) (string, error)
+	LocalArea    func() (int, int)        // content area the local mirror session's clients can show (injected)
+	Reflow       func()                   // forces a status-bar reflow of the mirror session (injected; nil = off)
+	LocalPanes   func() map[string]string // remote pane id -> local pane id, read back from @bridge_pane (injected)
 	// NewGraphics builds the per-pane kitty-graphics proxy that localises image
 	// payloads crossing the bridge. nil disables proxying entirely (tests, and
 	// any transport where there is no remote filesystem to fetch from).
@@ -522,14 +524,20 @@ func setupWindow(cfg Config, send func(string), router *Router, connCh chan hell
 	}
 
 	mw.remotePanes = RemotePaneOrder(L)
+	mw.layout = L.Raw // PlanWindow's last command is this select-layout
 	cst.setWindowPanes(mw.remoteID, mw.remotePanes)
 
-	// Spawn one renderer per local pane, targeted by position — the local
-	// window has no other source of pane identity available through Config
-	// (LocalTmux runs commands but doesn't capture output), and PlanWindow's
-	// splits create panes in RemotePaneOrder position (see mirror.go).
+	// PlanWindow's splits create panes in RemotePaneOrder position (see
+	// mirror.go), so the tiled list lines up index-for-index with remotePanes.
+	if err := refreshLocalPanes(cfg, mw); err != nil {
+		return fmt.Errorf("daemon: mirror panes for %s: %w", mw.remoteID, err)
+	}
+	if len(mw.localPanes) != len(mw.remotePanes) {
+		return fmt.Errorf("daemon: mirror for %s: %d local panes for %d remote",
+			mw.remoteID, len(mw.localPanes), len(mw.remotePanes))
+	}
 	for i, remotePane := range mw.remotePanes {
-		if err := spawnRenderer(cfg, mw.localWin, i, remotePane); err != nil {
+		if err := spawnRenderer(cfg, mw.localPanes[i], remotePane); err != nil {
 			return fmt.Errorf("daemon: spawn renderer for %s: %w", remotePane, err)
 		}
 	}
@@ -756,17 +764,15 @@ func readLayout(rt roundTrip, target string) (controlmode.Layout, string, error)
 	return L, active, err
 }
 
-// spawnRenderer respawns localWin's pane at position index (targeted by
-// window.index, since PlanWindow's local panes are created in RemotePaneOrder
-// position) with the renderer binary, wired to dial back with remotePane's id.
+// spawnRenderer respawns the local pane target (a %N pane id) with the
+// renderer binary, wired to dial back with remotePane's id.
 //
 // It also stamps the pane's remote id into the @bridge_pane pane option: that
 // is the carrier a local keybind reads to tell the daemon which remote pane a
 // structural gesture applies to. Pane options survive respawn-pane -k and ride
 // with the pane through select-layout and swap-pane (verified), so this is the
 // only place it needs writing.
-func spawnRenderer(cfg Config, localWin string, index int, remotePane string) error {
-	target := fmt.Sprintf("%s.%d", localWin, index)
+func spawnRenderer(cfg Config, target, remotePane string) error {
 	if err := cfg.LocalTmux("respawn-pane", "-k",
 		"-e", "LZTMUX_RENDER_SOCK="+cfg.SockPath,
 		"-e", "LZTMUX_RENDER_PANE="+remotePane,

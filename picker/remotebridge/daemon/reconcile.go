@@ -55,7 +55,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			}
 		}
 
-		applyLayout(cfg, w.localWin, L)
+		applyLayout(cfg, w, L)
 		// select-layout reshapes every surviving pane, so push each its new
 		// dims (layout is daemon-authoritative — renderers only record them).
 		for i, id := range newRemote {
@@ -110,19 +110,35 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 // shapes it into L. The fit comes first: an unfitted window would make
 // select-layout rescale the remote's layout to the local client's size instead
 // of taking the remote's.
-func applyLayout(cfg Config, target string, L controlmode.Layout) {
-	if err := cfg.LocalTmux(FitWindowCmd(target, L)...); err != nil {
+//
+// The shape is skipped when the window already carries L: tmux counts floating
+// panes against the layout's cell count and rejects the whole string when they
+// disagree ("have 4 panes but need 3"), so a select-layout the mirror does not
+// need is one that can only fail. applyPaneOps clears w.layout, so surgery that
+// reshapes the window always shapes it back.
+func applyLayout(cfg Config, w *mirrorWindow, L controlmode.Layout) {
+	if err := cfg.LocalTmux(FitWindowCmd(w.localWin, L)...); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change resize-window: %v\n", err)
 	}
-	if err := cfg.LocalTmux("select-layout", "-t", target, L.Raw); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+	if L.Raw == w.layout {
+		return
 	}
+	if err := cfg.LocalTmux("select-layout", "-t", w.localWin, L.Raw); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: layout-change select-layout: %v\n", err)
+		return
+	}
+	w.layout = L.Raw
 }
 
 // applyPaneOps performs the local pane surgery ops describes: kill the panes
 // whose remote pane is gone, split new ones off the tail and wire a renderer to
 // each, then swap the local panes into the remote's order.
 func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, send func(string), router *Router, connCh chan helloConn, rt roundTrip) error {
+	// Every op below reshapes the window, so what it carries is no longer the
+	// layout last applied to it.
+	w.layout = ""
+	// Each kill renumbers the window's remaining panes, so the targets are pane
+	// ids: they survive the kills ahead of them, an ordinal does not.
 	for _, i := range ops.Remove {
 		removed := remote[i]
 		router.Unregister(removed)
@@ -130,21 +146,40 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			c.Close()
 			delete(w.conns, removed)
 		}
-		if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
+		local, ok := localPaneAt(w, i)
+		if !ok {
+			return fmt.Errorf("reconcile: no local pane for %s", removed)
+		}
+		if err := cfg.LocalTmux("kill-pane", "-t", local); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: reconcile kill-pane: %v\n", err)
+		}
+	}
+	if len(ops.Remove) > 0 {
+		if err := refreshLocalPanes(cfg, w); err != nil {
+			return fmt.Errorf("reconcile: %w", err)
 		}
 	}
 
 	// Splits target the current last pane explicitly, which lands the new pane
 	// at lastIdx+1 (verified) — the old code split the window and relied on the
-	// new pane implicitly taking the loop index.
-	base := len(remote) - len(ops.Remove)
-	for k, id := range ops.Append {
-		last := base + k - 1
-		if err := cfg.LocalTmux("split-window", "-h", "-t", fmt.Sprintf("%s.%d", w.localWin, last)); err != nil {
+	// new pane implicitly taking the loop index. The re-read after each split
+	// is what names the pane just created.
+	for _, id := range ops.Append {
+		last, ok := localPaneAt(w, len(w.localPanes)-1)
+		if !ok {
+			return fmt.Errorf("reconcile: window %s has no pane to split", w.localWin)
+		}
+		if err := cfg.LocalTmux("split-window", "-h", "-t", last); err != nil {
 			return fmt.Errorf("reconcile split-window: %w", err)
 		}
-		if err := spawnRenderer(cfg, w.localWin, base+k, id); err != nil {
+		if err := refreshLocalPanes(cfg, w); err != nil {
+			return fmt.Errorf("reconcile: %w", err)
+		}
+		added, ok := localPaneAt(w, len(w.localPanes)-1)
+		if !ok {
+			return fmt.Errorf("reconcile: split of %s produced no pane", w.localWin)
+		}
+		if err := spawnRenderer(cfg, added, id); err != nil {
 			return fmt.Errorf("reconcile spawn renderer for %s: %w", id, err)
 		}
 	}
@@ -156,7 +191,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 		// whole handshake rather than for a frame (#408). The swaps below exchange
 		// panes between cells without changing cell geometry, so this stays
 		// correct and the caller's pass becomes idempotent.
-		applyLayout(cfg, w.localWin, L)
+		applyLayout(cfg, w, L)
 
 		// Seeding is sequential over the single control stream, so every new
 		// renderer must be connected first (mirrors setupWindow).
@@ -185,11 +220,15 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 	// flag's effect on the active pane id is opposite between swap-pane's
 	// one-target and two-target forms), so local focus rides with its pane.
 	for _, s := range ops.Swaps {
-		if err := cfg.LocalTmux("swap-pane", "-d",
-			"-s", fmt.Sprintf("%s.%d", w.localWin, s[0]),
-			"-t", fmt.Sprintf("%s.%d", w.localWin, s[1])); err != nil {
+		src, srcOK := localPaneAt(w, s[0])
+		dst, dstOK := localPaneAt(w, s[1])
+		if !srcOK || !dstOK {
+			return fmt.Errorf("reconcile: swap %d<->%d out of range for %s", s[0], s[1], w.localWin)
+		}
+		if err := cfg.LocalTmux("swap-pane", "-d", "-s", src, "-t", dst); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: reconcile swap-pane: %v\n", err)
 		}
+		w.localPanes[s[0]], w.localPanes[s[1]] = w.localPanes[s[1]], w.localPanes[s[0]]
 	}
 	return nil
 }
@@ -205,14 +244,23 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 			delete(w.conns, id)
 		}
 	}
-	// Leave pane 0 for setupWindow to re-shape and respawn; drop the rest.
-	for i := len(w.remotePanes) - 1; i > 0; i-- {
-		if err := cfg.LocalTmux("kill-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
+	dropMirroredPanes(cfg, w)
+	return setupWindow(cfg, send, router, connCh, cst, w, newConverger(), rt)
+}
+
+// dropMirroredPanes kills every mirrored pane but the first, which resetWindow
+// leaves for setupWindow to re-shape and respawn, and clears w's belief about
+// what the window holds. Only the panes this daemon created: a float the window
+// also holds is not its to reap.
+func dropMirroredPanes(cfg Config, w *mirrorWindow) {
+	for i := len(w.localPanes) - 1; i > 0; i-- {
+		if err := cfg.LocalTmux("kill-pane", "-t", w.localPanes[i]); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: reset kill-pane: %v\n", err)
 		}
 	}
 	w.remotePanes = nil
-	return setupWindow(cfg, send, router, connCh, cst, w, newConverger(), rt)
+	w.localPanes = nil
+	w.layout = ""
 }
 
 // focusLocalPane points local focus at whichever local pane renders the
@@ -226,7 +274,11 @@ func focusLocalPane(cfg Config, cst *ctlState, w *mirrorWindow, order []string, 
 	// Record before issuing: the local select-pane fires after-select-pane, whose
 	// ctl report must be recognised as this move's echo rather than a new gesture.
 	cst.noteLocalFocus(w.remoteID, remoteActive)
-	if err := cfg.LocalTmux("select-pane", "-t", fmt.Sprintf("%s.%d", w.localWin, i)); err != nil {
+	local, ok := localPaneAt(w, i)
+	if !ok {
+		return
+	}
+	if err := cfg.LocalTmux("select-pane", "-t", local); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: reconcile select-pane: %v\n", err)
 	}
 }
