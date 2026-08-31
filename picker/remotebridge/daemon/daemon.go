@@ -484,7 +484,7 @@ func Run(cfg Config) error {
 			if len(queued) == 0 && !wantWindows && len(layouts) == 0 {
 				return false
 			}
-			for _, q := range queued {
+			for _, q := range coalesceLayoutChanges(queued) {
 				if dispatch(q) {
 					return true
 				}
@@ -699,6 +699,32 @@ func (q *asyncQueue) take() []controlmode.Line {
 	lines := q.lines
 	q.lines = nil
 	return lines
+}
+
+// coalesceLayoutChanges collapses a burst of %layout-change notifications for
+// the same window into just the last one. reconcileLayout always re-reads the
+// remote's current layout fresh, so only the last notification for a given
+// window in an already-buffered batch can still matter — a resize drag can
+// otherwise queue many of these while a single reconcileLayout call's own
+// round-trips are in flight, and dispatching each one individually would pay
+// for N-1 redundant readLayout round-trips before the dedup in reconcileLayout
+// even gets a chance to discard them. Every other notification kind, and the
+// relative order of what survives, is left untouched.
+func coalesceLayoutChanges(lines []controlmode.Line) []controlmode.Line {
+	last := map[string]int{}
+	for i, l := range lines {
+		if l.Kind == controlmode.LayoutChange && len(l.Args) > 0 {
+			last[l.Args[0]] = i
+		}
+	}
+	out := make([]controlmode.Line, 0, len(lines))
+	for i, l := range lines {
+		if l.Kind == controlmode.LayoutChange && len(l.Args) > 0 && last[l.Args[0]] != i {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // nextLine is the daemon's only read of the control stream. For a reply block
