@@ -26,7 +26,7 @@ import (
 // ssh/tmux/socket in production is a field here, so the bats test can point it
 // at a second local tmux instead.
 type Config struct {
-	Ctl            io.ReadWriteCloser         // the ssh -CC stream (stdin+stdout duplex)
+	Ctl            io.ReadWriteCloser         // tmux -C control-mode stream over plain ssh (stdin+stdout duplex)
 	SockPath       string                     // unix socket renderers dial
 	LocalSess      string                     // "<host>-<sess>"
 	RemoteHost     string                     // ssh host being mirrored (picker's Host column)
@@ -1196,7 +1196,7 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 		if f.Type != wire.FrameInput {
 			continue
 		}
-		for _, args := range controlmode.SendKeysArgs(remotePane, f.Payload, 500) {
+		for _, args := range controlmode.SendKeysArgs(remotePane, f.Payload, controlmode.InputChunkBytes) {
 			send(strings.Join(args, " "))
 		}
 	}
