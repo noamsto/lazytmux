@@ -1,6 +1,9 @@
 package controlmode
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUnescape(t *testing.T) {
 	cases := []struct {
@@ -14,7 +17,7 @@ func TestUnescape(t *testing.T) {
 		{`\342\230\203`, []byte{0xe2, 0x98, 0x83}}, // a UTF-8 rune as raw bytes
 	}
 	for _, c := range cases {
-		got := Unescape(c.in)
+		got := Unescape([]byte(c.in))
 		if string(got) != string(c.want) {
 			t.Errorf("Unescape(%q) = %v, want %v", c.in, got, c.want)
 		}
@@ -85,5 +88,37 @@ func TestParseExtendedOutput(t *testing.T) {
 	l2 := ParseLine(`%extended-output %0 42 : a : b`)
 	if l2.Kind != Output || l2.Pane != "%0" || string(l2.Data) != "a : b" {
 		t.Fatalf("extended-output age/colon wrong: %+v", l2)
+	}
+}
+
+// TestReaderNextZeroCopyOutput verifies the Reader.Next() hot path — which
+// parses directly off the scanner's reused buffer via parseLine(sc.Bytes())
+// — still produces a correct, fully-owned Line for a %output line.
+func TestReaderNextZeroCopyOutput(t *testing.T) {
+	rd := NewReader(strings.NewReader("%output %3 hello world\n"))
+	l, ok := rd.Next()
+	if !ok || l.Kind != Output || l.Pane != "%3" || string(l.Data) != "hello world" {
+		t.Fatalf("Next() = %+v, ok=%v, want Output %%3 %q", l, ok, "hello world")
+	}
+}
+
+// TestReaderNextNoBufferAliasing guards against the bug class this change
+// could introduce: parseLine must never retain a slice into the scanner's
+// buffer, or a later Scan() would silently corrupt an earlier Line's Data.
+func TestReaderNextNoBufferAliasing(t *testing.T) {
+	rd := NewReader(strings.NewReader("%output %1 first\n%output %2 second\n"))
+	l1, ok := rd.Next()
+	if !ok || l1.Kind != Output {
+		t.Fatalf("first Next() = %+v, ok=%v", l1, ok)
+	}
+	l2, ok := rd.Next()
+	if !ok || l2.Kind != Output {
+		t.Fatalf("second Next() = %+v, ok=%v", l2, ok)
+	}
+	if string(l1.Data) != "first" {
+		t.Errorf("l1.Data corrupted by second Next(): got %q, want %q", l1.Data, "first")
+	}
+	if string(l2.Data) != "second" {
+		t.Errorf("l2.Data = %q, want %q", l2.Data, "second")
 	}
 }

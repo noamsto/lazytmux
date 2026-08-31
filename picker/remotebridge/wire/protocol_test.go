@@ -80,6 +80,46 @@ func TestReadFrameCleanCloseAtBoundary(t *testing.T) {
 	}
 }
 
+type countingWriter struct {
+	w     io.Writer
+	calls int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.calls++
+	return c.w.Write(p)
+}
+
+func TestWriteFrameSingleSyscall(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{"non-empty payload", []byte("\x1b[2J\x1b[Hhello")},
+		{"nil payload", nil},
+		{"empty payload", []byte{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			cw := &countingWriter{w: &buf}
+			if err := WriteFrame(cw, FrameSeed, c.payload); err != nil {
+				t.Fatalf("WriteFrame: %v", err)
+			}
+			if cw.calls != 1 {
+				t.Errorf("Write calls = %d, want 1", cw.calls)
+			}
+			f, err := ReadFrame(&buf)
+			if err != nil {
+				t.Fatalf("ReadFrame: %v", err)
+			}
+			if f.Type != FrameSeed || !bytes.Equal(f.Payload, c.payload) {
+				t.Errorf("frame = %d/%q, want %d/%q", f.Type, f.Payload, FrameSeed, c.payload)
+			}
+		})
+	}
+}
+
 func TestResizeCodec(t *testing.T) {
 	p := EncodeResize(210, 52)
 	w, h, err := DecodeResize(p)

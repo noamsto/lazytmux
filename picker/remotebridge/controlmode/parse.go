@@ -2,6 +2,7 @@ package controlmode
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ const ClientCommandFlag = 1
 // Unescape decodes tmux control-mode %output data: bytes below 0x20 and the
 // backslash are written as three-digit octal (\NNN); all else is literal.
 // Operates on bytes — a UTF-8 rune may be split across two %output lines.
-func Unescape(data string) []byte {
+func Unescape(data []byte) []byte {
 	out := make([]byte, 0, len(data))
 	for i := 0; i < len(data); i++ {
 		if data[i] == '\\' && i+3 < len(data) {
@@ -68,59 +69,109 @@ type Line struct {
 	Flags int
 }
 
+// ParseLine is the string-based entry point, kept for the readBlock retained-
+// line path (which already owns a string via sc.Text()) and for callers
+// outside the hot %output loop. It's a thin wrapper over parseLine.
 func ParseLine(raw string) Line {
-	if !strings.HasPrefix(raw, "%") {
+	return parseLine([]byte(raw))
+}
+
+// extSep is the "%extended-output" age/payload separator, pre-allocated so
+// cutExtSep never allocates the literal per call.
+var extSep = []byte(" : ")
+
+// cutSpace splits b at the first space, mirroring strings.Cut(string(b), " ")
+// without ever converting b to a string.
+func cutSpace(b []byte) (before, after []byte, found bool) {
+	i := bytes.IndexByte(b, ' ')
+	if i < 0 {
+		return b, nil, false
+	}
+	return b[:i], b[i+1:], true
+}
+
+// cutExtSep splits b at the first " : ", mirroring strings.Cut(string(b), " : ").
+func cutExtSep(b []byte) (before, after []byte, found bool) {
+	i := bytes.Index(b, extSep)
+	if i < 0 {
+		return b, nil, false
+	}
+	return b[:i], b[i+len(extSep):], true
+}
+
+// fieldsToStrings copies each field to an owned string; used for the
+// low-frequency verbs whose Args are never retained as []byte.
+func fieldsToStrings(fields [][]byte) []string {
+	if len(fields) == 0 {
+		return nil
+	}
+	out := make([]string, len(fields))
+	for i, f := range fields {
+		out[i] = string(f)
+	}
+	return out
+}
+
+// parseLine is the zero-copy hot path: it never converts the whole line to a
+// string. Every retained field is either a small string(...) conversion (verb,
+// pane id, Fields), Unescape's freshly allocated output, or an explicit
+// bytes.Clone — raw itself (and any slice of it) must never be retained
+// beyond this call, since callers may pass a scanner buffer valid only until
+// the next Scan().
+func parseLine(raw []byte) Line {
+	if len(raw) == 0 || raw[0] != '%' {
 		return Line{Kind: Other}
 	}
-	verb, rest, _ := strings.Cut(raw, " ")
-	switch verb {
+	verbB, rest, _ := cutSpace(raw)
+	switch string(verbB) {
 	case "%output":
-		pane, data, _ := strings.Cut(rest, " ")
-		return Line{Kind: Output, Pane: pane, Data: Unescape(data)}
+		pane, data, _ := cutSpace(rest)
+		return Line{Kind: Output, Pane: string(pane), Data: Unescape(data)}
 	case "%extended-output":
 		// Flow-control form of %output, emitted once pause-after is armed
 		// (refresh-client -f pause-after=N): "%extended-output %pane <age-ms> :
 		// <escaped-data>". Same payload escaping as %output; drop the pane's
 		// pause age and treat it as ordinary output, or live output is lost.
-		pane, r, _ := strings.Cut(rest, " ")
-		_, data, _ := strings.Cut(r, " : ")
-		return Line{Kind: Output, Pane: pane, Data: Unescape(data)}
+		pane, r, _ := cutSpace(rest)
+		_, data, _ := cutExtSep(r)
+		return Line{Kind: Output, Pane: string(pane), Data: Unescape(data)}
 	case "%begin":
-		f := strings.Fields(rest)
+		f := fieldsToStrings(bytes.Fields(rest))
 		return Line{Kind: Begin, Args: f, Flags: guardFlags(f)}
 	case "%end":
-		f := strings.Fields(rest)
+		f := fieldsToStrings(bytes.Fields(rest))
 		return Line{Kind: End, Args: f, Flags: guardFlags(f)}
 	case "%error":
-		f := strings.Fields(rest)
+		f := fieldsToStrings(bytes.Fields(rest))
 		return Line{Kind: Error, Args: f, Flags: guardFlags(f)}
 	case "%window-close":
-		return Line{Kind: WindowClose, Args: strings.Fields(rest)}
+		return Line{Kind: WindowClose, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%exit":
-		return Line{Kind: Exit, Args: strings.Fields(rest)}
+		return Line{Kind: Exit, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%layout-change":
-		return Line{Kind: LayoutChange, Args: strings.Fields(rest)}
+		return Line{Kind: LayoutChange, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%window-add":
-		return Line{Kind: WindowAdd, Args: strings.Fields(rest)}
+		return Line{Kind: WindowAdd, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%window-renamed":
 		// name may contain spaces: id is the first token, the rest is the
-		// whole name (kept in Data, not Fields-split).
-		id, name, _ := strings.Cut(rest, " ")
-		return Line{Kind: WindowRenamed, Args: []string{id}, Data: []byte(name)}
+		// whole name (kept in Data, not Fields-split). Data must be an owned
+		// copy — it must not alias the scanner's reused buffer.
+		id, name, _ := cutSpace(rest)
+		return Line{Kind: WindowRenamed, Args: []string{string(id)}, Data: bytes.Clone(name)}
 	case "%session-changed":
 		// Emitted at attach and on every switch-client that moves this client.
 		// Same shape as %window-renamed: id is the first token, the rest is the
 		// whole session name, which may contain spaces.
-		id, name, _ := strings.Cut(rest, " ")
-		return Line{Kind: SessionChanged, Args: []string{id}, Data: []byte(name)}
+		id, name, _ := cutSpace(rest)
+		return Line{Kind: SessionChanged, Args: []string{string(id)}, Data: bytes.Clone(name)}
 	case "%session-window-changed":
-		return Line{Kind: SessionWindowChanged, Args: strings.Fields(rest)}
+		return Line{Kind: SessionWindowChanged, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%window-pane-changed":
-		return Line{Kind: WindowPaneChanged, Args: strings.Fields(rest)}
+		return Line{Kind: WindowPaneChanged, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%pause":
-		return Line{Kind: Pause, Args: strings.Fields(rest)}
+		return Line{Kind: Pause, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%continue":
-		return Line{Kind: Continue, Args: strings.Fields(rest)}
+		return Line{Kind: Continue, Args: fieldsToStrings(bytes.Fields(rest))}
 	default:
 		return Line{Kind: Other}
 	}
@@ -161,7 +212,7 @@ func (rd *Reader) Next() (Line, bool) {
 		if !rd.sc.Scan() {
 			return Line{}, false
 		}
-		l := ParseLine(rd.sc.Text())
+		l := parseLine(rd.sc.Bytes())
 		if l.Kind != Begin {
 			return l, true
 		}

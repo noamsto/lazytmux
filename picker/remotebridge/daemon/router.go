@@ -33,13 +33,25 @@ func (r *Router) Unregister(paneID string) {
 	}
 }
 
+// ownedWriter is implemented by *outputSink. Route's data is always a fresh,
+// solely-owned []byte from controlmode.Unescape, so a sink that supports it
+// skips Write's defensive copy.
+type ownedWriter interface {
+	writeOwned([]byte)
+}
+
 func (r *Router) Route(paneID string, data []byte) {
 	r.mu.Lock()
 	sink := r.sinks[paneID]
 	r.mu.Unlock()
-	if sink != nil {
-		sink.Write(data) // best-effort; sink is non-blocking (see daemon.go)
+	if sink == nil {
+		return
 	}
+	if ow, ok := sink.(ownedWriter); ok {
+		ow.writeOwned(data)
+		return
+	}
+	sink.Write(data) // best-effort; sink is non-blocking (see daemon.go), and test fakes only implement io.Writer
 }
 
 // sink returns paneID's registered *outputSink, or nil if none is registered

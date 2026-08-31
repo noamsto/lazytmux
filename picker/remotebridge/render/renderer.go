@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bufio"
 	"io"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
@@ -40,8 +41,10 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 	}()
 
 	// daemon frames -> paint
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(out)
 	for {
-		f, err := wire.ReadFrame(conn)
+		f, err := wire.ReadFrame(reader)
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -50,7 +53,7 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 		}
 		switch f.Type {
 		case wire.FrameSeed, wire.FrameOutput:
-			if _, werr := out.Write(f.Payload); werr != nil {
+			if _, werr := writer.Write(f.Payload); werr != nil {
 				return werr
 			}
 		case wire.FrameResize:
@@ -58,6 +61,14 @@ func Run(conn io.ReadWriteCloser, paneID string, in io.Reader, out io.Writer, ra
 			// for its painter but never resizes anything (no refresh-client).
 			if w, h, err := wire.DecodeResize(f.Payload); err == nil && recordResize != nil {
 				recordResize(w, h)
+			}
+		}
+		// Flush only when nothing else is already buffered to read, so a
+		// burst of frames paints in one write but a lone frame still lands
+		// immediately (no added latency for interactive output).
+		if reader.Buffered() == 0 {
+			if werr := writer.Flush(); werr != nil {
+				return werr
 			}
 		}
 	}
