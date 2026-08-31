@@ -118,7 +118,7 @@ func main() {
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				for _, cmd := range controlmode.SendKeysArgs(pane, buf[:n], 500) {
+				for _, cmd := range controlmode.SendKeysArgs(pane, buf[:n], controlmode.InputChunkBytes) {
 					send(quoteArgs(cmd))
 				}
 			}

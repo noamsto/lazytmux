@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ func PaneSeed(rt roundTrip, paneID string) ([]byte, error) {
 }
 
 func replaceLF(b []byte) []byte {
-	return []byte(strings.ReplaceAll(string(b), "\n", "\r\n"))
+	return bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n"))
 }
 
 // readCursor reads "cursor_x cursor_y alternate_on keypad_cursor_flag" for a
