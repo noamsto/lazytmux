@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -10,6 +11,12 @@ import (
 
 // maxReconcilePasses bounds reconcileLayout's trailing-reread loop (below).
 const maxReconcilePasses = 5
+
+// errLocalPanesDesynced reports that the mirror window no longer holds one
+// local pane per remote pane, so applyPaneOps' positional mapping — local pane
+// i renders remote pane i — cannot be trusted. Recovered from by rebuilding the
+// window, never by acting on the broken mapping.
+var errLocalPanesDesynced = errors.New("local panes desynced from the remote order")
 
 // reconcileLayout re-reads window w's remote layout and applies the general
 // pane diff (planPaneOps) so the local mirror renders the remote's panes in the
@@ -60,7 +67,17 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			// setupWindow re-read the layout and re-shaped the window itself.
 			return
 		case structural:
-			if err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, waitHellos, rt); err != nil {
+			err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, waitHellos, rt)
+			if errors.Is(err, errLocalPanesDesynced) {
+				fmt.Fprintf(os.Stderr, "daemon: layout-change %s: %v; rebuilding\n", w.remoteID, err)
+				if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
+					w.remotePanes = remote
+				}
+				// setupWindow re-read the layout and re-shaped the window itself.
+				return
+			}
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 				w.remotePanes = remote
 				return
@@ -164,6 +181,23 @@ func applyLayout(cfg Config, w *mirrorWindow, L controlmode.Layout) {
 // whose remote pane is gone, split new ones off the tail and wire a renderer to
 // each, then swap the local panes into the remote's order.
 func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout, remote, newRemote []string, send func(string), router *Router, waitHellos helloWaiter, rt roundTrip) error {
+	// tmux is the only authority on what the window holds (see
+	// refreshLocalPanes), and a pane can leave by a route this daemon never
+	// saw — a renderer that died, a local kill, the window picker's ^x. Re-read
+	// before trusting the positional mapping every op below depends on.
+	//
+	// A count that no longer matches means the mapping is broken outright, not
+	// merely stale: local pane i stops rendering remote[i], so a kill or a swap
+	// lands on a live neighbour, and the panes that should have gone survive
+	// into a select-layout that then refuses them ("have 2 panes but need 1").
+	// Rebuild instead — the caller's resetWindow is the existing escape hatch
+	// for exactly this, and a desync is rare enough to afford it.
+	if err := refreshLocalPanes(cfg, w); err != nil {
+		return fmt.Errorf("reconcile: %w", err)
+	}
+	if len(w.localPanes) != len(remote) {
+		return fmt.Errorf("%w: %d local panes for %d remote", errLocalPanesDesynced, len(w.localPanes), len(remote))
+	}
 	// Every op below reshapes the window, so what it carries is no longer the
 	// layout last applied to it.
 	w.layout = ""
@@ -180,6 +214,8 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 		if !ok {
 			return fmt.Errorf("reconcile: no local pane for %s", removed)
 		}
+		// Killing by id, so a failure here means the pane was already gone —
+		// which the entry re-read above has already accounted for.
 		if err := cfg.LocalTmux("kill-pane", "-t", local); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: reconcile kill-pane: %v\n", err)
 		}
