@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"os/user"
@@ -633,18 +634,64 @@ func remoteHeaderItem(tmuxOpts map[string]string) listItem {
 	}
 }
 
+// hostPalette is the set of @thm_* options a remote host may be tinted with,
+// each paired with its Mocha fallback. Excludes mauve, red and blue — local
+// sessions, error states and the path icon already mean those.
+var hostPalette = [...][2]string{
+	{"THM_PEACH", "#fab387"},
+	{"THM_TEAL", "#94e2d5"},
+	{"THM_PINK", "#f5c2e7"},
+	{"THM_YELLOW", "#f9e2af"},
+	{"THM_SKY", "#89dceb"},
+}
+
+// hostColorFunc returns the per-host tint drawn everywhere a host or one of
+// its sessions appears — Host column, mirror session name, Remote row and its
+// children — so one host is one colour across the popup. Hashing keeps that
+// mapping stable with nothing stored.
+func hostColorFunc(tmuxOpts map[string]string) func(string) string {
+	colors := make([]string, len(hostPalette))
+	for i, p := range hostPalette {
+		colors[i] = ansiFg(envOrMap(p[0], tmuxOpts, "@"+strings.ToLower(p[0]), p[1]))
+	}
+	return func(host string) string {
+		if host == "" {
+			return ""
+		}
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(host))
+		return colors[h.Sum32()%uint32(len(colors))]
+	}
+}
+
+// sessionDisplayName trims the "${host}-" prefix lztmux-remote-open bakes into
+// a mirror session's name. Session-picker rows only, where the Host column
+// carries the host: window mode and everything outside the picker have no host
+// of their own to read, which is why the session itself is never renamed and
+// the untrimmed name stays the tmux target.
+func sessionDisplayName(name, bridgeHost string) string {
+	if bridgeHost == "" {
+		return name
+	}
+	trimmed := strings.TrimPrefix(name, bridgeHost+"-")
+	if trimmed == "" {
+		return name
+	}
+	return trimmed
+}
+
 // remoteHostRowItem renders one host's row with the given trailing note —
 // either a resolved annotation ("(no server — Enter starts one)", …) or
 // remotePendingNote before the probe has run. The host row is always
 // selectable: it opens the remote's most-recent session and keeps the
 // section alive once every session is bridged.
 func remoteHostRowItem(tmuxOpts map[string]string, host, note string) listItem {
-	cPeach := ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387"))
+	cHost := hostColorFunc(tmuxOpts)(host)
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
 	reset := "\033[0m"
 
-	display := fmt.Sprintf("%s %s", cPeach+iSess+reset, host)
+	display := fmt.Sprintf("%s %s", cHost+iSess+reset, cHost+host+reset)
 	plain := fmt.Sprintf("%s %s", iSess, host)
 	if note != "" {
 		display += "  " + cDim + note + reset
@@ -702,6 +749,7 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 	localID := readLocalRemoteIdentity()
 
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
+	hostColor := hostColorFunc(tmuxOpts)
 	reset := "\033[0m"
 
 	type hostResult struct {
@@ -785,14 +833,15 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 			hostRow.remoteInert = true
 		}
 		items = append(items, hostRow)
+		cH := hostColor(r.host)
 		for _, sess := range r.sess {
 			items = append(items, listItem{
 				isRemoteRow: true,
 				target:      "remote:" + r.host + ":" + sess,
 				remoteHost:  r.host,
 				remoteSess:  sess,
-				display:     cDim + remoteTreeMid + reset + " " + sess,
-				displayEnd:  cDim + remoteTreeEnd + reset + " " + sess,
+				display:     cH + remoteTreeMid + reset + " " + sess,
+				displayEnd:  cH + remoteTreeEnd + reset + " " + sess,
 				plain:       remoteTreeMid + " " + sess,
 				plainEnd:    remoteTreeEnd + " " + sess,
 				searchText:  r.host + "/" + sess + " " + r.host + " " + sess,
@@ -806,8 +855,8 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 				remoteHost:    r.host,
 				remoteSess:    s.Name,
 				remoteRestore: true,
-				display:       cDim + remoteTreeMid + reset + " " + s.Name + cDim + suffix + reset,
-				displayEnd:    cDim + remoteTreeEnd + reset + " " + s.Name + cDim + suffix + reset,
+				display:       cH + remoteTreeMid + reset + " " + s.Name + cDim + suffix + reset,
+				displayEnd:    cH + remoteTreeEnd + reset + " " + s.Name + cDim + suffix + reset,
 				plain:         remoteTreeMid + " " + s.Name + suffix,
 				plainEnd:      remoteTreeEnd + " " + s.Name + suffix,
 				searchText:    r.host + "/" + s.Name + " " + r.host + " " + s.Name,
