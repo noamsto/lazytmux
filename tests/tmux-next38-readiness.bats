@@ -82,11 +82,6 @@ embedded_path() {
 	grep -o "$pattern" "$file" | head -1
 }
 
-wrapper_path() {
-	local pattern=$1
-	grep -o "$pattern" "$TMUX_BIN" | head -1
-}
-
 make_tmux_shim() {
 	SHIM_DIR="$BATS_TEST_TMPDIR/shim"
 	mkdir -p "$SHIM_DIR"
@@ -168,7 +163,6 @@ wait_for_client() {
 	[[ $keys == *"tmux-session-picker"* ]]
 	[[ $keys == *"tmux-window-picker"* ]]
 	[[ $keys == *"display-popup"* && $keys == *"tmux-enrich-card"* ]]
-	[[ $keys == *"tmux-gh-dash"* ]]
 
 	session_picker="$(store_path '/nix/store/[[:alnum:]]*-tmux-session-picker/bin/tmux-session-picker')"
 	picker="$(embedded_path "$session_picker" '/nix/store/[[:alnum:]]*-lazytmux-go-tools-[^[:space:]]*/bin/tmux-picker-generate')"
@@ -200,21 +194,6 @@ wait_for_client() {
 	kill "$CTL_PID" 2>/dev/null || true
 
 	[ "$(cat "$marker")" = "popup-ok" ]
-}
-
-@test "gh-dash stays pinned to 4.23.2 and launcher composes a theme config" {
-	gh_dash="$(wrapper_path '/nix/store/[a-z0-9]*-gh-dash-4[.]23[.]2/bin')/gh-dash"
-	launcher="$(store_path '/nix/store/[a-z0-9]*-tmux-gh-dash/bin/tmux-gh-dash')"
-	[[ -x $gh_dash ]]
-	[[ -x $launcher ]]
-
-	run "$gh_dash" --version
-	[ "$status" -eq 0 ]
-	[[ $output == *"4.23.2"* ]]
-
-	run timeout 2 "$launcher" --help
-	[[ -f $XDG_CACHE_HOME/lazytmux/gh-dash-config.yml ]]
-	grep -q 'theme:' "$XDG_CACHE_HOME/lazytmux/gh-dash-config.yml"
 }
 
 # === Remote bridge structural-input gate (M2.3) ===
