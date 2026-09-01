@@ -149,6 +149,34 @@ func TestSessionFilterMapsSkipsScratch(t *testing.T) {
 	}
 }
 
+func TestSessionFilterMapsSkipsBridgePath(t *testing.T) {
+	dir := t.TempDir()
+	sessions := []sessionData{
+		{name: "real", path: dir},
+		{name: "otherhost-lazytmux", path: dir, bridgeHost: "otherhost"},
+	}
+	paths, names := sessionFilterMaps(sessions)
+	if !paths[normalizePath(dir)] || !names["real"] {
+		t.Errorf("real session not recorded: paths=%v names=%v", paths, names)
+	}
+	// The mirror's own name is a real tmux-namespace entry and must still
+	// suppress, even though its path (launcher-cwd artifact) must not.
+	if !names["otherhost-lazytmux"] {
+		t.Errorf("bridge session name dropped from name filter: %v", names)
+	}
+
+	// A dir hosting only a mirror session (no other real session at that
+	// path) must still be suggested (#461).
+	paths, names = sessionFilterMaps(sessions[1:])
+	if paths[normalizePath(dir)] {
+		t.Errorf("bridge session's launcher cwd leaked into path filter: %v", paths)
+	}
+	got := zoxideSuggestions([]string{normalizePath(dir)}, paths, names, 15)
+	if len(got) != 1 {
+		t.Errorf("mirror-only dir suppressed from suggestions: %v", got)
+	}
+}
+
 func TestCollapseWorktree(t *testing.T) {
 	// Nested layout "<repo>/.worktrees/<branch>": the worktree's ".git" file
 	// points into <repo>/.git, so it folds to <repo> via the same walk-up used

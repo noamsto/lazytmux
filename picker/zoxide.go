@@ -123,6 +123,15 @@ func zoxideSuggestions(paths []string, sessionPaths, sessionNames map[string]boo
 // sessionFilterMaps builds the path/name suppression sets from real sessions.
 // Scratch sessions are hidden helpers; they must not suppress the suggestion
 // for the dir they happen to live in.
+//
+// A bridge/mirror session's path is likewise not a real suppression signal:
+// lztmux-remote-open creates it with no "-c", so session_path is whatever cwd
+// the launching client happened to have, not a workspace the user is "in" —
+// its windows get their real (remote) cwds from the daemon separately. Its
+// name still suppresses, though: mirror names are real tmux-namespace
+// entries, so offering a zoxide dir whose derived name collides would make
+// createAndSwitch's has-session check switch into the mirror instead of
+// creating the local session.
 func sessionFilterMaps(sessions []sessionData) (paths, names map[string]bool) {
 	paths = make(map[string]bool, len(sessions))
 	names = make(map[string]bool, len(sessions))
@@ -130,7 +139,9 @@ func sessionFilterMaps(sessions []sessionData) (paths, names map[string]bool) {
 		if strings.HasPrefix(s.name, "scratch-") {
 			continue
 		}
-		paths[normalizePath(s.path)] = true
+		if s.bridgeHost == "" {
+			paths[normalizePath(s.path)] = true
+		}
 		names[s.name] = true
 	}
 	return paths, names
