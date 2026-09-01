@@ -962,3 +962,15 @@ func TestHostColorFunc(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteHeaderCarriesTheRemoteGlyph(t *testing.T) {
+	it := remoteHeaderItem(nil)
+	if it.headerLabel != "Remote" {
+		t.Errorf("headerLabel = %q, want Remote", it.headerLabel)
+	}
+	// renderHeaderItem composes the divider from these two, so an empty icon
+	// silently drops the glyph from the section header and its pinned copy.
+	if it.headerIcon != iconRemote {
+		t.Errorf("headerIcon = %q, want the @icon_remote default %q", it.headerIcon, iconRemote)
+	}
+}

@@ -87,13 +87,13 @@
     session = "";
     branch = "";
     dir = "";
-    remote = "󰣀";
+    remote = "";
     # Session-picker column headers. Verified present in the pinned nerd font:
     # md-server, md-apps, md-chip, md-memory.
-    host = "󰒋";
+    host = "";
     procs = "󰀻";
-    cpu = "󰘚";
-    mem = "󰍛";
+    cpu = "";
+    mem = "";
     window-last = "󰖰";
     window-current = "󰖯";
     window-zoom = "󰁌";

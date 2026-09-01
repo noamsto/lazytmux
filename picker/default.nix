@@ -35,11 +35,11 @@
     var iconSession = ""
     var iconDir = ""
     var iconBranch = ""
-    var iconHost = "󰒋"
+    var iconHost = ""
     var iconProcs = "󰀻"
-    var iconCPU = "󰘚"
-    var iconMem = "󰍛"
-    var iconRemote = "󰣀"
+    var iconCPU = ""
+    var iconMem = ""
+    var iconRemote = ""
   '';
 
   tipsGo = pkgs.writeText "tips_generated.go" ''

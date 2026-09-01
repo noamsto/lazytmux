@@ -66,7 +66,7 @@ func TestDecodeBridgeName(t *testing.T) {
 	}
 }
 
-func TestSessionHeaderIsGlyphOnlyAndAligned(t *testing.T) {
+func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 	snap := panesSnapshot{
 		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1",
 		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1",
@@ -77,8 +77,8 @@ func TestSessionHeaderIsGlyphOnlyAndAligned(t *testing.T) {
 		t.Fatal("items[0] must be flagged as the column header for the sticky pin")
 	}
 	for _, word := range []string{"Session", "Host", "Procs", "CPU", "Mem", "Path"} {
-		if strings.Contains(hdr.plain, word) {
-			t.Errorf("header still carries the word %q: %q", word, hdr.plain)
+		if !strings.Contains(hdr.plain, word) {
+			t.Errorf("header is missing the label %q: %q", word, hdr.plain)
 		}
 	}
 	for _, glyph := range []string{iconHost, iconProcs, iconCPU, iconMem} {
@@ -95,6 +95,19 @@ func TestSessionHeaderIsGlyphOnlyAndAligned(t *testing.T) {
 	col := func(s, needle string) int { return visibleWidth(s[:strings.Index(s, needle)]) }
 	if h, r := col(hdr.plain, iconHost), col(items[2].plain, "tp-g6 "); h != r {
 		t.Errorf("host column starts at %d in the header but %d in the row", h, r)
+	}
+	// The CPU and Mem labels mirror each other around the separator: CPU ends on
+	// its left, Mem starts on its right, reading as one CPU / Mem unit.
+	if !strings.Contains(hdr.plain, "CPU / "+iconMem) {
+		t.Errorf("CPU and Mem labels should flank the separator: %q", hdr.plain)
+	}
+	// Both header and rows must agree on where the resource field ends, or Path
+	// drifts: the label moving left may not change the field's width.
+	if h, r := col(hdr.plain, " / "), col(items[1].plain, " / "); h != r {
+		t.Errorf("the ' / ' sits at %d in the header but %d in a row", h, r)
+	}
+	if h, r := col(hdr.plain, iconDir), col(items[1].plain, iconDir); h != r {
+		t.Errorf("path column starts at %d in the header but %d in the row", h, r)
 	}
 }
 
