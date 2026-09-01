@@ -59,6 +59,7 @@ type sessionData struct {
 	agent      agentCounts
 	cpuPct     float64 // total CPU% across all descendant processes
 	memMB      float64 // total RSS in MiB across all descendant processes
+	resUnknown bool    // mirror whose host has not reported yet: render "-", never the renderer's own figures
 }
 
 type windowData struct {
@@ -386,6 +387,64 @@ type sessionResources struct {
 	memMB  float64
 }
 
+// psArgs is the process table both the local and the remote leg read. -A
+// (POSIX all-processes), not -e: BSD ps on macOS reads -e as "show
+// environment". No --no-headers either: it's GNU-only and errors on BSD ps —
+// the header row it leaves behind is skipped by aggregateResources, where
+// "PID" parses to 0.
+var psArgs = []string{"-Ao", "pid,ppid,pcpu,rss"}
+
+// aggregateResources sums CPU% and RSS over each root PID's whole process
+// tree, given one `ps psArgs` table. Pure, and the only place the tree walk
+// lives: the remote leg feeds it a table fetched over ssh instead.
+func aggregateResources(rootPIDs map[string][]int, psOut string) map[string]sessionResources {
+	children := make(map[int][]int)
+	type procInfo struct {
+		cpu float64
+		rss int64 // KiB
+	}
+	procs := make(map[int]*procInfo)
+
+	for _, line := range strings.Split(strings.TrimSpace(psOut), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, _ := strconv.Atoi(fields[0])
+		ppid, _ := strconv.Atoi(fields[1])
+		cpu, _ := strconv.ParseFloat(fields[2], 64)
+		rss, _ := strconv.ParseInt(fields[3], 10, 64)
+		if pid <= 0 {
+			continue
+		}
+		procs[pid] = &procInfo{cpu: cpu, rss: rss}
+		children[ppid] = append(children[ppid], pid)
+	}
+
+	result := make(map[string]sessionResources, len(rootPIDs))
+	for key, pids := range rootPIDs {
+		var totalCPU float64
+		var totalRSS int64
+		for _, root := range pids {
+			queue := []int{root}
+			for len(queue) > 0 {
+				cur := queue[0]
+				queue = queue[1:]
+				if p, ok := procs[cur]; ok {
+					totalCPU += p.cpu
+					totalRSS += p.rss
+				}
+				queue = append(queue, children[cur]...)
+			}
+		}
+		result[key] = sessionResources{
+			cpuPct: totalCPU,
+			memMB:  float64(totalRSS) / 1024.0,
+		}
+	}
+	return result
+}
+
 // resourceCache holds the last result to avoid re-running ps every 1s tick.
 var resourceCache struct {
 	sync.Mutex
@@ -415,58 +474,11 @@ func collectSessionResources(sessions []sessionData) map[string]sessionResources
 		}
 	}
 
-	// -A (POSIX all-processes), not -e: BSD ps on macOS reads -e as "show
-	// environment". No --no-headers either: it's GNU-only and errors on BSD ps.
-	// The header row that reappears is skipped below since "PID" parses to 0.
-	psOut, err := exec.Command("ps", "-Ao", "pid,ppid,pcpu,rss").Output()
+	psOut, err := exec.Command("ps", psArgs...).Output()
 	if err != nil {
 		return nil
 	}
-
-	children := make(map[int][]int)
-	type procInfo struct {
-		cpu float64
-		rss int64 // KiB
-	}
-	procs := make(map[int]*procInfo)
-
-	for _, line := range strings.Split(strings.TrimSpace(string(psOut)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		pid, _ := strconv.Atoi(fields[0])
-		ppid, _ := strconv.Atoi(fields[1])
-		cpu, _ := strconv.ParseFloat(fields[2], 64)
-		rss, _ := strconv.ParseInt(fields[3], 10, 64)
-		if pid <= 0 {
-			continue
-		}
-		procs[pid] = &procInfo{cpu: cpu, rss: rss}
-		children[ppid] = append(children[ppid], pid)
-	}
-
-	result := make(map[string]sessionResources, len(sessionPIDs))
-	for sess, pids := range sessionPIDs {
-		var totalCPU float64
-		var totalRSS int64
-		for _, root := range pids {
-			queue := []int{root}
-			for len(queue) > 0 {
-				cur := queue[0]
-				queue = queue[1:]
-				if p, ok := procs[cur]; ok {
-					totalCPU += p.cpu
-					totalRSS += p.rss
-				}
-				queue = append(queue, children[cur]...)
-			}
-		}
-		result[sess] = sessionResources{
-			cpuPct: totalCPU,
-			memMB:  float64(totalRSS) / 1024.0,
-		}
-	}
+	result := aggregateResources(sessionPIDs, string(psOut))
 
 	resourceCache.Lock()
 	resourceCache.result = result
@@ -485,8 +497,13 @@ func mergeResources(sessions []sessionData, res map[string]sessionResources) {
 	}
 }
 
-// formatCPU returns a compact CPU% string.
+// formatCPU returns a compact CPU% string. Busy but under 1% reads as "<1%",
+// not a flat 0%: a mirror's figure is divided by the remote's core count, so
+// real work routinely lands below one percent.
 func formatCPU(cpuPct float64) string {
+	if cpuPct > 0 && cpuPct < 1 {
+		return "<1%"
+	}
 	return fmt.Sprintf("%.0f%%", cpuPct)
 }
 
