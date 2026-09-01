@@ -168,8 +168,12 @@ fi
 probe_script+='
 printf '"'"'os=%s\nuid=%s\ntmux=%s\ntmpdir=%s\nsess=%s\nwin=%s\n'"'"' "$os" "$uid" "$tmux_bin" "$tmpdir" "$sess" "$win"'
 
-# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-probe_out="$(ssh "$host" "$probe_script")"
+# ssh hands its command to the remote user's LOGIN shell, which here is fish:
+# it rejects the `var=value` lines above outright, so the probe comes back empty
+# behind a fish parse error on stderr. Feed the script to an explicit bash on
+# stdin instead, the same way lztmux-remote-picker already does. A fish login
+# greeting can still land on stdout, which the key=value parse below ignores.
+probe_out="$(ssh -T "$host" bash -s <<<"$probe_script")"
 
 remote_os="" remote_uid="" remote_tmux="" remote_tmpdir="" probe_sess="" probe_win=""
 while IFS= read -r probe_line; do
@@ -260,8 +264,9 @@ if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
 		# the store path we just resolved), so it needs that directory on its
 		# PATH — the same non-interactive-ssh-PATH problem $remote_tmux above
 		# already had to work around.
-		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir PATH=$(dirname "$remote_tmux"):\$PATH $remote_remux restore"; then
+		# Same login-shell problem as the probe: fish expands the unquoted $PATH
+		# into one argument per element, leaving `env` a PATH of one directory.
+		if ! ssh -T "$host" bash -s <<<"env TMUX_TMPDIR=$remote_tmpdir PATH=$(dirname "$remote_tmux"):\$PATH $remote_remux restore"; then
 			echo "lztmux-remote-open: tmux-remux restore failed on $host" >&2
 			exit 1
 		fi

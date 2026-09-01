@@ -35,34 +35,42 @@ setup() {
 		# command itself spans) so a test can count actual ssh round-trips, not
 		# just substring hits.
 		printf '===SSH-CALL===\n' >>"$SSH_LOG"
-		echo "$*" >>"$SSH_LOG"
+		# The launcher ships multi-line scripts to an explicit `bash -s` on
+		# stdin rather than to the remote login shell, so the command this
+		# invocation really runs is argv plus whatever is piped in.
+		cmd="$*"
+		case "$cmd" in
+		*"bash -s"*) cmd="$cmd
+		$(cat)" ;;
+		esac
+		echo "$cmd" >>"$SSH_LOG"
 		# The launcher's combined probe is recognized by its fixed leading no-op,
 		# without actually interpreting the shell it received. Session/window
 		# resolve here only when the caller didn't already name them (embedded as
 		# *_lit literals).
-		case "$*" in
+		case "$cmd" in
 		*": lztmux-probe;"*)
 			os="${FAKE_UNAME:-Linux}"
 			uid=1000
 			if [ "$os" = Darwin ]; then tmpdir="/tmp/tmux-$uid"; else tmpdir="/run/user/$uid"; fi
-			case "$*" in
-			*"tmpdir_lit="*) tmpdir=$(printf '%s\n' "$*" | sed -n "s/.*tmpdir_lit='\([^']*\)'.*/\1/p") ;;
+			case "$cmd" in
+			*"tmpdir_lit="*) tmpdir=$(printf '%s\n' "$cmd" | sed -n "s/.*tmpdir_lit='\([^']*\)'.*/\1/p") ;;
 			esac
 			sess=""
-			case "$*" in
-			*"sess_lit="*) sess=$(printf '%s\n' "$*" | sed -n "s/.*sess_lit='\([^']*\)'.*/\1/p") ;;
+			case "$cmd" in
+			*"sess_lit="*) sess=$(printf '%s\n' "$cmd" | sed -n "s/.*sess_lit='\([^']*\)'.*/\1/p") ;;
 			*) [ -f "$REMOTE_SERVER" ] && sess="$REMOTE_SESSION" ;;
 			esac
 			win=""
-			case "$*" in
-			*"win_lit="*) win=$(printf '%s\n' "$*" | sed -n "s/.*win_lit='\([^']*\)'.*/\1/p") ;;
+			case "$cmd" in
+			*"win_lit="*) win=$(printf '%s\n' "$cmd" | sed -n "s/.*win_lit='\([^']*\)'.*/\1/p") ;;
 			*) [ -n "$sess" ] && [ -z "${FAKE_NO_WINDOW:-}" ] && win=1 ;;
 			esac
 			printf 'os=%s\nuid=%s\ntmux=%s\ntmpdir=%s\nsess=%s\nwin=%s\n' "$os" "$uid" /usr/bin/tmux "$tmpdir" "$sess" "$win"
 			exit 0
 			;;
 		esac
-		case "$*" in
+		case "$cmd" in
 		*"command -v tmux-remux"*) echo /usr/bin/tmux-remux ;;
 		*"tmux-remux restore"*)
 			if [ -n "${FAKE_RESTORE_FAILS:-}" ]; then
@@ -661,6 +669,32 @@ teardown() {
 # The launcher makes at most one combined ssh probe (resolving whichever of
 # session/window the caller didn't already name) before ever reaching the
 # daemon. These assert that, for each combination of what the caller knows.
+
+# ssh gives its command string to the remote user's LOGIN shell, which on these
+# hosts is fish. fish rejects the probe's `var=value` lines outright, so putting
+# the script in argv returns an empty probe behind a parse error on stderr — not
+# an ssh failure, so the launcher only notices later, on the unusable values.
+@test "the probe script rides stdin into bash, never the remote login shell" {
+	touch "$REMOTE_SERVER"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	# Line 1 of the entry is argv (what the login shell parses), the rest is
+	# stdin (what bash parses).
+	local argv script
+	argv="$(sed -n '2p' "$SSH_LOG")"
+	script="$(sed -n '3,$p' "$SSH_LOG")"
+	[[ $argv == *"-T tp-g6 bash -s" ]]
+	[[ $script == ": lztmux-probe;"* ]]
+
+	# fish is absent from `nix flake check`'s sandbox (see flake.nix's
+	# remote-tests nativeBuildInputs), so this leg only strengthens local runs;
+	# the argv assertion above is what the CI gate relies on.
+	if command -v fish >/dev/null 2>&1; then
+		fish -n <<<"$argv"
+	fi
+}
 
 @test "combined probe: neither session nor window given -> exactly one ssh call before the daemon" {
 	touch "$REMOTE_SERVER"
