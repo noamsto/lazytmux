@@ -61,3 +61,35 @@ func TestRemotePaneOrderExcludesFloats(t *testing.T) {
 		t.Errorf("planPaneOps with remote float = %+v, want no-op %+v", ops, want)
 	}
 }
+
+// #447: a mirrored split was always created with -h and only put on the right
+// axis by the select-layout that followed, so a stacked remote split showed
+// side-by-side for the frames in between.
+func TestSplitAxisFollowsTheRemote(t *testing.T) {
+	// Two cells sharing a column (same X and width), stacked vertically.
+	stacked := controlmode.Layout{W: 80, H: 40, Panes: []controlmode.PaneCell{
+		{ID: "%1", W: 80, H: 20, X: 0, Y: 0},
+		{ID: "%2", W: 80, H: 19, X: 0, Y: 21},
+	}}
+	// Two cells sharing a row, side by side.
+	sideBySide := controlmode.Layout{W: 80, H: 40, Panes: []controlmode.PaneCell{
+		{ID: "%1", W: 40, H: 40, X: 0, Y: 0},
+		{ID: "%2", W: 39, H: 40, X: 41, Y: 0},
+	}}
+	order := []string{"%1", "%2"}
+
+	if got := SplitAxis(stacked, order, "%1", "%2"); got != "-v" {
+		t.Errorf("stacked: axis = %q, want -v", got)
+	}
+	if got := SplitAxis(sideBySide, order, "%1", "%2"); got != "-h" {
+		t.Errorf("side by side: axis = %q, want -h", got)
+	}
+	// An id the layout does not carry falls back to what it always was, so an
+	// unclassifiable cell costs a wrong frame rather than a wrong layout.
+	if got := SplitAxis(stacked, order, "%nope", "%2"); got != "-h" {
+		t.Errorf("unknown source: axis = %q, want -h", got)
+	}
+	if got := SplitAxis(stacked, order, "%1", "%nope"); got != "-h" {
+		t.Errorf("unknown target: axis = %q, want -h", got)
+	}
+}
