@@ -1672,7 +1672,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	cMauve := ansiFg(thmMauve)
 	cBlue := ansiFg(thmBlue)
 	cDim := ansiFg(thmSubtext0)
-	cPeach := ansiFg(envOrMap("THM_PEACH", tmuxOpts, "@thm_peach", "#fab387"))
+	hostColor := hostColorFunc(tmuxOpts)
 	rc := newResourceColors(tmuxOpts)
 	reset := "\033[0m"
 	dim := "\033[2m"
@@ -1686,6 +1686,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 
 	type row struct {
 		sess   *sessionData
+		name   string // display name; a mirror drops the host its Host cell already carries
 		icons  string
 		iconDW int
 	}
@@ -1693,13 +1694,14 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	maxName, maxIconDW := 0, 0
 	for i := range sessions {
 		s := &sessions[i]
-		if len(s.name) > maxName {
-			maxName = len(s.name)
+		name := sessionDisplayName(s.name, s.bridgeHost)
+		if len(name) > maxName {
+			maxName = len(name)
 		}
 		icons, dw := buildProcIcons(s.procs, maxIconsPicker)
 		icons, dw = appendAgentIcon(icons, dw, s.agent, theme, dim, reset)
 		icons, dw = appendIssueIDs(icons, dw, s.agent.issues, cDim, reset)
-		rows[i] = row{sess: s, icons: icons, iconDW: dw}
+		rows[i] = row{sess: s, name: name, icons: icons, iconDW: dw}
 		if dw > maxIconDW {
 			maxIconDW = dw
 		}
@@ -1784,7 +1786,11 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		plain:   hdrPlain,
 	})
 	for i, r := range rows {
-		pad := strings.Repeat(" ", max(0, maxName-len(r.sess.name)))
+		pad := strings.Repeat(" ", max(0, maxName-len(r.name)))
+		cName := cMauve
+		if r.sess.bridgeHost != "" {
+			cName = hostColor(r.sess.bridgeHost)
+		}
 		icons := r.icons
 		if icons == "" {
 			icons = emptyIcons
@@ -1796,10 +1802,10 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		cpuPad := strings.Repeat(" ", max(0, maxCPU-len(cpuStrs[i])))
 		memPad := strings.Repeat(" ", max(0, maxMem-len(memStrs[i])))
 		display := fmt.Sprintf("%s %s%s  %s%s  %s%s %s %s%s  %s %s",
-			cMauve+iSess+reset,
-			cMauve+r.sess.name+reset,
+			cName+iSess+reset,
+			cName+r.name+reset,
 			pad,
-			hostCell(r.sess.bridgeHost, cPeach),
+			hostCell(r.sess.bridgeHost, cName),
 			icons,
 			cpuPad,
 			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
@@ -1811,7 +1817,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		)
 		resPlain := cpuPad + cpuStrs[i] + " / " + memPad + memStrs[i]
 		plain := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
-			iSess, r.sess.name, pad, hostCell(r.sess.bridgeHost, ""),
+			iSess, r.name, pad, hostCell(r.sess.bridgeHost, ""),
 			stripANSI(icons), resPlain, iDir, shortPath,
 		)
 		items = append(items, listItem{

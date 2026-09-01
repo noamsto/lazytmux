@@ -901,3 +901,46 @@ func TestIsCachedRemoteSelfAliasRejectsUntrustedMarker(t *testing.T) {
 		t.Fatal("world-writable cache dir must not count as cached")
 	}
 }
+
+func TestSessionDisplayName(t *testing.T) {
+	cases := []struct {
+		name, host, want string
+	}{
+		{"work", "", "work"},
+		{"tp-g6-work", "tp-g6", "work"},
+		{"tp-g6-work-remote-2", "tp-g6", "work-remote-2"},
+		// The prefix is the whole name: trimming would leave the row blank.
+		{"tp-g6-", "tp-g6", "tp-g6-"},
+		// A renamed mirror keeps whatever the user called it.
+		{"tp-g6", "tp-g6", "tp-g6"},
+		{"scratch-1", "tp-g6", "scratch-1"},
+	}
+	for _, c := range cases {
+		if got := sessionDisplayName(c.name, c.host); got != c.want {
+			t.Errorf("sessionDisplayName(%q, %q) = %q, want %q", c.name, c.host, got, c.want)
+		}
+	}
+}
+
+func TestHostColorFunc(t *testing.T) {
+	hostColor := hostColorFunc(nil)
+	if got := hostColor(""); got != "" {
+		t.Errorf("empty host got %q, want no color", got)
+	}
+	palette := make(map[string]bool, len(hostPalette))
+	for _, p := range hostPalette {
+		palette[ansiFg(p[1])] = true
+	}
+	for _, host := range []string{"tp-g6", "lab", "mbp", "g5"} {
+		got := hostColor(host)
+		if !palette[got] {
+			t.Errorf("%s got %q, which is not in the palette", host, got)
+		}
+		if again := hostColor(host); again != got {
+			t.Errorf("%s got %q then %q", host, got, again)
+		}
+		if fresh := hostColorFunc(nil)(host); fresh != got {
+			t.Errorf("%s got %q, a fresh func gave %q", host, got, fresh)
+		}
+	}
+}
