@@ -702,6 +702,16 @@ func TestParseRemoteProbeOutput(t *testing.T) {
 	}
 }
 
+// An unreachable host's probe is parsed too, with nothing on stdout.
+func TestParseRemoteProbeOutputShort(t *testing.T) {
+	for _, stdout := range []string{"", "\n", "abc123\n", "abc123\nnoams\n"} {
+		got := parseRemoteProbeOutput(stdout)
+		if len(got.Sessions) != 0 {
+			t.Errorf("stdout %q: sessions = %v, want none", stdout, got.Sessions)
+		}
+	}
+}
+
 func TestCollectRemoteItemsDropsSelfHost(t *testing.T) {
 	const selfID = "test-machine-id-self"
 	local := remoteIdentity{MachineID: selfID, User: "noams"}
