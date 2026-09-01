@@ -277,9 +277,31 @@ func themeApplyScript(theme string) string {
 // and this is POSIX. Like carouselResolveScript it must contain zero single-quote
 // characters so double tmuxQuote only wraps. tool is a remoteTools key, so it is
 // [a-z-] and needs no quoting of its own.
+//
+// The PATH restore is what makes the bare name resolvable at all. tmux hands a
+// new pane its global environ, which carries every store path lazytmux's wrapper
+// prepended — but split-window spawns through default-shell, and fish on NixOS
+// rebuilds PATH from the login profile instead of inheriting it (measured on the
+// remote: 67 entries in, 10 out). A tool that reaches the remote tmux only
+// through the wrapper is then invisible; prdash and tmux-gh-dash are exactly
+// that, while lazygit and yazi survive only by also being in the user profile.
+//
+// Prepended, not replaced, and guarded on a non-empty PATH= line: an unset
+// variable prints nothing and exits 1, and blindly assigning that leaves the
+// pane with no PATH at all — not even the sleep below would resolve, so the
+// fallback would flash shut instead of showing its message.
+//
+// The trim is ${p#*=}, never ${p#PATH=}: split-window does NOT format-expand its
+// shell-command (measured, next-3.8 — #P and #{pane_id} arrive byte-identical),
+// but run-shell DOES, and there #P expands to the pane index, corrupting that
+// spelling to ${p1ATH=}. #* passes through both. Keep this body #*-only so it
+// stays correct if it ever moves near a run-shell verb, or if a tmux bump
+// extends expansion to split-window.
 func toolResolveScript(tool string) string {
 	return fmt.Sprintf(
-		"command -v %s >/dev/null 2>&1 && exec %s; "+
+		"p=$(tmux show-environment -g PATH 2>/dev/null); "+
+			"case $p in PATH=?*) PATH=${p#*=}:$PATH; export PATH;; esac; "+
+			"command -v %s >/dev/null 2>&1 && exec %s; "+
 			"echo lazytmux: %s is not on PATH on this host; sleep 5",
 		tool, tool, tool)
 }
