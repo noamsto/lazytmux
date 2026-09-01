@@ -115,7 +115,6 @@ Press <kbd>prefix</kbd> then <kbd>C-Space</kbd> for the in-terminal cheatsheet.
 | <kbd>a</kbd> | Claude-window picker (only windows with a running agent) |
 | <kbd>i</kbd> | Issue / PR enrich card (Linear/GitHub + PR state) |
 | <kbd>g</kbd> | LazyGit popup |
-| <kbd>G</kbd> | gh-dash popup |
 | <kbd>b</kbd> | btop popup |
 | <kbd>y</kbd> | yazi (new window) |
 | <kbd>p</kbd> | Scratchpad |

@@ -132,7 +132,7 @@ var (
 	// The closed set of tools a bind may launch on the remote: a name reaches a
 	// remote shell only by being a key here, so the socket peer cannot smuggle
 	// one in.
-	remoteTools  = map[string]bool{"prdash": true, "lazygit": true, "tmux-gh-dash": true, "yazi": true}
+	remoteTools  = map[string]bool{"prdash": true, "lazygit": true, "yazi": true}
 	remoteThemes = map[string]bool{"dark": true, "light": true}
 )
 

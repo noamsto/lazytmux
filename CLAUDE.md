@@ -364,7 +364,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 | Remote agent status | lazytmux's `claude-status-update` (it stamps the pane options the daemon polls) |
 | Cold start (`prefix + s` on a serverless host) | `tmux-startup.service` / the launchd agent, plus lingering |
 | Remote-side picker (`prefix + s` `^o`) | `lztmux-remote-picker` (`remote.exposePickOnPath`, default true) |
-| Tool binds across a mirror (`prefix + p`/`g`/`G`/`y`) | whichever of `prdash`, `lazygit`, `tmux-gh-dash`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. |
+| Tool binds across a mirror (`prefix + p`/`g`/`y`) | whichever of `prdash`, `lazygit`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. |
 | Theme fan-out (any light/dark toggle) | `theme-toggle` — it ships from the desktop profile, so a headless remote has none and the verb is silently a no-op there. |
 
 `lztmux-remote-picker` doubles as the picker's capability probe, so its absence

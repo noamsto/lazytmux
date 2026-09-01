@@ -249,13 +249,6 @@
       (builtins.readFile ../scripts/${name}.sh)
     );
 
-  # gh-dash launcher: needs the pinned gh-dash + yq store paths.
-  mkScriptGhDash = name:
-    pkgs.writeShellScriptBin name (
-      builtins.replaceStrings ["@gh_dash@" "@yq@"] ["${gh-dash}/bin/gh-dash" "${pkgs.yq-go}/bin/yq"]
-      (builtins.readFile ../scripts/${name}.sh)
-    );
-
   # claude-status needs lib substitution but not self-reference
   mkScriptWithLibs = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -347,7 +340,6 @@
     "tmux-issue-stamp-github"
     "tmux-pr-enrich"
     "tmux-splash-maybe"
-    "tmux-gh-dash"
     "lazytmux-log-event"
     "lazytmux-debug"
     "codex-relaunch-stamp"
@@ -559,8 +551,6 @@
     then mkScriptWithLibs name
     else if name == "tmux-splash-maybe"
     then mkScriptSplash name
-    else if name == "tmux-gh-dash"
-    then mkScriptGhDash name
     else if name == "tmux-reconcile-window"
     then mkScriptReconcile name
     else if builtins.elem name scriptsWithLog
@@ -890,7 +880,6 @@
     # across the remote bridge in principle where a popup can never be).
     ${bridgedFloatTool "g" "lazygit" floatFull "-c '#{pane_current_path}' " "lazygit \\; set -p @pane_label lazygit"}
     ${floatBind "b" floatFull "" "btop \\; set -p @pane_label btop"}
-    ${bridgedFloatTool "G" "tmux-gh-dash" floatFull "-c '#{pane_current_path}' " "${script.tmux-gh-dash}/bin/tmux-gh-dash \\; set -p @pane_label gh-dash"}
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
@@ -1240,22 +1229,6 @@
   # so no self-referential substitution needed
   tmuxConf = tmuxConfText;
 
-  # Pinned to 4.23.2: the bubbletea-v2 rewrite in 4.24.0 panics in
-  # issueview.renderBody when the issues view syncs its preview sidebar, which
-  # closes the `prefix + G` popup (display-popup -E). Unpin once upstream ships
-  # a fixed 4.24.x. Shared with the module's popupTools so a single version runs.
-  gh-dash = pkgs.gh-dash.overrideAttrs (_: rec {
-    version = "4.23.2";
-    src = pkgs.fetchFromGitHub {
-      owner = "dlvhdr";
-      repo = "gh-dash";
-      tag = "v${version}";
-      hash = "sha256-C06LPVoE23ITJpMG0x75Djgeup+eb5uYwA8wL7xxvWU=";
-    };
-    vendorHash = "sha256-4AbeoH0l7eIS7d0yyJxM7+woC7Q/FCh0BOJj3d1zyX4=";
-    ldflags = ["-s" "-w" "-X github.com/dlvhdr/gh-dash/v4/cmd.Version=${version}" "-buildid="];
-  });
-
   # --- Wrapped tmux binary ---
   tmux-wrapped = pkgs.symlinkJoin {
     name = "tmux-wrapped";
@@ -1264,10 +1237,10 @@
     postBuild = ''
       wrapProgram $out/bin/tmux \
         --add-flags "-f ${tmuxConf}" \
-        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [picker-generate pkgs.bash pkgs.lazygit gh-dash pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.curl pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa pkgs.socat] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
+        --prefix PATH : ${lib.makeBinPath ([tmuxPkg] ++ scripts ++ [picker-generate pkgs.bash pkgs.lazygit pkgs.yazi pkgs.btop pkgs.zoxide pkgs.jq pkgs.curl pkgs.util-linux pkgs.coreutils pkgs.xdg-utils pkgs.chafa pkgs.socat] ++ lib.optional (carousel-toggle != null) carousel-toggle ++ lib.optional (prdash != null) prdash)}
     '';
     meta.mainProgram = "tmux";
   };
 in {
-  inherit tmux-wrapped tmuxConf script gh-dash;
+  inherit tmux-wrapped tmuxConf script;
 }
