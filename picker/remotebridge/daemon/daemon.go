@@ -223,6 +223,12 @@ func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *r
 			}
 			lastCheck = now
 			w, h := area()
+			// The client size first: it governs what a window created after this
+			// point is born at, while the per-window caps below govern the ones
+			// that already exist (#449).
+			if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) {
+				send(ClientSizeCmd(w, h))
+			}
 			for _, remoteID := range reg.remoteIDs() {
 				if cv.need(remoteID, w, h) {
 					send(ConvergeCmd(remoteID, w, h))
@@ -382,6 +388,16 @@ func Run(cfg Config) error {
 	router := NewRouter()
 	async := &asyncQueue{}
 	rt := newRoundTrip(pump, router, async, st)
+	// Declared here rather than beside the registry below: the client-size send
+	// that follows is the converger's first user.
+	cv := newConverger()
+
+	// Before anything else the remote might act on: give this control client a
+	// size, so a window created on the remote is born at the local client's
+	// size instead of tmux's 80-column control-client default (#449).
+	if w, h := cfg.LocalArea(); w > 0 && h > 0 && cv.need(clientSizeKey, w, h) {
+		st.send(ClientSizeCmd(w, h))
+	}
 
 	// The implicit attach reply needs no draining: it is flagged 0, so the reply
 	// reader skips it like any other block we did not ask for.
@@ -448,7 +464,6 @@ func Run(cfg Config) error {
 	}
 
 	reg := newRegistry()
-	cv := newConverger()
 	// nudgePath is the file registerResizeHook's client-resized hook touches;
 	// removed here so a stale touch from a prior daemon on this same socket
 	// path can't be mistaken for a resize before the hook ever fires again.
