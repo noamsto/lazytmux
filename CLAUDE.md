@@ -87,6 +87,9 @@ Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to a
   one cell and four bytes, so `len`-based padding puts each column three cells
   short. The session column's label is the leading session glyph itself, which
   already sits in that cell on every row, so the name column's header is blank.
+  Text labels sit at their column's left edge; the CPU and Mem labels mirror each
+  other around the ` / ` (CPU padded left, Mem padded right) so the pair reads as
+  one unit. Padding never changes a field's total width — Path would drift.
 - **One pinned line** (`governingHeaderIdx` + `renderHeaderItem`) carries
   whichever header governs the rows beneath it — the column glyphs through the
   session list, the divider once the window starts inside Remote or New session,

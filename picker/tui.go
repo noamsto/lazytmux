@@ -1770,9 +1770,14 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	// Build header row. Every label is a single glyph, so each cell is sized by
 	// display width — a nerd glyph is one cell but four bytes, and len() here
 	// would pad every column three cells short.
+	//
+	// The CPU and Mem labels mirror each other around the " / ": CPU padded on
+	// the left, Mem on the right, so the pair reads as one CPU/Mem unit rather
+	// than two labels adrift in their fields. Each field keeps the width the
+	// rows give it, so Path stays in place.
 	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-visibleWidth(iCPU)))
 	hdrMemPad := strings.Repeat(" ", max(0, maxMem-visibleWidth(iMem)))
-	hdrRes := hdrCPUPad + iCPU + " / " + hdrMemPad + iMem
+	hdrRes := hdrCPUPad + iCPU + " / " + iMem + hdrMemPad
 	// The session column's label is the leading session glyph itself, which
 	// sits in the same cell as every row's own — so the name column is blank.
 	hdrName := strings.Repeat(" ", maxName)

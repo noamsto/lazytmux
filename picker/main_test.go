@@ -96,6 +96,19 @@ func TestSessionHeaderIsGlyphOnlyAndAligned(t *testing.T) {
 	if h, r := col(hdr.plain, iconHost), col(items[2].plain, "tp-g6 "); h != r {
 		t.Errorf("host column starts at %d in the header but %d in the row", h, r)
 	}
+	// The CPU and Mem labels mirror each other around the separator: CPU on its
+	// left, Mem on its right, reading as one CPU/Mem unit.
+	if !strings.Contains(hdr.plain, iconCPU+" / "+iconMem) {
+		t.Errorf("CPU and Mem glyphs should flank the separator: %q", hdr.plain)
+	}
+	// Both header and rows must agree on where the resource field ends, or Path
+	// drifts: the label moving left may not change the field's width.
+	if h, r := col(hdr.plain, " / "), col(items[1].plain, " / "); h != r {
+		t.Errorf("the ' / ' sits at %d in the header but %d in a row", h, r)
+	}
+	if h, r := col(hdr.plain, iconDir), col(items[1].plain, iconDir); h != r {
+		t.Errorf("path column starts at %d in the header but %d in the row", h, r)
+	}
 }
 
 func TestUnquoteTmuxOptValue(t *testing.T) {
