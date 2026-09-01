@@ -1107,16 +1107,28 @@ func readLayout(rt roundTrip, target string) (l0 controlmode.Layout, active stri
 // with the pane through select-layout and swap-pane (verified), so this is the
 // only place it needs writing.
 func spawnRenderer(cfg Config, target, remotePane string) error {
-	if err := cfg.LocalTmux("respawn-pane", "-k",
-		"-e", "LZTMUX_RENDER_SOCK="+cfg.SockPath,
-		"-e", "LZTMUX_RENDER_PANE="+remotePane,
-		"-t", target,
-		cfg.RendererBin,
-	); err != nil {
+	if err := cfg.LocalTmux(append([]string{"respawn-pane", "-k"},
+		append(rendererSpawnArgs(cfg, remotePane), "-t", target, cfg.RendererBin)...)...); err != nil {
 		return err
 	}
-	cfg.LocalTmux("set-option", "-p", "-t", target, "@bridge_pane", remotePane)
+	markRendererPane(cfg, target, remotePane)
 	return nil
+}
+
+// rendererSpawnArgs is the environment a renderer pane needs, shared by
+// respawn-pane (an existing pane) and split-window (a pane created to run it
+// directly, which is how a mirrored split avoids painting a shell first).
+func rendererSpawnArgs(cfg Config, remotePane string) []string {
+	return []string{
+		"-e", "LZTMUX_RENDER_SOCK=" + cfg.SockPath,
+		"-e", "LZTMUX_RENDER_PANE=" + remotePane,
+	}
+}
+
+// markRendererPane stamps the reverse mapping a keybind reads to reach the
+// remote pane this local one renders.
+func markRendererPane(cfg Config, target, remotePane string) {
+	cfg.LocalTmux("set-option", "-p", "-t", target, "@bridge_pane", remotePane)
 }
 
 // acceptConns accepts connections on l until it's closed and dispatches each on

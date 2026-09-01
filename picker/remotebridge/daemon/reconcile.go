@@ -194,12 +194,28 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 	// at lastIdx+1 (verified) — the old code split the window and relied on the
 	// new pane implicitly taking the loop index. The re-read after each split
 	// is what names the pane just created.
+	//
+	// The pane is created on the axis the remote used and already running the
+	// renderer, rather than -h with a shell that respawn-pane then replaces
+	// (#447). Both were visible: a stacked remote split showed side-by-side
+	// until select-layout landed, and the shell painted a prompt into the pane
+	// first. srcID is the pane being split from — the last surviving remote
+	// pane for the first append, then each previous append in turn.
+	srcID := ""
+	for i := len(remote) - 1; i >= 0; i-- {
+		if indexOf(newRemote, remote[i]) >= 0 {
+			srcID = remote[i]
+			break
+		}
+	}
 	for _, id := range ops.Append {
 		last, ok := localPaneAt(w, len(w.localPanes)-1)
 		if !ok {
 			return fmt.Errorf("reconcile: window %s has no pane to split", w.localWin)
 		}
-		if err := cfg.LocalTmux("split-window", "-h", "-t", last); err != nil {
+		axis := SplitAxis(L, newRemote, srcID, id)
+		split := append([]string{"split-window", axis}, rendererSpawnArgs(cfg, id)...)
+		if err := cfg.LocalTmux(append(split, "-t", last, cfg.RendererBin)...); err != nil {
 			return fmt.Errorf("reconcile split-window: %w", err)
 		}
 		if err := refreshLocalPanes(cfg, w); err != nil {
@@ -209,9 +225,8 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 		if !ok {
 			return fmt.Errorf("reconcile: split of %s produced no pane", w.localWin)
 		}
-		if err := spawnRenderer(cfg, added, id); err != nil {
-			return fmt.Errorf("reconcile spawn renderer for %s: %w", id, err)
-		}
+		markRendererPane(cfg, added, id)
+		srcID = id
 	}
 
 	if len(ops.Append) > 0 {
