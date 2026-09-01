@@ -115,6 +115,36 @@ Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when 
 
 Git worktree management is handled by the third-party `worktrunk` tool, configured via the home-manager module's `worktrunk.enable` option.
 
+### Remote Session Resources
+
+The session picker's CPU/Mem columns on a mirror row measure the **remote**
+session, not the local renderers its panes actually run (`picker/remote_resources.go`).
+
+- **One aggregator, two sources.** `aggregateResources` (pure) walks the process
+  tree from a set of root PIDs over one `ps psArgs` table. The local leg forks
+  `ps`; the remote leg fetches the same table over ssh. Neither owns the walk.
+- **The payload is one ssh round-trip** per host — core count, then
+  `<session>|<pane_pid>` lines, then a `PSTABLE` separator, then the process
+  table. The separator **must start with a letter**: the remote's login shell is
+  whatever the user set, and fish reads `echo --` as end-of-options and prints a
+  blank line, which silently swallowed it and left every mirror at 0% / 0M.
+  `getconf _NPROCESSORS_ONLN`, never `nproc` — coreutils-only, absent on macOS.
+- **CPU is normalised by the remote's core count**, so the column reads as "% of
+  that machine". A raw `ps` sum is per-core: a 24-core remote reports figures a
+  column sized to `numCPU * 100` for *this* machine cannot hold. The knock-on is
+  that real remote work often lands under 1%, which is why `formatCPU` renders
+  `<1%` instead of rounding to a flat `0%`.
+- **Never blocks the render.** `remoteResourcesFor` returns what is cached and
+  kicks a background refresh (`remoteResourceTTL`, 10s — an ssh round-trip where
+  the local leg costs a fork). A host already in flight is skipped, not queued,
+  so the 1s item rebuild cannot pile ssh processes behind a slow host, and a
+  failed fetch keeps the previous values.
+- **A mirror with no answer renders `-`, not its local figures** (`resUnknown`).
+  Those figures measure the renderer, and a wrong number is worse than an
+  absent one — an unreachable host shows `-` indefinitely, which is the truth.
+- Remote needs nothing new on PATH: `tmux` and `ps` only, which the existing
+  session probe already assumes.
+
 ### Remote Agent Status
 
 A mirror window's local panes run renderers, so nothing writes

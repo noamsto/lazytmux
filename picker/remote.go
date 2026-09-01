@@ -26,17 +26,31 @@ const remoteProbeTimeout = 3 * time.Second
 // identity rides the existing ssh probe with no extra round trip.
 const remoteIdentityPreamble = `cat /etc/machine-id 2>/dev/null || sysctl -n kern.uuid 2>/dev/null || hostname; id -un`
 
-// remoteListSessionsCmd lists remote tmux sessions under the same TMUX_TMPDIR /
+// remoteListSessionsBody lists the remote's tmux sessions. Stdout of the full
+// command begins with the identity preamble (machine-id line, username line),
+// then session names.
+var remoteListSessionsBody = remoteTmuxCmd(`list-sessions -F '#{session_name}'`)
+
+// remoteTmuxBin resolves the remote's tmux without a shell assignment: PATH
+// first, then the nix per-user profile a non-interactive ssh does not see.
+const remoteTmuxBin = `$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux)`
+
+// remoteTmuxCmd runs one tmux argument string under the same TMUX_TMPDIR /
 // binary resolution as lztmux-remote-open. The socket dir is OS-dependent:
 // /run/user/<uid> on Linux, tmux's default /tmp/tmux-<uid> on macOS (no
-// $XDG_RUNTIME_DIR) — try Linux first, then macOS; a missing socket dir fails
-// fast, so the wrong guess costs a local stat. Must stay fish-safe: no
-// `var=value` shell assignments — fish login shells reject them and the picker
-// would mark a reachable host unreachable. Stdout begins with the identity
-// preamble (machine-id line, username line), then session names.
-const remoteListSessionsBody = `env TMUX_TMPDIR=/run/user/$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null || env TMUX_TMPDIR=/tmp/tmux-$(id -u) $(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux) list-sessions -F '#{session_name}' 2>/dev/null`
+// $XDG_RUNTIME_DIR), so it tries Linux first and a wrong guess costs a stat.
+// Both legs are silenced and OR'd, so a missing server yields empty stdout
+// rather than an error a caller would read as unreachable. Everything it emits
+// must stay fish-safe: no `var=value` assignments — fish login shells reject
+// them, and the picker would mark a reachable host unreachable.
+func remoteTmuxCmd(args string) string {
+	leg := func(tmpdir string) string {
+		return `env TMUX_TMPDIR=` + tmpdir + ` ` + remoteTmuxBin + ` ` + args + ` 2>/dev/null`
+	}
+	return leg(`/run/user/$(id -u)`) + ` || ` + leg(`/tmp/tmux-$(id -u)`)
+}
 
-const remoteListSessionsCmd = remoteIdentityPreamble + `; ` + remoteListSessionsBody
+var remoteListSessionsCmd = remoteIdentityPreamble + `; ` + remoteListSessionsBody
 
 // remoteSelfCacheDir holds alias→self verdicts so pendingRemoteItems can omit
 // known-self hosts on the first paint without another ssh probe.

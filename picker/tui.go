@@ -1733,6 +1733,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 
 	if withResources {
 		mergeResources(sessions, <-resCh)
+		mergeRemoteResources(sessions)
 	}
 
 	// Pre-compute CPU and MEM strings separately so the "/" aligns
@@ -1740,7 +1741,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	memStrs := make([]string, len(rows))
 	maxCPU, maxMem := cpuColWidth(), 0
 	for i, r := range rows {
-		if withResources {
+		if withResources && !r.sess.resUnknown {
 			cpuStrs[i] = formatCPU(r.sess.cpuPct)
 			memStrs[i] = formatMem(r.sess.memMB)
 		} else {
