@@ -83,3 +83,156 @@ func TestHintsNameTheRemoteKill(t *testing.T) {
 		t.Errorf("hints on a local row = %q, want a plain ^x:kill", got)
 	}
 }
+
+// stickyItems is a session-mode list: column header, sessions, Remote section,
+// New session section — the shape renderList's pinned line has to cope with.
+func stickyItems() []listItem {
+	items := []listItem{{display: "COLHDR", plain: "COLHDR", isColumnHeader: true}}
+	for _, n := range []string{"lazytmux", "tp-g6-money", "nix-config", "aeye", "agent-smith"} {
+		items = append(items, listItem{target: n, display: n, plain: n, session: n})
+	}
+	items = append(items, listItem{
+		isHeader: true, isRemoteHeader: true,
+		headerLabel: "Remote", headerIcon: "H",
+		display: "── Remote ──", plain: "── Remote ──",
+	})
+	for _, n := range []string{"tp-g6", "work", "spare"} {
+		items = append(items, listItem{target: "remote:" + n, display: n, plain: n, isRemoteRow: true, remoteHost: "tp-g6"})
+	}
+	items = append(items, listItem{
+		isHeader: true, isZoxideHeader: true,
+		headerLabel: "New session", headerIcon: "D",
+		display: "── New session ──", plain: "── New session ──",
+	})
+	for _, n := range []string{"~/src/foo", "~/src/bar"} {
+		items = append(items, listItem{createPath: n, display: n, plain: n})
+	}
+	return items
+}
+
+func TestGoverningHeaderIdx(t *testing.T) {
+	items := stickyItems()
+	cases := map[int]int{
+		0:  0, // the column header labels itself
+		3:  0, // a session row is labelled by the column header
+		6:  6, // the Remote divider labels itself
+		8:  6, // a remote row is labelled by the Remote divider
+		10: 10,
+		12: 10,
+	}
+	for start, want := range cases {
+		if got := governingHeaderIdx(items, start); got != want {
+			t.Errorf("governingHeaderIdx(start=%d) = %d, want %d", start, got, want)
+		}
+	}
+	// Past the end clamps rather than panicking.
+	if got := governingHeaderIdx(items, len(items)+5); got != 10 {
+		t.Errorf("out-of-range start gave %d, want 10", got)
+	}
+	// Under a query nothing above matches: no header to pin.
+	if got := governingHeaderIdx([]listItem{{target: "a"}, {target: "b"}}, 1); got != -1 {
+		t.Errorf("headerless list gave %d, want -1", got)
+	}
+}
+
+func renderedLines(m tuiModel) []string {
+	out := strings.Split(m.renderList(), "\n")
+	for i := range out {
+		out[i] = strings.TrimRight(stripANSI(out[i]), " ")
+	}
+	return out
+}
+
+func TestRenderListPinsColumnHeaderWithoutRepeatingIt(t *testing.T) {
+	m := tuiModel{width: 46, height: 12, visible: stickyItems(), cursor: 1}
+	lines := renderedLines(m)
+	if !strings.Contains(lines[0], "COLHDR") {
+		t.Fatalf("line 0 = %q, want the pinned column header", lines[0])
+	}
+	// Pinned and also drawn inline would waste one of very few rows.
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, "COLHDR") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("column header appears %d times, want 1:\n%s", n, strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[1], "lazytmux") {
+		t.Errorf("line 1 = %q, want the first session row", lines[1])
+	}
+}
+
+func TestRenderListPinsTheSectionYouScrolledInto(t *testing.T) {
+	items := stickyItems()
+	m := tuiModel{width: 46, height: 12, visible: items, cursor: len(items) - 1}
+	lines := renderedLines(m)
+	if !strings.Contains(lines[0], "Remote") {
+		t.Fatalf("line 0 = %q, want the Remote divider pinned once scrolled past it", lines[0])
+	}
+	if strings.Contains(lines[0], "COLHDR") {
+		t.Errorf("column header must not stay pinned below its own section")
+	}
+}
+
+func TestRenderListHeightIsConstantAcrossScroll(t *testing.T) {
+	items := stickyItems()
+	want := -1
+	for cursor := range items {
+		m := tuiModel{width: 46, height: 12, visible: items, cursor: cursor}
+		got := len(strings.Split(m.renderList(), "\n"))
+		if want == -1 {
+			want = got
+		}
+		if got != want {
+			t.Fatalf("cursor=%d rendered %d lines, want %d — the list must not shift height as it scrolls", cursor, got, want)
+		}
+	}
+}
+
+func TestRenderListKeepsCursorRowVisible(t *testing.T) {
+	items := stickyItems()
+	for cursor := range items {
+		if items[cursor].isHeader || items[cursor].isColumnHeader {
+			continue
+		}
+		m := tuiModel{width: 46, height: 12, visible: items, cursor: cursor}
+		if !strings.Contains(m.renderList(), "▶ ") {
+			t.Errorf("cursor=%d (%s) is off-screen", cursor, items[cursor].plain)
+		}
+	}
+}
+
+func TestRenderHeaderItemFillsExactWidth(t *testing.T) {
+	m := tuiModel{width: 46, height: 12}
+	item := listItem{isHeader: true, headerLabel: "Remote", headerIcon: "H", display: "unused"}
+	line := m.renderHeaderItem(item, 46)
+	// The two leading spaces every list line carries are added by renderList.
+	if got := visibleWidth(line); got != 44 {
+		t.Errorf("header width = %d, want 44 (46 minus the row indent)", got)
+	}
+	plain := stripANSI(line)
+	if !strings.Contains(plain, "Remote") || !strings.Contains(plain, "H") {
+		t.Errorf("header = %q, want the label and its glyph", plain)
+	}
+	if !strings.HasSuffix(plain, "─") {
+		t.Errorf("header = %q, want the rule running to the edge", plain)
+	}
+}
+
+func TestRenderHeaderItemNarrowDoesNotOverflow(t *testing.T) {
+	m := tuiModel{width: 8, height: 12}
+	item := listItem{isHeader: true, headerLabel: "New session", headerIcon: "D"}
+	if got := visibleWidth(m.renderHeaderItem(item, 8)); got > 20 {
+		t.Errorf("narrow header width = %d; renderList clips, but it must not build a rule from a negative fill", got)
+	}
+}
+
+func TestRenderHeaderItemPassesThroughNonSectionHeaders(t *testing.T) {
+	m := tuiModel{width: 46, height: 12}
+	item := listItem{isColumnHeader: true, display: "COLHDR-DISPLAY"}
+	if got := m.renderHeaderItem(item, 46); got != "COLHDR-DISPLAY" {
+		t.Errorf("got %q, want the column header's own display untouched", got)
+	}
+}

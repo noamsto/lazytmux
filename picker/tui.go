@@ -24,10 +24,15 @@ type listItem struct {
 	plain          string // display stripped of ANSI (cached for width)
 	searchText     string // filterable text (name, branch — no paths/icons)
 	isHeader       bool   // session header row
+	isColumnHeader bool   // the session list's glyph column-label row
 	isZoxideHeader bool   // the "── New session ──" divider
 	isRemoteHeader bool   // the "── Remote ──" divider
-	session        string // owning session name (for kill)
-	groupKey       string // window-mode header key this row re-attaches to
+	// headerLabel/headerIcon let renderList rebuild a section divider at the
+	// real popup width, which the collectors do not know.
+	headerLabel string
+	headerIcon  string
+	session     string // owning session name (for kill)
+	groupKey    string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
 	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
 	bridgePane      string // window row: @bridge_pane — the remote pane whose window this mirrors
@@ -1668,6 +1673,10 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	thmSubtext0 := envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8")
 	iDir := envOrMap("PICKER_ICON_DIR", tmuxOpts, "@icon_dir", iconDir)
 	iSess := envOrMap("PICKER_ICON_SESSION", tmuxOpts, "@icon_session", iconSession)
+	iHost := envOrMap("PICKER_ICON_HOST", tmuxOpts, "@icon_host", iconHost)
+	iProcs := envOrMap("PICKER_ICON_PROCS", tmuxOpts, "@icon_procs", iconProcs)
+	iCPU := envOrMap("PICKER_ICON_CPU", tmuxOpts, "@icon_cpu", iconCPU)
+	iMem := envOrMap("PICKER_ICON_MEM", tmuxOpts, "@icon_mem", iconMem)
 
 	cMauve := ansiFg(thmMauve)
 	cBlue := ansiFg(thmBlue)
@@ -1726,7 +1735,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		if hostCol == 0 {
 			return ""
 		}
-		tail := strings.Repeat(" ", hostCol-len(host)) + "  "
+		tail := strings.Repeat(" ", max(0, hostCol-visibleWidth(host))) + "  "
 		if host == "" || color == "" {
 			return host + tail
 		}
@@ -1758,32 +1767,34 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		}
 	}
 
-	// Build header row
-	hdrCPU := "CPU"
-	hdrMem := "Mem"
-	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-len(hdrCPU)))
-	hdrMemPad := strings.Repeat(" ", max(0, maxMem-len(hdrMem)))
-	hdrRes := hdrCPUPad + hdrCPU + " / " + hdrMemPad + hdrMem
-	hdrDisplay := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
+	// Build header row. Every label is a single glyph, so each cell is sized by
+	// display width — a nerd glyph is one cell but four bytes, and len() here
+	// would pad every column three cells short.
+	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-visibleWidth(iCPU)))
+	hdrMemPad := strings.Repeat(" ", max(0, maxMem-visibleWidth(iMem)))
+	hdrRes := hdrCPUPad + iCPU + " / " + hdrMemPad + iMem
+	// The session column's label is the leading session glyph itself, which
+	// sits in the same cell as every row's own — so the name column is blank.
+	hdrName := strings.Repeat(" ", maxName)
+	hdrDisplay := fmt.Sprintf("%s %s  %s%s  %s  %s",
 		cDim+iSess+reset,
-		cDim+"Session"+reset,
-		strings.Repeat(" ", max(0, maxName-7)),
-		hostCell("Host", cDim),
-		cDim+padToWidth("Procs", 5, iconCol)+reset,
+		hdrName,
+		hostCell(iHost, cDim),
+		cDim+padToWidth(iProcs, visibleWidth(iProcs), iconCol)+reset,
 		cDim+hdrRes+reset,
 		cDim+iDir+reset,
-		cDim+"Path"+reset,
 	)
-	hdrPlain := fmt.Sprintf("%s %s%s  %s%s  %s  %s %s",
-		iSess, "Session", strings.Repeat(" ", max(0, maxName-7)),
-		hostCell("Host", ""), padToWidth("Procs", 5, iconCol), hdrRes, iDir, "Path",
+	hdrPlain := fmt.Sprintf("%s %s  %s%s  %s  %s",
+		iSess, hdrName,
+		hostCell(iHost, ""), padToWidth(iProcs, visibleWidth(iProcs), iconCol), hdrRes, iDir,
 	)
 
 	home := os.Getenv("HOME")
 	items := make([]listItem, 0, len(rows)+1)
 	items = append(items, listItem{
-		display: hdrDisplay,
-		plain:   hdrPlain,
+		display:        hdrDisplay,
+		plain:          hdrPlain,
+		isColumnHeader: true,
 	})
 	for i, r := range rows {
 		pad := strings.Repeat(" ", max(0, maxName-len(r.name)))
@@ -1857,6 +1868,8 @@ func collectZoxideItems(tmuxOpts map[string]string) []listItem {
 		plain:          rule,
 		isHeader:       true,
 		isZoxideHeader: true,
+		headerLabel:    "New session",
+		headerIcon:     envOrMap("PICKER_ICON_DIR", tmuxOpts, "@icon_dir", iconDir),
 	})
 	for _, sg := range sugs {
 		shortPath := sg.path

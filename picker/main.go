@@ -1219,6 +1219,19 @@ func ansiBg(hex string) string {
 	return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
 }
 
+// unquoteTmuxOptValue strips the one matched quote pair `show -g` wraps a value
+// in. It quotes with single quotes as readily as double — an option set to the
+// empty string prints as ” — so trimming only double quotes turned "no remote
+// hosts configured" into a host literally named ” with a Remote section of its
+// own. Only a matched pair is removed, so a value that merely starts with a
+// quote survives.
+func unquoteTmuxOptValue(v string) string {
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		return v[1 : len(v)-1]
+	}
+	return v
+}
+
 func readTmuxOpts() map[string]string {
 	out, err := exec.Command("tmux", "show", "-g").Output()
 	if err != nil {
@@ -1227,9 +1240,7 @@ func readTmuxOpts() map[string]string {
 	m := make(map[string]string)
 	for _, line := range strings.Split(string(out), "\n") {
 		if i := strings.IndexByte(line, ' '); i > 0 {
-			v := strings.TrimRight(line[i+1:], " \t\r")
-			v = strings.Trim(v, "\"")
-			m[line[:i]] = v
+			m[line[:i]] = unquoteTmuxOptValue(strings.TrimRight(line[i+1:], " \t\r"))
 		}
 	}
 	return m

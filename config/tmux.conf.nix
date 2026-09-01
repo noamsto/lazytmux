@@ -88,6 +88,12 @@
     branch = "";
     dir = "";
     remote = "󰣀";
+    # Session-picker column headers. Verified present in the pinned nerd font:
+    # md-server, md-apps, md-chip, md-memory.
+    host = "󰒋";
+    procs = "󰀻";
+    cpu = "󰘚";
+    mem = "󰍛";
     window-last = "󰖰";
     window-current = "󰖯";
     window-zoom = "󰁌";
@@ -961,6 +967,10 @@
     set -g @icon_branch "${icons.branch}"
     set -g @icon_dir "${icons.dir}"
     set -g @icon_remote "${icons.remote}"
+    set -g @icon_host "${icons.host}"
+    set -g @icon_procs "${icons.procs}"
+    set -g @icon_cpu "${icons.cpu}"
+    set -g @icon_mem "${icons.mem}"
     set -g @picker_zoxide_exclude "${zoxideExclude}"
     set -g @picker_list_ratio "${toString pickerListRatio}"
     set -g @picker_layout "${pickerLayout}"
