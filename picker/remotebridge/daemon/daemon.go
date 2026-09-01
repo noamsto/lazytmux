@@ -1141,9 +1141,29 @@ func rendererSpawnArgs(cfg Config, remotePane string) []string {
 }
 
 // markRendererPane stamps the reverse mapping a keybind reads to reach the
-// remote pane this local one renders.
+// remote pane this local one renders, and opts the pane into unrestricted
+// passthrough.
+//
+// allow-passthrough is per pane, and the global stays `on`: with `on`, tmux
+// hands a passthrough sequence to a client only while the pane's window is that
+// client's current one, and a kitty image store dropped that way is gone —
+// tmux stores nothing and never retransmits, while the placeholders naming the
+// image are grid text and redraw without it, so the pane paints chrome around
+// an empty picture. A mirror carousel would trip that on nearly every open,
+// since the split is created by reconcile rather than by the keypress.
+//
+// `all` here rather than globally because a mirror pane replays a remote host's
+// bytes verbatim: the widened reach is confined to the panes that already carry
+// remote output by design (#464). It does not help a client attached to a
+// *different* session — `all` still requires session_has — which is why #465
+// and #468 exist.
+//
+// Both creation paths reach this function (respawn-pane and the mirrored
+// split), and pane options survive respawn-pane -k, select-layout and
+// swap-pane, so this is the only place either option needs writing.
 func markRendererPane(cfg Config, target, remotePane string) {
 	cfg.LocalTmux("set-option", "-p", "-t", target, "@bridge_pane", remotePane)
+	cfg.LocalTmux("set-option", "-p", "-t", target, "allow-passthrough", "all")
 }
 
 // acceptConns accepts connections on l until it's closed and dispatches each on

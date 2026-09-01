@@ -708,6 +708,13 @@
     set -g aggressive-resize on
     set-option -g renumber-window on
     set -g focus-events on
+    # Deliberately on, not all: `all` lets a program in any pane of an attached
+    # session write escape sequences straight to the terminal while invisible,
+    # and a mirror pane replays a remote host's bytes verbatim — global `all`
+    # would widen a remote's reach from "while you are looking at that window"
+    # to "whenever any client is attached". Mirror panes, which need `all` to
+    # keep their kitty image stores, get it per pane from the daemon instead
+    # (markRendererPane, #464).
     set -g allow-passthrough on
     set -g visual-activity off
 
