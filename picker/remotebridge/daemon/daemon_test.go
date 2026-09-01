@@ -413,7 +413,9 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	reg.add("@1", "@101")
 	reg.add("@2", "host-sess:2")
 	cv := newConverger()
-	// The setup path already asserted the startup size for both windows.
+	// The setup path already asserted the startup size — the client's own size
+	// as well as both windows' caps.
+	cv.need(clientSizeKey, 100, 30)
 	cv.need("@1", 100, 30)
 	cv.need("@2", 100, 30)
 
@@ -438,9 +440,10 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	nudgeCh <- nudgeResult{t: t1, ok: true}
 	sizeCh <- [2]int{100, 30}
 
-	// Tick 3 — mtime advanced and the size changed (120x40): one send per
-	// mirrored window. This tick's sends block the goroutine from
-	// re-selecting, so the next tick can't unblock until they land.
+	// Tick 3 — mtime advanced and the size changed (120x40): the client size
+	// once, then one send per mirrored window. This tick's sends block the
+	// goroutine from re-selecting, so the next tick can't unblock until they
+	// land.
 	tick <- time.Now()
 	nudgeCh <- nudgeResult{t: t2, ok: true}
 	sizeCh <- [2]int{120, 40}
@@ -459,7 +462,7 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 
 	// remoteIDs snapshots a map, so the per-window sends land in either order.
 	sort.Strings(sent)
-	want := []string{ConvergeCmd("@1", 120, 40), ConvergeCmd("@2", 120, 40)}
+	want := []string{ClientSizeCmd(120, 40), ConvergeCmd("@1", 120, 40), ConvergeCmd("@2", 120, 40)}
 	sort.Strings(want)
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)

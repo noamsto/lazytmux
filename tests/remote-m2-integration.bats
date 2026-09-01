@@ -481,10 +481,15 @@ sorted_dims() {
 		>"$BATS_TEST_TMPDIR/dc.log" 2>&1 &
 	daemon_pid=$!
 
-	# Poll until SRC converges to DST's size (100x30).
+	# Gate on the DST side settling — every mirror pane running a renderer —
+	# the way the mirror-dims test above does. SRC's width alone is not a proxy
+	# for "the daemon is done": it reaches 100 the moment the daemon sizes its
+	# own control client, which is before any mirror pane exists (#449), so
+	# dst_dims below would be read against a window not yet shaped.
+	want_panes="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
 	for _ in $(seq 1 60); do
-		w="$($SRC display-message -p -t rem -F '#{window_width}' 2>/dev/null || echo 0)"
-		[ "$w" -eq 100 ] && break
+		got_panes="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
+		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
 	done
 
