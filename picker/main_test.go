@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAgentPriority(t *testing.T) {
 	cases := []struct {
@@ -60,5 +63,66 @@ func TestDecodeBridgeName(t *testing.T) {
 		if got := decodeBridgeName(in); got != want {
 			t.Errorf("decodeBridgeName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSessionHeaderIsGlyphOnlyAndAligned(t *testing.T) {
+	snap := panesSnapshot{
+		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1",
+		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1",
+	}
+	items := buildSessionItems(nil, snap, nil, "dark", false)
+	hdr := items[0]
+	if !hdr.isColumnHeader {
+		t.Fatal("items[0] must be flagged as the column header for the sticky pin")
+	}
+	for _, word := range []string{"Session", "Host", "Procs", "CPU", "Mem", "Path"} {
+		if strings.Contains(hdr.plain, word) {
+			t.Errorf("header still carries the word %q: %q", word, hdr.plain)
+		}
+	}
+	for _, glyph := range []string{iconHost, iconProcs, iconCPU, iconMem} {
+		if !strings.Contains(hdr.plain, glyph) {
+			t.Errorf("header is missing glyph %q: %q", glyph, hdr.plain)
+		}
+	}
+	// CPU and Mem must be distinguishable, not the same glyph twice.
+	if iconCPU == iconMem {
+		t.Error("CPU and Mem share a glyph")
+	}
+	// The Host column has to start at the same cell in the header and in a row,
+	// which len()-based padding would get wrong: a glyph is 1 cell, 4 bytes.
+	col := func(s, needle string) int { return visibleWidth(s[:strings.Index(s, needle)]) }
+	if h, r := col(hdr.plain, iconHost), col(items[2].plain, "tp-g6 "); h != r {
+		t.Errorf("host column starts at %d in the header but %d in the row", h, r)
+	}
+}
+
+func TestUnquoteTmuxOptValue(t *testing.T) {
+	cases := map[string]string{
+		`''`:              "",          // tmux's rendering of an option set to ""
+		`""`:              "",          //
+		`"tp-g6 mbp"`:     "tp-g6 mbp", // quoted because it holds a space
+		`tp-g6`:           "tp-g6",     // bare, no quoting needed
+		`'tp-g6 mbp'`:     "tp-g6 mbp",
+		`"unbalanced`:     `"unbalanced`, // no matched pair: leave it alone
+		`ends"`:           `ends"`,
+		`"outer 'inner'"`: `outer 'inner'`, // only the one outer pair comes off
+	}
+	for in, want := range cases {
+		if got := unquoteTmuxOptValue(in); got != want {
+			t.Errorf("unquoteTmuxOptValue(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestEmptyRemoteHostsOptionYieldsNoSection(t *testing.T) {
+	// The '' form reached parseRemoteHosts as a one-element list, so a user with
+	// no remote hosts configured got a Remote section holding a host named ''.
+	if got := parseRemoteHosts(unquoteTmuxOptValue(`''`)); got != nil {
+		t.Errorf("got %q, want no hosts", got)
+	}
+	if got := pendingRemoteItems(map[string]string{"@remote_bridge_hosts": unquoteTmuxOptValue(`''`)}); got != nil {
+		t.Errorf("got %d rows, want no Remote section", len(got))
 	}
 }

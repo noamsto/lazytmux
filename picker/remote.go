@@ -645,6 +645,8 @@ func remoteHeaderItem(tmuxOpts map[string]string) listItem {
 		plain:          rule,
 		isHeader:       true,
 		isRemoteHeader: true,
+		headerLabel:    "Remote",
+		headerIcon:     envOrMap("PICKER_ICON_REMOTE", tmuxOpts, "@icon_remote", iconRemote),
 	}
 }
 

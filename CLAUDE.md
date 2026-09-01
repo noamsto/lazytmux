@@ -79,6 +79,33 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 
 Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to avoid subshell forks in hot paths.
 
+### Picker Chrome (header, sticky line, sections)
+
+- **The session list's column labels are glyphs**, not words (`@icon_host`,
+  `@icon_procs`, `@icon_cpu`, `@icon_mem`, added to the `icons` attrset like the
+  rest). Every cell is sized with `visibleWidth`, never `len`: a nerd glyph is
+  one cell and four bytes, so `len`-based padding puts each column three cells
+  short. The session column's label is the leading session glyph itself, which
+  already sits in that cell on every row, so the name column's header is blank.
+- **One pinned line** (`governingHeaderIdx` + `renderHeaderItem`) carries
+  whichever header governs the rows beneath it — the column glyphs through the
+  session list, the divider once the window starts inside Remote or New session,
+  the group row in window mode. One line, not a column header stacked above a
+  section header: this is a popup that rarely has twenty rows to give. At the top
+  of the list the pinned row *is* `visible[start]`, so the body advances past it
+  rather than drawing it twice; the rendered height is therefore constant across
+  scroll, which a test asserts.
+- **Section dividers are rebuilt at render width.** The collectors emit
+  `"── Remote " + 220 dashes` and cannot do better — they do not know the popup
+  width — so they now carry `headerLabel`/`headerIcon` instead and
+  `renderHeaderItem` composes glyph + label + a rule that ends exactly at the
+  edge. `isColumnHeader` marks the one header that is not a section, so the pin
+  passes its own `display` through untouched.
+- **`unquoteTmuxOptValue`**: `show -g` quotes with single quotes as readily as
+  double, and an option set to the empty string prints as `''`. Trimming only
+  double quotes turned "no remote hosts configured" into a host literally named
+  `''`, with a Remote section of its own. Only a matched pair is stripped.
+
 ### Two Icon Variables
 
 - `@window_icon_display` — unpadded, used in `automatic-rename-format` (window tab names) and top-right status

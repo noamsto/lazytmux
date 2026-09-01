@@ -20,16 +20,39 @@ func (m tuiModel) renderList() string {
 	// ANSI reset (\033[0m) inside display strings kills the background.
 	// Replace resets with "reset fg + re-apply bg" so background persists.
 	selResetKeepBg := "\033[39m" + ansiBg(selBgHex) // reset fg only, re-set bg
-	start := m.scrollStart(h)
+
+	// One pinned line carries whichever header governs the rows beneath it: the
+	// column glyphs through the session list, the divider once inside Remote or
+	// New session, the group row in window mode.
+	bodyH, start := h, m.scrollStart(h)
+	pin := -1
+	if h > 1 {
+		if governingHeaderIdx(m.visible, start) >= 0 {
+			bodyH = h - 1
+			start = m.scrollStart(bodyH)
+			pin = governingHeaderIdx(m.visible, start)
+			// At the top of the list the pinned row IS visible[start]; advance
+			// past it rather than drawing it twice and wasting the line.
+			if pin == start {
+				start++
+			}
+		}
+	}
 
 	lines := make([]string, 0, h)
-	for i := start; i < start+h && i < len(m.visible); i++ {
+	if pin >= 0 {
+		lines = append(lines, fitVisibleWidth("  "+m.renderHeaderItem(m.visible[pin], w), w))
+	}
+	for i := start; i < start+bodyH && i < len(m.visible); i++ {
 		item := m.visible[i]
-		if i == m.cursor {
+		switch {
+		case item.headerLabel != "":
+			lines = append(lines, fitVisibleWidth("  "+m.renderHeaderItem(item, w), w))
+		case i == m.cursor:
 			patched := strings.ReplaceAll(item.display, "\033[0m", selResetKeepBg)
 			line := fitVisibleWidth("▶ "+patched, w)
 			lines = append(lines, selStyle.Render(line))
-		} else {
+		default:
 			lines = append(lines, fitVisibleWidth("  "+item.display, w))
 		}
 	}
@@ -39,6 +62,48 @@ func (m tuiModel) renderList() string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// governingHeaderIdx returns the index of the header that labels the rows at
+// start — start itself when that is the header. -1 under a query, where the
+// column row is filtered out with everything else that does not match.
+func governingHeaderIdx(items []listItem, start int) int {
+	if start >= len(items) {
+		start = len(items) - 1
+	}
+	for i := start; i >= 0; i-- {
+		if items[i].isHeader || items[i].isColumnHeader {
+			return i
+		}
+	}
+	return -1
+}
+
+// renderHeaderItem draws a header at the real popup width. A section divider
+// carries a label and a glyph rather than a finished rule because the collectors
+// that build these items do not know the width — they emit 220 dashes and leave
+// the clipping to the renderer.
+func (m tuiModel) renderHeaderItem(item listItem, w int) string {
+	if item.headerLabel == "" {
+		return item.display
+	}
+	accent := lipgloss.NewStyle().
+		Foreground(m.thmColor("@thm_lavender", "#b4befe", "#7287fd"))
+	rule := lipgloss.NewStyle().
+		Foreground(m.thmColor("@thm_surface_1", "#45475a", "#9ca0b0"))
+
+	head := rule.Render("──") + " "
+	if item.headerIcon != "" {
+		head += accent.Render(item.headerIcon) + " "
+	}
+	head += accent.Render(item.headerLabel) + " "
+
+	// -2 for the two leading spaces every list line carries.
+	fill := w - 2 - visibleWidth(head)
+	if fill < 1 {
+		return head
+	}
+	return head + rule.Render(strings.Repeat("─", fill))
 }
 
 func (m tuiModel) renderSeparator() string {

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -716,9 +717,11 @@ func TestCollectRemoteItemsDropsSelfHost(t *testing.T) {
 	const selfID = "test-machine-id-self"
 	local := remoteIdentity{MachineID: selfID, User: "noams"}
 	readLocalRemoteIdentity = func() remoteIdentity { return local }
-	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
-		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
-	} })
+	t.Cleanup(func() {
+		readLocalRemoteIdentity = func() remoteIdentity {
+			return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+		}
+	})
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
@@ -754,9 +757,11 @@ func TestCollectRemoteItemsKeepsSameMachineDifferentUser(t *testing.T) {
 	readLocalRemoteIdentity = func() remoteIdentity {
 		return remoteIdentity{MachineID: sharedID, User: "noams"}
 	}
-	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
-		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
-	} })
+	t.Cleanup(func() {
+		readLocalRemoteIdentity = func() remoteIdentity {
+			return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+		}
+	})
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
@@ -780,9 +785,11 @@ func TestCollectRemoteItemsDropsSelfOnNoServer(t *testing.T) {
 	const selfID = "test-machine-id-noserver"
 	local := remoteIdentity{MachineID: selfID, User: "noams"}
 	readLocalRemoteIdentity = func() remoteIdentity { return local }
-	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
-		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
-	} })
+	t.Cleanup(func() {
+		readLocalRemoteIdentity = func() remoteIdentity {
+			return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+		}
+	})
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
@@ -829,14 +836,22 @@ func TestCollectRemoteItemsRevalidatesCachedSelfAlias(t *testing.T) {
 	readLocalRemoteIdentity = func() remoteIdentity {
 		return remoteIdentity{MachineID: "local-id", User: "noams"}
 	}
-	t.Cleanup(func() { readLocalRemoteIdentity = func() remoteIdentity {
-		return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
-	} })
+	t.Cleanup(func() {
+		readLocalRemoteIdentity = func() remoteIdentity {
+			return remoteIdentity{MachineID: readLocalMachineID(), User: localUsername()}
+		}
+	})
 
+	// collectRemoteItems probes every host on its own goroutine, so the stub's
+	// bookkeeping needs a lock — without one this test is a coin-flip
+	// "concurrent map writes" crash that takes the whole run down.
+	var probedMu sync.Mutex
 	probed := make(map[string]bool)
 	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
 	probe := func(host string) (remoteProbeResult, error) {
+		probedMu.Lock()
 		probed[host] = true
+		probedMu.Unlock()
 		switch host {
 		case "localhost":
 			return probeWithIdentity(remoteIdentity{MachineID: "repointed-id", User: "noams"}, "work"), nil
@@ -847,7 +862,10 @@ func TestCollectRemoteItemsRevalidatesCachedSelfAlias(t *testing.T) {
 	}
 
 	items := collectRemoteItems(opts, nil, probe, noRestore)
-	if !probed["localhost"] {
+	probedMu.Lock()
+	probedLocalhost := probed["localhost"]
+	probedMu.Unlock()
+	if !probedLocalhost {
 		t.Fatal("collect must probe cached self aliases, not skip them")
 	}
 	if isCachedRemoteSelfAlias("localhost") {
