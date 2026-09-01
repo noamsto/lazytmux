@@ -151,10 +151,14 @@ func parseRemoteProbeOutput(stdout string) remoteProbeResult {
 	if len(lines) >= 2 {
 		res.Identity.User = strings.TrimSpace(lines[1])
 	}
-	for _, line := range lines[2:] {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			res.Sessions = append(res.Sessions, line)
+	// A failed probe still lands here with whatever stdout it managed, which
+	// for an unreachable host is nothing at all.
+	if len(lines) > 2 {
+		for _, line := range lines[2:] {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				res.Sessions = append(res.Sessions, line)
+			}
 		}
 	}
 	return res
