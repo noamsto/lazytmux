@@ -39,7 +39,14 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 			rec(argv[0])
 			return nil
 		},
-		LocalTmuxOut: func(...string) (string, error) { return "%1 0\n%9local 0\n", nil },
+		// Grows only once the split has run: applyPaneOps re-reads on entry too,
+		// and a window that already held the new pane would read as desynced.
+		LocalTmuxOut: func(...string) (string, error) {
+			if !seen("split-window") {
+				return "%1 0\n", nil
+			}
+			return "%1 0\n%9local 0\n", nil
+		},
 	}
 
 	cli, srv := net.Pipe()

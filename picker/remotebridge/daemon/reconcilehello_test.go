@@ -51,10 +51,23 @@ func (s *signalSink) String() string {
 // delivered and applyPaneOps dies on the wait's deadline.
 func TestApplyPaneOpsRoutesSiblingOutputDuringHelloWait(t *testing.T) {
 	// The split lands the local pane %9local; applyPaneOps reads the window back
-	// to learn its id, since a split reports nothing through LocalTmux.
+	// to learn its id, since a split reports nothing through LocalTmux. The
+	// listing grows only once the split has run — applyPaneOps also re-reads on
+	// entry, and a window that already held the new pane would read as desynced.
+	var split bool
 	cfg := Config{
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "%1 0\n%9local 0\n", nil },
+		LocalTmux: func(argv ...string) error {
+			if argv[0] == "split-window" {
+				split = true
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) {
+			if !split {
+				return "%1 0\n", nil
+			}
+			return "%1 0\n%9local 0\n", nil
+		},
 	}
 
 	// A pipe nothing else writes: the only line the pump ever carries is the

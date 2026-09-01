@@ -36,10 +36,23 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 		"%begin 1 4 1", onePane + " %3 0", "%end 1 4 1", // trailing re-read: unchanged, stop
 	}, "\n") + "\n")
 
-	// %l4 is killed with its remote pane, leaving the survivor alone.
+	// %l4 is killed with its remote pane, leaving the survivor alone. The
+	// listing shrinks only once that kill has run: applyPaneOps re-reads on
+	// entry, where the window still holds both panes.
+	var killed bool
 	cfg := Config{
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "%l3 0\n", nil },
+		LocalTmux: func(argv ...string) error {
+			if argv[0] == "kill-pane" {
+				killed = true
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) {
+			if !killed {
+				return "%l3 0\n%l4 0\n", nil
+			}
+			return "%l3 0\n", nil
+		},
 	}
 	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), rt)
 
