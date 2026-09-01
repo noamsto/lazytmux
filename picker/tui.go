@@ -1678,6 +1678,17 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	iCPU := envOrMap("PICKER_ICON_CPU", tmuxOpts, "@icon_cpu", iconCPU)
 	iMem := envOrMap("PICKER_ICON_MEM", tmuxOpts, "@icon_mem", iconMem)
 
+	// Column labels are glyph + word. Each one sets a floor under its column's
+	// width below: the columns are otherwise sized by their data alone, and a
+	// label wider than its cell would push every later column right in the
+	// header only, which is exactly the drift the alignment tests catch.
+	lblSess := "Session"
+	lblHost := iHost + " Host"
+	lblProcs := iProcs + " Procs"
+	lblCPU := iCPU + " CPU"
+	lblMem := iMem + " Mem"
+	lblPath := "Path"
+
 	cMauve := ansiFg(thmMauve)
 	cBlue := ansiFg(thmBlue)
 	cDim := ansiFg(thmSubtext0)
@@ -1715,7 +1726,8 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 			maxIconDW = dw
 		}
 	}
-	iconCol := max(maxIconDW+1, 5)
+	maxName = max(maxName, visibleWidth(lblSess))
+	iconCol := max(maxIconDW+1, max(5, visibleWidth(lblProcs)))
 	for i := range rows {
 		rows[i].icons = padToWidth(rows[i].icons, rows[i].iconDW, iconCol)
 	}
@@ -1728,7 +1740,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 		hostCol = max(hostCol, len(sessions[i].bridgeHost))
 	}
 	if hostCol > 0 {
-		hostCol = max(hostCol, len("Host"))
+		hostCol = max(hostCol, visibleWidth(lblHost))
 	}
 	// color wraps the text only, so the plain variant (color "") stays escape-free.
 	hostCell := func(host, color string) string {
@@ -1750,7 +1762,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	// Pre-compute CPU and MEM strings separately so the "/" aligns
 	cpuStrs := make([]string, len(rows))
 	memStrs := make([]string, len(rows))
-	maxCPU, maxMem := cpuColWidth(), 0
+	maxCPU, maxMem := max(cpuColWidth(), visibleWidth(lblCPU)), visibleWidth(lblMem)
 	for i, r := range rows {
 		if withResources && !r.sess.resUnknown {
 			cpuStrs[i] = formatCPU(r.sess.cpuPct)
@@ -1775,23 +1787,22 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	// the left, Mem on the right, so the pair reads as one CPU/Mem unit rather
 	// than two labels adrift in their fields. Each field keeps the width the
 	// rows give it, so Path stays in place.
-	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-visibleWidth(iCPU)))
-	hdrMemPad := strings.Repeat(" ", max(0, maxMem-visibleWidth(iMem)))
-	hdrRes := hdrCPUPad + iCPU + " / " + iMem + hdrMemPad
-	// The session column's label is the leading session glyph itself, which
-	// sits in the same cell as every row's own — so the name column is blank.
-	hdrName := strings.Repeat(" ", maxName)
-	hdrDisplay := fmt.Sprintf("%s %s  %s%s  %s  %s",
+	hdrCPUPad := strings.Repeat(" ", max(0, maxCPU-visibleWidth(lblCPU)))
+	hdrMemPad := strings.Repeat(" ", max(0, maxMem-visibleWidth(lblMem)))
+	hdrRes := hdrCPUPad + lblCPU + " / " + lblMem + hdrMemPad
+	hdrName := lblSess + strings.Repeat(" ", max(0, maxName-visibleWidth(lblSess)))
+	hdrDisplay := fmt.Sprintf("%s %s  %s%s  %s  %s %s",
 		cDim+iSess+reset,
-		hdrName,
-		hostCell(iHost, cDim),
-		cDim+padToWidth(iProcs, visibleWidth(iProcs), iconCol)+reset,
+		cDim+hdrName+reset,
+		hostCell(lblHost, cDim),
+		cDim+padToWidth(lblProcs, visibleWidth(lblProcs), iconCol)+reset,
 		cDim+hdrRes+reset,
 		cDim+iDir+reset,
+		cDim+lblPath+reset,
 	)
-	hdrPlain := fmt.Sprintf("%s %s  %s%s  %s  %s",
+	hdrPlain := fmt.Sprintf("%s %s  %s%s  %s  %s %s",
 		iSess, hdrName,
-		hostCell(iHost, ""), padToWidth(iProcs, visibleWidth(iProcs), iconCol), hdrRes, iDir,
+		hostCell(lblHost, ""), padToWidth(lblProcs, visibleWidth(lblProcs), iconCol), hdrRes, iDir, lblPath,
 	)
 
 	home := os.Getenv("HOME")

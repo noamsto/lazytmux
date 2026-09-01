@@ -81,15 +81,18 @@ Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to a
 
 ### Picker Chrome (header, sticky line, sections)
 
-- **The session list's column labels are glyphs**, not words (`@icon_host`,
+- **The session list's column labels are glyph + word** (`@icon_host`,
   `@icon_procs`, `@icon_cpu`, `@icon_mem`, added to the `icons` attrset like the
   rest). Every cell is sized with `visibleWidth`, never `len`: a nerd glyph is
   one cell and four bytes, so `len`-based padding puts each column three cells
-  short. The session column's label is the leading session glyph itself, which
-  already sits in that cell on every row, so the name column's header is blank.
-  Text labels sit at their column's left edge; the CPU and Mem labels mirror each
-  other around the ` / ` (CPU padded left, Mem padded right) so the pair reads as
-  one unit. Padding never changes a field's total width — Path would drift.
+  short. **Each label sets a floor under its column's width** — the columns are
+  otherwise sized by their data alone (Host is as wide as the widest
+  `@bridge_host`), and a label wider than its cell pushes every later column
+  right in the header only. The CPU and Mem labels mirror each other around the
+  ` / ` (CPU padded left, Mem padded right) so the pair reads as one unit;
+  padding never changes a field's total width, or Path drifts. The alignment
+  tests assert the ` / ` and the path glyph land on the same cell in the header
+  and in a row, which is the regression net for both mistakes.
 - **One pinned line** (`governingHeaderIdx` + `renderHeaderItem`) carries
   whichever header governs the rows beneath it — the column glyphs through the
   session list, the divider once the window starts inside Remote or New session,
