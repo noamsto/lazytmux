@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -381,7 +382,7 @@ func TestToolVerbBuildsRemoteSplitInRemoteCwd(t *testing.T) {
 	}
 	// The cwd must stay a format for the remote to expand, and the tool must be
 	// resolved off the remote PATH rather than a local store path.
-	for _, want := range []string{"-c '#{pane_current_path}'", "command -v prdash", "exec prdash"} {
+	for _, want := range []string{"-c '#{pane_current_path}'", "show-environment -g PATH", "command -v prdash", "exec prdash"} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
 		}
@@ -391,6 +392,60 @@ func TestToolVerbBuildsRemoteSplitInRemoteCwd(t *testing.T) {
 	}
 	if !v.moves || !v.layout {
 		t.Fatal("the verb opens a split that takes focus: needs moves+layout")
+	}
+}
+
+// A pane spawned through fish gets a PATH rebuilt from the login profile, so the
+// script restores tmux's own before looking the tool up. The three shapes
+// show-environment can answer with, run for real under /bin/sh against a stub.
+func TestToolPathRestore(t *testing.T) {
+	// The restore prefix, verbatim from the shipped script.
+	prefix, _, found := strings.Cut(toolResolveScript("prdash"), "command -v")
+	if !found {
+		t.Fatal("toolResolveScript no longer has a command -v")
+	}
+
+	tests := []struct {
+		name string
+		stub string
+		want string
+	}{
+		{"global PATH present", "echo PATH=/opt/a:/opt/b", "/opt/a:/opt/b:/login"},
+		{"variable unset", "echo unknown variable: PATH >&2; exit 1", "/login"},
+		{"empty value", "echo PATH=", "/login"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stub := filepath.Join(dir, "tmux")
+			if err := os.WriteFile(stub, []byte("#!/bin/sh\n"+tc.stub+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("/bin/sh", "-c", prefix+`printf %s "$PATH"`)
+			cmd.Env = []string{"PATH=" + dir + ":/login"}
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			// The stub dir is only there so `tmux` resolves, and the restore
+			// prepends ahead of it; drop it wherever it landed to compare.
+			if got := strings.Replace(string(out), dir+":", "", 1); got != tc.want {
+				t.Errorf("PATH = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// split-window does not format-expand its shell-command but run-shell does, so
+// the restore trims with #* rather than #PATH= — under run-shell the latter's
+// #P would expand to the pane index. Keep the body free of every sequence tmux
+// would treat as a format, so it stays correct wherever it is used.
+func TestToolResolveScriptSurvivesFormatExpansion(t *testing.T) {
+	script := toolResolveScript("prdash")
+	for _, bad := range []string{"#{", "#(", "#P", "#S", "#W", "#T", "#D", "#F", "#I", "#H"} {
+		if strings.Contains(script, bad) {
+			t.Errorf("script contains tmux format %q, which run-shell would expand: %q", bad, script)
+		}
 	}
 }
 
