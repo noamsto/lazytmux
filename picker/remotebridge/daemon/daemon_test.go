@@ -642,3 +642,27 @@ func TestParseWindowIDRejectsAnIndex(t *testing.T) {
 		}
 	}
 }
+
+// A mirror pane must be opted into unrestricted passthrough at creation. With
+// the global left at `on`, tmux drops a kitty image store aimed at a pane whose
+// window is not the client's current one, and never retransmits it — so a
+// carousel opened by reconcile rather than by the keypress paints chrome around
+// an empty picture (#464). Both creation paths stamp through this function, so
+// asserting it here covers respawn-pane and the mirrored split alike.
+func TestMarkRendererPaneStampsBridgePaneAndPassthrough(t *testing.T) {
+	var calls [][]string
+	cfg := Config{LocalTmux: func(args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}}
+
+	markRendererPane(cfg, "%7", "%42")
+
+	want := [][]string{
+		{"set-option", "-p", "-t", "%7", "@bridge_pane", "%42"},
+		{"set-option", "-p", "-t", "%7", "allow-passthrough", "all"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("markRendererPane calls =\n%q\nwant\n%q", calls, want)
+	}
+}
