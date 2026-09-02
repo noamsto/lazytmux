@@ -13,61 +13,122 @@ type Seq struct {
 	Wrapped bool
 }
 
+// dropReason says why decodeSeq consumed bytes without yielding a sequence.
+// Two very different things used to share one bool, which is the conflation
+// that let a partly-decoded store be forwarded as though it were none of ours.
+type dropReason int
+
+const (
+	dropNone      dropReason = iota // not a drop
+	dropSixel                       // sixel over the bridge is a non-goal
+	dropMalformed                   // ours, but we could not decode it whole
+)
+
 // decodeSeq decodes the sequence at the head of b:
 //
-//	seq != nil, n > 0, drop false  — a graphics sequence; consume n
-//	seq == nil, n > 0, drop false  — a COMPLETE sequence that isn't ours (a
-//	                                 passthrough carrying something else, e.g.
-//	                                 OSC 52); forward b[:n] verbatim
-//	seq == nil, n > 0, drop true   — a complete sixel DCS (bare or wrapped);
-//	                                 consume n and emit nothing
-//	seq == nil, n == 0             — incomplete; hold for more bytes
+//	seq != nil, n > 0, dropNone      — a graphics sequence; consume n
+//	seq == nil, n > 0, dropNone      — a COMPLETE sequence that isn't ours (a
+//	                                   passthrough carrying something else, e.g.
+//	                                   OSC 52); forward b[:n] verbatim
+//	seq == nil, n > 0, dropSixel     — a complete sixel DCS (bare or wrapped);
+//	                                   consume n and emit nothing
+//	seq == nil, n > 0, dropMalformed — a kitty APC we could not decode whole;
+//	                                   consume n and emit nothing (see the
+//	                                   wrapped branch for why forwarding is
+//	                                   not an option)
+//	seq == nil, n == 0               — incomplete; hold for more bytes
 //
 // The forward-verbatim case is why this returns a length rather than an ok
 // bool. "Not complete yet" and "complete, but not mine" both mean "no sequence
 // here", but conflating them stalls the pane: a clipboard escape would hold
 // every later byte behind it until the partial cap or Flush.
-func decodeSeq(b []byte) (*Seq, int, bool) {
+func decodeSeq(b []byte) (*Seq, int, dropReason) {
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
-			return nil, 0, false
+			return nil, 0, dropNone
 		}
 		// Sixel through the bridge is an explicit non-goal: drop a
 		// passthrough whose undoubled payload is a bare sixel DCS rather
 		// than forwarding it (which would paint a SIXEL IMAGE placeholder
 		// or garble mid-sequence text into the mirrored pane).
 		if isConfirmedSixelHead(inner) {
-			return nil, n, true
+			return nil, n, dropSixel
 		}
 		q, m, ok := decodeBare(inner)
-		// The sequence must fill the wrapper exactly. A wrapper carrying anything
-		// after its first sequence is treated as not-ours and forwarded whole:
-		// decoding only the first would silently drop the rest, and a proxy must
-		// never lose bytes it was asked to relay. The cost is that such a store
-		// goes unlocalised (blank image, per D7) — a case aeye cannot produce,
-		// since tmuxPassthrough wraps exactly one sequence.
-		if !ok || m != len(inner) {
-			return nil, n, false
+		// Forwarding a wrapper verbatim is only safe when the inner escape is
+		// none of ours. If it IS a kitty APC and we could not decode it whole,
+		// forwarding hands the terminal a sequence whose t=f payload never
+		// passed the localiser — a path on the REMOTE filesystem, or one the
+		// sender chose to name on this one. D7 governs: an unlocalisable store
+		// is dropped, never forwarded, because a missing image renders blank and
+		// self-heals where a wrong one renders wrong. So the two failures split.
+		switch {
+		case !ok && !bytes.HasPrefix(inner, []byte(apcStart)):
+			// Genuinely not ours (OSC 52, a title, …): forward the wrapper
+			// whole, which is what its sender meant and what the renderer's
+			// local tmux needs to reach the outer terminal.
+			return nil, n, dropNone
+		case !ok:
+			// Ours, but unterminated inside the wrapper. Forwarding it would
+			// leave the terminal holding an open APC that a LATER wrapper could
+			// terminate, assembling a store out of pieces neither of which we
+			// ever localised.
+			return nil, n, dropMalformed
+		case m != len(inner):
+			// Ours, plus trailing bytes. Splitting the wrapper would mean
+			// re-wrapping the remainder to keep its passthrough semantics; not
+			// worth it for a shape no legitimate sender emits (tmuxPassthrough
+			// wraps exactly one sequence), and dropping is the safe direction.
+			return nil, n, dropMalformed
+		case hasDuplicateKey(q.Keys):
+			return nil, n, dropMalformed
 		}
 		q.Wrapped = true
-		return q, n, false
+		return q, n, dropNone
 	}
 	if isSixelPrefix(b) {
 		n, complete := consumeBareSixel(b)
 		if !complete {
-			return nil, 0, false
+			return nil, 0, dropNone
 		}
-		return nil, n, true
+		return nil, n, dropSixel
 	}
 	// Feed only calls this at an indexSeqStart hit, so a head that isn't a
 	// passthrough or sixel is an apcStart: decodeBare can only fail for want
 	// of the ST.
 	q, n, ok := decodeBare(b)
 	if !ok {
-		return nil, 0, false
+		return nil, 0, dropNone
 	}
-	return q, n, false
+	if hasDuplicateKey(q.Keys) {
+		return nil, n, dropMalformed
+	}
+	return q, n, dropNone
+}
+
+// hasDuplicateKey reports whether keys names the same key twice.
+//
+// Get returns the FIRST match, so a sequence carrying t=d,t=f reads to us as
+// inline data while a terminal resolving last-wins reads it as a file
+// transmission — and the payload, a path we never localised, reaches it
+// verbatim. Rather than guess which way any given terminal resolves it, reject
+// the sequence: no legitimate sender emits a duplicate control key, and this
+// removes the disagreement instead of trying to match it.
+func hasDuplicateKey(keys []byte) bool {
+	seen := make(map[string]bool)
+	for _, kv := range bytes.Split(keys, []byte{','}) {
+		i := bytes.IndexByte(kv, '=')
+		if i < 0 {
+			continue
+		}
+		k := string(kv[:i])
+		if seen[k] {
+			return true
+		}
+		seen[k] = true
+	}
+	return false
 }
 
 func decodeBare(b []byte) (*Seq, int, bool) {
