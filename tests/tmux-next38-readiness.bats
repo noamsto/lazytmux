@@ -478,3 +478,22 @@ wait_for_client() {
 	[[ $output == *'-F "#{key_table}: #{key_prefix}#{key_string}'* ]]
 	[[ $output == *'-O key'* ]]
 }
+
+@test "session user options read back with a bare -t target, not the = exact-match prefix" {
+	# Pins the targeting asymmetry lztmux-remote-open's mirror dedup relies on:
+	# show-options rejects the "=" prefix has-session accepts, and -q hides that
+	# failure as an empty string that reads as "unset" (#474).
+	t new-session -d -s mirror -c "$PWD"
+	t new-session -d -s mirror-remote -c "$PWD"
+	t set-option -t mirror @bridge_session upstream
+	t set-option -t mirror-remote @bridge_session sibling
+
+	t has-session -t "=mirror"
+
+	run t show-options -t "=mirror" -v @bridge_session
+	[ "$status" -ne 0 ]
+	[ -z "$(t show-options -t "=mirror" -qv @bridge_session)" ]
+
+	# The bare form reads it, and an exact match still beats the prefix sibling.
+	[ "$(t show-options -t mirror -qv @bridge_session)" = upstream ]
+}
