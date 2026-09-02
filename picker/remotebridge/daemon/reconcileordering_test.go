@@ -71,7 +71,7 @@ func TestReconcileSeedsPaneBeforeItsLaterOutputArrives(t *testing.T) {
 		LocalTmux:    func(...string) error { return nil },
 		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // localZoomed: not zoomed
 	}
-	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), rt)
+	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
 	peerA.SetDeadline(time.Now().Add(5 * time.Second))
 

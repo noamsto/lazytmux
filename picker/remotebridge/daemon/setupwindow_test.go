@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,17 @@ import (
 // the commands. Blocks in script must be numbered from seq 1.
 func setupWindowRT(script string) roundTrip {
 	return newRoundTrip(newTestReader(script), NewRouter(), &asyncQueue{}, testStream())
+}
+
+// recordingRT wraps setupWindowRT to capture what was issued, for the
+// assertions that care about a command reaching the round-trip rather than
+// about its reply.
+func recordingRT(script string, issued *[]string) roundTrip {
+	rt := setupWindowRT(script)
+	return func(cmds ...string) replies {
+		*issued = append(*issued, cmds...)
+		return rt(cmds...)
+	}
 }
 
 // readSeedThenResize takes a wired pane's first two frames — wireRenderer
@@ -114,6 +126,116 @@ func TestSetupWindowResizesEachPaneFromItsOwnLayoutCell(t *testing.T) {
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("setupWindow: %v", err)
+	}
+}
+
+// TestSetupWindowOptsTheWindowOutOfAggressiveResize pins the emission every
+// mirrored window depends on: without it the cap issued right after is accepted
+// and discarded for every window but the remote's current one (#478).
+// setupWindow is the single choke point every mirrored window runs through, so
+// asserting it here covers them all.
+//
+// The script fails readLayout, which is the first thing after the cap: the
+// opt-out precedes anything that can go wrong, and nothing else is sent.
+func TestSetupWindowOptsTheWindowOutOfAggressiveResize(t *testing.T) {
+	script := strings.Join([]string{
+		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
+		"%begin 1 2 1", "%error 1 2 1", // readLayout, window gone
+	}, "\n") + "\n"
+
+	cfg := Config{
+		LocalArea: func() (int, int) { return 190, 45 },
+		LocalTmux: func(...string) error { return nil },
+	}
+	mw := newRegistry().add("@1", "@101")
+
+	var sent []string
+	send := func(s string) { sent = append(sent, s) }
+
+	if err := setupWindow(cfg, send, NewRouter(), noHellos, newCtlState(), mw, newConverger(), setupWindowRT(script)); err == nil {
+		t.Fatal("setupWindow err = nil, want the readLayout failure the script scripts")
+	}
+	want := []string{AggressiveResizeOffCmd("@1")}
+	if !reflect.DeepEqual(sent, want) {
+		t.Errorf("sent = %v, want %v", sent, want)
+	}
+}
+
+// TestSetupWindowDoesNotRecordACapItCouldNotIssue covers the second place the
+// converger could record a size the remote was never told — the call site the
+// issue's own suggested fix would have missed. An empty script leaves the
+// round-trip no reply to read, so the cap reports a failed write.
+func TestSetupWindowDoesNotRecordACapItCouldNotIssue(t *testing.T) {
+	cfg := Config{
+		LocalArea: func() (int, int) { return 190, 45 },
+		LocalTmux: func(...string) error { return nil },
+	}
+	mw := newRegistry().add("@1", "@101")
+	cv := newConverger()
+
+	if err := setupWindow(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), mw, cv, setupWindowRT("")); err == nil {
+		t.Fatal("setupWindow err = nil, want a failure on a stream with no replies")
+	}
+	if !cv.need("@1", 190, 45) {
+		t.Error("the cap was recorded although its round-trip never read a reply")
+	}
+}
+
+// TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded closes the ordering race
+// between reg.add and setupWindow: reg.add publishes the window first, so
+// watchResize's goroutine can cap it before the opt-out lands. tmux discards
+// that cap, but cv.need has recorded the size — and without the forget, setup's
+// own cap is then skipped and the window is left opted out but never capped.
+func TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded(t *testing.T) {
+	script := strings.Join([]string{
+		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
+		"%begin 1 2 1", "%error 1 2 1", // readLayout, window gone
+	}, "\n") + "\n"
+
+	cfg := Config{
+		LocalArea: func() (int, int) { return 190, 45 },
+		LocalTmux: func(...string) error { return nil },
+	}
+	mw := newRegistry().add("@1", "@101")
+
+	// What watchResize did between reg.add and here: a cap the window could not
+	// yet accept, recorded as asserted.
+	cv := newConverger()
+	cv.need("@1", 190, 45)
+
+	var issued []string
+	if err := setupWindow(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), mw, cv, recordingRT(script, &issued)); err == nil {
+		t.Fatal("setupWindow err = nil, want the readLayout failure the script encodes")
+	}
+	want := ConvergeCmd("@1", 190, 45)
+	if len(issued) == 0 || issued[0] != want {
+		t.Errorf("first command issued = %q, want %q", issued, want)
+	}
+}
+
+// TestResetWindowRecordsItsCapInTheSharedConverger pins which converger
+// resetWindow threads through. A throwaway map lets its cap and watchResize's
+// disagree: both read cfg.LocalArea() independently and both write to the same
+// stream, so a size that changed in the gap can be written stale-last while the
+// shared record holds the new one — and watchResize then never re-sends it.
+func TestResetWindowRecordsItsCapInTheSharedConverger(t *testing.T) {
+	script := strings.Join([]string{
+		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
+		"%begin 1 2 1", "%error 1 2 1", // readLayout, window gone
+	}, "\n") + "\n"
+
+	cfg := Config{
+		LocalArea: func() (int, int) { return 190, 45 },
+		LocalTmux: func(...string) error { return nil },
+	}
+	mw := newRegistry().add("@1", "@101")
+	cv := newConverger()
+
+	if err := resetWindow(cfg, mw, func(string) {}, NewRouter(), noHellos, newCtlState(), cv, setupWindowRT(script)); err == nil {
+		t.Fatal("resetWindow err = nil, want the readLayout failure the script encodes")
+	}
+	if cv.need("@1", 190, 45) {
+		t.Error("the reset's cap never reached the shared converger, which is then free to disagree with what the remote was told")
 	}
 }
 

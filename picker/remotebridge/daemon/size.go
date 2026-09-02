@@ -8,12 +8,32 @@ import (
 // ConvergeCmd returns the control-mode command that caps one remote window at
 // WxH. The per-window form of refresh-client -C, not the whole-client one:
 // tmux applies it as a clamp *after* window-size's own calculation (resize.c
-// clients_calculate_size), so it holds even when a human client is attached to
-// the same remote session and owns the window as w->latest. The whole-client
-// form loses that race — under window-size latest every client but w->latest
-// is skipped outright.
+// clients_calculate_size), whereas the whole-client form loses that
+// calculation outright — under window-size latest every client but w->latest
+// is skipped.
+//
+// The clamp only reaches a window that participates in sizing at all, so the
+// per-window form holds only alongside AggressiveResizeOffCmd below (#478).
 func ConvergeCmd(remoteID string, w, h int) string {
 	return fmt.Sprintf("refresh-client -C %s:%dx%d", remoteID, w, h)
+}
+
+// AggressiveResizeOffCmd returns the control-mode command that opts one remote
+// window out of aggressive-resize, which every remote window inherits from
+// lazytmux's own global config.
+//
+// With that option on, tmux sizes a window only from clients whose session
+// currently has it selected (resize.c, clients_calculate_size_skip_client's
+// `current` branch). The bridge holds one control client on the mirrored
+// session, so it is "on" one window at a time: for every other mirrored window
+// no client contributes a size, ConvergeCmd's cap is accepted and then
+// discarded during recalculation, and the window keeps whatever size it last
+// held — or default-size if it never held one (#478).
+//
+// A relaxation, not a pin: window-size stays latest, so a human client
+// attached to the remote still clamps the window down.
+func AggressiveResizeOffCmd(remoteID string) string {
+	return fmt.Sprintf("set-option -w -t %s aggressive-resize off", remoteID)
 }
 
 // clientSizeKey is the converger slot for the whole-client size below. Remote
@@ -57,6 +77,24 @@ func (c *converger) need(remoteID string, w, h int) bool {
 	}
 	c.last[remoteID] = [2]int{w, h}
 	return true
+}
+
+// unrecord drops the size recorded for remoteID when the write meant to carry
+// it never happened, so the next tick retries instead of treating the remote as
+// already told. Only if the slot still holds that size: the other writer may
+// have asserted a different one in between, and that assertion is the current
+// truth.
+//
+// What this cannot close: a written command is still not an applied one. A cap
+// that draws %error because the window vanished between reg.remoteIDs() and the
+// send latches as asserted — acceptable only because that path is followed by
+// closeWindow's cv.forget.
+func (c *converger) unrecord(remoteID string, w, h int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.last[remoteID] == [2]int{w, h} {
+		delete(c.last, remoteID)
+	}
 }
 
 func (c *converger) forget(remoteID string) {
