@@ -22,6 +22,53 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 )
 
+// How long the control connection may go unanswered before ssh gives up on it
+// and exits, which is what surfaces a dead remote to this process (#471).
+//
+// The product is the detection window: 15s x 4 = 60s of total silence. Probes
+// are sent only while the connection is idle and cost a round-trip each, so the
+// interval is cheap; the count is what keeps a transient blip from tearing down
+// a live mirror, since a mirror torn down is every window of it gone.
+const (
+	serverAliveInterval = 15
+	serverAliveCountMax = 4
+)
+
+// sshControlArgs builds the argv for the control-mode ssh. Extracted so the
+// options below are assertable — every one of them is load-bearing and none of
+// them is visible in a passing test otherwise.
+func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []string) []string {
+	args := []string{"-T", "-e", "none",
+		// ControlMaster on the control connection makes every image fetch a
+		// multiplexed exec on this same TCP connection: no second handshake,
+		// and image bytes never share the control stream with live output.
+		// ControlPersist=no ties the master's lifetime to this process.
+		"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctlSock, "-o", "ControlPersist=no",
+		// Keepalives are how this process finds out the remote is gone. A host
+		// that dies abruptly — a reboot, a yanked cable — sends no FIN and no
+		// RST, so the TCP connection stays open and ssh sits on it
+		// indefinitely. Without these the control stream never reaches EOF, so
+		// the daemon's teardown is never reached and the mirror goes on
+		// presenting stale screens while discarding every keystroke (#471).
+		// Observed on a rebooted host: hours in that state.
+		"-o", "ServerAliveInterval=" + strconv.Itoa(serverAliveInterval),
+		"-o", "ServerAliveCountMax=" + strconv.Itoa(serverAliveCountMax),
+		host, "--", "env", "TMUX_TMPDIR=" + tmpdir}
+	// TERM decides the remote viewer's graphics backend: it reads
+	// #{client_termname}, which is whatever this control client advertises. A
+	// non-kitty local terminal therefore degrades the remote carousel to block
+	// art on its own. -T means no pty, so ssh won't send TERM itself — it has
+	// to ride in this env prefix like TMUX_TMPDIR does.
+	if term != "" {
+		args = append(args, "TERM="+shellQuote(term))
+	}
+	args = append(args, tmuxArgv...)
+	// ssh space-joins the post-host argv into one string run by the remote
+	// login shell, so shell-quote the session name (may contain spaces) to keep
+	// it a single target token.
+	return append(args, "-C", "attach-session", "-t", shellQuote(session))
+}
+
 func main() {
 	// Flags default to LZTMUX_BRIDGE_*/LZTMUX_DAEMON_* env vars, mirroring
 	// M1's remotebridge/main.go: the launcher passes untrusted, remote-derived
@@ -74,29 +121,8 @@ func main() {
 			ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
 				"-C", "attach-session", "-t", *session)...)
 		} else {
-			// ControlMaster on the control connection makes every image fetch a
-			// multiplexed exec on this same TCP connection: no second handshake,
-			// and image bytes never share the control stream with live output.
-			// ControlPersist=no ties the master's lifetime to this process.
 			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
-			args := []string{"-T", "-e", "none",
-				"-o", "ControlMaster=auto", "-o", "ControlPath=" + ctlSock, "-o", "ControlPersist=no",
-				*host, "--", "env", "TMUX_TMPDIR=" + *tmpdir}
-			// TERM decides the remote viewer's graphics backend: it reads
-			// #{client_termname}, which is whatever this control client
-			// advertises. A non-kitty local terminal therefore degrades the
-			// remote carousel to block art on its own. -T means no pty, so ssh
-			// won't send TERM itself — it has to ride in this env prefix like
-			// TMUX_TMPDIR does.
-			if *term != "" {
-				args = append(args, "TERM="+shellQuote(*term))
-			}
-			args = append(args, tmuxArgv...)
-			// ssh space-joins the post-host argv into one string run by the
-			// remote login shell, so shell-quote the session name (may
-			// contain spaces) to keep it a single target token.
-			args = append(args, "-C", "attach-session", "-t", shellQuote(*session))
-			ctl = exec.Command(*sshCmd, args...)
+			ctl = exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *session, tmuxArgv)...)
 		}
 		localTmuxArgv = strings.Fields(*localTmux)
 	}
