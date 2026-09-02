@@ -140,6 +140,8 @@ The renderer must never emit a label wider than its column. When even the floors
 
 Numeric session names (e.g., "10") cause ambiguity with `tmux set -t '10'` when piped through `tmux source -`. The Go TUI targets sessions by name (`tmux switch-client -t <name>`; zoxide suggestions use `=name` exact-match when creating a new session). Direct `tmux set` calls (as in update-icons) work fine with session names.
 
+**`show-options` does not accept the `=` exact-match prefix.** `has-session`, `switch-client` and `kill-session` all take `-t "=name"`; `show-options -t "=name"` answers `no such session`, and `-q` turns that into an empty string indistinguishable from an unset option — so a script can stamp an option with `set-option -t "$name"` and never read it back. That silently disabled `lztmux-remote-open`'s mirror dedup, forking a `-remote` session on every re-open (#474). Read session user-options with a bare `-t "$name"` (an exact match still beats a prefix match), or via `display-message -p` / `list-sessions -F`.
+
 ### Home-Manager Module
 
 `modules/home-manager.nix` provides `programs.lazytmux` with options for `enable`, `worktrunk.enable`, `skills.enable`, and `startupSession` (systemd service). The activation script reloads tmux config and reflows all sessions after `home-manager switch`.
