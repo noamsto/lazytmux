@@ -185,6 +185,30 @@ func TestNoSessionRows(t *testing.T) {
 	}
 }
 
+func TestRemotePickHost(t *testing.T) {
+	cases := []struct {
+		name       string
+		item       listItem
+		windowMode bool
+		wantHost   string
+		wantOK     bool
+	}{
+		{"session remote row", listItem{remoteHost: "tp-g6"}, false, "tp-g6", true},
+		{"session remote row in window mode", listItem{remoteHost: "tp-g6"}, true, "tp-g6", true},
+		{"mirror window row", listItem{target: "g6-main:1", bridgeHost: "tp-g6"}, true, "tp-g6", true},
+		{"mirror row ignored in session mode", listItem{bridgeHost: "tp-g6"}, false, "", false},
+		{"local window row", listItem{target: "lazytmux:1"}, true, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host, ok := remotePickHost(tc.item, tc.windowMode)
+			if ok != tc.wantOK || host != tc.wantHost {
+				t.Errorf("remotePickHost() = %q, %v, want %q, %v", host, ok, tc.wantHost, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestRemotePickGated(t *testing.T) {
 	cases := map[string]bool{
 		"1":      true,

@@ -86,6 +86,19 @@ func noSessionRows(items []listItem) bool {
 	return true
 }
 
+// remotePickHost resolves the ssh host ^o should float the remote picker for.
+// Session-mode Remote rows carry remoteHost; window/wall mirror rows carry
+// bridgeHost instead.
+func remotePickHost(item listItem, windowMode bool) (string, bool) {
+	if item.remoteHost != "" {
+		return item.remoteHost, true
+	}
+	if windowMode && item.bridgeHost != "" {
+		return item.bridgeHost, true
+	}
+	return "", false
+}
+
 // remotePickGated parses the mirror-window gate probe — tmux display-message
 // evaluating `#{&&:#{@bridge_win},#{@bridge_pane}}` — into a bool. Only "1"
 // means gated (spec D7); "0", empty, and any whitespace/newline padding

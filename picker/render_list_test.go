@@ -21,6 +21,19 @@ func TestRenderHintsNonRemoteRow(t *testing.T) {
 	}
 }
 
+func TestRenderHintsMirrorWindowRow(t *testing.T) {
+	m := tuiModel{
+		windowMode: true,
+		width:      200,
+		visible:    []listItem{{target: "g6-main:1", bridgeHost: "tp-g6"}},
+		cursor:     0,
+	}
+	hints := stripANSI(m.renderHints())
+	if !strings.Contains(hints, "^o:browse") {
+		t.Errorf("hints = %q, want ^o:browse on a mirror window row", hints)
+	}
+}
+
 func TestRenderHintsEmitMode(t *testing.T) {
 	m := tuiModel{width: 200, emitPath: "/tmp/emit", visible: []listItem{{target: "lazytmux"}}, cursor: 0}
 	hints := stripANSI(m.renderHints())

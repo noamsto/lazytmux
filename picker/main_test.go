@@ -132,7 +132,7 @@ func TestUnquoteTmuxOptValue(t *testing.T) {
 // windowPaneRow builds one list-panes -a row in parseWindowPaneRows' field
 // order (see collectWindows' -F string), for tests below.
 func windowPaneRow(fields ...string) string {
-	const n = 28
+	const n = 29
 	row := make([]string, n)
 	copy(row, fields)
 	return strings.Join(row, "|")
@@ -169,6 +169,22 @@ func TestParseWindowPaneRowsBridgeIdentity(t *testing.T) {
 	}
 	if wi.prPlain != " pr-bridge" || wi.prState != "closed" || wi.prCheck != "success" || wi.prMergeable != "conflicting" {
 		t.Errorf("pr = %q/%q/%q/%q, want bridge values", wi.prPlain, wi.prState, wi.prCheck, wi.prMergeable)
+	}
+}
+
+func TestParseWindowPaneRowsBridgeHost(t *testing.T) {
+	row := windowPaneRow(
+		"sess", "0", "winname", "0", "fish", "1", "feature/x", "/some/path",
+		"", "", "", "", "", "",
+		"", "", "", "", "",
+		"", "", "", "", "",
+		"", "", "", "",
+		"tp-g6",
+	)
+	order, m := parseWindowPaneRows([]string{row})
+	wi := m[order[0]]
+	if wi.bridgeHost != "tp-g6" {
+		t.Errorf("bridgeHost = %q, want tp-g6", wi.bridgeHost)
 	}
 }
 
