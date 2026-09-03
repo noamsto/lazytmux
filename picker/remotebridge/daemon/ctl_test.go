@@ -417,16 +417,9 @@ fi
 echo launched >>"`+launchLog+`"
 `)
 
-			sock := filepath.Join(dir, "sock")
-			newSession := exec.Command("tmux", "-f", "/dev/null", "-S", sock,
-				"new-session", "-d", "-s", "w", "-x", "80", "-y", "24")
-			newSession.Env = append(os.Environ(), "PATH="+stubDir+":"+os.Getenv("PATH"))
-			if out, err := newSession.CombinedOutput(); err != nil {
-				t.Fatalf("new-session: %v\n%s", err, out)
-			}
-			t.Cleanup(func() { exec.Command("tmux", "-S", sock, "kill-server").Run() })
+			tmux := startIsolatedTmux(t, "PATH="+stubDir+":"+os.Getenv("PATH"))
 
-			paneOut, err := exec.Command("tmux", "-S", sock, "display-message", "-p", "-t", "w", "#{pane_id}").Output()
+			paneOut, err := tmux("display-message", "-p", "-t", "w", "#{pane_id}").Output()
 			if err != nil {
 				t.Fatalf("display-message: %v", err)
 			}
@@ -442,7 +435,7 @@ echo launched >>"`+launchLog+`"
 			}
 			// source-file drives the same command grammar (and the same
 			// format-expansion pass) a control-mode client's command would.
-			if out, err := exec.Command("tmux", "-S", sock, "source-file", conf).CombinedOutput(); err != nil {
+			if out, err := tmux("source-file", conf).CombinedOutput(); err != nil {
 				t.Fatalf("source-file: %v\n%s", err, out)
 			}
 
@@ -455,7 +448,7 @@ echo launched >>"`+launchLog+`"
 				if b, _ := os.ReadFile(launchLog); len(b) > 0 {
 					launched = true
 				}
-				out, err := exec.Command("tmux", "-S", sock, "list-panes", "-t", "w").Output()
+				out, err := tmux("list-panes", "-t", "w").Output()
 				if err == nil {
 					paneCount = len(strings.Split(strings.TrimSpace(string(out)), "\n"))
 				}
@@ -480,7 +473,7 @@ echo launched >>"`+launchLog+`"
 			if paneCount <= 1 {
 				t.Fatal("no fallback split appeared for an empty manifest")
 			}
-			capOut, err := exec.Command("tmux", "-S", sock, "capture-pane", "-p", "-t", "w.1").Output()
+			capOut, err := tmux("capture-pane", "-p", "-t", "w.1").Output()
 			if err != nil {
 				t.Fatalf("capture-pane: %v", err)
 			}
@@ -495,6 +488,38 @@ func writeStub(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("writeStub %s: %v", path, err)
+	}
+}
+
+// startIsolatedTmux starts a private tmux server whose unix socket path stays
+// within macOS sun_path (104 bytes). Nix-build sandboxes give t.TempDir() a
+// long prefix; a -S path derived from it plus the test name exceeds that
+// limit, while -L with a fixed name under os.MkdirTemp("", "lz") does not.
+func startIsolatedTmux(t *testing.T, extraEnv ...string) func(args ...string) *exec.Cmd {
+	t.Helper()
+	tmpdir, err := os.MkdirTemp("", "lz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpdir) })
+	const socket = "s"
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmpdir)
+	env = append(env, extraEnv...)
+	start := exec.Command("tmux", "-L", socket, "-f", "/dev/null",
+		"new-session", "-d", "-s", "w", "-x", "80", "-y", "24")
+	start.Env = env
+	if out, err := start.CombinedOutput(); err != nil {
+		t.Fatalf("new-session: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		stop := exec.Command("tmux", "-L", socket, "kill-server")
+		stop.Env = env
+		stop.Run()
+	})
+	return func(args ...string) *exec.Cmd {
+		cmd := exec.Command("tmux", append([]string{"-L", socket}, args...)...)
+		cmd.Env = env
+		return cmd
 	}
 }
 
