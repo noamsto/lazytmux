@@ -355,6 +355,119 @@ func TestPauseContinueReseedsBeforeResumingOutput(t *testing.T) {
 	}
 }
 
+// TestPauseContinueReplaysRetainedKittyStoreAfterSeed pins #465: a re-seed
+// restores placeholders but not kitty stores, so the retained localised store
+// must land as FrameOutput immediately after the FrameSeed.
+func TestPauseContinueReplaysRetainedKittyStoreAfterSeed(t *testing.T) {
+	oneLocal, onePeer := net.Pipe()
+	defer oneLocal.Close()
+	defer onePeer.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	router := NewRouter()
+	router.Register("%1", newOutputSink(oneLocal, p))
+
+	s := strings.Join([]string{
+		"%output %1 " + string(testKittyStore("9")),
+		"%pause %1",
+		"%continue %1",
+		"%begin 1 1 1",
+		"0 0 0 0",
+		"%end 1 1 1",
+		"%begin 1 2 1",
+		"FRESH-CAPTURE",
+		"%end 1 2 1",
+		"%exit",
+	}, "\n") + "\n"
+
+	reader := newTestReader(s)
+	st := newStream(io.Discard)
+	rt := newRoundTrip(reader, router, &asyncQueue{}, st)
+	for {
+		l, ok := reader.Next()
+		if !ok {
+			break
+		}
+		switch l.Kind {
+		case controlmode.Output:
+			router.Route(l.Pane, l.Data)
+		case controlmode.Pause:
+			handlePause(router, func(string) {}, l.Args[0])
+		case controlmode.Continue:
+			handleContinue(router, rt, l.Args[0])
+		}
+		if l.Kind == controlmode.Exit {
+			break
+		}
+	}
+
+	store, err := wire.ReadFrame(onePeer)
+	if err != nil {
+		t.Fatalf("read initial store: %v", err)
+	}
+	if store.Type != wire.FrameOutput || !bytes.Contains(store.Payload, []byte(kittyLocalisedMarker)) {
+		t.Fatalf("initial store = %v %q", store.Type, store.Payload)
+	}
+
+	seed, replay := seedThenReplayFrames(t, onePeer)
+	if seed.Type != wire.FrameSeed {
+		t.Fatalf("first frame = %v, want FrameSeed", seed.Type)
+	}
+	if !bytes.Contains(seed.Payload, []byte("FRESH-CAPTURE")) {
+		t.Fatalf("seed = %q, want FRESH-CAPTURE", seed.Payload)
+	}
+	if replay.Type != wire.FrameOutput {
+		t.Fatalf("second frame = %v, want FrameOutput replay", replay.Type)
+	}
+	if !bytes.Contains(replay.Payload, []byte(kittyLocalisedMarker)) {
+		t.Fatalf("replay = %q, want retained localised store", replay.Payload)
+	}
+}
+
+// TestOutputSinkCloseDiscardsReplayState: retained stores live on the sink's
+// proxy; teardown drops the sink and a fresh proxy must not inherit replay.
+func TestOutputSinkCloseDiscardsReplayState(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	s := newOutputSink(remote, p)
+	s.Write(testKittyStore("1"))
+	if got := readAllFrames(t, local, 200*time.Millisecond); !strings.Contains(got, kittyLocalisedMarker) {
+		t.Fatalf("store not forwarded: %q", got)
+	}
+	s.Close()
+	readAllFrames(t, local, 100*time.Millisecond)
+	if len(p.Replay()) != 0 {
+		t.Fatal("closed sink's proxy still retained replay state")
+	}
+
+	p2 := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	if len(p2.Replay()) != 0 {
+		t.Fatal("fresh proxy inherited replay state")
+	}
+
+	local2, remote2 := net.Pipe()
+	defer local2.Close()
+	defer remote2.Close()
+	s2 := newOutputSink(remote2, p2)
+	enqueueSeedWithReplay(s2, []byte("only-seed"))
+	seed, err := wire.ReadFrame(local2)
+	if err != nil {
+		t.Fatalf("read seed: %v", err)
+	}
+	if seed.Type != wire.FrameSeed || string(seed.Payload) != "only-seed" {
+		t.Fatalf("seed = %v %q", seed.Type, seed.Payload)
+	}
+	if err := local2.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wire.ReadFrame(local2); err == nil {
+		t.Fatal("fresh sink replayed kitty stores without a new store passing through")
+	}
+}
+
 // TestWaitHellosTimesOutWhenRenderersDontConnect uses a real listener
 // that nobody dials: a spawned renderer that never connects back (bad
 // RendererBin, exec failure, crash) must not wedge the wait forever.
@@ -530,13 +643,13 @@ func TestOutputSinkFiltersAndCoalescesThroughTheProxy(t *testing.T) {
 	// s.ch directly, then start the pump: its first receive is guaranteed to
 	// see both frames already queued, so drainOutput's batch is deterministic
 	// instead of racing the goroutine's startup against these writes.
-	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
+	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf), gfx: p}
 	seq := func(payload string) []byte {
 		return []byte("\x1b_Gi=7,a=T,U=1,f=100,t=f;" + payload + "\x1b\\")
 	}
 	s.Write(seq("L3RtcC9hLnBuZw==")) // /tmp/a.png
 	s.Write(seq("L3RtcC9iLnBuZw==")) // /tmp/b.png
-	s.start(remote, p)
+	s.start(remote)
 	defer s.Close()
 
 	got := readAllFrames(t, local, 500*time.Millisecond)
@@ -628,6 +741,26 @@ func TestOutputSinkFlushesTheProxyHeldPartialOnClose(t *testing.T) {
 type stubLocalizer struct{ local string }
 
 func (s *stubLocalizer) Localize(context.Context, string) (string, error) { return s.local, nil }
+
+const kittyLocalisedMarker = "L2xvY2FsL2EuYmlu"
+
+func testKittyStore(id string) []byte {
+	return []byte("\x1b_Gi=" + id + ",a=T,t=f;L3RtcC94LnBuZw==\x1b\\")
+}
+
+func seedThenReplayFrames(t *testing.T, peer net.Conn) (seed, replay wire.Frame) {
+	t.Helper()
+	var err error
+	seed, err = wire.ReadFrame(peer)
+	if err != nil {
+		t.Fatalf("read seed: %v", err)
+	}
+	replay, err = wire.ReadFrame(peer)
+	if err != nil {
+		t.Fatalf("read replay: %v", err)
+	}
+	return seed, replay
+}
 
 // readAllFrames reads frames off conn until it goes quiet for the deadline and
 // returns their concatenated payloads.

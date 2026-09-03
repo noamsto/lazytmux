@@ -1321,7 +1321,7 @@ func handleContinue(router *Router, rt roundTrip, paneID string) {
 		return
 	}
 	if seed, err := PaneSeed(rt, paneID); err == nil {
-		s.enqueue(wire.FrameSeed, seed)
+		enqueueSeedWithReplay(s, seed)
 	} else {
 		fmt.Fprintf(os.Stderr, "daemon: %%continue reseed for %s: %v\n", paneID, err)
 	}
@@ -1356,7 +1356,7 @@ func reseedDropped(router *Router, rt roundTrip) {
 			fmt.Fprintf(os.Stderr, "daemon: re-seed after drop for %s: %v\n", ids[i], err)
 			return
 		}
-		sinks[i].enqueue(wire.FrameSeed, seed)
+		enqueueSeedWithReplay(sinks[i], seed)
 	})
 }
 
@@ -1586,6 +1586,7 @@ type sinkFrame struct {
 type outputSink struct {
 	mu     sync.Mutex
 	ch     chan sinkFrame
+	gfx    *graphics.Proxy
 	closed bool
 	paused bool
 	// dropped counts frames lost to a full buffer since the last re-seed.
@@ -1599,8 +1600,8 @@ type outputSink struct {
 // newOutputSink constructs the sink and starts its pump immediately; see
 // start's doc for what the pump does and why it's a separate method.
 func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
-	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
-	s.start(conn, gfx)
+	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf), gfx: gfx}
+	s.start(conn)
 	return s
 }
 
@@ -1617,8 +1618,9 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 // enqueue frames directly onto s.ch, and only then call start —
 // guaranteeing the pump's first receive sees the whole burst instead of
 // racing its startup against the writer.
-func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
+func (s *outputSink) start(conn net.Conn) {
 	go func() {
+		gfx := s.gfx
 		// kn strips modifyOtherKeys negotiation sequences a remote pane's
 		// occupant wrote for itself before they reach the local mirror
 		// pane's pty, where local tmux would otherwise treat them as a
@@ -1671,6 +1673,13 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 			}
 			if err := wire.WriteFrame(conn, f.typ, f.payload); err != nil {
 				return
+			}
+			if f.typ == wire.FrameSeed && gfx != nil {
+				if replay := gfx.Replay(); len(replay) > 0 {
+					if err := wire.WriteFrame(conn, wire.FrameOutput, replay); err != nil {
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -1739,6 +1748,16 @@ func (s *outputSink) enqueue(typ wire.FrameType, payload []byte) {
 	default:
 		s.dropped++
 	}
+}
+
+// enqueueSeedWithReplay enqueues a FrameSeed; the sink pump appends any
+// retained kitty stores immediately after writing the seed (same goroutine as
+// gfx.Filter, so Replay stays race-free).
+func enqueueSeedWithReplay(s *outputSink, seed []byte) {
+	if s == nil {
+		return
+	}
+	s.enqueue(wire.FrameSeed, seed)
 }
 
 // takeDirty reports how many frames this sink dropped, and clears the count, but

@@ -122,7 +122,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", reseedIDs[i], err)
 				return
 			}
-			sinks[i].enqueue(wire.FrameSeed, seed)
+			enqueueSeedWithReplay(sinks[i], seed)
 		})
 		// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
 		// have cleared a local one first: applyLayout skips select-layout when the

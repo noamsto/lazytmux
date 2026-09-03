@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
 // sessionIDRe matches a tmux session id. The id is interpolated into a command
@@ -197,6 +196,6 @@ func reseedPanes(reg *registry, router *Router, rt roundTrip, reason string) {
 			fmt.Fprintf(os.Stderr, "daemon: reseed %s %s: %v\n", ids[i], reason, err)
 			return
 		}
-		sinks[i].enqueue(wire.FrameSeed, seed)
+		enqueueSeedWithReplay(sinks[i], seed)
 	})
 }
