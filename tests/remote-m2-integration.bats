@@ -1885,3 +1885,382 @@ m2_pane_gate_failed() {
 	[ -n "$src_dims" ]
 	[ "$src_dims" = "$dst_dims" ]
 }
+
+# #482: a dropped control connection must not destroy the mirror. Below, the
+# DROP is always a SIGKILL of the transport child (the `tmux -L m2src -C
+# attach-session` the daemon's own Dial spawned), found by matching on
+# "attach-session" rather than blindly taking the daemon's first child: a
+# transient `tmux -L m2dst set-option ...` the daemon forks for a local-tmux
+# call is also, briefly, one of its children.
+#
+# The distinction is load-bearing (measured on the pinned next-3.8 tmux):
+# `detach-client`/`kill-server` end the control client with a terminal %exit,
+# while only killing the transport out from under a live stdin/stdout pipe
+# produces the bare EOF that is a DROP — see the design spec's "Test strategy".
+#
+# `ps -Ao`, not pgrep: nixpkgs' `procps` on darwin is unixtools' shim, which
+# ships ps/sysctl/top/watch and NO pgrep, so a pgrep-based probe returns empty
+# on macOS and every case below fails at its first assertion. Same portability
+# rules as picker's psArgs — `-A` (POSIX), never `-e` (BSD ps reads that as
+# "show environment"), and no GNU-only `--no-headers`: the header row's PPID
+# column is the string "PPID", which no numeric pid ever equals.
+transport_child() {
+	ps -Ao pid,ppid,args 2>/dev/null |
+		awk -v parent="$daemon_pid" '$2 == parent && /attach-session/ {print $1; exit}'
+}
+
+@test "a control-connection drop leaves the mirror standing and reattaches to the same remote server" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 drc
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+	kill -9 "$old_transport"
+
+	# @bridge_state is stamped BEFORE the first re-dial attempt, so it must
+	# appear within about one status tick of the drop.
+	state=""
+	for _ in $(seq 1 40); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ "$state" = disconnected ] && break
+		sleep 0.1
+	done
+	[ "$state" = disconnected ]
+
+	# The mirror itself must survive: same session, same window, same pane —
+	# nothing torn down by the drop.
+	run $DST has-session -t =host-sess
+	[ "$status" -eq 0 ]
+	[ "$($DST list-panes -t host-sess:1 -F '#{pane_id}' | wc -l)" -eq 1 ]
+
+	# Content produced on SRC while disconnected is not buffered for the
+	# control stream — it lands in the pane's own screen regardless of
+	# whether any client is attached, so this is what the reattach's
+	# capture-pane reseed must pick up. Sent now, asserted only after
+	# reconnect: reaching the mirror is proof the reseed ran, not mere
+	# window survival.
+	$SRC send-keys -t rem 'echo DROP_RECONNECT_4X8P' Enter
+
+	# Reattach: a NEW control client, distinct from the one just killed.
+	new_transport=""
+	for _ in $(seq 1 80); do
+		candidate="$(transport_child)"
+		[ -n "$candidate" ] && [ "$candidate" != "$old_transport" ] && {
+			new_transport="$candidate"
+			break
+		}
+		sleep 0.1
+	done
+	[ -n "$new_transport" ]
+	run $SRC list-clients -t rem
+	[ "$status" -eq 0 ]
+
+	# Cleared only once the reattach repair (resume + reconcile + reseed) has
+	# actually completed — not on the bare re-attach.
+	for _ in $(seq 1 80); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ -z "$state" ] && break
+		sleep 0.1
+	done
+	[ -z "$state" ]
+
+	painted=no
+	for _ in $(seq 1 60); do
+		mirror_contains 1 DROP_RECONNECT_4X8P && {
+			painted=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$painted" = yes ]
+}
+
+@test "a control-connection drop into a different tmux server tears the mirror down" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 dds
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+
+	# SIGKILL first: kill-server against the still-live control client would
+	# itself be seen as a terminal %exit (measured on next-3.8), reaching
+	# teardown without ever touching the identity check this test is named
+	# for. Only killing the TRANSPORT produces the bare-EOF drop that the
+	# reconnect loop retries — the identity check runs on that retry's dial.
+	kill -9 "$old_transport"
+	# Recreate immediately, minimizing the window in which the daemon's own
+	# backoff (jittered, up to 500ms) could dial the OLD, still-live server
+	# first — which would reattach, legitimately match, and leave the
+	# identity-mismatch path unreached. A same-named session on a freshly
+	# started server (a different tmux server pid, even though $0 is reused) is
+	# exactly the case a session-id-only identity check would wave through.
+	# The fresh server also renumbers panes from %0, so its pane ids collide
+	# with the ones this mirror's registry still holds. That leak window
+	# (attach to identity reply) is not assertable here — teardown kills the
+	# mirror session milliseconds later — so
+	# TestReattachDropsOutputFromAnUnverifiedConnection pins it instead.
+	$SRC kill-server 2>/dev/null || true
+	$SRC new-session -d -s rem -x 100 -y 30
+
+	# Positive evidence of the mismatch — the daemon's own stderr line — not
+	# "the mirror is gone" alone: if the race above went the other way the
+	# mirror would end up gone anyway, via the harness's own kill-server, and
+	# the test would be a silent false-green.
+	mismatch=no
+	for _ in $(seq 1 100); do
+		grep -q "different tmux server" "$BATS_TEST_TMPDIR/dds.log" 2>/dev/null && {
+			mismatch=yes
+			break
+		}
+		sleep 0.1
+	done
+
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$mismatch" = yes ]
+	[ ! -e "$sock" ]
+	[ ! -e "$sock.pid" ]
+	run $DST has-session -t =host-sess
+	[ "$status" -ne 0 ]
+}
+
+@test "a pane paused when the connection drops resumes and keeps repainting after reconnect" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 dpp
+
+	# Default pause-after is 1s and needs no backlog to fire (a fresh attach
+	# pauses on its own ~1s in, per the pre-existing "pause-after default"
+	# test above) — give it time to actually pause this pane BEFORE the drop.
+	# %pause is per-control-client state a fresh client will never see
+	# %continue for, so reattach must resume() the sink before the reseed is
+	# enqueued into it, or the pane freezes for the life of the daemon — worse
+	# than teardown (#482).
+	sleep 2
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+	kill -9 "$old_transport"
+
+	state="disconnected"
+	for _ in $(seq 1 100); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ -z "$state" ] && break
+		sleep 0.1
+	done
+	[ -z "$state" ]
+
+	# First write after reconnect: proves the resumed sink repaints at all.
+	$SRC send-keys -t rem 'echo PAUSED_REPAINT_A9K2' Enter
+	painted_a=no
+	for _ in $(seq 1 60); do
+		mirror_contains 1 PAUSED_REPAINT_A9K2 && {
+			painted_a=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	# A second, later write: proves it KEEPS repainting rather than having
+	# been resumed just long enough for the reseed's own one-shot capture.
+	$SRC send-keys -t rem 'echo PAUSED_REPAINT_B3M7' Enter
+	painted_b=no
+	for _ in $(seq 1 60); do
+		mirror_contains 1 PAUSED_REPAINT_B3M7 && {
+			painted_b=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$painted_a" = yes ]
+	[ "$painted_b" = yes ]
+}
+
+@test "a mirror resized during the outage converges the remote to the new size after reconnect" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 drz
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+	kill -9 "$old_transport"
+
+	state=""
+	for _ in $(seq 1 40); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ "$state" = disconnected ] && break
+		sleep 0.1
+	done
+	[ "$state" = disconnected ]
+
+	# Resize the LOCAL mirror while disconnected. watchResize keeps polling
+	# through the outage and records the new size into the converger before
+	# it can ever send it (the send fails closed with no live connection) —
+	# so a converger merely carried across the reconnect, rather than reset,
+	# would believe the remote already has this size and never resend it
+	# (#482). resize-window sticks on the detached DST session (no attached
+	# client to override it under window-size latest).
+	$DST resize-window -t host-sess:1 -x 120 -y 40
+
+	for _ in $(seq 1 100); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ -z "$state" ] && break
+		sleep 0.1
+	done
+	[ -z "$state" ]
+
+	# The right size, not 80 columns: an unset/never-resent converger would
+	# leave the remote at its ORIGINAL 100x30, not tmux's control-client
+	# default — this asserts the CONVERGED size actually landed.
+	dims=""
+	for _ in $(seq 1 60); do
+		dims="$($SRC display-message -p -t rem -F '#{window_width}x#{window_height}' 2>/dev/null)"
+		[ "$dims" = "120x40" ] && break
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$dims" = "120x40" ]
+}
+
+# #482 × #487: a mirror's local window can die during the outage — the one
+# stretch in which nothing can discover it, since the live path notices a dead
+# local window only on a %layout-change pass that fails against it, and the
+# stream those arrive on is down. The reattach repair owns that recovery.
+#
+# Two remote windows so the kill leaves the mirror session standing: emptying
+# the registry is a teardown, which would pass a broken daemon for the wrong
+# reason.
+@test "a mirror window killed during the outage is retired and rebuilt by the reattach repair" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$SRC new-window -t 'rem:{end}' -a
+	$SRC select-window -t rem:1
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/lwo.sock" \
+		>"$BATS_TEST_TMPDIR/lwo.log" 2>&1 &
+	daemon_pid=$!
+
+	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
+	for _ in $(seq 1 "$(((BRIDGE_UP_BUDGET_SECS + want_panes * BRIDGE_UP_PER_PANE_SECS) * 10))"); do
+		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
+		[ "$got_panes" -eq "$want_panes" ] && break
+		sleep 0.1
+	done
+	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/lwo.log" "$got_panes" "$want_panes"
+	[ "$got_panes" -eq "$want_panes" ]
+
+	doomed="$($DST list-windows -t host-sess -F '#{window_id}' | tail -1)"
+	[ -n "$doomed" ]
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+	kill -9 "$old_transport"
+
+	state=""
+	for _ in $(seq 1 40); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ "$state" = disconnected ] && break
+		sleep 0.1
+	done
+	[ "$state" = disconnected ]
+
+	# The kill lands while there is no stream to report it on.
+	$DST kill-window -t "$doomed"
+	[ "$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)" -eq 1 ]
+
+	# Both remote windows mirrored again, each replacement carrying
+	# @bridge_win — the stamp only mirrorNewWindow writes, so its presence is
+	# what says the rebuild went through reconcileWindows rather than some
+	# half-built window left behind.
+	ids=""
+	rebuilt=no
+	for _ in $(seq 1 120); do
+		ids="$($DST list-windows -t host-sess -F '#{window_id} #{@bridge_win}' 2>/dev/null || true)"
+		[ "$(printf '%s\n' "$ids" | grep -c ' 1$')" -eq 2 ] && {
+			rebuilt=yes
+			break
+		}
+		sleep 0.1
+	done
+	if [ "$rebuilt" != yes ]; then
+		printf -- '--- DST windows ---\n%s\n--- daemon log ---\n' "$ids" >&3
+		tail -60 "$BATS_TEST_TMPDIR/lwo.log" >&3 2>/dev/null || true
+	fi
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$rebuilt" = yes ]
+	# A rebuild, not the corpse: tmux never reuses a live id, so the killed one
+	# reappearing would mean the entry was never retired.
+	if printf '%s\n' "$ids" | grep -q "^$doomed "; then
+		echo "the killed window $doomed is still in the mirror: $ids" >&2
+		false
+	fi
+}
+
+# #482 × #491: the label poll rides a coarse ticker, a remote window option
+# changing nothing the control stream reports. That ticker is session-lifetime,
+# and a reconnect must neither lose it nor build a second one.
+#
+# Two halves, and the second is the one that needs it: a label set DURING the
+# outage lands on the repair pass's first loop iteration, while one set after
+# it, on an otherwise silent mirror, can only arrive on a tick.
+@test "window labels keep tracking the remote across a reconnect" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 lbr
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+	kill -9 "$old_transport"
+
+	state=""
+	for _ in $(seq 1 40); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ "$state" = disconnected ] && break
+		sleep 0.1
+	done
+	[ "$state" = disconnected ]
+
+	# Set while there is no stream to carry it.
+	$SRC set -w -t rem:1 @crew_name nova
+
+	crew=""
+	for _ in $(seq 1 200); do
+		crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+		[ "$crew" = nova ] && break
+		sleep 0.1
+	done
+	[ "$crew" = nova ]
+
+	# Now the ticker's half. Nothing below writes to a pane, so the control
+	# stream stays silent and only a tick can bring the loop back around.
+	$SRC set -w -t rem:1 @crew_name pine
+
+	for _ in $(seq 1 300); do
+		crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+		[ "$crew" = pine ] && break
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$crew" = pine ]
+}

@@ -176,6 +176,22 @@ func TestParseCtlPingProbesCompatibilityBeforePaneLookup(t *testing.T) {
 	}
 }
 
+// TestPingSubmitAcksWithNoLiveConnection: parseCtl returns a request with no
+// commands for ping, so submit's loop never calls send and acks even against
+// a send that always refuses — which is what connHolder.send does with an
+// empty slot mid-outage. Without that, lztmux-remote-open's dedup would read a
+// disconnected bridge as dead and stack a second daemon on the same socket.
+func TestPingSubmitAcksWithNoLiveConnection(t *testing.T) {
+	c := newCtlState()
+	req, err := c.parseCtl([]string{wire.CtlProtocolVersion, "ping", "placeholder"}, "rem")
+	if err != nil {
+		t.Fatalf("parseCtl ping: %v", err)
+	}
+	if !c.submit(req, func(string) bool { return false }) {
+		t.Error("submit reported ping unwritten with no live connection, want ack")
+	}
+}
+
 // The daemon must build every remote command from the verb table, never forward
 // text a caller supplied.
 func TestParseCtlNeverForwardsRawCommandText(t *testing.T) {

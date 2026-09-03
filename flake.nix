@@ -766,7 +766,12 @@
               # notification behavior (e.g. %window-close on kill-window) differs
               # from 3.7b, so the mirror is exercised against the version it —
               # and production, local + remote — actually runs.
-              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep (mkTmux pkgs)];
+              # procps supplies ps, which the #482 reconnect cases use to find
+              # the daemon's own transport child (not the daemon_pid itself)
+              # and SIGKILL it for a bare-EOF drop. On darwin this resolves to
+              # unixtools' shim — ps/sysctl/top/watch, no pgrep — which is why
+              # transport_child reads the process table rather than pgrepping.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.procps (mkTmux pkgs)];
               DAEMON = "${pickerChecked}/bin/lztmux-remote-bridge-daemon";
               RENDERER = "${pickerChecked}/bin/lztmux-remote-bridge-renderer";
               # M2.3 structural input: the tests drive ctl straight at the

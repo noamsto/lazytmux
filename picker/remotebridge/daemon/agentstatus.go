@@ -112,6 +112,12 @@ func newAgentShipper(localSess string, skew int64) *agentShipper {
 	return &agentShipper{dir: dir, sess: localSess, skew: skew, written: map[string]paneStatus{}}
 }
 
+// reskew re-points the shipper at a freshly measured clock offset, keeping the
+// files it already owns. Measured once per connection rather than once per
+// session: NTP drift over a session is far below the fade's resolution, but a
+// reconnect follows an outage of unknown length (#482).
+func (a *agentShipper) reskew(skew int64) { a.skew = skew }
+
 // apply stamps each mirrored pane's remote command, writes a file per pane an
 // agent reported on, and drops the ones that stopped reporting (the agent
 // exited, or its pane is gone).

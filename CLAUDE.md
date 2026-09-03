@@ -432,6 +432,85 @@ Not done: rebuilding the mirror windows for the new session in place. That would
 break the one-local-session ↔ one-remote-session invariant `@bridge_host`,
 `@bridge_win` and `lztmux-remote-detach` all assume.
 
+### Bridge Reconnect
+
+A control-connection drop no longer kills the mirror. `daemon.Run` is two
+lifetimes, not one (#482): the ssh process, `ctlPump`, `stream`, round-trip and
+async queue are rebuilt per attach behind a mutex-guarded `connHolder`
+(`daemon/conn.go`), while the listener, pidfile, `@bridge_*` stamps, registry,
+`ctlState`, resize watcher, renderer panes, their conns and the `Router`'s sinks
+all survive. `send`, the round-trip and `waitHellos` are stable closures over
+the holder, because `pumpInput` (started in `setupWindow` *and*
+`applyPaneOps`), `watchResize` and the `acceptConns` ctl handler are each
+started once and would otherwise hold a dead stream. An empty holder slot is a
+normal state: sends fail closed through `stampAll`'s existing `ok == false`
+path, which every caller already handles.
+
+- **Only a bare EOF is a drop.** `%exit` is the remote deliberately ending the
+  client and is terminal, as is an emptied registry, a raised stop, and an
+  exhausted retry budget. Measured: `detach-client` and `kill-server` both make
+  the control client see `%exit`; only killing the transport process gives the
+  bare EOF. That is why the offline reconnect tests SIGKILL the transport child
+  rather than detaching it — a test built on `detach-client` asserts teardown
+  and fails a correct daemon.
+- **SIGTERM must be told apart from a link failure**, since it works by dropping
+  the transport. `cmd/daemon/main.go` raises `Shutdown` *before* it touches the
+  transport, and `reattach` consults it before scheduling any retry.
+  `lztmux-remote-detach` waits 2s before falling back to `kill-session` itself,
+  so a reconnecting bridge that ignored this would be stranded.
+- **Server identity is the correctness cliff.** Every attach reads
+  `#{pid}|#{start_time}|#{session_id}` in one round-trip (folded into
+  `newSessionPin`, so there is one authority for "which session are we on").
+  `pid` + `session_id` are required and compared always; `start_time` is
+  optional both ways, because tmux renders an unknown format as an empty field
+  and the remote may predate it. A reply that arrives and mismatches or is
+  malformed tears the mirror down — reconnecting into a rebooted server would
+  mirror another machine's output into panes the user believes are their
+  shells. A read that *EOFs* is a different thing: another drop, so it retries.
+  The first attach records and never tears down; if it cannot, reconnect is
+  disabled and the daemon stays single-shot.
+- **Repair order is load-bearing and every error in it is silent**: reset the
+  converger wholesale (it caches what *this* client told the remote, and
+  `watchResize` records before it sends, so a resize during the outage left it
+  believing a size the remote was never told) → re-send the client size and each
+  window's cap → `resume()` every sink (a pane `%pause`d under the old client
+  never gets its `%continue`, and a paused sink drops every frame forever, out
+  of `reseedDropped`'s reach) → `reconcileWindows` → retire-or-`reconcileLayout`
+  per survivor → one full reseed through the shared `reseedPanes`. `pause-after`
+  deliberately stays where it is, re-armed by the main loop after the first
+  `settle()`: a reattach *is* a setup pass, and arming it earlier re-opens the
+  very window that leaves a pane paused with no `%continue`.
+- **A local window that dies during the outage is retired by the repair pass,
+  never mid-drop.** #487's retire-and-rebuild needs `reconcileWindows`, so it
+  needs round-trips: a retire raised while disconnected would `closeWindow` and
+  then fail to replace it, losing a window the remote still has. Nothing raises
+  it there anyway — `reconcileLayout` runs only off the stream — so the verdict
+  waits for the transport by construction, and the repair pass owns it. There it
+  asks `localWindowGone` **outright**, where the live path asks only of a pass
+  that already failed: an outage is the one stretch in which a local window can
+  die with no `%layout-change` to discover it on, and a remote that never touches
+  that window again would strand the entry for the life of the daemon.
+- **The coarse main-loop tick is session-lifetime, not per attach.** The label
+  shipper is the one poller with no stream wake-up of its own — a remote window
+  option changes nothing the control stream reports — so `runConn` selects on
+  `loopTick` alongside the pump. Built once, before the attach loop: a ticker
+  built per attach would leak one per reconnect, and teardown can only stop the
+  handle it can see. `labelShipper` itself needs nothing from repair — it holds
+  no connection-scoped state, its `written` rows key on the local window id so a
+  retire-and-rebuild re-stamps on its own, and its 1s floor means the first
+  post-repair pass polls immediately.
+- **`@bridge_state`** is a session option the daemon alone writes:
+  `disconnected` while a re-dial is pending, unset otherwise. Stamped before the
+  first dial so the badge appears within a status tick, cleared only after the
+  reseed — a stale screen the user knows is stale is a paused mirror; one they
+  don't is a lie. `tmux-statusline` renders it in red beside `@bridge_host`.
+- **The `ControlMaster` path is reused and must be unlinked first.** It is
+  derived from the daemon's pid, and the graphics fetcher captures it in a
+  closure, so it cannot move; but a transport killed without catching a signal
+  leaves the socket behind, and `ControlMaster=auto` meeting a stale socket
+  *disables multiplexing* rather than replacing it — silently, which is how
+  image fetches would go stale after the first reconnect.
+
 ### What the Remote Host Needs on PATH
 
 Each bridge feature that runs code on the *remote* names its own requirement, and
