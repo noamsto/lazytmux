@@ -1658,6 +1658,18 @@ EOF
 	# timeout must not be reported as a resize failure.
 	[ "$got_panes" -eq "$want_panes" ]
 
+	# registerResizeHook (daemon.go) only wires client-resized/window-resized on
+	# host-sess AFTER reconcileWindows, which runs after the per-window setup
+	# loop above — so "every renderer pane is up" does not imply "a resize is
+	# observable yet". A resize fired in that gap is not lost (watchResize's
+	# resizeFallbackInterval still catches it) but that fallback is 30s, well
+	# past this test's poll budget below — so gate on the hook itself.
+	for _ in $(seq 1 40); do
+		$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized' && break
+		sleep 0.1
+	done
+	$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized'
+
 	# The gesture: resize the attached client.
 	$OBS resize-window -t obs -x 90 -y 28
 
