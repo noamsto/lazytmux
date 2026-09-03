@@ -564,23 +564,24 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+o":
 		item, ok := m.currentItem()
-		if !ok || item.remoteHost == "" {
-			// Structurally inert outside the Remote section — no window-mode
-			// row ever carries remoteHost (spec D10).
+		host, live := remotePickHost(item, m.windowMode)
+		if !ok || !live {
 			return m, nil
 		}
-		raw, _ := exec.Command("tmux", "display-message", "-p",
-			"#{&&:#{@bridge_win},#{@bridge_pane}}").Output()
-		if remotePickGated(string(raw)) {
-			m.statusMsg = "mirror window — open the remote picker from a local window"
-			return m, nil
+		if item.remoteHost != "" {
+			raw, _ := exec.Command("tmux", "display-message", "-p",
+				"#{&&:#{@bridge_win},#{@bridge_pane}}").Output()
+			if remotePickGated(string(raw)) {
+				m.statusMsg = "mirror window — open the remote picker from a local window"
+				return m, nil
+			}
 		}
 		bin := envOrMap("REMOTE_PICK_BIN", m.tmuxOpts, "@remote_pick_bin", "")
 		if bin == "" {
 			m.statusMsg = "remote picker not configured — reload tmux"
 			return m, nil
 		}
-		if err := exec.Command("tmux", remotePickNewPaneArgs(bin, item.remoteHost)...).Run(); err != nil {
+		if err := exec.Command("tmux", remotePickNewPaneArgs(bin, host)...).Run(); err != nil {
 			m.statusMsg = err.Error()
 			return m, nil
 		}
@@ -2272,6 +2273,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 				searchText:     search,
 				session:        w.session,
 				groupKey:       g.key,
+				bridgeHost:     w.bridgeHost,
 				bridgePane:     w.bridgePane,
 				bridgeSock:     w.bridgeSock,
 				hasActiveAgent: isActiveState(agentPriority(w.agent)),

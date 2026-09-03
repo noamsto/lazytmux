@@ -78,6 +78,7 @@ type windowData struct {
 	bridgeName  string // @window_bridge_name — daemon-owned remote window name, or ""
 	bridgePane  string // @bridge_pane — remote pane id this window mirrors, or ""
 	bridgeSock  string // @bridge_sock — ctl socket of the daemon mirroring this session
+	bridgeHost  string // @bridge_host — ssh host the mirror session lives on, or ""
 	prPlain     string // @window_pr_plain   — " <glyph> #<n>" or ""
 	prState     string // @pr_state
 	prCheck     string // @pr_check_state
@@ -267,6 +268,7 @@ type winInfo struct {
 	bridgeName  string
 	bridgePane  string
 	bridgeSock  string
+	bridgeHost  string
 	prPlain     string
 	prState     string
 	prCheck     string
@@ -293,7 +295,7 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 	}
 	for _, line := range lines {
 		parts := strings.Split(line, "|")
-		if len(parts) != 28 {
+		if len(parts) != 29 {
 			continue
 		}
 		sess := parts[0]
@@ -355,6 +357,7 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 				bridgeName:  bridgeName,
 				bridgePane:  field(parts, 17),
 				bridgeSock:  field(parts, 18),
+				bridgeHost:  field(parts, 28),
 				seen:        make(map[string]bool),
 			}
 			m[k] = wi
@@ -372,7 +375,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}").Output()
+		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}|#{@bridge_host}").Output()
 	if err != nil {
 		return nil
 	}
@@ -417,6 +420,7 @@ func collectWindows() []windowData {
 			bridgeName:  wi.bridgeName,
 			bridgePane:  wi.bridgePane,
 			bridgeSock:  wi.bridgeSock,
+			bridgeHost:  wi.bridgeHost,
 			prPlain:     wi.prPlain,
 			prState:     wi.prState,
 			prCheck:     wi.prCheck,
