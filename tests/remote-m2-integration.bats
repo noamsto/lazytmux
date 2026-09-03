@@ -1539,6 +1539,19 @@ EOF
 	[ "$handoff" = "lab other " ]
 }
 
+# m2_pane_gate_failed prints why a renderer-pane readiness gate gave up, plus
+# both sides' pane lists and the daemon's own log, so a CI-only failure here is
+# diagnosable without a re-run.
+m2_pane_gate_failed() {
+	local log="$1" got="$2" want="$3"
+	printf 'm2 pane gate: got %s/%s renderer panes\n--- SRC panes ---\n' "$got" "$want" >&3
+	$SRC list-panes -s -t rem -F '#{window_index} #{pane_id} #{pane_current_command}' >&3 2>&1 || true
+	printf -- '--- DST panes ---\n' >&3
+	$DST list-panes -s -t host-sess -F '#{window_index} #{pane_id} #{pane_current_command}' >&3 2>&1 || true
+	printf -- '--- daemon log ---\n' >&3
+	tail -60 "$log" >&3 2>/dev/null || true
+}
+
 # Regression for #478: lazytmux sets `aggressive-resize on`
 # (config/tmux.conf.nix), so every remote window inherits it, and tmux then
 # sizes a window only from clients whose session currently has that window
@@ -1573,6 +1586,7 @@ EOF
 	done
 	# Fail here, not below, when the mirror itself never came up — a bring-up
 	# timeout must not be reported as a convergence failure.
+	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/d478.log" "$got_panes" "$want_panes"
 	[ "$got_panes" -eq "$want_panes" ]
 
 	# Then poll every remote window down to the local size, on the house
@@ -1586,9 +1600,16 @@ EOF
 	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
 	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
-	# Capture the DST side before killing — teardown drops the mirror session.
-	src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
-	dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+	# The local mirror needs one more round trip after SRC converges — the
+	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
+	# so poll for parity too instead of comparing a single snapshot of each
+	# side. Capture before killing: teardown drops the mirror session.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
+		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+		[ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.1
+	done
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
@@ -1656,6 +1677,7 @@ EOF
 	done
 	# Fail here, not below, when the mirror itself never came up — a bring-up
 	# timeout must not be reported as a resize failure.
+	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/d478r.log" "$got_panes" "$want_panes"
 	[ "$got_panes" -eq "$want_panes" ]
 
 	# registerResizeHook (daemon.go) only wires client-resized/window-resized on
@@ -1683,9 +1705,16 @@ EOF
 	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
 	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
-	# Capture the DST side before killing — teardown drops the mirror session.
-	src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
-	dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+	# The local mirror needs one more round trip after SRC converges — the
+	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
+	# so poll for parity too instead of comparing a single snapshot of each
+	# side. Capture before killing: teardown drops the mirror session.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
+		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+		[ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.1
+	done
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
