@@ -30,7 +30,7 @@ setup() {
 	DST_CONF="$BATS_TEST_TMPDIR/dst.conf"
 	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit on\nset -g renumber-windows on\n' >"$DST_CONF"
 	SRC_CONF="$BATS_TEST_TMPDIR/src.conf"
-	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\n' >"$SRC_CONF"
+	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g window-size latest\nset -g aggressive-resize on\n' >"$SRC_CONF"
 	SRC="tmux -L m2src -f $SRC_CONF" # stands in for the "remote", full render config
 	DST="tmux -L m2dst -f $DST_CONF" # the local mirror target
 
@@ -46,6 +46,13 @@ setup() {
 		CTL="$BATS_TEST_TMPDIR/ctl"
 		(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$CTL" ./remotebridge/cmd/ctl)
 	fi
+	# pane_current_command truncates a long comm to macOS's MAXCOMLEN (15
+	# usable chars) but not Linux's (which reads the full cmdline) — the nix
+	# build's RENDERER is the long store binary name
+	# "lztmux-remote-bridge-renderer", so grepping the literal "renderer"
+	# substring never matches once macOS cuts the pane's reported command
+	# short of it. A prefix this short survives that truncation everywhere.
+	RENDERER_PROBE="$(basename "$RENDERER" | cut -c1-15)"
 
 	$SRC kill-server 2>/dev/null || true
 	$DST kill-server 2>/dev/null || true
@@ -511,8 +518,12 @@ sorted_dims() {
 # clients_calculate_size skips every client but w->latest, so the bridge's
 # whole-client "refresh-client -C WxH" was ignored and the mirror painted a
 # screen of the human's size into a pane of ours (garbled, overlapping text).
-# The per-window form is a clamp applied after that calculation, so it holds
-# regardless of who is latest.
+# The per-window form is a clamp applied after that calculation, but only for
+# a window that participates in sizing at all — under aggressive-resize,
+# clients_calculate_size_skip_client drops any client whose session doesn't
+# currently have that window selected, discarding the clamp outright for
+# every other mirrored window (#478), which is why the bridge must also opt
+# each mirrored window out of aggressive-resize.
 @test "daemon clamps the remote even with a bigger human client attached" {
 	# OBS is a third tmux server used purely as a pty host: its pane runs a
 	# real `attach` to SRC, which is the only way to give SRC an attached
@@ -1533,4 +1544,200 @@ EOF
 	[ "$back" = yes ]
 	[ "$painted" = yes ]
 	[ "$handoff" = "lab other " ]
+}
+
+# m2_pane_gate_failed prints why a renderer-pane readiness gate gave up, plus
+# both sides' pane lists and the daemon's own log, so a CI-only failure here is
+# diagnosable without a re-run.
+m2_pane_gate_failed() {
+	local log="$1" got="$2" want="$3"
+	printf 'm2 pane gate: got %s/%s renderer panes\n--- SRC panes ---\n' "$got" "$want" >&3
+	$SRC list-panes -s -t rem -F '#{window_index} #{pane_id} #{pane_current_command}' >&3 2>&1 || true
+	printf -- '--- DST panes ---\n' >&3
+	$DST list-panes -s -t host-sess -F '#{window_index} #{pane_id} #{pane_current_command}' >&3 2>&1 || true
+	printf -- '--- daemon log ---\n' >&3
+	tail -60 "$log" >&3 2>/dev/null || true
+}
+
+# Regression for #478: lazytmux sets `aggressive-resize on`
+# (config/tmux.conf.nix), so every remote window inherits it, and tmux then
+# sizes a window only from clients whose session currently has that window
+# selected. The bridge holds ONE control client on the mirrored session, so
+# every mirrored window except the remote's current one had its
+# `refresh-client -C @N:WxH` silently discarded and sat at whatever size it
+# last held. Mirror two windows and assert EVERY remote window converges, not
+# just the current one.
+@test "daemon converges every mirrored window, not just the remote's current one" {
+	$SRC new-session -d -s rem -x 120 -y 40
+	$SRC new-window -t 'rem:{end}' -a
+	# new-window selects what it creates; put the remote back on window 1 so
+	# window 2 is the one that used to be skipped.
+	$SRC select-window -t rem:1
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d478.sock" \
+		>"$BATS_TEST_TMPDIR/d478.log" 2>&1 &
+	daemon_pid=$!
+
+	# Gate on the MIRROR settling — one renderer pane per remote pane across
+	# every mirrored window. A source-side width is not a proxy: SRC reaches
+	# 100 as soon as the daemon sizes its own control client (#449), before any
+	# mirror pane exists.
+	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
+		[ "$got_panes" -eq "$want_panes" ] && break
+		sleep 0.1
+	done
+	# Fail here, not below, when the mirror itself never came up — a bring-up
+	# timeout must not be reported as a convergence failure.
+	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/d478.log" "$got_panes" "$want_panes"
+	[ "$got_panes" -eq "$want_panes" ]
+
+	# Then poll every remote window down to the local size, on the house
+	# budget rather than a fixed sleep — same WxH across windows, not just
+	# the same width.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		whs="$($SRC list-windows -t rem -F '#{window_width}x#{window_height}' | sort -u)"
+		[ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 100 ] && break
+		sleep 0.1
+	done
+	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
+	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
+	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
+	# The local mirror needs one more round trip after SRC converges — the
+	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
+	# so poll for parity too instead of comparing a single snapshot of each
+	# side. Capture before killing: teardown drops the mirror session.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
+		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+		[ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$n_windows" -eq 2 ]
+	[ "${ref_wh%x*}" = 100 ]
+	# Every window at the SAME WxH as window 1 — a width-only check would miss
+	# an asymmetric per-window bug (width converges, height doesn't, or the
+	# reverse).
+	stragglers="$(printf '%s\n' "$src_whs" | awk -v ref="$ref_wh" '$2 != ref')"
+	[ -z "$stragglers" ] || {
+		echo "windows that never converged to $ref_wh: $stragglers" >&2
+		false
+	}
+	# And the local mirror's panes match the remote's, window for window.
+	[ -n "$src_dims" ]
+	[ "$src_dims" = "$dst_dims" ]
+}
+
+# Regression for #478 (resize leg): AggressiveResizeOffCmd is a one-time,
+# unconditional opt-out sent at the top of setupWindow and persists as a tmux
+# window option — watchResize has no aggressive-resize handling of its own;
+# it only re-issues ConvergeCmd for windows already in the registry. So this
+# covers the same invariant as the setup-leg test above, reached through a live
+# client resize rather than the daemon's startup path.
+# It does not (and cannot) exercise the reg.add-before-opt-out goroutine
+# race; that is covered deterministically by
+# TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded in
+# picker/remotebridge/daemon/setupwindow_test.go.
+@test "daemon re-converges every mirrored window after a client resize" {
+	OBS="tmux -L m2obs"
+	$OBS kill-server 2>/dev/null || true
+
+	$SRC new-session -d -s rem -x 120 -y 40
+	$SRC new-window -t 'rem:{end}' -a
+	# new-window selects what it creates; put the remote back on window 1 so
+	# window 2 is the one that used to be skipped.
+	$SRC select-window -t rem:1
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	"$DAEMON" --test-local --src-socket m2src --dst-socket m2dst \
+		--session rem --window 1 --local-sess host-sess \
+		--renderer "$RENDERER" --sock "$BATS_TEST_TMPDIR/d478r.sock" \
+		>"$BATS_TEST_TMPDIR/d478r.log" 2>&1 &
+	daemon_pid=$!
+
+	# A real pty-hosted client attached to the LOCAL mirror (not the remote):
+	# watchResize reads clientArea off the mirror session, so only a client
+	# actually attached there can nudge it.
+	$OBS new-session -d -s obs -x 100 -y 30 "$DST attach -t host-sess"
+	for _ in $(seq 1 40); do
+		clients="$($DST list-clients -t host-sess 2>/dev/null | wc -l | tr -d ' ')"
+		[ "$clients" -ge 1 ] && break
+		sleep 0.1
+	done
+	[ "$clients" -ge 1 ]
+
+	# Gate on the MIRROR settling before resizing — one renderer pane per
+	# remote pane across every mirrored window, same gate as the setup-leg test.
+	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
+		[ "$got_panes" -eq "$want_panes" ] && break
+		sleep 0.1
+	done
+	# Fail here, not below, when the mirror itself never came up — a bring-up
+	# timeout must not be reported as a resize failure.
+	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/d478r.log" "$got_panes" "$want_panes"
+	[ "$got_panes" -eq "$want_panes" ]
+
+	# registerResizeHook (daemon.go) only wires client-resized/window-resized on
+	# host-sess AFTER reconcileWindows, which runs after the per-window setup
+	# loop above — so "every renderer pane is up" does not imply "a resize is
+	# observable yet". A resize fired in that gap is not lost (watchResize's
+	# resizeFallbackInterval still catches it) but that fallback is 30s, well
+	# past this test's poll budget below — so gate on the hook itself.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized' && break
+		sleep 0.1
+	done
+	$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized'
+
+	# The gesture: resize the attached client.
+	$OBS resize-window -t obs -x 90 -y 28
+
+	# watchResize polls once a second, so this needs a more generous budget
+	# than a pure-setup gate. Same WxH across windows, not just the same width.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		whs="$($SRC list-windows -t rem -F '#{window_width}x#{window_height}' | sort -u)"
+		[ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 90 ] && break
+		sleep 0.1
+	done
+	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
+	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
+	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
+	# The local mirror needs one more round trip after SRC converges — the
+	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
+	# so poll for parity too instead of comparing a single snapshot of each
+	# side. Capture before killing: teardown drops the mirror session.
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
+		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
+		[ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.1
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	$OBS kill-server 2>/dev/null || true
+
+	[ "$n_windows" -eq 2 ]
+	[ "${ref_wh%x*}" = 90 ]
+	# Every window at the SAME WxH as window 1 — a width-only check would miss
+	# an asymmetric per-window bug (width converges, height doesn't, or the
+	# reverse).
+	stragglers="$(printf '%s\n' "$src_whs" | awk -v ref="$ref_wh" '$2 != ref')"
+	[ -z "$stragglers" ] || {
+		echo "windows that never converged to $ref_wh: $stragglers" >&2
+		false
+	}
+	# And the local mirror's panes match the remote's, window for window.
+	[ -n "$src_dims" ]
+	[ "$src_dims" = "$dst_dims" ]
 }

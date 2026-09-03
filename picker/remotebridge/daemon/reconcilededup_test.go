@@ -32,7 +32,7 @@ func TestReconcileLayoutDedupsUnchangedLayout(t *testing.T) {
 		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil },
 	}
 
-	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), rt)
+	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
 
 	if strings.Contains(sent.String(), "capture-pane") {
 		t.Errorf("sent %q, want no capture-pane (no PaneSeed round-trip)", sent.String())
@@ -76,7 +76,7 @@ func TestReconcileLayoutFallsThroughOnZoomChange(t *testing.T) {
 		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil },
 	}
 
-	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), rt)
+	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
 
 	joined := strings.Join(calls, "\n")
 	if !strings.Contains(joined, "resize-pane") || !strings.Contains(joined, "-Z") {
@@ -115,7 +115,7 @@ func TestReconcileLayoutFallsThroughOnUnknownZoomState(t *testing.T) {
 		LocalTmuxOut: func(...string) (string, error) { return "", fmt.Errorf("boom") },
 	}
 
-	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), rt)
+	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
 
 	joined := strings.Join(calls, "\n")
 	if !strings.Contains(joined, "resize-window") {
