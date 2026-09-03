@@ -308,12 +308,35 @@ func toolResolveScript(tool string) string {
 
 // carouselResolveScript is the POSIX body run under exec /bin/sh -c. It must
 // contain zero single-quote characters so double tmuxQuote only wraps.
+//
+// An empty/absent manifest is checked here rather than left to
+// tmux-claude-images' own `[[ ! -s $MANIFEST ]]` branch: that branch's
+// `tmux display-message` lands on the control-mode client's nonexistent
+// status line and evaporates, same as the missing-binary case above it — so
+// this uses `tmux-claude-images --resolve` (prints MODE\tKEY\tMANIFEST,
+// launches nothing) to test the manifest itself and falls back to the same
+// short-lived split.
+//
+// manifest=${res####*$tab}, not ${res##*$tab}: run-shell format-expands its
+// whole command string before /bin/sh ever sees it, and a run of `#`
+// characters is that format language's own escape for a literal `#` — two
+// collapse to one (measured, next-3.8: `##` arrives as `#`). Writing the
+// POSIX "strip longest match" operator ## therefore requires doubling every
+// `#` in it, i.e. four, so the shell that actually runs still sees `##`.
 func carouselResolveScript(pane string) string {
 	return fmt.Sprintf(
 		"src=$(tmux show-options -pqv -t %s @claude_img_src); "+
 			"case \"$src\" in %%[0-9]*) case \"${src#%%}\" in *[!0-9]*) src=%s;; esac;; *) src=%s;; esac; "+
-			"command -v tmux-claude-images >/dev/null 2>&1 && "+
+			"if command -v tmux-claude-images >/dev/null 2>&1; then "+
+			"tab=$(printf \"\\t\"); "+
+			"res=$(env TMUX_PANE=\"$src\" tmux-claude-images --resolve 2>/dev/null); "+
+			"manifest=${res####*$tab}; "+
+			"if [ -n \"$manifest\" ] && [ -s \"$manifest\" ]; then "+
 			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 tmux-claude-images; "+
+			"fi; "+
+			`tmux split-window -t "$src" -l 3 "echo lazytmux: no images yet for this pane; sleep 5"; `+
+			"exit 0; "+
+			"fi; "+
 			`tmux split-window -t "$src" -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
 		pane, pane, pane,
 	)
