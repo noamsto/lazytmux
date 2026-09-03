@@ -1382,13 +1382,13 @@ Every `file:line` cite in the doc, re-resolved against `$SRC` (pin
 
 | Citation | Doc claims is there | Actually at that line in `$SRC` | Resolves? |
 |---|---|---|---|
-| `server-client.c:2947` | `server_client_dispatch_identify`'s `if (c->flags & CLIENT_CONTROL) control_start(c); else if (c->fd != -1) { tty_init(&c->tty, c); ... }` | `MSG_IDENTIFY_STDIN` case body (`c->fd = imsg_get_fd(imsg);`) — unrelated code | **No** — drifted ~48 lines; the quoted branch is actually at `server-client.c:2995-2997` |
+| `server-client.c:2947` | `server_client_dispatch_identify`'s `if (c->flags & CLIENT_CONTROL) control_start(c); else if (c->fd != -1) { tty_init(&c->tty, c); ... }` | `MSG_IDENTIFY_STDIN` case body (`c->fd = imsg_get_fd(imsg);`) — unrelated code | **No** — drifted ~48 lines; the quoted branch is actually at `server-client.c:2996-2997` |
 | `cmd-display-menu.c:581` | `int modify = popup_present(tc);` | Exact match | **Yes**, byte-for-byte |
 | `popup.c:550` | `if (lines != BOX_LINES_DEFAULT)` branch "ends with" `tty_resize(&c->tty)` | Branch opens at line 541; the `tty_resize(&c->tty)` call itself is at line 551 | **Close but off** — no line 550 statement matches either half of the description; nearest is 551 (off-by-1) |
 | `tty.c:124` | "opens with `struct client *c = tty->client;`" | Line 124 is the `tty_resize(struct tty *tty)` function signature; `struct client *c = tty->client;` is line 126 | **Off by 2** — same function, wrong line |
 
 Verdict: **mechanism CONFIRMED, citations mostly REVISED.** The chain the doc
-describes — control-mode client has no tty (`server-client.c` ~2995-2997) →
+describes — control-mode client has no tty (`server-client.c:2996-2997`) →
 second popup takes the `popup_modify` path (`cmd-display-menu.c:581`) →
 `-B`/`-b` triggers `tty_resize(&c->tty)` (`popup.c:551`) → NULL deref inside
 `tty_resize` (`tty.c:124-126`) — still holds verbatim in content at the pin.
