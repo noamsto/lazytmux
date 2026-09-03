@@ -18,9 +18,13 @@ const retainMaxIDs = 8
 // Proxy filters one pane's output stream. It is owned by that pane's output
 // sink and called only from the sink's pump goroutine — Filter on every
 // output batch, Replay immediately after each FrameSeed, Close on teardown —
-// so retain needs no locking. Filter may block there, bounded by timeout:
-// holding one pane's stream at a sequence boundary is what keeps a store
-// ahead of the placements that reference it (spec D4).
+// so retain needs no locking. That confinement outlives Close: the pump may
+// still be flushing (Filter then Close) when Close returns, so a caller that
+// needs to inspect retain state from outside the pump — a test, typically —
+// must wait for the pump to actually exit (outputSink.Wait) rather than
+// racing that flush. Filter may block there, bounded by timeout: holding one
+// pane's stream at a sequence boundary is what keeps a store ahead of the
+// placements that reference it (spec D4).
 type Proxy struct {
 	sc        *Scanner
 	loc       Localizer

@@ -438,7 +438,7 @@ func TestOutputSinkCloseDiscardsReplayState(t *testing.T) {
 		t.Fatalf("store not forwarded: %q", got)
 	}
 	s.Close()
-	readAllFrames(t, local, 100*time.Millisecond)
+	s.Wait()
 	if len(p.Replay()) != 0 {
 		t.Fatal("closed sink's proxy still retained replay state")
 	}

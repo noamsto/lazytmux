@@ -1595,6 +1595,12 @@ type outputSink struct {
 	// positional, so the bytes that would have repaired those cells are the
 	// ones that went missing.
 	dropped int
+	// done closes when the pump goroutine returns. Close only signals the
+	// pump to stop; the pump may still be mid-flush (draining kn/gfx state on
+	// teardown) after Close returns. Wait is how a caller that needs to
+	// inspect gfx directly — outside the pump's own goroutine confinement —
+	// gets a happens-before edge instead of racing that flush.
+	done chan struct{}
 }
 
 // newOutputSink constructs the sink and starts its pump immediately; see
@@ -1604,6 +1610,10 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 	s.start(conn)
 	return s
 }
+
+// Wait blocks until the pump goroutine has exited. See done's doc: this is
+// the synchronization a caller needs before touching gfx after Close.
+func (s *outputSink) Wait() { <-s.done }
 
 // start launches the pump goroutine, which batch-drains queued FrameOutput
 // frames before handing them to gfx: coalescing can only drop a store a later
@@ -1619,7 +1629,11 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 // guaranteeing the pump's first receive sees the whole burst instead of
 // racing its startup against the writer.
 func (s *outputSink) start(conn net.Conn) {
+	if s.done == nil {
+		s.done = make(chan struct{})
+	}
 	go func() {
+		defer close(s.done)
 		gfx := s.gfx
 		// kn strips modifyOtherKeys negotiation sequences a remote pane's
 		// occupant wrote for itself before they reach the local mirror
@@ -1782,7 +1796,9 @@ func (s *outputSink) resume() { s.mu.Lock(); s.paused = false; s.mu.Unlock() }
 // Close stops the sink's pump goroutine so it doesn't leak once its pane is
 // torn down (reconcile-removal, teardown); the channel is otherwise never
 // closed and an idle sink would linger until process exit. Safe to call more
-// than once, and safe to race with a concurrent Write.
+// than once, and safe to race with a concurrent Write. Close only asks the
+// pump to stop — it does not wait for it; a caller that needs to know gfx has
+// gone quiet (there is no other reason to) must Wait too.
 func (s *outputSink) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
