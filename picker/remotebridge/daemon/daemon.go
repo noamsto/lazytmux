@@ -8,6 +8,7 @@ package daemon
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -44,6 +45,10 @@ type Config struct {
 	// payloads crossing the bridge. nil disables proxying entirely (tests, and
 	// any transport where there is no remote filesystem to fetch from).
 	NewGraphics func(paneID string) *graphics.Proxy
+	// PasteUpload ships one clipboard image to the remote over the bridge's
+	// ssh ControlMaster and returns the remote path it landed at (#361). nil
+	// disables ctrl+v image-paste interception (tests, --test-local).
+	PasteUpload func(ctx context.Context, ext string, data []byte) (string, error)
 	// HandOff opens a remote session this bridge was switched to as a mirror of
 	// its own (injected; prod = lztmux-remote-open, nil = off). See sessionPin.
 	HandOff func(remoteSession string)
@@ -1057,7 +1062,7 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 
 	for i, remotePane := range paneIDs {
 		if wired[i] {
-			go pumpInput(mw.conns[remotePane], remotePane, send)
+			go pumpInput(mw.conns[remotePane], remotePane, send, cfg.paster())
 			continue
 		}
 		// A sole pane's failure is fatal: this error is what makes addWindow /
@@ -1069,7 +1074,7 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 			delete(mw.conns, remotePane)
 			return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
 		}
-		go pumpInput(mw.conns[remotePane], remotePane, send)
+		go pumpInput(mw.conns[remotePane], remotePane, send, cfg.paster())
 	}
 	return nil
 }
@@ -1820,8 +1825,9 @@ func (s *outputSink) Close() {
 }
 
 // pumpInput forwards conn's FrameInput frames to the remote pane as
-// send-keys commands, until conn closes.
-func pumpInput(conn net.Conn, remotePane string, send func(string)) {
+// send-keys commands, until conn closes. A non-nil paste handler intercepts
+// ctrl+v image pastes first (see paste.go); nil forwards input verbatim.
+func pumpInput(conn net.Conn, remotePane string, send func(string), paste *pasteHandler) {
 	for {
 		f, err := wire.ReadFrame(conn)
 		if err != nil {
@@ -1830,7 +1836,11 @@ func pumpInput(conn net.Conn, remotePane string, send func(string)) {
 		if f.Type != wire.FrameInput {
 			continue
 		}
-		for _, args := range controlmode.SendKeysArgs(remotePane, f.Payload, controlmode.InputChunkBytes) {
+		payload := f.Payload
+		if paste != nil {
+			payload = paste.handle(remotePane, payload, send)
+		}
+		for _, args := range controlmode.SendKeysArgs(remotePane, payload, controlmode.InputChunkBytes) {
 			send(strings.Join(args, " "))
 		}
 	}

@@ -313,7 +313,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			// temporary local index it was appended at — the swaps below have
 			// not run yet, so the two differ.
 			seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)], cfg.graphicsFor(id))
-			go pumpInput(c, id, send)
+			go pumpInput(c, id, send, cfg.paster())
 		}
 	}
 

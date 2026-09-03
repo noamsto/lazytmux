@@ -6,6 +6,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +71,39 @@ func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []stri
 	// login shell, so shell-quote the session name (may contain spaces) to keep
 	// it a single target token.
 	return append(args, "-C", "attach-session", "-t", shellQuote(session))
+}
+
+// remoteStoreScript is the paste upload's remote half (#361): it lands the
+// image bytes (stdin) in a 0600 mktemp file under a fixed dir and prints the
+// path. The find sweep is the cleanup answer — the file must outlive prompt
+// editing (the agent reads the path at SUBMIT, possibly minutes later), so
+// delete-on-inject is wrong and a per-paste janitor needs no daemon state.
+//
+// It runs under sh -c exactly like graphics' remoteFetch: ssh space-joins the
+// post-host argv for the remote LOGIN shell (fish on the normal host), which
+// never parses the script because shellQuote makes it one argv element.
+// $1 is the extension, validated against pasteExtRe before it is ever
+// interpolated.
+const remoteStoreScript = `d=/tmp/lazytmux-paste
+umask 077
+mkdir -p "$d" || exit 1
+find "$d" -type f -mmin +60 -delete 2>/dev/null
+f=$(mktemp "$d/img-XXXXXXXX.$1") || exit 1
+cat > "$f" || { rm -f "$f"; exit 1; }
+printf "%s" "$f"`
+
+// pasteExtRe gates the extension before it reaches the remote mktemp
+// template. bmp is absent on purpose: the agent's path-inlining regex
+// excludes it, so shipping one would plant a path nothing reads.
+var pasteExtRe = regexp.MustCompile(`^(png|jpe?g|gif|webp)$`)
+
+// pasteUploadArgs builds the ssh argv for one image upload, riding the
+// control connection's ControlMaster exactly like the graphics fetcher: no
+// second handshake, and image bytes never share the control stream with live
+// terminal output. Extracted so the argv is assertable.
+func pasteUploadArgs(sshCmd, ctlSock, host, ext string) []string {
+	return []string{sshCmd, "-S", ctlSock, "-T", host, "--",
+		"sh", "-c", shellQuote(remoteStoreScript), "_", ext}
 }
 
 func main() {
@@ -231,6 +267,27 @@ func main() {
 		}
 	}
 
+	// The paste upload rides the same ControlMaster as the graphics fetcher
+	// and is disabled for the same reason when there is no ssh transport.
+	// The closure captures ctlSock, which is derived from the pid and stable
+	// across re-dials (see the dial closure's comment).
+	var pasteUpload func(ctx context.Context, ext string, data []byte) (string, error)
+	if ctlSock != "" {
+		pasteUpload = func(ctx context.Context, ext string, data []byte) (string, error) {
+			if !pasteExtRe.MatchString(ext) {
+				return "", fmt.Errorf("paste: bad extension %q", ext)
+			}
+			args := pasteUploadArgs(*sshCmd, ctlSock, *host, ext)
+			cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+			cmd.Stdin = bytes.NewReader(data)
+			out, err := cmd.Output()
+			if err != nil {
+				return "", fmt.Errorf("paste store: %w", err)
+			}
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+
 	cfg := daemon.Config{
 		Dial:           dial,
 		Shutdown:       stop,
@@ -247,6 +304,7 @@ func main() {
 		Reflow:         reflow,
 		LocalPanes:     panes,
 		HandOff:        handOff,
+		PasteUpload:    pasteUpload,
 		NewGraphics: func(string) *graphics.Proxy {
 			if ctlSock == "" {
 				return nil // --test-local / local-tmux transport: no remote filesystem
