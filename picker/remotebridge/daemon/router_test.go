@@ -2,7 +2,12 @@ package daemon
 
 import (
 	"bytes"
+	"io"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestRouterRoutesByPane(t *testing.T) {
@@ -14,7 +19,8 @@ func TestRouterRoutesByPane(t *testing.T) {
 	r.Route("%1", []byte("one"))
 	r.Route("%2", []byte("two"))
 	r.Route("%1", []byte("-more"))
-	r.Route("%9", []byte("dropped")) // unregistered: silently dropped
+	r.Route("%9", []byte("dropped")) // unregistered: dropped and counted
+	r.Unregister("%9")
 
 	if a.String() != "one-more" {
 		t.Errorf("pane %%1 got %q, want %q", a.String(), "one-more")
@@ -27,6 +33,230 @@ func TestRouterRoutesByPane(t *testing.T) {
 	r.Route("%1", []byte("after-unregister"))
 	if a.String() != "one-more" {
 		t.Errorf("pane %%1 received after unregister: %q", a.String())
+	}
+	if r.dropped != 2 {
+		t.Errorf("dropped = %d, want 2", r.dropped)
+	}
+}
+
+func TestRouterBuffersBeforeRegisterInOrder(t *testing.T) {
+	r := NewRouter()
+	r.Route("%1", []byte("before-1"))
+	r.Route("%1", []byte("before-2"))
+
+	var sink bytes.Buffer
+	r.Register("%1", &sink)
+	r.Route("%1", []byte("after"))
+
+	if got, want := sink.String(), "before-1before-2after"; got != want {
+		t.Fatalf("routed output = %q, want %q", got, want)
+	}
+}
+
+func TestRouterBoundsPreRegistrationBuffer(t *testing.T) {
+	r := NewRouter()
+	for i := 0; i < routerPendingMaxFrames+1; i++ {
+		r.Route("%1", []byte("x"))
+	}
+
+	if got := len(r.pending["%1"].frames); got != routerPendingMaxFrames {
+		t.Fatalf("pending frames = %d, want %d", got, routerPendingMaxFrames)
+	}
+	if r.dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", r.dropped)
+	}
+
+	var sink bytes.Buffer
+	r.Register("%1", &sink)
+	if got, want := sink.Len(), routerPendingMaxFrames; got != want {
+		t.Fatalf("flushed bytes = %d, want %d", got, want)
+	}
+}
+
+func TestRouterBoundsTotalPreRegistrationBuffer(t *testing.T) {
+	r := NewRouter()
+	frame := bytes.Repeat([]byte("x"), routerPendingMaxBytes)
+	r.pendingMaxTotalBytes = 2 * len(frame)
+
+	r.Route("%1", frame)
+	r.Route("%2", frame)
+	r.Route("%3", frame)
+
+	if got, want := r.pendingBytes, 2*len(frame); got != want {
+		t.Fatalf("pending bytes = %d, want %d", got, want)
+	}
+	if got, want := len(r.pending), 2; got != want {
+		t.Fatalf("pending panes = %d, want %d", got, want)
+	}
+	if got, want := r.dropped, 1; got != want {
+		t.Fatalf("dropped = %d, want %d", got, want)
+	}
+}
+
+func TestRouterRouteDropsLogReasons(t *testing.T) {
+	r := NewRouter()
+	r.pendingLifetime = time.Hour
+	logs := captureRouterStderr(t, func() {
+		r.Register("%nil", nil)
+		r.Route("%nil", []byte("dropped"))
+
+		r.Register("%gone", &bytes.Buffer{})
+		r.Unregister("%gone")
+		r.Route("%gone", []byte("dropped"))
+
+		r.Route("%oversized", bytes.Repeat([]byte("x"), routerPendingMaxBytes+1))
+		for i := 0; i <= routerPendingMaxFrames; i++ {
+			r.Route("%per-pane", []byte("x"))
+		}
+
+		r.pendingMaxTotalBytes = 1
+		r.Route("%total", []byte("xx"))
+	})
+
+	for _, reason := range []string{
+		"registered without a sink",
+		"pane is gone",
+		"frame exceeds per-pane limit",
+		"per-pane buffer full",
+		"total pre-registration buffer full",
+	} {
+		if !strings.Contains(logs, reason) {
+			t.Errorf("logs = %q, want reason %q", logs, reason)
+		}
+	}
+}
+
+func TestRouterRouteGoneDropsLogOnce(t *testing.T) {
+	r := NewRouter()
+	r.Register("%gone", &bytes.Buffer{})
+	r.Unregister("%gone")
+
+	logs := captureRouterStderr(t, func() {
+		for i := 0; i < 100; i++ {
+			r.Route("%gone", []byte("dropped"))
+		}
+	})
+
+	if got, want := strings.Count(logs, "\n"), 1; got != want {
+		t.Fatalf("gone-pane log lines = %d, want %d; logs = %q", got, want, logs)
+	}
+	if got, want := r.dropped, 100; got != want {
+		t.Fatalf("dropped = %d, want %d", got, want)
+	}
+}
+
+func TestRouterRouteDropLoggingStateBounded(t *testing.T) {
+	r := NewRouter()
+	frame := bytes.Repeat([]byte("x"), routerPendingMaxBytes+1)
+	logs := captureRouterStderr(t, func() {
+		for i := 0; i < 1000; i++ {
+			r.Route("%oversized-"+strconv.Itoa(i), frame)
+		}
+	})
+
+	if got, want := strings.Count(logs, "\n"), 1; got != want {
+		t.Fatalf("oversized-pane log lines = %d, want %d", got, want)
+	}
+	if got, want := len(r.routeDropLogged), 1; got != want {
+		t.Fatalf("route drop logging state entries = %d, want %d", got, want)
+	}
+	if got, want := r.dropped, 1000; got != want {
+		t.Fatalf("dropped = %d, want %d", got, want)
+	}
+}
+
+func captureRouterStderr(t *testing.T, f func()) string {
+	t.Helper()
+	old := os.Stderr
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = write
+	f()
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = old
+	defer read.Close()
+	logs, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(logs)
+}
+
+func TestRouterExpiryCleansPendingState(t *testing.T) {
+	r := NewRouter()
+	r.pendingLifetime = time.Hour
+	r.Route("%1", []byte("before-expiry"))
+	p := r.pending["%1"]
+
+	r.expirePending("%1", p)
+
+	if _, ok := r.pending["%1"]; ok {
+		t.Fatal("expired pane still has pending output")
+	}
+	if got := r.pendingBytes; got != 0 {
+		t.Fatalf("pending bytes = %d, want 0", got)
+	}
+	if got, want := r.dropped, 1; got != want {
+		t.Fatalf("dropped = %d, want %d", got, want)
+	}
+}
+
+func TestRouterRegisterNilDropsPendingOutput(t *testing.T) {
+	r := NewRouter()
+	r.Route("%1", []byte("before-register"))
+
+	r.Register("%1", nil)
+
+	if _, ok := r.pending["%1"]; ok {
+		t.Fatal("nil registration left pending output")
+	}
+	if got, want := r.pendingBytes, 0; got != want {
+		t.Fatalf("pending bytes = %d, want %d", got, want)
+	}
+	if got, want := r.dropped, 1; got != want {
+		t.Fatalf("dropped = %d, want %d", got, want)
+	}
+}
+
+func TestRouterGoneStateExpires(t *testing.T) {
+	r := NewRouter()
+	r.goneLifetime = time.Hour
+	r.Register("%1", &bytes.Buffer{})
+	r.Unregister("%1")
+	g := r.gone["%1"]
+
+	r.expireGone("%1", g)
+
+	if _, ok := r.gone["%1"]; ok {
+		t.Fatal("expired closed pane state remains")
+	}
+	r.Route("%1", []byte("after-expiry"))
+	if _, ok := r.pending["%1"]; !ok {
+		t.Fatal("pane did not become bufferable after closed state expiry")
+	}
+}
+
+func TestRouterUnregisterDropsPendingOutput(t *testing.T) {
+	r := NewRouter()
+	r.Route("%1", []byte("before-close"))
+	r.Unregister("%1")
+
+	var sink bytes.Buffer
+	r.Register("%1", &sink)
+	if sink.Len() != 0 {
+		t.Fatalf("flushed output for unregistered pane: %q", sink.String())
+	}
+
+	r.Route("%1", []byte("after-register"))
+	if got, want := sink.String(), "after-register"; got != want {
+		t.Fatalf("routed output = %q, want %q", got, want)
+	}
+	if r.dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", r.dropped)
 	}
 }
 
