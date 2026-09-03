@@ -84,7 +84,7 @@ IFS='|' read -r win_count prev_key HEIGHT < <(tmux display-message -t "$SESSION"
 # the key can never be stamped with a trailing blank field.
 [[ $HEIGHT =~ ^[1-9][0-9]*$ ]] || HEIGHT=0
 cache_key="${win_count}:${WIDTH}:${HEIGHT}"
-if ((!FORCE)) && [[ $cache_key == "$prev_key" ]]; then
+if ((! FORCE)) && [[ $cache_key == "$prev_key" ]]; then
 	log_enabled && log_event reflow event cache_hit wins "$win_count" width "$WIDTH" height "$HEIGHT" sess "$SESSION"
 	exit 0
 fi
@@ -328,7 +328,7 @@ for pos in "${!indices[@]}"; do
 		cur_rest="${win_rest_short[$idx]}"
 	fi
 
-	if ((!needs_multiline)); then
+	if ((! needs_multiline)); then
 		win_id_disp[$idx]="${win_id[$idx]}"
 		win_crew_disp[$idx]="${win_crew[$idx]}"
 		win_disp[$idx]="$cur_rest"
@@ -454,7 +454,7 @@ tmux_cmds+=("set -t '$SESSION' status $((current_line + 2))")
 # [1..4] are still set — line 0 renders blank and the session name flashes
 # away. The per-index unsets that used to live here are redundant with the
 # bare `status-format` unset below.
-if ((!needs_multiline && current_line == 0)); then
+if ((! needs_multiline && current_line == 0)); then
 	tmux_cmds+=("set -u -t '$SESSION' status-format")
 fi
 
@@ -525,7 +525,7 @@ ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${CREW}${LABEL_Z}$
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
 # batched commands. See commit 60421e7.
-if ((!needs_multiline && current_line == 0)); then
+if ((! needs_multiline && current_line == 0)); then
 	: # handled via batched unset above
 elif ((current_line == 0)); then
 	FMT0=$(tmux show -gv status-format[0] 2>/dev/null)
