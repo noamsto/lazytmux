@@ -126,12 +126,10 @@ func parseWindowLabels(body string) []labelRow {
 //
 // Two values are dropped whole rather than cleaned, because cfg.LocalTmux execs
 // without a shell and tmux's own parser sees the argv: one beginning with '-',
-// which args_parse reads as a flag, and one that is exactly ";", which is the
-// separator joining apply's per-window command sequence. The latter fails the
-// whole batch ("empty value", exit 1) and takes every later option in that
-// sequence with it, and since apply records the row as written either way the
-// window would keep stale labels until its next genuine change. A ';' merely
-// *inside* a value is fine — only a lone one is read as a separator.
+// which args_parse reads as a flag, and one that is exactly ";", the separator
+// joining apply's per-window command sequence — tmux fails the whole batch on it
+// ("empty value", exit 1) and drops every later option in that sequence. A ';'
+// inside a value is not a separator and is kept.
 func cleanLabelValue(v string, maxRunes int) string {
 	v = stripWindowName(v)
 	if strings.HasPrefix(v, "-") || v == ";" {
@@ -201,8 +199,7 @@ func (s *labelShipper) poll(cfg Config, reg *registry, rt roundTrip) {
 //
 // A bare mirror's FIRST pass counts as changed: seen is false, so the row
 // compare cannot fire and the window gets nine `-u` for a row carrying nothing,
-// forcing one reflow at daemon start. That is one argv command sequence, and
-// reconcileWindows already ends in a reflow.
+// forcing one reflow at daemon start.
 func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (changed bool) {
 	for _, r := range rows {
 		mw, ok := reg.byRemoteID(r.id)
@@ -243,8 +240,7 @@ func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (change
 	// Forget by absence from the REGISTRY, not from the reply as
 	// agentShipper.apply does: a remote window that vanishes from list-windows
 	// while its mirror is still registered keeps its last stamp until
-	// reconcileWindows closes it. Harmless, but the difference from the file
-	// next door would otherwise read as an oversight.
+	// reconcileWindows closes it.
 	for id := range s.written {
 		if _, ok := reg.byRemoteID(id); !ok {
 			delete(s.written, id)
@@ -257,7 +253,7 @@ func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (change
 // exist. Near-vacuous in production — teardown ends in kill-session and window
 // options die with the session — so unlike agentShipper.clear, whose files
 // outlive tmux, this is kept for symmetry and for the paths where that kill
-// fails, and is provable only by unit test.
+// fails.
 func (s *labelShipper) clear(cfg Config, reg *registry) {
 	for id := range s.written {
 		mw, ok := reg.byRemoteID(id)

@@ -191,9 +191,8 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	fi
 
 	# Both arms fall through here, so every width input the fit math reads is
-	# filled identically on either path. A mirror that skipped this pinned
-	# pr_colw and crew_colw to 0, and crew_colw == 0 suppresses the badge
-	# fragment outright — so a mirror-only session rendered no codename at all.
+	# filled identically on either path. An arm that skips it leaves pr_colw and
+	# crew_colw at 0, and crew_colw == 0 suppresses the badge fragment outright.
 	# The composed label is id + rest, which is what build_window_label's REPLY
 	# is on the local path.
 	win_short[$idx]="${win_id[$idx]}${win_rest_short[$idx]}"
