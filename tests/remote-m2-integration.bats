@@ -1777,8 +1777,9 @@ m2_pane_gate_failed() {
 	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
 	# so poll for parity too instead of comparing a single snapshot of each
 	# side. Capture before killing: teardown drops the mirror session.
-	# Post-SRC-converge settle; BRIDGE_UP is enough — just no silent fall-through.
-	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
+	# Post-SRC-converge DST re-fit can lag SRC under load; use
+	# RESIZE_CONVERGE_BUDGET_SECS — not BRIDGE_UP.
+	deadline=$((SECONDS + RESIZE_CONVERGE_BUDGET_SECS))
 	src_dims=""
 	dst_dims=""
 	while [ "$SECONDS" -lt "$deadline" ]; do
@@ -1788,7 +1789,7 @@ m2_pane_gate_failed() {
 		sleep 0.1
 	done
 	if [ "$src_dims" != "$dst_dims" ]; then
-		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&3
+		echo "DST parity timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s:" >&3
 		echo "  src_dims=$src_dims" >&3
 		echo "  dst_dims=$dst_dims" >&3
 		kill "$daemon_pid" 2>/dev/null || true
