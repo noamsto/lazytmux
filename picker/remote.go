@@ -431,11 +431,7 @@ func classifyProbeErr(err error, stdout, stderr string, timedOut bool) error {
 }
 
 // tailscaleCheckErr carries the login URL classifyProbeErr captured for a
-// Tailscale SSH "check" host. A typed error rather than string-encoding the
-// URL into the message (as the other classifyProbeErr branches do, where
-// there is no payload to carry) — tailscaleCheckURL recovers it via
-// errors.As, so a future change to this file's %w-wrapping conventions can't
-// silently break URL recovery.
+// Tailscale SSH "check" host; tailscaleCheckURL recovers it via errors.As.
 type tailscaleCheckErr struct {
 	url string
 }

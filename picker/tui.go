@@ -1216,10 +1216,7 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		}
 		// A Tailscale ACL "check" re-arms on its own checkPeriod regardless of
 		// keys or multiplexing — lztmux-remote-auth's ssh-copy-id/ControlMaster
-		// flow can't clear it, so Enter must not pretend it can (#486). Same
-		// refuse-to-act shape as remoteInert; note that resolveEmitPick's emit-mode
-		// path doesn't consult this flag either, same pre-existing gap remoteInert
-		// already has (out of scope here).
+		// flow can't clear it, so Enter must not pretend it can (#486).
 		if item.remoteTailscaleCheck {
 			m.statusMsg = "tailscale check required for " + item.remoteHost + " — run: ssh " + item.remoteHost
 			return m, nil

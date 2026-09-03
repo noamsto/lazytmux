@@ -340,8 +340,8 @@ func TestClassifyProbeErr(t *testing.T) {
 		})
 	}
 
-	// Pin the round-trip: classifyProbeErr's "%w: %s" format must stay in
-	// sync with tailscaleCheckURL's prefix-strip contract, or the URL a user
+	// Pin the round-trip: classifyProbeErr must hand tailscaleCheckURL a
+	// *tailscaleCheckErr it can recover via errors.As, or the URL a user
 	// would copy-paste silently goes missing.
 	t.Run("tailscale check URL round-trips through tailscaleCheckURL", func(t *testing.T) {
 		got := classifyProbeErr(timeoutErr, tailscaleCheckStdout, "", true)
