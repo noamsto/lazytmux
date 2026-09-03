@@ -396,11 +396,21 @@ sorted_dims() {
 	$DST resize-window -t host-sess:1 -x 120 -y 40
 
 	# Poll until the watcher (1s interval) pushes the new size to the remote.
-	for _ in $(seq 1 40); do
+	# RESIZE_CONVERGE_BUDGET_SECS — not a fixed 4s seq — matches the poll
+	# interval plus control-stream reconcile under contended CI.
+	deadline=$((SECONDS + RESIZE_CONVERGE_BUDGET_SECS))
+	dims=""
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		dims="$($SRC display-message -p -t rem -F '#{window_width}x#{window_height}' 2>/dev/null)"
 		[ "$dims" = "120x40" ] && break
 		sleep 0.1
 	done
+	if [ "$dims" != "120x40" ]; then
+		echo "resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted 120x40, got ${dims:-empty}" >&3
+		kill "$daemon_pid" 2>/dev/null || true
+		wait "$daemon_pid" 2>/dev/null || true
+		return 1
+	fi
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
@@ -681,6 +691,19 @@ pane_map() {
 # idle, and within 325-596ms with the CPU oversubscribed 2x — the slowest case
 # being a 2-pane mirror under load at 596ms.
 BRIDGE_UP_BUDGET_SECS=12
+
+# watchResize ticks once a second (resizePollInterval), then a control-stream
+# round-trip and reconcile must land on every mirrored window. Contended CI
+# needs real headroom beyond one tick — sized from the mechanism, not nudged
+# until green. Must stay below resizeFallbackInterval (30s): that path is what
+# the client-resized hook gate exists to avoid waiting for.
+# Sizing: 1s poll + ~1s RT/reconcile × ~10x contended headroom ≈ 20s.
+RESIZE_CONVERGE_BUDGET_SECS=20
+
+# Flat BRIDGE_UP_BUDGET_SECS was measured for bridge_up's single-window path.
+# The #478 cases mirror N windows/panes and assert session-wide renderer count;
+# give each pane a small add-on so the gate stays honest as those tests grow.
+BRIDGE_UP_PER_PANE_SECS=3
 
 bridge_up() {
 	local want_panes="$1" tag="$2"
@@ -1584,9 +1607,10 @@ m2_pane_gate_failed() {
 	# Gate on the MIRROR settling — one renderer pane per remote pane across
 	# every mirrored window. A source-side width is not a proxy: SRC reaches
 	# 100 as soon as the daemon sizes its own control client (#449), before any
-	# mirror pane exists.
+	# mirror pane exists. Budget scales with pane count: flat BRIDGE_UP was
+	# measured for bridge_up's single-window path.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	for _ in $(seq 1 "$(((BRIDGE_UP_BUDGET_SECS + want_panes * BRIDGE_UP_PER_PANE_SECS) * 10))"); do
 		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
@@ -1596,14 +1620,24 @@ m2_pane_gate_failed() {
 	[ "$got_panes" -eq "$want_panes" ] || m2_pane_gate_failed "$BATS_TEST_TMPDIR/d478.log" "$got_panes" "$want_panes"
 	[ "$got_panes" -eq "$want_panes" ]
 
-	# Then poll every remote window down to the local size, on the house
-	# budget rather than a fixed sleep — same WxH across windows, not just
-	# the same width.
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	# Poll every remote window down to the local size. Setup-path converge
+	# (not watchResize) so BRIDGE_UP_BUDGET_SECS is the right floor — but fail
+	# inside this gate on expiry rather than falling through to a bare width
+	# assert that looks like a different failure.
+	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
+	whs=""
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		whs="$($SRC list-windows -t rem -F '#{window_width}x#{window_height}' | sort -u)"
 		[ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 100 ] && break
 		sleep 0.1
 	done
+	if ! { [ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 100 ]; }; then
+		echo "SRC width converge timeout after ${BRIDGE_UP_BUDGET_SECS}s: wanted unique width 100, got:" >&3
+		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&3
+		kill "$daemon_pid" 2>/dev/null || true
+		wait "$daemon_pid" 2>/dev/null || true
+		return 1
+	fi
 	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
 	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
@@ -1611,12 +1645,23 @@ m2_pane_gate_failed() {
 	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
 	# so poll for parity too instead of comparing a single snapshot of each
 	# side. Capture before killing: teardown drops the mirror session.
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
+	src_dims=""
+	dst_dims=""
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
 		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
 		[ "$src_dims" = "$dst_dims" ] && break
 		sleep 0.1
 	done
+	if [ "$src_dims" != "$dst_dims" ]; then
+		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&3
+		echo "  src_dims=$src_dims" >&3
+		echo "  dst_dims=$dst_dims" >&3
+		kill "$daemon_pid" 2>/dev/null || true
+		wait "$daemon_pid" 2>/dev/null || true
+		return 1
+	fi
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
@@ -1676,8 +1721,10 @@ m2_pane_gate_failed() {
 
 	# Gate on the MIRROR settling before resizing — one renderer pane per
 	# remote pane across every mirrored window, same gate as the setup-leg test.
+	# Budget scales with pane count: flat BRIDGE_UP was measured for
+	# bridge_up's single-window path.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	for _ in $(seq 1 "$(((BRIDGE_UP_BUDGET_SECS + want_panes * BRIDGE_UP_PER_PANE_SECS) * 10))"); do
 		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
@@ -1693,6 +1740,7 @@ m2_pane_gate_failed() {
 	# observable yet". A resize fired in that gap is not lost (watchResize's
 	# resizeFallbackInterval still catches it) but that fallback is 30s, well
 	# past this test's poll budget below — so gate on the hook itself.
+	# Not a resize-converge wait: BRIDGE_UP is enough to see the hook land.
 	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
 		$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized' && break
 		sleep 0.1
@@ -1702,13 +1750,26 @@ m2_pane_gate_failed() {
 	# The gesture: resize the attached client.
 	$OBS resize-window -t obs -x 90 -y 28
 
-	# watchResize polls once a second, so this needs a more generous budget
-	# than a pure-setup gate. Same WxH across windows, not just the same width.
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	# Poll SRC-side window widths: the production invariant under test is that
+	# every remote window receives the new client cap (aggressive-resize used
+	# to drop refresh-client for non-current windows). DST pane-dim parity
+	# below is the settle-last mirror gate, not a substitute for this check.
+	# RESIZE_CONVERGE_BUDGET_SECS — watchResize's own floor, not BRIDGE_UP.
+	deadline=$((SECONDS + RESIZE_CONVERGE_BUDGET_SECS))
+	whs=""
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		whs="$($SRC list-windows -t rem -F '#{window_width}x#{window_height}' | sort -u)"
 		[ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 90 ] && break
 		sleep 0.1
 	done
+	if ! { [ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 90 ]; }; then
+		echo "SRC resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted unique width 90, got:" >&3
+		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&3
+		kill "$daemon_pid" 2>/dev/null || true
+		wait "$daemon_pid" 2>/dev/null || true
+		$OBS kill-server 2>/dev/null || true
+		return 1
+	fi
 	src_whs="$($SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}')"
 	n_windows="$($SRC list-windows -t rem -F '#{window_id}' | wc -l)"
 	ref_wh="$($SRC display-message -p -t rem:1 -F '#{window_width}x#{window_height}' 2>/dev/null)"
@@ -1716,12 +1777,26 @@ m2_pane_gate_failed() {
 	# daemon reacts to the resulting %layout-change and re-fits each DST pane —
 	# so poll for parity too instead of comparing a single snapshot of each
 	# side. Capture before killing: teardown drops the mirror session.
-	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
+	# Post-SRC-converge DST re-fit can lag SRC under load; use
+	# RESIZE_CONVERGE_BUDGET_SECS — not BRIDGE_UP.
+	deadline=$((SECONDS + RESIZE_CONVERGE_BUDGET_SECS))
+	src_dims=""
+	dst_dims=""
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		src_dims="$($SRC list-panes -s -t rem -F '#{pane_width}x#{pane_height}' | sort)"
 		dst_dims="$($DST list-panes -s -t host-sess -F '#{pane_width}x#{pane_height}' | sort)"
 		[ "$src_dims" = "$dst_dims" ] && break
 		sleep 0.1
 	done
+	if [ "$src_dims" != "$dst_dims" ]; then
+		echo "DST parity timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s:" >&3
+		echo "  src_dims=$src_dims" >&3
+		echo "  dst_dims=$dst_dims" >&3
+		kill "$daemon_pid" 2>/dev/null || true
+		wait "$daemon_pid" 2>/dev/null || true
+		$OBS kill-server 2>/dev/null || true
+		return 1
+	fi
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
