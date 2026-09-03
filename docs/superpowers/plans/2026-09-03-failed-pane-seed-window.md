@@ -80,10 +80,18 @@ Change to:
 - Afterward, per old conn: if `setupWindow` superseded it (same remote id now
   maps to a different conn) its renderer was already `respawn-pane -k`'d —
   close it. If setupWindow **succeeded**, close every remaining old conn (all
-  renderers replaced). If it **failed**, merge un-superseded old conns back
-  into `w.conns` and close nothing — the kept pane's old renderer is still
-  that pane's live process, and closing its conn is the window death being
-  fixed. Degraded (stale screen, live window), never silent death.
+  renderers replaced). If it **failed**, the split is *when* it failed
+  (review-gate amendment): a new `mirrorWindow.spawned` flag, reset at
+  `setupWindow` entry and set just before its `spawnRenderer` loop, marks the
+  point after which the kept pane's old renderer is dead. Failed **after**
+  that point: close every remaining old conn, merge nothing back (the conns
+  are dead). Failed **before** it: merge un-superseded old conns back into
+  `w.conns`, close nothing, **and re-register a fresh sink per merged conn**
+  (`router.Register(remoteID, newOutputSink(oldConn, cfg.graphicsFor(remoteID)))`)
+  — a conn restored without its routing half leaves a live renderer no
+  `%output` or reseed path can reach. The pane still drifts by whatever
+  output arrived while unrouted, until the next successful reset/reseed:
+  degradation, never silent death.
 
 Mapping-free by construction (R4): no local→remote pane mapping is consulted;
 the survivor's conn is kept because *every* unsuperseded conn is kept.

@@ -25,6 +25,11 @@ type mirrorWindow struct {
 	localPanes  []string
 	layout      string // last tiled layout string applied locally, "" = none yet
 	conns       map[string]net.Conn
+	// spawned reports whether the last setupWindow reached its spawnRenderer
+	// loop — the point after which a kept pane's old renderer is dead
+	// (respawn-pane -k) and its old conn must not be merged back on failure.
+	// Reset at setupWindow entry; read by resetWindow's failure path.
+	spawned bool
 }
 
 // registry maps remote window ids (@N) to their local mirror windows.

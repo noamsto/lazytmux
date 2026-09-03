@@ -64,6 +64,7 @@ func twoPaneAppendHarness(t *testing.T, send func(string)) (cfg Config, w *mirro
 		[]string{"%1"}, []string{"%1", "%2"}, send, router, waiter, rt); err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
 	}
+	w.remotePanes = []string{"%1", "%2"}
 	return cfg, w, router, newConn, newPeer, rt, localTrace
 }
 
@@ -85,6 +86,9 @@ func TestSeedFailureApplyPaneOpsKeepsPaneWired(t *testing.T) {
 	}
 	if len(w.localPanes) != 2 {
 		t.Errorf("localPanes = %v, want 2", w.localPanes)
+	}
+	if len(w.remotePanes) != len(w.localPanes) {
+		t.Errorf("remotePanes = %d, localPanes = %d, want equal", len(w.remotePanes), len(w.localPanes))
 	}
 	for _, cmd := range *trace {
 		if strings.HasPrefix(cmd, "kill-pane") {
@@ -199,7 +203,8 @@ func TestResetWindowKeepsKeptPaneConnOnSetupFailure(t *testing.T) {
 		conns:       map[string]net.Conn{"%1": keptConn},
 	}
 
-	err := resetWindow(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), setupWindowRT(strings.Join([]string{
+	router := NewRouter()
+	err := resetWindow(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), setupWindowRT(strings.Join([]string{
 		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
 		"%begin 1 2 1", "%error 1 2 1", // readLayout fails
 	}, "\n")+"\n"))
@@ -211,6 +216,9 @@ func TestResetWindowKeepsKeptPaneConnOnSetupFailure(t *testing.T) {
 	}
 	if w.conns["%1"] != keptConn {
 		t.Errorf("w.conns[%%1] = %v, want the original kept conn merged back", w.conns["%1"])
+	}
+	if router.sink("%1") == nil {
+		t.Error("router.sink(%1) = nil, want sink re-registered after merge-back")
 	}
 }
 
@@ -320,5 +328,47 @@ func TestSetupWindowSolePaneSeedFailureCleansUp(t *testing.T) {
 	}
 	if _, err := peer.Write([]byte("x")); err == nil {
 		t.Error("sole-pane conn still open after cleanup")
+	}
+}
+
+// TestResetWindowClosesKeptPaneConnOnSpawnedSetupFailure is acceptance 4c:
+// when setupWindow fails after respawn-pane -k, the kept pane's old conn is
+// closed and not merged back — the old renderer is dead.
+func TestResetWindowClosesKeptPaneConnOnSpawnedSetupFailure(t *testing.T) {
+	raw, keptPeer := net.Pipe()
+	defer keptPeer.Close()
+	go io.Copy(io.Discard, keptPeer)
+
+	keptConn := &trackCloseConn{Conn: raw}
+
+	script := strings.Join([]string{
+		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
+		"%begin 1 2 1", "b2c3,80x24,0,0,0 %0 0", "%end 1 2 1", // readLayout
+	}, "\n") + "\n"
+
+	waiter := func(int) (map[string]net.Conn, error) {
+		return nil, io.EOF
+	}
+
+	cfg := Config{
+		LocalArea:    func() (int, int) { return 80, 24 },
+		LocalTmux:    func(...string) error { return nil },
+		LocalTmuxOut: func(...string) (string, error) { return "%l0 0\n", nil },
+	}
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%0"}, localPanes: []string{"%l0"},
+		conns:       map[string]net.Conn{"%0": keptConn},
+	}
+
+	err := resetWindow(cfg, w, func(string) {}, NewRouter(), waiter, newCtlState(), newConverger(), setupWindowRT(script))
+	if err == nil {
+		t.Fatal("resetWindow err = nil, want setupWindow failure after spawn")
+	}
+	if !keptConn.closed {
+		t.Error("kept pane conn still open after spawned setup failure, want it closed")
+	}
+	if w.conns["%0"] == keptConn {
+		t.Error("w.conns[%0] still maps to the dead kept conn, want it not merged back")
 	}
 }

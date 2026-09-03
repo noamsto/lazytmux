@@ -362,14 +362,17 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 			closed[remoteID] = true
 		}
 	}
-	if err == nil {
+	if err == nil || w.spawned {
 		for remoteID, oldConn := range oldConns {
 			if closed[remoteID] {
 				continue
 			}
 			oldConn.Close()
 		}
-		return nil
+		if err == nil {
+			return nil
+		}
+		return err
 	}
 	for remoteID, oldConn := range oldConns {
 		if closed[remoteID] {
@@ -377,6 +380,9 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 		}
 		if _, ok := w.conns[remoteID]; !ok {
 			w.conns[remoteID] = oldConn
+			// Output while unrouted is lost; the pane stays live but drifts
+			// until the next successful reset/reseed repairs the screen.
+			router.Register(remoteID, newOutputSink(oldConn, cfg.graphicsFor(remoteID)))
 		}
 	}
 	return err

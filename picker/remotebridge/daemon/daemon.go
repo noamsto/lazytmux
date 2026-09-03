@@ -969,6 +969,7 @@ func Run(cfg Config) error {
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
 func setupWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, mw *mirrorWindow, cv *converger, rt roundTrip) error {
+	mw.spawned = false
 	// Cap the remote window at what the local clients can show before reading
 	// its layout, so the layout that gets mirrored is the converged one. The
 	// opt-out first, and unconditionally: it is a property of the window's whole
@@ -1013,6 +1014,9 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		return fmt.Errorf("daemon: mirror for %s: %d local panes for %d remote",
 			mw.remoteID, len(mw.localPanes), len(mw.remotePanes))
 	}
+	// Past here respawn-pane -k has killed any kept pane's old renderer; a
+	// mid-spawn failure must not merge that dead conn back.
+	mw.spawned = true
 	for i, remotePane := range mw.remotePanes {
 		if err := spawnRenderer(cfg, mw.localPanes[i], remotePane); err != nil {
 			return fmt.Errorf("daemon: spawn renderer for %s: %w", remotePane, err)
