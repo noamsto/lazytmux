@@ -30,13 +30,18 @@ var errLocalPanesDesynced = errors.New("local panes desynced from the remote ord
 // already stale. Re-reading once more right after applying catches it: the
 // round-trips above give the remote plenty of time to settle, so a still-
 // different layout means something changed underneath us and needs its own pass.
-func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) {
+//
+// Reports whether the mirror should be retired: its local window is gone, so
+// nothing this pass aims at it can land. The caller owns that recovery — it
+// holds the registry, and the rebuild goes back through reconcileWindows so the
+// replacement is built by the one path that stamps and names a mirror window.
+func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) (retire bool) {
 	target := remoteWinTarget(cfg, w.remoteID)
 
 	L, remoteActive, zoomed, err := readLayout(rt, target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-		return
+		return false
 	}
 
 	// Nothing to do: same panes, same geometry, same zoom state. A resize
@@ -47,7 +52,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 	// zoom-only change must still fall through.
 	if L.Raw == w.layout {
 		if local, ok := localZoomed(cfg, w.localWin); ok && local == zoomed {
-			return
+			return false
 		}
 	}
 
@@ -62,10 +67,10 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 				w.remotePanes = remote
-				return
+				return resetLostWindow(cfg, w)
 			}
 			// setupWindow re-read the layout and re-shaped the window itself.
-			return
+			return false
 		case structural:
 			err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, waitHellos, rt)
 			if errors.Is(err, errLocalPanesDesynced) {
@@ -73,14 +78,15 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 				if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 					w.remotePanes = remote
+					return resetLostWindow(cfg, w)
 				}
 				// setupWindow re-read the layout and re-shaped the window itself.
-				return
+				return false
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
 				w.remotePanes = remote
-				return
+				return resetLostWindow(cfg, w)
 			}
 		}
 
@@ -145,12 +151,28 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 
 		fresh, freshActive, freshZoom, err := readLayout(rt, target)
 		if err != nil || (fresh.Raw == L.Raw && freshZoom == zoomed) {
-			return
+			return false
 		}
 		L, remoteActive, zoomed = fresh, freshActive, freshZoom
 	}
 	fmt.Fprintf(os.Stderr, "daemon: layout-change: didn't converge after %d passes, stopping at %v\n", maxReconcilePasses, remote)
 	w.remotePanes = remote
+	return false
+}
+
+// resetLostWindow asks, of a pass that already failed, whether the reason was
+// that the mirror's local window went away — the one failure a retry can never
+// clear, and the one a rebuild fixes. Consulted only on an error path, so the
+// extra tmux read costs nothing on the pass that succeeds.
+//
+// Every other failure returns false and leaves the mirror alone: they are
+// transient, and retiring on one would tear down a live window to rebuild it.
+func resetLostWindow(cfg Config, w *mirrorWindow) bool {
+	if !localWindowGone(cfg, w.localWin) {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "daemon: layout-change %s: local window %s is gone; retiring\n", w.remoteID, w.localWin)
+	return true
 }
 
 // applyLayout fits the local mirror window to the remote's geometry and then
