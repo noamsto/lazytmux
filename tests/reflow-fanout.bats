@@ -7,6 +7,13 @@
 # Runs the real scripts against a private, config-less tmux server so bare
 # `tmux` calls inside the scripts resolve to it (via TMUX_TMPDIR), never the
 # developer's own server.
+#
+# Run it through nix (`nix build .#checks.<system>.reflow-fanout-tests`, which
+# `nix flake check` covers), not a bare `bats tests/reflow-fanout.bats`. The
+# tests address the session's first window as S:0, which holds under the plain
+# tmux the check pins — but lazytmux's own wrapper bakes in `-f <conf>` ahead of
+# the `-f /dev/null` below, and that conf sets base-index 1, so with the wrapper
+# on PATH the window is S:1 and half the file fails with "no such window: S:0".
 
 setup() {
 	command -v tmux >/dev/null || skip "tmux not on PATH"
