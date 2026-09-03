@@ -101,6 +101,33 @@ func TestWindowLabelValidation(t *testing.T) {
 	if got := oneRow(t, 9, "-n oops").labelRest; got != "" {
 		t.Errorf("flag-shaped value = %q, want it dropped", got)
 	}
+
+	// A lone ';' is the separator apply joins its per-window sequence with:
+	// tmux fails the whole batch on it and drops every later option in the
+	// sequence. One *inside* a value is not a separator and is kept.
+	for _, f := range []int{1, 7, 8, 9} {
+		if got := oneRow(t, f, ";"); rowField(got, f) != "" {
+			t.Errorf("field %d: lone ';' = %q, want it dropped", f, rowField(got, f))
+		}
+	}
+	if got := oneRow(t, 9, " a;b").labelRest; got != " a;b" {
+		t.Errorf("labelRest(%q) = %q, want it kept", " a;b", got)
+	}
+}
+
+// rowField reads the field oneRow placed at index i, so the ';' table can walk
+// every value that carries no regex of its own.
+func rowField(r labelRow, i int) string {
+	switch i {
+	case 1:
+		return r.crewName
+	case 7:
+		return r.prPlain
+	case 8:
+		return r.labelID
+	default:
+		return r.labelRest
+	}
 }
 
 func TestLabelShipperApply(t *testing.T) {

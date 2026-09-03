@@ -720,8 +720,8 @@ func Run(cfg Config) error {
 		select {
 		case l, ok := <-pump.lines:
 			if !ok {
-				// Control-stream EOF. `continue` and not `break`, which would
-				// leave the select and fall into the dispatch below.
+				// Control-stream EOF. The flag is what ends the loop: a
+				// `break` here reads like it does, but leaves only the select.
 				running = false
 				continue
 			}

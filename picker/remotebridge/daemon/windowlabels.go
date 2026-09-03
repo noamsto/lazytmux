@@ -124,11 +124,17 @@ func parseWindowLabels(body string) []labelRow {
 // '#'-doubling twin is deliberately not used — the local label options already
 // store raw '#', so a bridge copy must too), then caps the length.
 //
-// A value beginning with '-' is dropped whole: cfg.LocalTmux execs without a
-// shell, so tmux's own args_parse sees it and reads it as a flag.
+// Two values are dropped whole rather than cleaned, because cfg.LocalTmux execs
+// without a shell and tmux's own parser sees the argv: one beginning with '-',
+// which args_parse reads as a flag, and one that is exactly ";", which is the
+// separator joining apply's per-window command sequence. The latter fails the
+// whole batch ("empty value", exit 1) and takes every later option in that
+// sequence with it, and since apply records the row as written either way the
+// window would keep stale labels until its next genuine change. A ';' merely
+// *inside* a value is fine — only a lone one is read as a separator.
 func cleanLabelValue(v string, maxRunes int) string {
 	v = stripWindowName(v)
-	if strings.HasPrefix(v, "-") {
+	if strings.HasPrefix(v, "-") || v == ";" {
 		return ""
 	}
 	r := []rune(v)
