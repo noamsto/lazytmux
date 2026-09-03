@@ -482,12 +482,27 @@ func Run(cfg Config) error {
 	// Assigned once the mirror is up; teardown must drop the status files it
 	// wrote, so it is declared ahead of the closure that captures it.
 	var agents *agentShipper
+	// Same reason for labels; and the coarse tick is created at the main loop,
+	// which the three early returns below never reach, so teardown needs a
+	// nil-guarded handle to stop it.
+	var (
+		labels   *labelShipper
+		loopTick *time.Ticker
+	)
 	teardown := func() {
 		close(stopWatch)
 		unregisterResizeHook(cfg)
 		os.Remove(nudgePath)
 		if agents != nil {
 			agents.clear()
+		}
+		// Before the kill-session below, which is what makes the -u land: the
+		// reg.all() loop between only unregisters sinks and closes conns.
+		if labels != nil {
+			labels.clear(cfg, reg)
+		}
+		if loopTick != nil {
+			loopTick.Stop()
 		}
 		listener.Close()
 		os.Remove(cfg.SockPath)
@@ -508,6 +523,14 @@ func Run(cfg Config) error {
 			cfg.LocalTmux("kill-session", "-t", cfg.LocalSess)
 		}
 	}
+
+	// Before the mirror windows exist, not after they are all set up: the hook
+	// only touches nudgePath, so arming it early costs one stat a tick, while
+	// arming it late drops every resize landing during setup — and setup is the
+	// slow part, spanning a spawn/hello/seed round-trip per window plus the
+	// reconcile below. A dropped nudge is not lost work but a 30s wait for
+	// resizeFallbackInterval, which is the delay the hook exists to avoid.
+	registerResizeHook(cfg, nudgePath)
 
 	// Mirror each remote window into its own local window. The first reuses the
 	// launcher's initial window; the rest are appended.
@@ -556,10 +579,7 @@ func Run(cfg Config) error {
 
 	// Re-converge the remote whenever the local client resizes. A local resize
 	// emits no control-stream event, so poll (cheaply — see watchResize);
-	// teardown closes stopWatch and removes the hook this registers. A resize
-	// landing between the last per-window setup convergence above and this
-	// registration is caught by resizeFallbackInterval rather than lost.
-	registerResizeHook(cfg, nudgePath)
+	// teardown closes stopWatch and removes the hook registered above.
 	nudged := func() (time.Time, bool) {
 		fi, err := os.Stat(nudgePath)
 		if err != nil {
@@ -573,8 +593,10 @@ func Run(cfg Config) error {
 		watchResize(cfg.LocalArea, nudged, reg, cv, st.send, stopWatch, ticker.C)
 	}()
 
-	// Ship the remote's agent state into the local claude-status tree.
+	// Ship the remote's agent state into the local claude-status tree, and its
+	// window labels onto the mirror windows as @bridge_* options.
 	agents = newAgentShipper(cfg.LocalSess, remoteClockSkew(rt))
+	labels = newLabelShipper()
 
 	// dispatch handles one notification, whether it came straight off the stream
 	// or a reply reader queued it while awaiting a reply. It reports whether the
@@ -674,17 +696,20 @@ func Run(cfg Config) error {
 
 	// Main loop.
 	pauseAfterSet := false
-	for {
+	loopTick = time.NewTicker(mainLoopTickInterval)
+	for running := true; running; {
 		// Settling before the blocking read is what makes a ctl gesture land
-		// without a timer: nextLine wakes on any line, and by the time it
+		// without a timer: the read below wakes on any line, and by the time it
 		// returns the intent is already registered, so the next pass through here
 		// drains it. It also picks up whatever window setup queued.
 		if settle() {
 			break
 		}
-		// Same wake-up: an agent that changes state redraws its pane first, so
-		// the output that ended a turn has already brought us here.
+		// Same wake-up for an agent, which redraws its pane before it changes
+		// state; a window option carries no such traffic, which is what the
+		// tick below is for.
 		agents.poll(cfg, rt)
+		labels.poll(cfg, reg, rt)
 		reseedDropped(router, rt)
 		// Enable pause-after only now that every window is set up. Setup does
 		// drain the stream (its round-trips route, and so does the hello wait),
@@ -697,12 +722,25 @@ func Run(cfg Config) error {
 				send(fmt.Sprintf("refresh-client -f pause-after=%d", cfg.PauseAfterSecs))
 			}
 		}
-		l, _, ok := nextLine(pump, st)
-		if !ok {
-			break // control-stream EOF
-		}
-		if dispatch(l) {
-			break
+		select {
+		case l, ok := <-pump.lines:
+			if !ok {
+				// Control-stream EOF. The flag is what ends the loop: a
+				// `break` here reads like it does, but leaves only the select.
+				running = false
+				continue
+			}
+			// Every line taken off this channel must claim its ordinal or the
+			// count falls behind sent and no later round-trip recognises its own
+			// reply — the guarantee nextLine gives the other readers, and what
+			// waitHellos does explicitly for the same reason.
+			claimSeq(l, st)
+			if dispatch(l) {
+				running = false
+			}
+		case <-loopTick.C:
+			// A remote window-option change produces no stream traffic at all,
+			// so falling through to the top is the only thing that polls it.
 		}
 	}
 	teardown()

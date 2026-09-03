@@ -407,6 +407,12 @@ sorted_dims() {
 	done
 	if [ "$dims" != "120x40" ]; then
 		echo "resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted 120x40, got ${dims:-empty}" >&3
+		# The daemon log is the only witness to why the watcher never pushed;
+		# without it a platform-specific failure here is undiagnosable from CI.
+		echo "--- local: $($DST display-message -p -t host-sess:1 -F '#{window_width}x#{window_height}' 2>&1)" >&3
+		echo "--- daemon alive: $(kill -0 "$daemon_pid" 2>/dev/null && echo yes || echo no)" >&3
+		echo "--- dz.log ---" >&3
+		sed -n '1,60p' "$BATS_TEST_TMPDIR/dz.log" >&3 2>&1 || true
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		return 1
@@ -1428,6 +1434,69 @@ $pane 1" ]; then
 	[ "$bridge_proc" = "$remote_proc" ]
 	# The bridge owns what it wrote: SIGTERM teardown takes it away again.
 	[ ! -f "$pane_file" ]
+}
+
+# The daemon is the sole producer of the @bridge_* window namespace: it polls
+# the remote's window options and stamps sanitized copies onto the mirrors. It
+# never writes @crew_*/@window_label_*/@pr_*, which tmux-reflow-windows owns on
+# every window of the mirror session, mirrors included.
+@test "daemon ships the remote's window labels onto the mirror windows" {
+	$SRC new-session -d -s rem -x 120 -y 34
+	$DST new-session -d -s host-sess -x 120 -y 34
+
+	$SRC set -w -t rem:1 @crew_name nova
+	$SRC set -w -t rem:1 @crew_color '#89b4fa'
+	$SRC set -w -t rem:1 @pr_number 123
+	$SRC set -w -t rem:1 @pr_state open
+	$SRC set -w -t rem:1 @window_pr_plain ' PR #123'
+	$SRC set -w -t rem:1 @window_label_id 'GH #460'
+	# The one free-form field, and last in the read format: the '|' must land
+	# inside it rather than shifting the row, and the markup must not survive.
+	$SRC set -w -t rem:1 @window_label_rest_long ' a #[fg=red]title | piped'
+
+	bridge_up 1 lbl
+
+	# The bare-mirror half needs a window created AFTER bridge_up: bridge_up
+	# waits on the first window, which is the one stamped above.
+	$SRC new-window -t rem
+
+	# Gate on the mirror of that second window existing too — reconcileWindows
+	# runs on the main loop's next pass, so a missing window would satisfy the
+	# unset assertion below for the wrong reason.
+	for _ in $(seq 1 40); do
+		crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+		bare_win="$($DST show-options -w -t host-sess:2 -qv @bridge_win 2>/dev/null || true)"
+		[ "$crew" = "nova" ] && [ "$bare_win" = "1" ] && break
+		$SRC send-keys -t rem:1 "printf 'tick\\n'" Enter
+		sleep 0.2
+	done
+
+	crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+	color="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_color 2>/dev/null || true)"
+	pr_number="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_number 2>/dev/null || true)"
+	pr_state="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_state 2>/dev/null || true)"
+	pr_plain="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_plain 2>/dev/null || true)"
+	label_id="$($DST show-options -w -t host-sess:1 -qv @bridge_label_id 2>/dev/null || true)"
+	label_rest="$($DST show-options -w -t host-sess:1 -qv @bridge_label_rest_long 2>/dev/null || true)"
+	bare_win="$($DST show-options -w -t host-sess:2 -qv @bridge_win 2>/dev/null || true)"
+	# An empty remote value UNSETS the local option. `show-options -qv` returns
+	# empty for unset and for "" alike, so list what the window actually holds;
+	# @bridge_win is the daemon's own mirror marker, not a label copy.
+	bare_labels="$($DST show-options -w -t host-sess:2 2>/dev/null | grep '^@bridge_' | grep -v '^@bridge_win ' || true)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$crew" = "nova" ]
+	[ "$color" = "#89b4fa" ]
+	[ "$pr_number" = "123" ]
+	[ "$pr_state" = "open" ]
+	# The leading space is load-bearing for reflow's pr_colw padding.
+	[ "$pr_plain" = " PR #123" ]
+	[ "$label_id" = "GH #460" ]
+	[ "$label_rest" = " a title  piped" ]
+	[ "$bare_win" = "1" ]
+	[ -z "$bare_labels" ]
 }
 
 # run_detach runs lztmux-remote-detach against $1 under a `tmux` that is pinned

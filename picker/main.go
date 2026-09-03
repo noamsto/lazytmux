@@ -247,39 +247,40 @@ func decodeBridgeName(s string) string {
 	return strings.ReplaceAll(s, "##", "#")
 }
 
-func collectWindows() []windowData {
-	// Fetch both @branch and pane path basename. The window_name contains
-	// icons/colors from automatic-rename-format so we reconstruct a clean name.
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}").Output()
-	if err != nil {
-		return nil
-	}
+// winKey identifies a window across the panes that share it.
+type winKey struct {
+	sess string
+	idx  int
+}
 
-	type winKey struct {
-		sess string
-		idx  int
-	}
-	type winInfo struct {
-		name        string
-		zoomed      bool
-		active      bool
-		branch      string
-		path        string // pane_current_path for git branch fallback
-		labelID     string
-		labelRest   string
-		bridgeName  string
-		bridgePane  string
-		bridgeSock  string
-		prPlain     string
-		prState     string
-		prCheck     string
-		prMergeable string
-		crewName    string
-		crewColor   string
-		seen        map[string]bool
-		procs       []string
-	}
+// winInfo is one window's merged state across its panes, as parsed by
+// parseWindowPaneRows. Package-scope so the pure parse is testable.
+type winInfo struct {
+	name        string
+	zoomed      bool
+	active      bool
+	branch      string
+	path        string // pane_current_path for git branch fallback
+	bridgeWin   bool   // @bridge_win == "1" — arms the bridge substitution below and skips collectWindows' git fallback
+	labelID     string
+	labelRest   string
+	bridgeName  string
+	bridgePane  string
+	bridgeSock  string
+	prPlain     string
+	prState     string
+	prCheck     string
+	prMergeable string
+	crewName    string
+	crewColor   string
+	seen        map[string]bool
+	procs       []string
+}
+
+// parseWindowPaneRows parses `list-panes -a` rows (one per pane) into
+// per-window records, merging panes that share a window. Pure — no exec — so
+// the bridge substitution below is reachable from a test.
+func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 	m := make(map[winKey]*winInfo)
 	// Preserve ordering
 	var order []winKey
@@ -290,9 +291,9 @@ func collectWindows() []windowData {
 		}
 		return ""
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range lines {
 		parts := strings.Split(line, "|")
-		if len(parts) != 19 {
+		if len(parts) != 28 {
 			continue
 		}
 		sess := parts[0]
@@ -307,17 +308,51 @@ func collectWindows() []windowData {
 		k := winKey{sess, idx}
 		wi, ok := m[k]
 		if !ok {
+			bridgeWin := field(parts, 19) == "1"
+			labelID := field(parts, 8)
+			labelRest := field(parts, 9)
+			prPlain := field(parts, 10)
+			prState := field(parts, 11)
+			prCheck := field(parts, 12)
+			prMergeable := field(parts, 13)
+			crewName := field(parts, 14)
+			crewColor := field(parts, 15)
+			bridgeName := decodeBridgeName(field(parts, 16))
+
+			// A mirror window's identity lives on the remote, not in this
+			// window's own options (which carry the launcher's residue) —
+			// substitute the bridge copies wholesale and clear branch, which
+			// is what arms collectWindows' git fallback below.
+			if bridgeWin {
+				crewName = field(parts, 20)
+				crewColor = field(parts, 21)
+				labelID = field(parts, 22)
+				labelRest = field(parts, 23)
+				prPlain = field(parts, 24)
+				prState = field(parts, 25)
+				prCheck = field(parts, 26)
+				prMergeable = field(parts, 27)
+				branch = ""
+				// A remote window with no detected issue has no bridge id:
+				// fall back to the bridge rest raw, not decodeBridgeName — it
+				// isn't '#'-doubled the way @window_bridge_name is.
+				if labelID == "" && labelRest != "" {
+					bridgeName = labelRest
+				}
+			}
+
 			wi = &winInfo{
 				name: wName, zoomed: zoomed, active: active, branch: branch, path: panePath,
-				labelID:     field(parts, 8),
-				labelRest:   field(parts, 9),
-				prPlain:     field(parts, 10),
-				prState:     field(parts, 11),
-				prCheck:     field(parts, 12),
-				prMergeable: field(parts, 13),
-				crewName:    field(parts, 14),
-				crewColor:   field(parts, 15),
-				bridgeName:  decodeBridgeName(field(parts, 16)),
+				bridgeWin:   bridgeWin,
+				labelID:     labelID,
+				labelRest:   labelRest,
+				prPlain:     prPlain,
+				prState:     prState,
+				prCheck:     prCheck,
+				prMergeable: prMergeable,
+				crewName:    crewName,
+				crewColor:   crewColor,
+				bridgeName:  bridgeName,
 				bridgePane:  field(parts, 17),
 				bridgeSock:  field(parts, 18),
 				seen:        make(map[string]bool),
@@ -330,15 +365,31 @@ func collectWindows() []windowData {
 			wi.procs = append(wi.procs, proc)
 		}
 	}
+	return order, m
+}
+
+func collectWindows() []windowData {
+	// Fetch both @branch and pane path basename. The window_name contains
+	// icons/colors from automatic-rename-format so we reconstruct a clean name.
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
+		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}").Output()
+	if err != nil {
+		return nil
+	}
+
+	order, m := parseWindowPaneRows(strings.Split(strings.TrimSpace(string(out)), "\n"))
 
 	// Fill missing branches by running git in each pane's working directory.
 	// Parallel: one git fork per window, all in flight at once — the picker's
 	// first paint waits on the slowest single call, not their sum. Each goroutine
-	// writes a distinct *winInfo, so no shared-state guard is needed.
+	// writes a distinct *winInfo, so no shared-state guard is needed. Skipped on
+	// a mirror row: its cleared branch is the bridge substitution above, not a
+	// gap to fill, and the git call would read the launcher's own repo, not the
+	// remote's (SPEC R5.3).
 	var wg sync.WaitGroup
 	for _, k := range order {
 		wi := m[k]
-		if wi.branch == "" && wi.path != "" {
+		if wi.branch == "" && wi.path != "" && !wi.bridgeWin {
 			wg.Add(1)
 			go func(wi *winInfo) {
 				defer wg.Done()

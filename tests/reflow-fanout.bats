@@ -7,6 +7,13 @@
 # Runs the real scripts against a private, config-less tmux server so bare
 # `tmux` calls inside the scripts resolve to it (via TMUX_TMPDIR), never the
 # developer's own server.
+#
+# Run it through nix (`nix build .#checks.<system>.reflow-fanout-tests`, which
+# `nix flake check` covers), not a bare `bats tests/reflow-fanout.bats`. The
+# tests address the session's first window as S:0, which holds under the plain
+# tmux the check pins — but lazytmux's own wrapper bakes in `-f <conf>` ahead of
+# the `-f /dev/null` below, and that conf sets base-index 1, so with the wrapper
+# on PATH the window is S:1 and half the file fails with "no such window: S:0".
 
 setup() {
 	command -v tmux >/dev/null || skip "tmux not on PATH"
@@ -183,4 +190,84 @@ run_update_icons() {
 	bash "$REFLOW" S 200 --force >/dev/null 2>&1
 
 	[ "$(tmux show -wv -t S:0 @window_label_short)" = "shell" ]
+}
+
+# Bridge label carry (#462): the daemon stamps the remote window's own label
+# state under @bridge_*. Reflow must feed those through the same width math as a
+# local window's, or a mirror renders no badge and no identity.
+stamp_mirror() {
+	local w=$1 id=$2 rest=$3 crew=$4
+	tmux set -wq -t "S:$w" @bridge_win 1
+	tmux set-window-option -t "S:$w" automatic-rename off
+	tmux set -wq -t "S:$w" @bridge_label_id "$id"
+	tmux set -wq -t "S:$w" @bridge_label_rest_long "$rest"
+	tmux set -wq -t "S:$w" @bridge_crew_name "$crew"
+}
+
+@test "a mirror window renders the bridge crew badge and identity" {
+	stamp_mirror 0 "G #460" " land the fix" "atlas"
+	tmux set -wq -t S:0 @bridge_crew_color "#ff0000"
+	tmux set -wq -t S:0 @bridge_pr_plain " S #12"
+
+	bash "$REFLOW" S 200 --force >/dev/null 2>&1
+
+	[ "$(tmux show -wv -t S:0 @window_crew_disp)" = "atlas " ]
+	[ "$(tmux show -wv -t S:0 @window_label_id_disp)" = "G #460" ]
+	[ "$(tmux show -wv -t S:0 @window_label_id)" = "G #460" ]
+	[ "$(tmux show -wv -t S:0 @window_label_rest_long)" = " land the fix" ]
+	# Short mode drops the remainder for an id-bearing window, as the local
+	# build_window_label does — otherwise total_short == total_long.
+	[ -z "$(tmux show -wv -t S:0 @window_label_rest_short)" ]
+	[ "$(tmux show -wv -t S:0 @window_pr_plain)" = " S #12" ]
+}
+
+@test "a bare mirror renders the remote name and adds no badge or id column" {
+	tmux set -wq -t S:0 @bridge_win 1
+	tmux set-window-option -t S:0 automatic-rename off
+	tmux rename-window -t S:0 lazytmux
+	tmux set -wq -t S:0 @window_bridge_name shell
+
+	bash "$REFLOW" S 200 --force >/dev/null 2>&1
+
+	[ "$(tmux show -wv -t S:0 @window_label_short)" = "shell" ]
+	[ -z "$(tmux show -wv -t S:0 @window_crew_disp)" ]
+	[ -z "$(tmux show -wv -t S:0 @window_label_id)" ]
+}
+
+@test "a narrow mirror grid drops the badge before the id and keeps columns exact" {
+	for _ in 1 2 3; do tmux new-window -d; done
+	# Uneven id widths, so the column's padding has to compensate for a real
+	# difference rather than for nothing.
+	stamp_mirror 0 "G #4" " a remote branch title" "atlas"
+	stamp_mirror 1 "G #4601" " another title" "atlas"
+	stamp_mirror 2 "G #460000" " a remote branch title" "atlas"
+	stamp_mirror 3 "G #46" " yet another" "atlas"
+
+	bash "$REFLOW" S 80 --force >/dev/null 2>&1
+
+	local per
+	per=$(tmux show -v @window_per)
+	[ "$per" -lt 4 ] # multiline, or there are no columns to be exact about
+
+	# The widest id overruns its column with the badge attached: the badge is
+	# decoration and goes first, the ticket id is identity and survives whole.
+	[ -z "$(tmux show -wv -t "S:$per" @window_crew_disp)" ]
+	[ "$(tmux show -wv -t "S:$per" @window_label_id_disp)" = "G #460000" ]
+	# ... while its column neighbour still has room for its own badge, which is
+	# what keeps the equality below from being a tautology.
+	[ -n "$(tmux show -wv -t S:0 @window_crew_disp)" ]
+
+	# shellcheck source=/dev/null
+	source "$TDIR/lib-icons.sh"
+	# S:0 and S:$per sit in the same grid column. Everything the slot renders off
+	# the window's own label — badge, id, padded remainder — must add up to the
+	# same width in both, or every slot to the right on one row shifts.
+	slot_dw() {
+		measure_display_width "$(tmux show -wv -t "S:$1" @window_crew_disp)$(tmux show -wv -t "S:$1" @window_label_id_disp)$(tmux show -wv -t "S:$1" @window_label_disp)"
+	}
+	slot_dw 0
+	local first=$REPLY_DW
+	slot_dw "$per"
+	local below=$REPLY_DW
+	[ "$first" -eq "$below" ]
 }

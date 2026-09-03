@@ -310,6 +310,15 @@
   # point of the bridge (zero blast radius on the human's live session).
   bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}";
   bridgeCtl = "${picker-bridge-ctl-bin} --display-error=#{q:client_name} --sock=#{q:@bridge_sock}";
+
+  # A mirror window's own @crew_*/@pr_* describe the launcher's repo; the daemon
+  # ships the remote window's under @bridge_*. These are read live at render
+  # time, so the choice has to be a format conditional. Built per option name,
+  # not per site — each appears more than once in the window format. The commas
+  # inside are deliberately NOT '#,'-escaped: format_expand resolves the
+  # conditional before format_draw parses '#[…]', and its argument splitter
+  # tracks '#{'/'}' nesting, so they are already protected.
+  bridgeOpt = name: "#{?#{@bridge_win},#{@bridge_${name}},#{@${name}}}";
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
   # Commands the pipe-pane sweep in tmux-update-icons watches for, derived from
@@ -1036,7 +1045,7 @@
     # last so its state color only runs into the separator, which sets its own
     # color. tmux-reflow-windows mirrors this layout for the multi-line
     # variants with column-padded segments.
-    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?#{@crew_name},#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@crew_name} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
+    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?${bridgeOpt "crew_name"},#{?${bridgeOpt "crew_color"},#[fg=${bridgeOpt "crew_color"}#,bg=#{@thm_bg}],}${bridgeOpt "crew_name"} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:${bridgeOpt "pr_number"},#{!=:${bridgeOpt "pr_number"},none}},#{?#{==:${bridgeOpt "pr_state"},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:${bridgeOpt "pr_check_state"},failure},#{==:${bridgeOpt "pr_mergeable"},conflicting}},#[fg=#{@thm_red}],#{?#{==:${bridgeOpt "pr_check_state"},pending},#[fg=#{@thm_peach}],#{?#{==:${bridgeOpt "pr_state"},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
     set -g status-format[2] ""
     set -g status-format[3] ""
     set -g status-format[4] ""
