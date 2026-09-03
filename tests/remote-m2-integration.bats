@@ -406,7 +406,7 @@ sorted_dims() {
 		sleep 0.1
 	done
 	if [ "$dims" != "120x40" ]; then
-		echo "resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted 120x40, got ${dims:-empty}" >&2
+		echo "resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted 120x40, got ${dims:-empty}" >&3
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		return 1
@@ -1632,8 +1632,8 @@ m2_pane_gate_failed() {
 		sleep 0.1
 	done
 	if ! { [ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 100 ]; }; then
-		echo "SRC width converge timeout after ${BRIDGE_UP_BUDGET_SECS}s: wanted unique width 100, got:" >&2
-		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&2
+		echo "SRC width converge timeout after ${BRIDGE_UP_BUDGET_SECS}s: wanted unique width 100, got:" >&3
+		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&3
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		return 1
@@ -1655,9 +1655,9 @@ m2_pane_gate_failed() {
 		sleep 0.1
 	done
 	if [ "$src_dims" != "$dst_dims" ]; then
-		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&2
-		echo "  src_dims=$src_dims" >&2
-		echo "  dst_dims=$dst_dims" >&2
+		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&3
+		echo "  src_dims=$src_dims" >&3
+		echo "  dst_dims=$dst_dims" >&3
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		return 1
@@ -1763,8 +1763,8 @@ m2_pane_gate_failed() {
 		sleep 0.1
 	done
 	if ! { [ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 90 ]; }; then
-		echo "SRC resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted unique width 90, got:" >&2
-		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&2
+		echo "SRC resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted unique width 90, got:" >&3
+		$SRC list-windows -t rem -F '#{window_index} #{window_width}x#{window_height}' >&3
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		$OBS kill-server 2>/dev/null || true
@@ -1788,9 +1788,9 @@ m2_pane_gate_failed() {
 		sleep 0.1
 	done
 	if [ "$src_dims" != "$dst_dims" ]; then
-		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&2
-		echo "  src_dims=$src_dims" >&2
-		echo "  dst_dims=$dst_dims" >&2
+		echo "DST parity timeout after ${BRIDGE_UP_BUDGET_SECS}s:" >&3
+		echo "  src_dims=$src_dims" >&3
+		echo "  dst_dims=$dst_dims" >&3
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		$OBS kill-server 2>/dev/null || true
