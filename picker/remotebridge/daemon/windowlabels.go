@@ -152,12 +152,24 @@ func matching(v string, re *regexp.Regexp) string {
 // under @bridge_* names, the way agentShipper does the remote's pane state —
 // one level up, window options rather than pane options.
 type labelShipper struct {
-	written  map[string]labelRow // remote window id -> the row last written for it
+	written  map[string]writtenLabels // remote window id -> what was last written for it
 	lastPoll time.Time
 }
 
+// writtenLabels is one remote window's last stamp, and the local window it
+// landed on. The local target is part of the key, not just the payload:
+// retireMirror rebuilds a dead mirror through closeWindow + reconcileWindows,
+// which re-adds the SAME remote id against a fresh local window, so a row
+// compare alone would suppress the re-stamp and leave the replacement bare.
+// agentShipper needs no equivalent because it keys on the local pane id, which
+// a rebuild changes.
+type writtenLabels struct {
+	localWin string
+	row      labelRow
+}
+
 func newLabelShipper() *labelShipper {
-	return &labelShipper{written: map[string]labelRow{}}
+	return &labelShipper{written: map[string]writtenLabels{}}
 }
 
 // poll re-reads the remote's window options and applies them, throttled to
@@ -192,10 +204,11 @@ func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (change
 			continue
 		}
 		prev, seen := s.written[r.id]
-		if seen && prev == r {
+		seen = seen && prev.localWin == mw.localWin
+		if seen && prev.row == r {
 			continue
 		}
-		s.written[r.id] = r
+		s.written[r.id] = writtenLabels{localWin: mw.localWin, row: r}
 
 		// One argv command sequence per window — the form
 		// tmux-reflow-windows already uses — so a first pass over N windows
@@ -203,7 +216,7 @@ func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (change
 		var argv []string
 		for _, o := range bridgeLabelOptions {
 			v := o.get(r)
-			if seen && o.get(prev) == v {
+			if seen && o.get(prev.row) == v {
 				continue
 			}
 			if len(argv) > 0 {
@@ -254,5 +267,5 @@ func (s *labelShipper) clear(cfg Config, reg *registry) {
 		}
 		cfg.LocalTmux(argv...)
 	}
-	s.written = map[string]labelRow{}
+	s.written = map[string]writtenLabels{}
 }

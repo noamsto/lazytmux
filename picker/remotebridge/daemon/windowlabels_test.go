@@ -189,3 +189,38 @@ func TestLabelShipperClear(t *testing.T) {
 		t.Errorf("written = %v, want empty", s.written)
 	}
 }
+
+// retireMirror rebuilds a dead mirror through closeWindow + reconcileWindows,
+// which re-adds the SAME remote id against a fresh local window. The row is
+// unchanged across that, so only the local target tells the shipper it must
+// stamp again — otherwise the replacement window renders bare forever.
+func TestLabelShipperRestampsRebuiltMirror(t *testing.T) {
+	reg := newRegistry()
+	reg.add("@1", "@101")
+	s := newLabelShipper()
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+
+	row := labelRow{id: "@1", crewName: "nova", labelID: "GH #460"}
+	s.apply(cfg, reg, []labelRow{row})
+
+	reg.remove("@1")
+	reg.add("@1", "@102")
+	calls = nil
+	if !s.apply(cfg, reg, []labelRow{row}) {
+		t.Fatal("a rebuilt mirror reported no change")
+	}
+	if len(calls) != 1 {
+		t.Fatalf("rebuilt mirror = %d tmux calls, want one argv sequence: %v", len(calls), calls)
+	}
+	got := strings.Join(calls[0], " ")
+	if n := strings.Count(got, "set-option"); n != len(bridgeLabelOptions) {
+		t.Errorf("rebuilt mirror wrote %d options, want all %d: %q", n, len(bridgeLabelOptions), got)
+	}
+	if strings.Contains(got, "@101") {
+		t.Errorf("stamped the dead local window: %q", got)
+	}
+	if !strings.Contains(got, "set-option -w -t @102 @bridge_crew_name nova") {
+		t.Errorf("replacement window not stamped: %q", got)
+	}
+}

@@ -214,6 +214,52 @@ bridged window as agent-free. The bridge ships the remote's state instead:
 - Not carried: `interrupted` (derived on the remote from a transcript tail this
   side can't read) and screen-scraper states (same status-client problem).
 
+### Remote Window Labels
+
+The same problem one level up: a mirror window's own `@crew_*`, `@issue_*`,
+`@pr_*` and `@window_label_*` were stamped by the `after-new-window` hook
+against the *launcher's* cwd, so they describe the wrong repo entirely. Reflow
+used to blank them and render the bare remote window name (#462). The daemon now
+ships the remote window's own label state across instead.
+
+- **The daemon writes `@bridge_*`, never the real option names.**
+  `tmux-reflow-windows` stamps `@window_label_*` on every window of the mirror
+  session, mirrors included, so a same-name write is a two-writer race the daemon
+  loses on every reflow pass.
+- **Every render site reads `@bridge_*` directly** rather than reflow's stamped
+  copies — the three (reflow's grid, `picker/main.go`, `picker/statusline`) stay
+  symmetric and independent, and reflow only runs for a session with a client.
+  The colour/state values (`@bridge_crew_color`, `@bridge_pr_*`) are read *live*
+  at render time through a `#{?#{@bridge_win},…}` conditional, so they are never
+  in reflow's `read -r` list.
+- **Polled on the main loop only**, like `agentstatus.go` — `rt` reads the
+  stream, which has one consumer. But a window *option* change emits no
+  control-stream traffic at all, so unlike an agent state (whose pane redraws
+  first) nothing wakes the loop for it: `mainLoopTickInterval` is a coarse 5s
+  ticker added for exactly this, and the loop's stream read became a `select`
+  over the two. Every line taken off that channel must still `claimSeq`, or the
+  ordinal count falls behind and no later round-trip recognises its own reply.
+- **An unchanged row is not rewritten** (the neighbour's rule), but the cache is
+  keyed on remote window id *and* the local window it landed on: `retireMirror`
+  rebuilds a dead mirror under the same remote id against a fresh local window,
+  and a row compare alone would suppress the re-stamp and leave the replacement
+  bare. `agentShipper` needs no equivalent because it keys on the local pane id,
+  which a rebuild changes anyway.
+- **A label change alters no window count**, so reflow's `count:width:height`
+  cache would skip it — the shipper forces `tmux-reflow-windows --force` once per
+  changed pass, the `@window_bridge_name` precedent. It is the *only* trigger on
+  a mirror: `tmux-update-icons`' `@crew_name`/`@crew_seen` comparison never fires
+  there, since both stay empty.
+- **A remote carrying no label state renders the remote window name**, exactly as
+  before — reflow falls back only when the bridge carries neither id nor rest,
+  and that fallback alone speaks `@window_bridge_name`'s doubled-`#` dialect.
+- Every carried value is sanitized daemon-side (`|`, control bytes and `#[…]`
+  markup dropped, enums and colours regex-matched, a leading `-` rejected whole
+  since `LocalTmux` execs without a shell) and length-capped. Teardown unsets
+  what it wrote.
+- Liveness: the codename and label track the remote live; `@pr_*` is only as
+  fresh as the remote's own `tmux-pr-enrich` poll.
+
 ### Persist (tmux-remux)
 
 The [tmux-remux](https://github.com/noamsto/tmux-remux) Go binary is the persistence
@@ -397,6 +443,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 |---------|--------------|
 | Bridge graphics (`prefix + I` across a mirror) | `tmux-claude-images`, `resvg` |
 | Remote agent status | lazytmux's `claude-status-update` (it stamps the pane options the daemon polls) |
+| Remote window labels | lazytmux's own `tmux-reflow-windows` (what stamps `@window_label_*`) and, for a codename, whatever fan-out harness stamps `@crew_name`/`@crew_color`. The one requirement with no capability probe: an older remote stamps nothing and the mirror silently falls back to the remote window name. |
 | Cold start (`prefix + s` on a serverless host) | `tmux-startup.service` / the launchd agent, plus lingering |
 | Remote-side picker (`prefix + s` `^o`) | `lztmux-remote-picker` (`remote.exposePickOnPath`, default true) |
 | Tool binds across a mirror (`prefix + p`/`g`/`y`) | whichever of `prdash`, `lazygit`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. |
