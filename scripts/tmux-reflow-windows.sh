@@ -123,13 +123,17 @@ has_zoom=0
 # window option in the template, so only the name is pulled here (for width).
 # @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
 # window_name containing '|' is no worse off here than at the very end.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
+# The four @bridge_* label fields between them are daemon-sanitized (never
+# contain '|'). Only these four are pulled here: the five @bridge_* colour/state
+# values are read live by the format fragments below, so naming them would only
+# add unused variables.
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_crew_name}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge prdraft ibranch crew wai bridge wname bname wtask; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge prdraft ibranch crew wai bridge bid brest bpr bcrew wname bname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays
@@ -138,61 +142,88 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 	win_zoom_dw[$idx]=0
 	((zoomed)) && has_zoom=1 && win_zoom_dw[$idx]=2
 
-	# Remote-bridge mirror window (#167 @bridge_win opt-out): label it with the
-	# daemon-owned remote name (@window_bridge_name), NOT #{window_name} — the
-	# latter is clobbered by automatic-rename on the real config (#196). Fall
-	# back to window_name before the daemon's first write. The issue/PR/branch
-	# context belongs to the launcher's repo, not the remote window this
-	# mirrors — skip enrichment entirely.
+	# Remote-bridge mirror window (#167 @bridge_win opt-out): its identity comes
+	# from the daemon's @bridge_* copies of the remote window's own label state.
+	# Local enrichment is skipped entirely — the issue/PR/branch context here
+	# belongs to the launcher's repo, not the remote window this mirrors.
+	collapse=0
 	if [[ $bridge == 1 ]]; then
-		bwname="${bname:-$wname}"
-		win_short[$idx]="$bwname"
-		win_id[$idx]=""
-		win_rest_short[$idx]="$bwname"
-		win_pr[$idx]=""
-		# The daemon stores @window_bridge_name with every '#' doubled, and a
-		# '#{@opt}' read hands that back verbatim — but the status line draws it
-		# collapsed. Measure what will be drawn, or a '#' in a remote name buys
-		# the column a cell it never uses.
-		measure_display_width "${bwname//##/#}"
-		win_short_dw[$idx]=$REPLY_DW
-		win_id_dw[$idx]=0
-		win_pr_dw[$idx]=0
-		win_crew[$idx]=""
-		win_crew_dw[$idx]=0
-		win_rest_long[$idx]="$bwname"
-		win_long_dw[$idx]=$REPLY_DW
-		((total++))
-		continue
+		win_id[$idx]="$bid"
+		win_rest_long[$idx]="$brest"
+		win_pr[$idx]="$bpr"
+		crew="$bcrew"
+		# Short mode drops the remainder for an id-bearing window, matching
+		# build_window_label (which sets REPLY_REST only in its long arm).
+		# Without that, total_short == total_long and a mirror-heavy narrow
+		# session goes multiline earlier than the equivalent local one.
+		win_rest_short[$idx]=""
+		[[ -n $bid ]] || win_rest_short[$idx]="$brest"
+		# Before the daemon's first label write, fall back to the daemon-owned
+		# remote name (@window_bridge_name, NOT #{window_name} — the latter is
+		# clobbered by automatic-rename on the real config, #196). Only when the
+		# bridge carries neither id nor rest: an empty id alone still leaves the
+		# rest as the identity of a remote branch with no detected issue.
+		if [[ -z $bid && -z $brest ]]; then
+			bwname="${bname:-$wname}"
+			win_rest_short[$idx]="$bwname"
+			win_rest_long[$idx]="$bwname"
+			collapse=1
+		fi
+	else
+		# Stamp belongs to the branch it was written for. If the pane has since
+		# cd'd to a different branch, build the label from the current branch
+		# instead — the stamp stays on the window and reappears on cd back.
+		if [[ -n $iid && $ibranch != "$branch" ]]; then
+			iprov="" iid="" ititle=""
+			prnum="" prstate="" prcheck="" prmerge="" prdraft=""
+		fi
+
+		build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
+		win_id[$idx]="$REPLY_ID"
+		win_rest_short[$idx]="$REPLY_REST"
+		# shellcheck disable=SC2153 # REPLY_PR set by build_window_label (sourced lib)
+		win_pr[$idx]="$REPLY_PR"
+
+		# Long mode only changes the remainder (title / full branch); the id and
+		# PR segments are mode-independent.
+		build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
+		win_rest_long[$idx]="$REPLY_REST"
 	fi
 
-	# Stamp belongs to the branch it was written for. If the pane has since
-	# cd'd to a different branch, build the label from the current branch
-	# instead — the stamp stays on the window and reappears on cd back.
-	if [[ -n $iid && $ibranch != "$branch" ]]; then
-		iprov="" iid="" ititle=""
-		prnum="" prstate="" prcheck="" prmerge="" prdraft=""
+	# Both arms fall through here, so every width input the fit math reads is
+	# filled identically on either path. A mirror that skipped this pinned
+	# pr_colw and crew_colw to 0, and crew_colw == 0 suppresses the badge
+	# fragment outright — so a mirror-only session rendered no codename at all.
+	# The composed label is id + rest, which is what build_window_label's REPLY
+	# is on the local path.
+	win_short[$idx]="${win_id[$idx]}${win_rest_short[$idx]}"
+	short_m="${win_short[$idx]}"
+	long_m="${win_id[$idx]}${win_rest_long[$idx]}"
+	# The daemon stores @window_bridge_name with every '#' doubled, and a
+	# '#{@opt}' read hands that back verbatim — but the status line draws it
+	# collapsed. Measure what will be drawn, or a '#' in a remote name buys the
+	# column a cell it never uses. Only that fallback speaks the doubled dialect
+	# and it is all-or-nothing, so one flag decides it for the whole label.
+	if ((collapse)); then
+		short_m="${short_m//##/#}"
+		long_m="${long_m//##/#}"
 	fi
-
-	build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
-	win_short[$idx]="$REPLY"
-	win_id[$idx]="$REPLY_ID"
-	win_rest_short[$idx]="$REPLY_REST"
-	# shellcheck disable=SC2153 # REPLY_PR set by build_window_label (sourced lib)
-	win_pr[$idx]="$REPLY_PR"
-	measure_display_width "$REPLY"
+	measure_display_width "$short_m"
 	win_short_dw[$idx]=$REPLY_DW
-	measure_display_width "$REPLY_ID"
+	measure_display_width "$long_m"
+	win_long_dw[$idx]=$REPLY_DW
+	measure_display_width "${win_id[$idx]}"
 	win_id_dw[$idx]=$REPLY_DW
 	measure_display_width "${win_pr[$idx]}"
 	win_pr_dw[$idx]=$REPLY_DW
 	((win_pr_dw[$idx] > pr_colw)) && pr_colw=${win_pr_dw[$idx]}
 
-	# Agent codename badge (external fan-out harness stamps @crew_name/@crew_color).
-	# Rendered inline off the window's own label, so it is charged per-window in
-	# both the single-line fit test and the grid column floor below — never a
-	# shared column of its own. The trailing separator space is folded into the
-	# segment so the width math is exact.
+	# Agent codename badge (external fan-out harness stamps @crew_name/@crew_color;
+	# a mirror carries the remote's through @bridge_crew_name). Rendered inline off
+	# the window's own label, so it is charged per-window in both the single-line
+	# fit test and the grid column floor below — never a shared column of its own.
+	# The trailing separator space is folded into the segment so the width math is
+	# exact.
 	if [[ -n $crew ]]; then
 		win_crew[$idx]="${crew} "
 		measure_display_width "${win_crew[$idx]}"
@@ -202,13 +233,6 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 		win_crew[$idx]=""
 		win_crew_dw[$idx]=0
 	fi
-
-	# Long mode only changes the remainder (title / full branch); the id and PR
-	# segments are mode-independent.
-	build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
-	win_rest_long[$idx]="$REPLY_REST"
-	measure_display_width "$REPLY"
-	win_long_dw[$idx]=$REPLY_DW
 
 	((total++))
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
@@ -448,6 +472,16 @@ fi
 } | tmux source -
 
 # Common format fragments
+# Colour/state options read live at render time. A mirror window's own copies
+# belong to the launcher's repo; the daemon ships the remote's under @bridge_*,
+# so every such read is gated on @bridge_win. Built per option name, not per
+# site — each of these appears more than once below. The commas inside the
+# conditional are deliberately NOT '#,'-escaped: format_expand resolves it before
+# format_draw parses '#[…]', and its argument splitter tracks '#{'/'}' nesting.
+declare -A bopt
+for o in crew_color pr_number pr_state pr_check_state pr_mergeable; do
+	bopt[$o]="#{?#{@bridge_win},#{@bridge_${o}},#{@${o}}}"
+done
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
 ICON='#{@window_icon_padded}'
 # Name column: bold identity prefix + column-padded remainder (id + disp fill
@@ -474,7 +508,7 @@ ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],}"
 # a live one. No PR → no color directive, and @window_pr_disp is just column
 # padding. Rendered last in the slot, so its state color only runs into the
 # separator, which sets its own color.
-PRCOLOR="#{?#{&&:#{@pr_number},#{!=:#{@pr_number},none}},#{?#{==:#{@pr_state},merged},#[fg=#{@thm_mauve}],#{?#{==:#{@pr_state},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:#{@pr_check_state},failure},#{==:#{@pr_mergeable},conflicting}},#[fg=#{@thm_red}],#{?#{==:#{@pr_check_state},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}}},}"
+PRCOLOR="#{?#{&&:${bopt[pr_number]},#{!=:${bopt[pr_number]},none}},#{?#{==:${bopt[pr_state]},merged},#[fg=#{@thm_mauve}],#{?#{==:${bopt[pr_state]},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:${bopt[pr_check_state]},failure},#{==:${bopt[pr_mergeable]},conflicting}},#[fg=#{@thm_red}],#{?#{==:${bopt[pr_check_state]},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}}},}"
 # "Last active" column for halted Claude windows (@window_claude_ago, kept fresh
 # by tmux-update-icons). Right-aligned and padded to AGO_W's fixed width so the
 # value (and an empty value, for active/non-claude windows) always occupies the
@@ -486,7 +520,7 @@ AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
 # Emitted only when at least one window is tagged (crew_colw > 0); untagged
 # windows carry an empty @window_crew_disp and render a gapless full-width label.
 CREW=""
-((crew_colw > 0)) && CREW="#{?#{@crew_color},#[fg=#{@crew_color}#,bg=#{@thm_bg}],}#{@window_crew_disp}${BASE}"
+((crew_colw > 0)) && CREW="#{?${bopt[crew_color]},#[fg=${bopt[crew_color]}#,bg=#{@thm_bg}],}#{@window_crew_disp}${BASE}"
 ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${CREW}${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded

@@ -11,9 +11,11 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
 
-// agentStatusPollInterval is the floor between two polls. There is no timer:
-// rt reads the stream, so only the main loop may poll. An agent that changes
-// state redraws its pane first, which is what wakes that loop.
+// agentStatusPollInterval is the floor between two polls: rt reads the stream,
+// so only the main loop may poll. An agent that changes state redraws its pane
+// first, which is what wakes that loop on a busy bridge; since the window-label
+// shipper landed, mainLoopTickInterval also backs it, so a state that changed
+// without a redraw is picked up within that ceiling rather than never.
 const agentStatusPollInterval = time.Second
 
 // agentStatusFormat reads each remote pane's foreground command plus whatever

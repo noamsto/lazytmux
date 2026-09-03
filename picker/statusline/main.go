@@ -44,6 +44,8 @@ var volatileFields = []string{
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
 	"#{@bridge_win}", "#{@bridge_host}",
+	"#{@bridge_crew_name}", "#{@bridge_crew_color}",
+	"#{@bridge_label_id}", "#{@bridge_label_rest_long}",
 }
 
 // fetchVolatile fills the volatile fields via a single display-message
@@ -68,6 +70,8 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.paneIcon, a.paneCmd, a.claudeFg = f[8], f[9], f[10]
 	a.crewName, a.crewColor = f[11], f[12]
 	a.bridgeWin, a.bridgeHost = f[13], f[14]
+	a.bridgeCrewName, a.bridgeCrewColor = f[15], f[16]
+	a.bridgeLabelID, a.bridgeLabelRestLong = f[17], f[18]
 	return f[0] == "1", true
 }
 
@@ -117,6 +121,8 @@ type args struct {
 	paneIcon, paneCmd, claudeFg                     string
 	crewName, crewColor                             string
 	bridgeWin, bridgeHost                           string
+	bridgeCrewName, bridgeCrewColor                 string
+	bridgeLabelID, bridgeLabelRestLong              string
 
 	// theme palette (passed pre-expanded from tmux @thm_* options)
 	thmBg, thmRed, thmMauve, thmBlue, thmText, thmSubtext0 string
@@ -188,6 +194,24 @@ func sessionSegment(a args, prefixActive bool) string {
 	if a.bridgeWin == "1" {
 		if a.bridgeHost != "" {
 			b.WriteString("#[fg=" + a.thmPeach + "]" + a.iconRemote + " " + a.bridgeHost + "  ")
+		}
+		if a.bridgeCrewName != "" {
+			fg := a.bridgeCrewColor
+			if fg == "" {
+				fg = a.thmMauve
+			}
+			b.WriteString("#[fg=" + fg + "]" + a.bridgeCrewName + "  ")
+		}
+		switch {
+		case a.bridgeLabelID != "":
+			// @bridge_label_id already carries the provider glyph
+			// ("<icon> <id>"); @bridge_label_rest_long already carries its
+			// own leading space in this arm. No separator here would double
+			// either.
+			b.WriteString("#[fg=" + a.thmBlue + ",bold]" + a.bridgeLabelID +
+				"#[fg=" + a.thmText + ",nobold]" + a.bridgeLabelRestLong)
+		case a.bridgeLabelRestLong != "":
+			b.WriteString("#[fg=" + a.thmBlue + ",bold]" + a.iconBranch + " " + a.bridgeLabelRestLong)
 		}
 		return b.String()
 	}

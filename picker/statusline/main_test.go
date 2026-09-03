@@ -107,6 +107,42 @@ func TestSessionSegmentBridgeWinStopsAtPill(t *testing.T) {
 	}
 }
 
+func TestSessionSegmentBridgeFullIdentity(t *testing.T) {
+	a := args{
+		session: "work", panePath: "/repo",
+		bridgeWin: "1", bridgeHost: "g6",
+		bridgeCrewName: "coral", bridgeCrewColor: "colour210",
+		bridgeLabelID: "L ENG-7", bridgeLabelRestLong: " Do it",
+		iconSession: "S", iconRemote: "R",
+		thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd", thmPeach: "#fab",
+	}
+	got := sessionSegment(a, false)
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  " +
+		"#[fg=#fab]R g6  " +
+		"#[fg=colour210]coral  " +
+		"#[fg=#89b,bold]L ENG-7#[fg=#cdd,nobold] Do it"
+	if got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestSessionSegmentBridgeIdlessRest(t *testing.T) {
+	a := args{
+		session: "work", panePath: "/repo",
+		bridgeWin: "1", bridgeHost: "g6",
+		bridgeLabelID: "", bridgeLabelRestLong: "feat/x",
+		iconSession: "S", iconRemote: "R", iconBranch: "B",
+		thmMauve: "#c6a", thmBlue: "#89b", thmPeach: "#fab",
+	}
+	got := sessionSegment(a, false)
+	want := "#[fg=#c6a] #[range=left]S work#[norange]  " +
+		"#[fg=#fab]R g6  " +
+		"#[fg=#89b,bold]B feat/x"
+	if got != want {
+		t.Fatalf("\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestLastGoodRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	if _, ok := readLastGood(dir, "work"); ok {
