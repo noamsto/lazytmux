@@ -228,8 +228,7 @@ stamp_mirror() {
 }
 
 @test "a narrow mirror grid drops the badge before the id and keeps columns exact" {
-	local i
-	for i in 1 2 3; do tmux new-window -d; done
+	for _ in 1 2 3; do tmux new-window -d; done
 	# Uneven id widths, so the column's padding has to compensate for a real
 	# difference rather than for nothing.
 	stamp_mirror 0 "G #4" " a remote branch title" "atlas"
