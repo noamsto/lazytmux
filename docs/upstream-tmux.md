@@ -365,6 +365,8 @@ follow-up: the #341 note needs revising, and the question of whether lazytmux
 should simply register `pane-exited` at window scope (where it demonstrably
 fires) should be reopened on its own merits.
 
+**Platform:** Linux/x86_64 only.
+
 ---
 
 ## Claim 1b — `show-options -t '=name'` (#474, #476)
@@ -482,7 +484,7 @@ same declaration, verbatim:
 
 `switch-client` has **no static `.target` at all** (`cmd-switch-client.c`, entry
 struct comment: `/* -t is special */`) — it inspects the raw string itself and
-picks the type at runtime, `cmd-switch-client.c:65-76`:
+picks the type at runtime, `cmd-switch-client.c:68-76`:
 
 ```c
 	if (tflag != NULL &&
@@ -503,7 +505,7 @@ string's shape, not by being declared session-typed.
 All four routes end up in the same shared parser, `cmd_find_target()`
 (`cmd-find.c`). Its type-dispatch switch, reached only when the string has no
 `$`/`@`/`%` sigil and no `:`/`.` separator (a bare name — exactly `zz`/`=zz`),
-is keyed on the caller's declared type — `cmd-find.c:1096-1110`:
+is keyed on the caller's declared type — `cmd-find.c:1101-1111`:
 
 ```c
 		switch (type) {
@@ -1127,7 +1129,7 @@ Two mitigations shipped, and together they close every path lazytmux itself
 creates.
 
 **1. `-c` client pinning on the wrapper-script popups.** All four launchers
-take `--client` and forward it (`scripts/tmux-session-picker.sh:24-28`, same
+take `--client` and forward it (`scripts/tmux-session-picker.sh:22-28`, same
 shape at `tmux-window-picker.sh:31`, `tmux-window-wall.sh:17`,
 `tmux-scratchpad.sh:51`):
 
@@ -1323,12 +1325,13 @@ the mechanism argument is strong but nothing directly measured it firing.
 `tests/tmux-next38-readiness.bats:381-405`, the "every hook the config
 registers with set-hook -g is actually stored" test:
 
-- It already unions **both** tables (`run t show-hooks -g` then `run t
-  show-hooks -gw`, concatenated into `stored`, lines 383-390) — so the test
+- It already unions **both** tables (`run t show-hooks -g` at line 385, then
+  `run t show-hooks -gw` at line 392, concatenated into `stored` at line 394)
+  — so the test
   itself is not blind to window-scoped hooks in general.
 - The hook-name list it checks comes from `grep`ping `set-hook -g` lines out
-  of the **generated config file itself** (`conf="$(store_conf)"` ...
-  `grep -oE 'set-hook -g ([A-Za-z-]+...)'`, lines 392-396) — not from a fixed
+  of the **generated config file itself** (`conf="$(store_conf)"` at line 397,
+  `grep -oE 'set-hook -g ([A-Za-z-]+...)'` at line 398) — not from a fixed
   or historical list.
 
 Since `pane-exited` was removed from `config/tmux.conf.nix` by artifact (1)
@@ -1583,7 +1586,7 @@ in-repo artifacts state the opposite:
 |---|---|
 | `docs/superpowers/plans/2026-08-10-reap-pane-state.md:10-13` | *"tmux accepts the `set-hook` call (no error, no warning) but never actually stores or fires it"* |
 | `config/tmux.conf.nix:1135-1137` | *"The `pane-exited` hook is a silent no-op on the pinned tmux (confirmed via `show-hooks -g`)"* — and the parenthetical names the very method that produced the false negative |
-| `tests/tmux-next38-readiness.bats:379-381` | *"a `set-hook -g` that tmux silently discards, e.g. `pane-exited` on the pinned tmux"* — a wrong worked example in an otherwise sound test |
+| `tests/tmux-next38-readiness.bats:380-381` | *"a `set-hook -g` that tmux silently discards, e.g. `pane-exited` on the pinned tmux"* — a wrong worked example in an otherwise sound test |
 
 The test itself is fine: it already unions `show-hooks -g` **and**
 `show-hooks -gw` (`tests/tmux-next38-readiness.bats:383-390`), so it would
