@@ -524,6 +524,14 @@ func Run(cfg Config) error {
 		}
 	}
 
+	// Before the mirror windows exist, not after they are all set up: the hook
+	// only touches nudgePath, so arming it early costs one stat a tick, while
+	// arming it late drops every resize landing during setup — and setup is the
+	// slow part, spanning a spawn/hello/seed round-trip per window plus the
+	// reconcile below. A dropped nudge is not lost work but a 30s wait for
+	// resizeFallbackInterval, which is the delay the hook exists to avoid.
+	registerResizeHook(cfg, nudgePath)
+
 	// Mirror each remote window into its own local window. The first reuses the
 	// launcher's initial window; the rest are appended.
 	for i, rw := range remoteWins {
@@ -571,10 +579,7 @@ func Run(cfg Config) error {
 
 	// Re-converge the remote whenever the local client resizes. A local resize
 	// emits no control-stream event, so poll (cheaply — see watchResize);
-	// teardown closes stopWatch and removes the hook this registers. A resize
-	// landing between the last per-window setup convergence above and this
-	// registration is caught by resizeFallbackInterval rather than lost.
-	registerResizeHook(cfg, nudgePath)
+	// teardown closes stopWatch and removes the hook registered above.
 	nudged := func() (time.Time, bool) {
 		fi, err := os.Stat(nudgePath)
 		if err != nil {
