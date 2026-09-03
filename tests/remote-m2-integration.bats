@@ -1566,7 +1566,7 @@ EOF
 	# 100 as soon as the daemon sizes its own control client (#449), before any
 	# mirror pane exists.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
-	for _ in $(seq 1 80); do
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
 		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
@@ -1578,7 +1578,7 @@ EOF
 	# Then poll every remote window down to the local size, on the house
 	# budget rather than a fixed sleep — same WxH across windows, not just
 	# the same width.
-	for _ in $(seq 1 80); do
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
 		whs="$($SRC list-windows -t rem -F '#{window_width}x#{window_height}' | sort -u)"
 		[ "$(printf '%s\n' "$whs" | wc -l)" -eq 1 ] && [ "${whs%x*}" = 100 ] && break
 		sleep 0.1
@@ -1649,7 +1649,7 @@ EOF
 	# Gate on the MIRROR settling before resizing — one renderer pane per
 	# remote pane across every mirrored window, same gate as the setup-leg test.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
-	for _ in $(seq 1 80); do
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
 		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
@@ -1664,7 +1664,7 @@ EOF
 	# observable yet". A resize fired in that gap is not lost (watchResize's
 	# resizeFallbackInterval still catches it) but that fallback is 30s, well
 	# past this test's poll budget below — so gate on the hook itself.
-	for _ in $(seq 1 40); do
+	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
 		$DST show-hooks -t host-sess 2>/dev/null | grep -q '^client-resized' && break
 		sleep 0.1
 	done
