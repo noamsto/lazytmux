@@ -201,7 +201,14 @@ scan_shell_string() {
 					fi
 				elif [[ -z $modifier ]]; then
 					local bare_format="${group:2:$((${#group} - 3))}"
-					if ((wrap_only)) && is_wrap_required_format "$bare_format"; then
+					# A style modifier (qe:/qh:/qa:) doesn't quote for a shell, so a
+					# wrap-required format wrapped in one must still be flagged in
+					# wrap_only mode -- strip it before the comparison below.
+					local wrap_check_format="$bare_format"
+					case $wrap_check_format in
+					qe:* | qh:* | qa:*) wrap_check_format="${wrap_check_format#*:}" ;;
+					esac
+					if ((wrap_only)) && is_wrap_required_format "$wrap_check_format"; then
 						record_violation "$lineno" "$group" "$excerpt"
 					elif ((!wrap_only)); then
 						record_violation "$lineno" "$group" "$excerpt"
@@ -600,6 +607,22 @@ EOF
 	[[ $output == *'#{q:pane_current_command}'* ]]
 	[[ $output == *'#{q:pane_current_path}'* ]]
 	[ "$(echo "$output" | grep -c .)" -eq 2 ]
+}
+
+@test "flags qe:/qh:/qa: for a wrap-required identity format inside #(...)" {
+	# wrap_only counterpart to the header's qe:/qh:/qa: rule (format_quote_style /
+	# format_quote_shell -a don't quote for a shell) -- see scan_shell_string above.
+	cat >"$BATS_TEST_TMPDIR/hp-wrap-style.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --session #{qe:session_name})"
+set -g status-format[1] "#(/bin/statusline --session #{qh:session_name})"
+set -g status-format[2] "#(/bin/statusline --session #{qa:session_name})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-wrap-style.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{qe:session_name}'* ]]
+	[[ $output == *'#{qh:session_name}'* ]]
+	[[ $output == *'#{qa:session_name}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 3 ]
 }
 
 @test "flags bare pane formats inside #(...)" {
