@@ -819,6 +819,22 @@
               touch $out
             '';
 
+          # `qs:` silently degrades to a raw expansion on tmux 3.7, so the
+          # shell-word mechanism is exercised only through the pinned wrapper.
+          conf-shell-quoting-integration-tests =
+            pkgs.runCommand "conf-shell-quoting-integration-tests" {
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/conf-shell-quoting-integration.bats
+              touch $out
+            '';
+
           # The gate itself, not a keypress: remote-m2-integration-tests above
           # drives vanilla -L servers with no lazytmux keybindings for a gate to
           # intercept (comment on that check), so it can only exercise the
