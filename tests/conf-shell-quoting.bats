@@ -210,7 +210,7 @@ scan_shell_string() {
 					esac
 					if ((wrap_only)) && is_wrap_required_format "$wrap_check_format"; then
 						record_violation "$lineno" "$group" "$excerpt"
-					elif ((!wrap_only)); then
+					elif ((! wrap_only)); then
 						record_violation "$lineno" "$group" "$excerpt"
 					fi
 				elif [[ $modifier == qs && $quote_state != out ]]; then
