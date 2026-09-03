@@ -26,7 +26,7 @@ import (
 // ssh/tmux/socket in production is a field here, so the bats test can point it
 // at a second local tmux instead.
 type Config struct {
-	Ctl            io.ReadWriteCloser         // tmux -C control-mode stream over plain ssh (stdin+stdout duplex)
+	Ctl            io.ReadWriteCloser         // one already-opened tmux -C control-mode stream (stdin+stdout duplex); superseded by Dial
 	SockPath       string                     // unix socket renderers dial
 	LocalSess      string                     // "<host>-<sess>"
 	RemoteHost     string                     // ssh host being mirrored (picker's Host column)
@@ -47,6 +47,57 @@ type Config struct {
 	// HandOff opens a remote session this bridge was switched to as a mirror of
 	// its own (injected; prod = lztmux-remote-open, nil = off). See sessionPin.
 	HandOff func(remoteSession string)
+	// Dial opens a fresh control-mode connection. Called for the first attach
+	// and again after every drop; nil is single-shot over Ctl — a drop is
+	// terminal, exactly the behaviour before #482.
+	Dial func() (io.ReadWriteCloser, error)
+	// Shutdown is closed when the user asks the daemon to stop (SIGTERM/SIGINT).
+	// A pending reconnect selects on it, because SIGTERM works by dropping the
+	// transport and that is indistinguishable from a link failure — and during
+	// a backoff sleep there is no transport for the signal to reach at all.
+	// lztmux-remote-detach falls back to kill-session after 2s, so a daemon
+	// that waits out its backoff is a daemon stranded. nil never cancels.
+	Shutdown <-chan struct{}
+	// Retry bounds the reconnect schedule; nil takes DefaultBackoff. A pointer
+	// so "unset" stays distinguishable from a deliberately tiny schedule — the
+	// Go tests shrink it rather than paying the real backoff.
+	Retry *Backoff
+	// IdentityTimeout bounds one attach's identity read; 0 takes
+	// defaultIdentityTimeout. See armIdentityDeadline.
+	IdentityTimeout time.Duration
+}
+
+// defaultIdentityTimeout bounds the identity read that leads every re-attach.
+//
+// The case it exists for is a wedged remote tmux behind a healthy sshd: the
+// ServerAlive probes are answered by sshd, not by tmux, so the keepalives never
+// fire, the connection stays up, and one(rt, …) blocks forever on a reply that
+// is never coming. Backoff's attempt and elapsed caps are consulted only
+// BETWEEN attempts, so in that state the bounded-retry guarantee is not
+// enforced at all and only a manual SIGTERM recovers.
+//
+// 30s because Dial returns as soon as the transport process is started, so this
+// covers the ssh handshake, authentication and the remote tmux attach as well
+// as the display-message round-trip — seconds, legitimately, on a slow link or
+// a cold ControlMaster. Far above that, and far below the reconnect budget
+// (DefaultBackoff's 10 minutes), so a wedged remote burns retry attempts and
+// then tears down like any other unreachable one.
+const defaultIdentityTimeout = 30 * time.Second
+
+// identityTimeout is the identity-read deadline this Config asks for.
+func (c Config) identityTimeout() time.Duration {
+	if c.IdentityTimeout > 0 {
+		return c.IdentityTimeout
+	}
+	return defaultIdentityTimeout
+}
+
+// retrySchedule is the reconnect schedule this Config asks for.
+func (c Config) retrySchedule() Backoff {
+	if c.Retry != nil {
+		return *c.Retry
+	}
+	return DefaultBackoff(time.Now)
 }
 
 func (c Config) graphicsFor(paneID string) *graphics.Proxy {
@@ -378,51 +429,97 @@ func newRoundTrip(reader lineReader, router *Router, async *asyncQueue, st *stre
 }
 
 // Run mirrors every window of the bridged remote session, each into its own
-// local window, over the single -CC connection, until %exit or the control
-// connection drops.
+// local window, over a -CC connection, until %exit, an emptied mirror, or a
+// drop the reconnect budget cannot outlast.
+//
+// Two lifetimes live here and they only look like one (#482). The session
+// lifetime — listener, pidfile, registry, renderer panes and their sinks, the
+// resize watcher, the agent shipper — is created once and destroyed only by
+// teardown, which runs exactly once per return path. The connection lifetime —
+// transport, pump, stream, round-tripper, and every client-scoped value the
+// remote holds for this control client — is rebuilt on every attach.
 func Run(cfg Config) error {
-	pump := startCtlPump(controlmode.NewReader(cfg.Ctl))
-	st := newStream(cfg.Ctl)
-	// send is the fire-and-forget form the mirror paths use; the ctl and resize
-	// paths take st.send directly, since they act on whether the line was
-	// written.
-	send := func(s string) { st.send(s) }
-
 	router := NewRouter()
-	async := &asyncQueue{}
-	rt := newRoundTrip(pump, router, async, st)
 	// Declared here rather than beside the registry below: the client-size send
-	// that follows is the converger's first user.
+	// that follows the first dial is the converger's first user.
 	cv := newConverger()
+	// hold separates the daemon's session lifetime from its connection lifetime
+	// (#482). send, sendCtl and rt are stable closures over it, so the
+	// goroutines that capture them — every renderer's input pump, the resize
+	// watcher, the ctl accept loop — keep working across a re-dial rather than
+	// having to be restarted onto the new connection.
+	hold := &connHolder{}
+	// send is the fire-and-forget form the mirror paths use; the ctl and resize
+	// paths take sendCtl, since they act on whether the line was written.
+	send := func(s string) { hold.send(s) }
+	sendCtl := hold.send
+	rt := hold.roundTrip
 
-	// Before anything else the remote might act on: give this control client a
-	// size, so a window created on the remote is born at the local client's
-	// size instead of tmux's 80-column control-client default (#449). watchResize
-	// re-sends this slot only on a CHANGE, so a lost write here has nothing to
-	// correct it — every window created afterwards is born at the default —
-	// which is why the record is undone when the write did not happen.
-	if w, h := cfg.LocalArea(); w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !st.send(ClientSizeCmd(w, h)) {
+	c, err := dialConn(cfg)
+	if err != nil {
+		return err
+	}
+
+	// The identity read leads every attach, this one included, and runs on the
+	// unverified connection — before bind, so nothing the far end says can reach
+	// a sink. Here it only records: there is nothing yet to compare against, so
+	// newSessionPin never tears down.
+	//
+	// The deadline it runs under matters even so: attach 1 has no retry budget
+	// behind it — that is reattach's — so a far end that accepts the connection
+	// and then never answers would park daemon startup here indefinitely. A
+	// fired deadline has already closed the connection, so there is nothing
+	// left to carry on over.
+	disarm := armIdentityDeadline(c, cfg.identityTimeout())
+	pin := newSessionPin(cfg, c.rt)
+	if !disarm() {
+		c.close()
+		return fmt.Errorf("daemon: identity read for %s timed out", cfg.RemoteSession)
+	}
+	c.bind(router)
+	hold.set(c)
+
+	// The first thing the remote might act on: give this control client a size,
+	// so a window created on the remote is born at the local client's size
+	// instead of tmux's 80-column control-client default (#449). It follows the
+	// identity read rather than leading it — nothing between the two creates a
+	// window. watchResize re-sends this slot only on a CHANGE, so a lost write
+	// here has nothing to correct it — every window created afterwards is born
+	// at the default — which is why the record is undone when the write did not
+	// happen (#481).
+	if w, h := cfg.LocalArea(); w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !sendCtl(ClientSizeCmd(w, h)) {
 		cv.unrecord(clientSizeKey, w, h)
 	}
+
+	// Reconnect needs both a way to open another connection and a recorded
+	// identity to check it against; without either the daemon stays single-shot,
+	// exactly the behaviour before #482.
+	reconnect := cfg.Dial != nil && pin.identityKnown
 
 	// The implicit attach reply needs no draining: it is flagged 0, so the reply
 	// reader skips it like any other block we did not ask for.
 	//
 	// Enumerate every window of the bridged remote session. Read BOTH index
 	// and id: --window is an *index*, the registry is keyed by *id* (@N).
+	//
+	// These returns, and the identity timeout above, are the only ones that
+	// precede teardown: nothing has been built yet to tear down, but Run dialled
+	// this connection itself and so owes it a close.
 	lw, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowListFormat))
 	if !ok || lw.Kind == controlmode.Error {
+		hold.close()
 		return fmt.Errorf("daemon: list-windows for %s failed", cfg.RemoteSession)
 	}
 	remoteWins := parseWindowList(string(lw.Data))
 	if len(remoteWins) == 0 {
+		hold.close()
 		return fmt.Errorf("daemon: remote session %s has no windows", cfg.RemoteSession)
 	}
-	pin := newSessionPin(cfg, rt)
 
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
 	if err != nil {
+		hold.close()
 		return fmt.Errorf("daemon: listen %s: %w", cfg.SockPath, err)
 	}
 	// The socket forwards keystrokes to the remote pane and streams its output,
@@ -443,16 +540,27 @@ func Run(cfg Config) error {
 	// closure: draining the stream while waiting needs the pump, and only Run
 	// has it.
 	waitHellosFn := func(n int) (map[string]net.Conn, error) {
-		return waitHellos(pump.lines, router, async, st, connCh, n, helloTimeout)
+		c := hold.get()
+		if c == nil {
+			return nil, fmt.Errorf("daemon: hello wait with no control connection")
+		}
+		return waitHellos(c.pump.lines, router, c.async, c.st, connCh, n, helloTimeout)
 	}
 	cst := newCtlState()
+	// The listener outlives a drop, so a keybind pressed mid-outage reaches
+	// here and gets nacked by the closed stream rather than hanging. The nack
+	// must carry a non-empty error or the keybind claims a gesture landed that
+	// never did; `ping` is exempt by construction, since parseCtl returns an
+	// empty request for it and submit therefore sends nothing — which is what
+	// keeps lztmux-remote-open reusing this bridge instead of stacking a second
+	// daemon on the same socket.
 	go acceptConns(listener, connCh, func(argv []string) error {
 		req, err := cst.parseCtl(argv, cfg.RemoteSession)
 		if err != nil {
 			return err
 		}
-		if !cst.submit(req, st.send) {
-			return fmt.Errorf("bridge is shutting down")
+		if !cst.submit(req, sendCtl) {
+			return fmt.Errorf("bridge has no live connection to the remote")
 		}
 		return nil
 	})
@@ -468,6 +576,10 @@ func Run(cfg Config) error {
 		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_host", cfg.RemoteHost)
 		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_session", cfg.RemoteSession)
 	}
+	// The launcher reuses a mirror session (#474), so a prior daemon killed
+	// mid-outage — teardown would have taken the session with it — can leave
+	// its disconnected badge behind on a session this one is now attached to.
+	clearBridgeState(cfg)
 
 	reg := newRegistry()
 	// nudgePath is the file registerResizeHook's client-resized hook touches;
@@ -517,8 +629,9 @@ func Run(cfg Config) error {
 				c.Close()
 			}
 		}
-		st.close()
-		cfg.Ctl.Close()
+		// Whichever connection is current, which after a reconnect is no longer
+		// the one cfg.Ctl named.
+		hold.close()
 		if cfg.LocalSess != "" {
 			cfg.LocalTmux("kill-session", "-t", cfg.LocalSess)
 		}
@@ -590,7 +703,7 @@ func Run(cfg Config) error {
 	ticker := time.NewTicker(resizePollInterval)
 	go func() {
 		defer ticker.Stop()
-		watchResize(cfg.LocalArea, nudged, reg, cv, st.send, stopWatch, ticker.C)
+		watchResize(cfg.LocalArea, nudged, reg, cv, sendCtl, stopWatch, ticker.C)
 	}()
 
 	// Ship the remote's agent state into the local claude-status tree, and its
@@ -663,10 +776,12 @@ func Run(cfg Config) error {
 
 	// settle runs the queued notifications and the reconcile intents a ctl
 	// request registered, until neither has anything left: each dispatch and each
-	// reconcile does round-trips of its own, which can queue more of both.
-	settle := func() (done bool) {
+	// reconcile does round-trips of its own, which can queue more of both. It
+	// takes the connection rather than reaching through hold, because the queue
+	// it drains is the one this connection's reply readers fill.
+	settle := func(c *ctlConn) (done bool) {
 		for {
-			queued := async.take()
+			queued := c.async.take()
 			wantWindows, layouts := cst.takeIntents()
 			if len(queued) == 0 && !wantWindows && len(layouts) == 0 {
 				return false
@@ -694,53 +809,151 @@ func Run(cfg Config) error {
 		}
 	}
 
-	// Main loop.
-	pauseAfterSet := false
-	loopTick = time.NewTicker(mainLoopTickInterval)
-	for running := true; running; {
-		// Settling before the blocking read is what makes a ctl gesture land
-		// without a timer: the read below wakes on any line, and by the time it
-		// returns the intent is already registered, so the next pass through here
-		// drains it. It also picks up whatever window setup queued.
-		if settle() {
-			break
-		}
-		// Same wake-up for an agent, which redraws its pane before it changes
-		// state; a window option carries no such traffic, which is what the
-		// tick below is for.
-		agents.poll(cfg, rt)
-		labels.poll(cfg, reg, rt)
-		reseedDropped(router, rt)
-		// Enable pause-after only now that every window is set up. Setup does
-		// drain the stream (its round-trips route, and so does the hello wait),
-		// but only dispatch runs handlePause — so a %pause arriving mid-setup is
-		// merely queued, and its pane would sit paused with no %continue re-seed
-		// until setup finished (a deadlock offline bats can't catch).
-		if !pauseAfterSet {
-			pauseAfterSet = true
-			if cfg.PauseAfterSecs > 0 {
-				send(fmt.Sprintf("refresh-client -f pause-after=%d", cfg.PauseAfterSecs))
+	// runConn is the main loop for one control connection, from a live attach to
+	// whichever of the endings finishes it.
+	runConn := func(c *ctlConn) connVerdict {
+		// pause-after is per control client, so a fresh connection has never
+		// been told; re-armed here rather than in repair for the reason the
+		// send site below documents.
+		pauseAfterSet := false
+		for {
+			// Settling before the blocking read is what makes a ctl gesture land
+			// without a timer: nextLine wakes on any line, and by the time it
+			// returns the intent is already registered, so the next pass through here
+			// drains it. It also picks up whatever window setup queued.
+			if settle(c) {
+				return connEnd
+			}
+			// Same wake-up for an agent, which redraws its pane before it changes
+			// state; a window option carries no such traffic, which is what the
+			// tick below is for.
+			agents.poll(cfg, rt)
+			labels.poll(cfg, reg, rt)
+			reseedDropped(router, rt)
+			// Enable pause-after only now that every window is set up. Setup does
+			// drain the stream (its round-trips route, and so does the hello wait),
+			// but only dispatch runs handlePause — so a %pause arriving mid-setup is
+			// merely queued, and its pane would sit paused with no %continue re-seed
+			// until setup finished (a deadlock offline bats can't catch). A
+			// reattach is a setup pass too, hence the send site being here and not
+			// in repair.
+			if !pauseAfterSet {
+				pauseAfterSet = true
+				if cfg.PauseAfterSecs > 0 {
+					send(fmt.Sprintf("refresh-client -f pause-after=%d", cfg.PauseAfterSecs))
+				}
+			}
+			select {
+			case l, ok := <-c.pump.lines:
+				if !ok {
+					return connDrop // control-stream EOF, with no %exit before it
+				}
+				// Every line taken off this channel must claim its ordinal or the
+				// count falls behind sent and no later round-trip recognises its own
+				// reply — the guarantee nextLine gives the other readers, and what
+				// waitHellos does explicitly for the same reason.
+				claimSeq(l, c.st)
+				if dispatch(l) {
+					return connEnd
+				}
+			case <-loopTick.C:
+				// A remote window-option change produces no stream traffic at all,
+				// so falling through to the top is the only thing that polls it.
 			}
 		}
-		select {
-		case l, ok := <-pump.lines:
+	}
+
+	// repair brings the mirror back to remote ground truth after a re-attach,
+	// reporting whether it still stands. Every step runs on the main-loop
+	// goroutine, the only place a round-trip may run, and the order is
+	// load-bearing throughout — see the design spec.
+	//
+	// Load-bearing, but not exclusive: reattach publishes the connection before
+	// calling this, so a watchResize tick can land in the same converger slots
+	// mid-pass. Tolerated — cv.reset can only discard a fact this pass re-asserts
+	// anyway — and nothing drains the pump until the first round-trip below,
+	// which follows the resume loop.
+	repair := func() bool {
+		// The converger caches what THIS control client told the remote, and the
+		// fresh one has told it nothing. Reset wholesale rather than invalidating
+		// a key: only setupWindow and watchResize write it, and neither runs for
+		// a window that survived the outage, so nothing else would re-assert
+		// those per-window caps. watchResize also records before it sends, so a
+		// local resize during the outage left the converger believing a size the
+		// remote was never told — carried across, it is not merely stale but
+		// actively wrong, and every symptom is a silently 80-column mirror.
+		cv.reset()
+		w, h := cfg.LocalArea()
+		if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !sendCtl(ClientSizeCmd(w, h)) {
+			cv.unrecord(clientSizeKey, w, h)
+		}
+		// These draw %error blocks for windows that died during the outage, since
+		// reconcileWindows has not pruned them yet. Inert, and deliberately so:
+		// they are fire-and-forget sends, and claimSeq claims End *or* Error
+		// carrying ClientCommandFlag, so the ordinals stay exact. Do not route
+		// them through a round-trip that treats Kind == Error as fatal.
+		for _, remoteID := range reg.remoteIDs() {
+			if cv.need(remoteID, w, h) && !sendCtl(ConvergeCmd(remoteID, w, h)) {
+				cv.unrecord(remoteID, w, h)
+			}
+		}
+		// %pause is per-control-client state: the new client will never send the
+		// paired %continue, so a sink left paused drops every frame forever —
+		// and takeDirty skips a paused sink, putting it beyond reseedDropped's
+		// reach too. Resume before the reseed below is enqueued into it.
+		for _, mw := range reg.all() {
+			for _, id := range mw.remotePanes {
+				if s := router.sink(id); s != nil {
+					s.resume()
+				}
+			}
+		}
+		reconcileWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
+		if reg.empty() {
+			return false
+		}
+		// Asked outright here, where the live path asks only of a pass that
+		// already failed (#487): an outage is the one stretch in which a local
+		// window can die with no %layout-change to discover it on, since the
+		// stream those arrive on is down and the remote need never touch that
+		// window again. Short-circuited before reconcileLayout so a doomed pass
+		// does not spray commands at a window that is already gone.
+		//
+		// Iterated by id rather than over reg.all(): retireMirror reconciles the
+		// whole registry, so a *mirrorWindow taken before it ran may no longer
+		// be the entry for that remote window.
+		for _, remoteID := range reg.remoteIDs() {
+			mw, ok := reg.byRemoteID(remoteID)
 			if !ok {
-				// Control-stream EOF. The flag is what ends the loop: a
-				// `break` here reads like it does, but leaves only the select.
-				running = false
 				continue
 			}
-			// Every line taken off this channel must claim its ordinal or the
-			// count falls behind sent and no later round-trip recognises its own
-			// reply — the guarantee nextLine gives the other readers, and what
-			// waitHellos does explicitly for the same reason.
-			claimSeq(l, st)
-			if dispatch(l) {
-				running = false
+			if localWindowGone(cfg, mw.localWin) ||
+				reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
+				retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, remoteID)
 			}
-		case <-loopTick.C:
-			// A remote window-option change produces no stream traffic at all,
-			// so falling through to the top is the only thing that polls it.
+		}
+		if reg.empty() {
+			return false
+		}
+		// reconcileLayout early-returns on an unchanged layout, so it cannot be
+		// relied on for the repaint; and output produced while disconnected was
+		// dropped by the remote, not buffered.
+		reseedPanes(reg, router, rt, "after reattach")
+		agents.reskew(remoteClockSkew(rt))
+		return true
+	}
+
+	// Session-lifetime, not per attach: runConn selects on it, but a ticker built
+	// per attach would leak one per reconnect, and teardown can only stop the
+	// handle it can see.
+	loopTick = time.NewTicker(mainLoopTickInterval)
+
+	for {
+		if runConn(c) != connDrop || !reconnect {
+			break
+		}
+		if c = reattach(cfg, router, hold, pin.identity, repair); c == nil {
+			break
 		}
 	}
 	teardown()
@@ -997,15 +1210,16 @@ type lineReader interface {
 // the scanner's 4MB ceiling sizes a pathological reply body, not a routine one.
 const ctlPumpBuf = 256
 
-// ctlPump is the daemon's one caller of controlmode.Reader.Next(), for the life
-// of the process. Reading on a goroutine of its own is what lets a consumer
+// ctlPump is the daemon's one caller of controlmode.Reader.Next() for the life
+// of one control connection; a reconnect builds a new reader and a new pump
+// beside it (#482). Reading on a goroutine of its own is what lets a consumer
 // select over the stream alongside other events (see waitHellos) — Next()
 // blocks, so a select cannot include it directly.
 //
 // The goroutine ends when the stream does, and otherwise dies with the process:
-// teardown's cfg.Ctl.Close() closes only the ssh stdin, so a pump parked on a
-// send to a channel nobody is draining is not woken by it. Harmless — Run
-// returning means the process is on its way out.
+// closing the connection closes only the ssh stdin, so a pump parked on a send
+// to a channel nobody is draining is not woken by it. Harmless — the reader of
+// a connection the daemon has moved on from has nothing left to deliver.
 type ctlPump struct {
 	lines chan controlmode.Line
 }

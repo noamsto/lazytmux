@@ -125,13 +125,126 @@ func TestNewSessionPinRejectsNonID(t *testing.T) {
 }
 
 func TestNewSessionPinReadsID(t *testing.T) {
-	rt, sent := scriptedRT("%begin 1 1 1\n$3\n%end 1 1 1\n")
+	rt, sent := scriptedRT("%begin 1 1 1\n2151|1788283304|$3\n%end 1 1 1\n")
 	p := newSessionPin(Config{RemoteSession: "my proj"}, rt)
 	if p.id != "$3" {
 		t.Errorf("id = %q, want $3", p.id)
 	}
+	if !p.identityKnown {
+		t.Error("identityKnown = false, want true on a well-formed reply")
+	}
+	if p.identity != (remoteIdentity{pid: 2151, sessionID: "$3", startTime: 1788283304, hasStartTime: true}) {
+		t.Errorf("identity = %+v, want the parsed tuple", p.identity)
+	}
 	if !strings.Contains(sent.String(), "-t 'my proj'") {
 		t.Errorf("sent %q, want the session name quoted as one token", sent.String())
+	}
+}
+
+// TestNewSessionPinAttach1NeverTearsDown: an unusable identity at the first
+// attach disables the feature, it never fails startup — there is nothing yet
+// to compare a later attach against.
+func TestNewSessionPinAttach1NeverTearsDown(t *testing.T) {
+	for name, script := range map[string]string{
+		"malformed":  "%begin 1 1 1\nnot-an-id\n%end 1 1 1\n",
+		"empty body": "%begin 1 1 1\n\n%end 1 1 1\n",
+		"error":      "%begin 1 1 1\n%error 1 1 1\nboom\n%end 1 1 1\n",
+		"eof":        "%exit\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt, _ := scriptedRT(script)
+			p := newSessionPin(Config{RemoteSession: "A"}, rt)
+			if p.identityKnown {
+				t.Error("identityKnown = true, want false")
+			}
+			if p.id != "" {
+				t.Errorf("id = %q, want pinning disabled", p.id)
+			}
+		})
+	}
+}
+
+func mustIdentity(t *testing.T, session, body string) remoteIdentity {
+	t.Helper()
+	id, err := parseIdentity(session, body)
+	if err != nil {
+		t.Fatalf("parseIdentity(%q): %v", body, err)
+	}
+	return id
+}
+
+// TestRemoteIdentityMatches covers the comparison rule: pid and sessionID
+// always compare, startTime only when both sides carry one.
+func TestRemoteIdentityMatches(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b remoteIdentity
+		want bool
+	}{
+		{"identical", mustIdentity(t, "A", "2151|1788283304|$1"), mustIdentity(t, "A", "2151|1788283304|$1"), true},
+		{"pid mismatch", mustIdentity(t, "A", "2151|1788283304|$1"), mustIdentity(t, "A", "9999|1788283304|$1"), false},
+		{"session_id mismatch", mustIdentity(t, "A", "2151|1788283304|$1"), mustIdentity(t, "A", "2151|1788283304|$2"), false},
+		{"start_time mismatch, both present", mustIdentity(t, "A", "2151|1788283304|$1"), mustIdentity(t, "A", "2151|1|$1"), false},
+		{"start_time absent on one side", mustIdentity(t, "A", "2151|1788283304|$1"), mustIdentity(t, "A", "2151||$1"), true},
+		{"start_time absent on both sides", mustIdentity(t, "A", "2151||$1"), mustIdentity(t, "A", "2151||$1"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.matches(tt.b); got != tt.want {
+				t.Errorf("matches = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReadIdentityDistinguishesRetryFromTeardown is the load-bearing test:
+// EOF mid-read (one()'s ok==false) must report Retry()==true, while a reply
+// that arrived and is wrong must report Retry()==false, so a caller cannot
+// accidentally route one into the other's handling.
+func TestReadIdentityDistinguishesRetryFromTeardown(t *testing.T) {
+	tests := []struct {
+		name      string
+		script    string
+		wantRetry bool
+	}{
+		{"eof mid-read", "%exit\n", true},
+		{"error reply", "%begin 1 1 1\n%error 1 1 1\nboom\n%end 1 1 1\n", false},
+		{"malformed body", "%begin 1 1 1\nnot-an-id\n%end 1 1 1\n", false},
+		{"empty body", "%begin 1 1 1\n\n%end 1 1 1\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt, _ := scriptedRT(tt.script)
+			_, err := readIdentity(rt, "A")
+			if err == nil {
+				t.Fatal("err = nil, want a failure")
+			}
+			ie, ok := err.(*identityReadErr)
+			if !ok {
+				t.Fatalf("err = %T, want *identityReadErr", err)
+			}
+			if ie.Retry() != tt.wantRetry {
+				t.Errorf("Retry() = %v, want %v", ie.Retry(), tt.wantRetry)
+			}
+		})
+	}
+}
+
+func TestReadIdentityWellFormed(t *testing.T) {
+	rt, sent := scriptedRT("%begin 1 1 1\n2151|1788283304|$1\n%end 1 1 1\n")
+	id, err := readIdentity(rt, "my proj")
+	if err != nil {
+		t.Fatalf("readIdentity: %v", err)
+	}
+	want := remoteIdentity{pid: 2151, sessionID: "$1", startTime: 1788283304, hasStartTime: true}
+	if id != want {
+		t.Errorf("id = %+v, want %+v", id, want)
+	}
+	if !strings.Contains(sent.String(), "-t 'my proj'") {
+		t.Errorf("sent %q, want the session name quoted as one token", sent.String())
+	}
+	if !strings.Contains(sent.String(), "#{pid}|#{start_time}|#{session_id}") {
+		t.Errorf("sent %q, want the pipe-delimited identity format", sent.String())
 	}
 }
 

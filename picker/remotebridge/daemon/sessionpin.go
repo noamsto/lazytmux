@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
@@ -13,6 +14,91 @@ import (
 // sessionIDRe matches a tmux session id. The id is interpolated into a command
 // sent over the control stream, so a value that is not one is not pinned with.
 var sessionIDRe = regexp.MustCompile(`^\$[0-9]+$`)
+
+// remoteIdentity names the tmux server process hosting the mirrored session —
+// read in the same round-trip sessionPin already made for the session id, so
+// there is one identity read and one authority for "which session are we on"
+// (#482). A rebooted remote gets a different pid even when it hosts a
+// same-named session with the same $N, since a fresh server restarts session
+// ids at $0.
+type remoteIdentity struct {
+	pid       int
+	sessionID string
+	// startTime is optional belt-and-braces against a recycled pid. tmux
+	// renders an unknown format as an empty field, so a remote predating
+	// #{start_time} must not fail the read over it.
+	startTime    int
+	hasStartTime bool
+}
+
+// matches reports whether two identity reads name the same server. pid and
+// sessionID compare always; startTime compares only when both sides carry
+// one, so a remote that never offered it is never read as a mismatch.
+func (a remoteIdentity) matches(b remoteIdentity) bool {
+	if a.pid != b.pid || a.sessionID != b.sessionID {
+		return false
+	}
+	return !a.hasStartTime || !b.hasStartTime || a.startTime == b.startTime
+}
+
+// identityReadErr is what readIdentity returns on failure. Retry distinguishes
+// the two shapes a caller must never conflate: one(rt, …) returning ok==false
+// means the connection EOF'd before the reply arrived — another drop, and the
+// caller retries; a reply that arrived and is Kind==Error or does not parse is
+// a genuine identity failure — a different server — and the caller tears down.
+type identityReadErr struct {
+	err   error
+	retry bool
+}
+
+func (e *identityReadErr) Error() string { return e.err.Error() }
+
+// Retry reports whether this failure is the EOF-mid-read shape (retry) as
+// opposed to a reply that arrived and was wrong or malformed (teardown).
+func (e *identityReadErr) Retry() bool { return e.retry }
+
+// readIdentity fetches #{pid}|#{start_time}|#{session_id} for session in one
+// round-trip and parses it strictly: pid and session_id are required, the
+// same posture sessionIDRe and parseWindowID already take for anything
+// interpolated into a later command — malformed is rejected, never coerced.
+func readIdentity(rt roundTrip, session string) (remoteIdentity, error) {
+	l, ok := one(rt, fmt.Sprintf("display-message -p -t %s -F '#{pid}|#{start_time}|#{session_id}'", tmuxQuote(session)))
+	if !ok {
+		return remoteIdentity{}, &identityReadErr{
+			err:   fmt.Errorf("daemon: identity read for %s: connection closed before reply", session),
+			retry: true,
+		}
+	}
+	if l.Kind == controlmode.Error {
+		return remoteIdentity{}, &identityReadErr{err: fmt.Errorf("daemon: identity read for %s: %s", session, strings.TrimSpace(string(l.Data)))}
+	}
+	return parseIdentity(session, string(l.Data))
+}
+
+// parseIdentity parses one pid|start_time|session_id reply body.
+func parseIdentity(session, body string) (remoteIdentity, error) {
+	fields := strings.SplitN(strings.TrimSpace(body), "|", 3)
+	if len(fields) != 3 {
+		return remoteIdentity{}, &identityReadErr{err: fmt.Errorf("daemon: identity reply for %s (%q) is not pid|start_time|session_id", session, body)}
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return remoteIdentity{}, &identityReadErr{err: fmt.Errorf("daemon: identity reply for %s (%q) has a non-numeric pid", session, body)}
+	}
+	sessionID := fields[2]
+	if !sessionIDRe.MatchString(sessionID) {
+		return remoteIdentity{}, &identityReadErr{err: fmt.Errorf("daemon: identity reply for %s (%q) is not a session id (%q)", session, body, sessionID)}
+	}
+	id := remoteIdentity{pid: pid, sessionID: sessionID}
+	// Absent or unparsable start_time just means the field goes unrecorded —
+	// it's belt-and-braces, not required, unlike pid and session_id above.
+	if st := strings.TrimSpace(fields[1]); st != "" {
+		if v, err := strconv.Atoi(st); err == nil {
+			id.startTime, id.hasStartTime = v, true
+		}
+	}
+	return id, nil
+}
 
 // sessionPin keeps this control client on the session it mirrors.
 //
@@ -28,6 +114,12 @@ type sessionPin struct {
 	// learned from the first %session-changed — stream order is not evidence of
 	// which session we are supposed to be on. Empty disables pinning.
 	id string
+	// identity is the server-identity tuple read alongside id, at the same
+	// attach. identityKnown is false when the first attach's read failed, and
+	// Run then stays single-shot rather than comparing a later attach against
+	// a tuple that was never recorded (#482).
+	identity      remoteIdentity
+	identityKnown bool
 	// handOff opens the session we were switched to as a mirror of its own, so
 	// the gesture that switched us does what the user meant instead of nothing.
 	// nil disables it.
@@ -36,17 +128,18 @@ type sessionPin struct {
 
 func newSessionPin(cfg Config, rt roundTrip) *sessionPin {
 	p := &sessionPin{handOff: cfg.HandOff}
-	l, ok := one(rt, fmt.Sprintf("display-message -p -t %s -F '#{session_id}'", tmuxQuote(cfg.RemoteSession)))
-	if !ok || l.Kind == controlmode.Error {
-		fmt.Fprintf(os.Stderr, "daemon: cannot read session id for %s; session pinning is off\n", cfg.RemoteSession)
+	id, err := readIdentity(rt, cfg.RemoteSession)
+	if err != nil {
+		// The first attach records; it never tears down — there is nothing yet
+		// to compare a later attach against. So an unusable read here (EOF or
+		// malformed alike) leaves session pinning off and identityKnown false,
+		// which keeps this daemon single-shot instead of failing startup.
+		fmt.Fprintf(os.Stderr, "daemon: cannot read identity for %s; session pinning is off (%v)\n", cfg.RemoteSession, err)
 		return p
 	}
-	id := strings.TrimSpace(string(l.Data))
-	if !sessionIDRe.MatchString(id) {
-		fmt.Fprintf(os.Stderr, "daemon: session id for %s is not an id (%q); session pinning is off\n", cfg.RemoteSession, id)
-		return p
-	}
-	p.id = id
+	p.id = id.sessionID
+	p.identity = id
+	p.identityKnown = true
 	return p
 }
 
@@ -69,11 +162,21 @@ func (p *sessionPin) apply(l controlmode.Line, reg *registry, router *Router, rt
 	}
 }
 
-// reseed repaints every mirrored pane. Output produced while the client was on
-// another session is dropped by the server, not buffered, so the switch back
-// alone leaves live panes showing a stale screen — the excursion swallows the
-// very command that caused it and the prompt that followed.
+// reseed repaints every mirrored pane after the switch back.
 func (p *sessionPin) reseed(reg *registry, router *Router, rt roundTrip) {
+	reseedPanes(reg, router, rt, "after session change")
+}
+
+// reseedPanes repaints every mirrored pane from the remote's own screens.
+// Output produced while this control client was elsewhere — on another session,
+// or on no connection at all — is dropped by the server, not buffered, so the
+// panes are showing screens the remote has already moved past: an excursion
+// swallows the very command that caused it and the prompt that followed, and an
+// outage swallows everything that happened during it.
+//
+// One reseed path for both callers, deliberately: reusing PaneSeeds is what
+// keeps the seed-before-output ordering (#233/#412/#417/#430) true.
+func reseedPanes(reg *registry, router *Router, rt roundTrip, reason string) {
 	wins := reg.all()
 	n := 0
 	for _, mw := range wins {
@@ -91,7 +194,7 @@ func (p *sessionPin) reseed(reg *registry, router *Router, rt roundTrip) {
 	}
 	PaneSeeds(rt, ids, func(i int, seed []byte, err error) {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "daemon: reseed %s after session change: %v\n", ids[i], err)
+			fmt.Fprintf(os.Stderr, "daemon: reseed %s %s: %v\n", ids[i], reason, err)
 			return
 		}
 		sinks[i].enqueue(wire.FrameSeed, seed)

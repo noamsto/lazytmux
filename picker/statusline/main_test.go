@@ -250,6 +250,34 @@ func TestRenderLineBridgeHost(t *testing.T) {
 	}
 }
 
+// TestRenderLineBridgeStateDisconnected: a mirror with a dropped control
+// connection appends a red marker after the host badge, additive like
+// @pr_draft on a PR badge — the host badge itself is untouched.
+func TestRenderLineBridgeStateDisconnected(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/panes", 0o755)
+
+	a := args{
+		session: "g6-main", bridgeWin: "1", bridgeHost: "g6", bridgeState: "disconnected",
+		iconSession: "S", iconRemote: "R",
+		thmBg: "#000", thmMauve: "#c6a", thmSubtext0: "#9a8", thmOverlay1: "#777",
+		thmPeach: "#fab", thmRed: "#f00",
+		paneIcon: "I", paneCmd: "zsh",
+	}
+
+	got := renderLine(a, dir, "dark", false, 9000, "")
+	want := "#[align=left,bg=#000]" +
+		"#[fg=#c6a] #[range=left]S g6-main#[norange]  " +
+		"#[fg=#fab]R g6  " +
+		"#[fg=#f00]" + bridgeDisconnectedGlyph + "  " +
+		"  #[fg=#777]" +
+		" #[align=right]" +
+		"#[fg=#9a8]#{p-17:#{=/16/…:#{l:I zsh}}} "
+	if got != want {
+		t.Fatalf("renderLine bridge disconnected\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestPaneSlot(t *testing.T) {
 	got := paneSlot("I", "nvim")
 	want := "#{p-17:#{=/16/…:#{l:I nvim}}}"

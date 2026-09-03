@@ -43,7 +43,7 @@ var volatileFields = []string{
 	"#{@branch}", "#{pane_current_path}", "#{@git_root}",
 	"#{@active_pane_icon}", "#{pane_current_command}", "#{@claude_session_fg}",
 	"#{@crew_name}", "#{@crew_color}",
-	"#{@bridge_win}", "#{@bridge_host}",
+	"#{@bridge_win}", "#{@bridge_host}", "#{@bridge_state}",
 	"#{@bridge_crew_name}", "#{@bridge_crew_color}",
 	"#{@bridge_label_id}", "#{@bridge_label_rest_long}",
 }
@@ -69,9 +69,9 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.branch, a.panePath, a.gitRoot = f[5], f[6], f[7]
 	a.paneIcon, a.paneCmd, a.claudeFg = f[8], f[9], f[10]
 	a.crewName, a.crewColor = f[11], f[12]
-	a.bridgeWin, a.bridgeHost = f[13], f[14]
-	a.bridgeCrewName, a.bridgeCrewColor = f[15], f[16]
-	a.bridgeLabelID, a.bridgeLabelRestLong = f[17], f[18]
+	a.bridgeWin, a.bridgeHost, a.bridgeState = f[13], f[14], f[15]
+	a.bridgeCrewName, a.bridgeCrewColor = f[16], f[17]
+	a.bridgeLabelID, a.bridgeLabelRestLong = f[18], f[19]
 	return f[0] == "1", true
 }
 
@@ -120,7 +120,7 @@ type args struct {
 	branch, panePath, gitRoot                       string
 	paneIcon, paneCmd, claudeFg                     string
 	crewName, crewColor                             string
-	bridgeWin, bridgeHost                           string
+	bridgeWin, bridgeHost, bridgeState              string
 	bridgeCrewName, bridgeCrewColor                 string
 	bridgeLabelID, bridgeLabelRestLong              string
 
@@ -195,6 +195,11 @@ func sessionSegment(a args, prefixActive bool) string {
 		if a.bridgeHost != "" {
 			b.WriteString("#[fg=" + a.thmPeach + "]" + a.iconRemote + " " + a.bridgeHost + "  ")
 		}
+		// Additive, like @pr_draft on a PR badge: names the mirror's own frozen
+		// state without touching the host badge above it.
+		if a.bridgeState != "" {
+			b.WriteString("#[fg=" + a.thmRed + "]" + bridgeDisconnectedGlyph + "  ")
+		}
 		if a.bridgeCrewName != "" {
 			fg := a.bridgeCrewColor
 			if fg == "" {
@@ -239,6 +244,11 @@ func sessionSegment(a args, prefixActive bool) string {
 	}
 	return b.String()
 }
+
+// bridgeDisconnectedGlyph flags a mirror whose control connection dropped: the
+// daemon is retrying, but the panes on screen are frozen, not live — the badge
+// says so before the user mistakes a stale screen for a working one.
+const bridgeDisconnectedGlyph = "󰲛" // nerd: nf-md-lan_disconnect
 
 var wrappedRe = regexp.MustCompile(`^\.(.*)-wrapped$`)
 

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -107,22 +108,36 @@ func main() {
 		*sock = fmt.Sprintf("%s/lztmux-daemon-%d.sock", os.TempDir(), os.Getpid())
 	}
 
-	var ctl *exec.Cmd
+	// newCtlCmd is the transport as a *recipe* the daemon can re-run on every
+	// reconnect, rather than one already-built command. Every branch gets one,
+	// the offline --test-local seam included — that is the seam the reconnect
+	// integration tests drive.
+	var newCtlCmd func() *exec.Cmd
 	var ctlSock string
 	var localTmuxArgv []string
 	if *testLocal {
-		ctl = exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
+		newCtlCmd = func() *exec.Cmd {
+			return exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
+		}
 		localTmuxArgv = []string{"tmux", "-L", *dstSocket}
 	} else {
 		// remoteTmux/localTmux may carry args (e.g. "tmux -L sock" for
 		// tests), so split into argv rather than passing as a single token.
 		tmuxArgv := strings.Fields(*remoteTmux)
 		if *sshCmd == "" {
-			ctl = exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
-				"-C", "attach-session", "-t", *session)...)
+			newCtlCmd = func() *exec.Cmd {
+				return exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
+					"-C", "attach-session", "-t", *session)...)
+			}
 		} else {
+			// Derived from the pid, so it is stable across re-dials — the
+			// NewGraphics closure below captures it, and a per-dial path would
+			// leave the image fetcher pointing at a dead socket after the first
+			// reconnect.
 			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
-			ctl = exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *session, tmuxArgv)...)
+			newCtlCmd = func() *exec.Cmd {
+				return exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *session, tmuxArgv)...)
+			}
 		}
 		localTmuxArgv = strings.Fields(*localTmux)
 	}
@@ -139,37 +154,45 @@ func main() {
 		}
 	}
 
-	stdin, err := ctl.StdinPipe()
-	if err != nil {
-		cleanup()
-		fatal(err)
-	}
-	stdout, err := ctl.StdoutPipe()
-	if err != nil {
-		cleanup()
-		fatal(err)
-	}
-	if err := ctl.Start(); err != nil {
-		cleanup()
-		fatal(err)
+	tr := &transport{}
+	dial := func() (io.ReadWriteCloser, error) {
+		// ControlPersist=no ties the master's lifetime to the ssh process, but a
+		// process killed without catching a signal (the SIGKILL fallback below,
+		// a crash) leaves its ControlPath socket behind — and ControlMaster=auto
+		// meeting a socket it cannot connect to *disables multiplexing* for that
+		// instance rather than replacing it, silently. The reconnect would look
+		// healthy while every image fetch stopped being multiplexed. The path
+		// itself must not move, so unlink it and dial.
+		if ctlSock != "" {
+			os.Remove(ctlSock)
+		}
+		c, err := newChild(newCtlCmd())
+		if err != nil {
+			return nil, err
+		}
+		if err := tr.start(c); err != nil {
+			return nil, err
+		}
+		return c, nil
 	}
 
 	// On SIGTERM/SIGINT, ask the control transport to exit so daemon.Run's
 	// reader hits EOF and its teardown runs (removes the socket + pidfile,
-	// kills the local mirror session). SIGTERM first: ssh can catch it and
-	// unlink its own ControlPath itself, which cleanup() above only guarantees
-	// as a backstop. A bounded fallback to SIGKILL covers a wedged ssh —
-	// Process.Kill() on an already-exited process is a harmless no-op error.
+	// kills the local mirror session). See child.Close for how it is ended.
+	//
+	// stop is closed BEFORE the transport is touched, so the daemon reads the
+	// EOF that follows as a detach rather than as a link failure to retry.
+	// With reconnect, a transport this handler kills EOFs exactly like a
+	// dropped one, so stop is the only thing that tells the daemon "the user
+	// asked to detach" from "the link died" — and during a backoff sleep there
+	// is no transport for the signal to reach at all.
+	stop := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigCh
-		if ctl.Process == nil {
-			return
-		}
-		ctl.Process.Signal(syscall.SIGTERM)
-		time.Sleep(2 * time.Second)
-		ctl.Process.Kill()
+		close(stop)
+		tr.stop()
 	}()
 
 	runLocalTmux := func(args ...string) error {
@@ -209,7 +232,8 @@ func main() {
 	}
 
 	cfg := daemon.Config{
-		Ctl:            rwc{stdout, stdin},
+		Dial:           dial,
+		Shutdown:       stop,
 		SockPath:       *sock,
 		LocalSess:      *localSess,
 		RemoteHost:     *host,
@@ -234,7 +258,7 @@ func main() {
 		},
 	}
 
-	err = daemon.Run(cfg)
+	err := daemon.Run(cfg)
 	cleanup()
 	if err != nil {
 		fatal(err)
@@ -352,12 +376,118 @@ func statusLines(v string) int {
 	return n
 }
 
-// rwc adapts an ssh/tmux subprocess's separate stdout/stdin pipes into the
-// single io.ReadWriteCloser daemon.Config wants: Read from the control
-// stream's stdout, Write+Close its stdin.
-type rwc struct {
-	io.Reader
-	io.WriteCloser
+// transport holds the control-mode child the daemon is currently talking to.
+// The signal handler and the dialer race over it otherwise: the handler is
+// started once and closes over whatever is current, while the dialer replaces
+// the process on every reconnect.
+type transport struct {
+	mu       sync.Mutex
+	ch       *child
+	stopping bool
+}
+
+// start runs c and publishes it as the current transport, atomically against
+// stop. A signal landing between the two would otherwise reach the transport
+// this one replaces — already dead and reaped, so signalling it is a no-op —
+// and the ssh child just started would outlive the daemon, holding the mirror's
+// ControlMaster open. Once stop has run, a start that still wins the lock ends
+// its own child rather than publishing a survivor.
+func (t *transport) start(c *child) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := c.cmd.Start(); err != nil {
+		// No pipes to release: Start closes the parent's ends of the ones it
+		// opened when it fails. And c.Close is not the tool if that ever
+		// changes — it schedules end(), which signals c.cmd.Process, nil until
+		// Start succeeds.
+		return err
+	}
+	t.ch = c
+	if t.stopping {
+		c.Close()
+	}
+	return nil
+}
+
+// stop ends the current transport and bars any later one from surviving. Only
+// the signal handler calls it: stopping means "the user asked to detach", which
+// a child ended because it was superseded or timed out is not — reading one as
+// the other would stop the daemon on a reconnect.
+func (t *transport) stop() {
+	t.mu.Lock()
+	t.stopping = true
+	c := t.ch
+	t.mu.Unlock()
+	if c != nil {
+		c.Close()
+	}
+}
+
+// transportKillGrace is how long a control transport gets to exit on its own
+// after SIGTERM before it is killed.
+const transportKillGrace = 2 * time.Second
+
+// child is one control-transport process as the io.ReadWriteCloser
+// daemon.Config wants: read the control stream off its stdout, write commands
+// to its stdin.
+type child struct {
+	cmd  *exec.Cmd
+	out  io.ReadCloser
+	in   io.WriteCloser
+	once sync.Once
+	// ended is closed once the process has been signalled and reaped.
+	ended chan struct{}
+}
+
+func newChild(cmd *exec.Cmd) (*child, error) {
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	return &child{cmd: cmd, out: out, in: in, ended: make(chan struct{})}, nil
+}
+
+func (c *child) Read(p []byte) (int, error)  { return c.out.Read(p) }
+func (c *child) Write(p []byte) (int, error) { return c.in.Write(p) }
+
+// Close ends this transport for good, and is the whole of what makes closing a
+// connection mean anything. Closing stdin alone does not end one: ssh keeps
+// reading until the REMOTE closes its side, so a far end that accepts the
+// connection and then goes silent leaves the control reader parked forever —
+// which is exactly the case the identity deadline exists for. Closing our own
+// read end is what unparks the reader, and it does so whether or not the
+// process cooperates.
+//
+// Never blocks: the grace window and the reap run on their own goroutine, so
+// the deadline timer, a drop and teardown can each call this and get on with
+// it. Idempotent, because the drop path and teardown both do.
+func (c *child) Close() error {
+	c.once.Do(func() {
+		c.in.Close()
+		c.out.Close()
+		go c.end()
+	})
+	return nil
+}
+
+// end signals the process and reaps it. SIGTERM first: ssh can catch it and
+// unlink its own ControlPath, which main's cleanup only guarantees as a
+// backstop. Kill after the grace window covers a wedged ssh — on an already
+// exited process it reports ErrProcessDone rather than reaching a pid the
+// kernel has since recycled, since os.Process holds a handle, which is also why
+// the ordinary EOF case costs nothing here. Wait is what keeps a daemon that
+// reconnects from leaving a zombie per attempt; it cannot outlast the grace
+// window, since the kill is already scheduled when it starts.
+func (c *child) end() {
+	defer close(c.ended)
+	kill := time.AfterFunc(transportKillGrace, func() { c.cmd.Process.Kill() })
+	defer kill.Stop()
+	c.cmd.Process.Signal(syscall.SIGTERM)
+	c.cmd.Wait()
 }
 
 func fatal(err error) {
