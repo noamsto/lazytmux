@@ -69,3 +69,24 @@ func localZoomed(cfg Config, localWin string) (zoomed, ok bool) {
 	}
 	return strings.TrimSpace(out) == "1", true
 }
+
+// localWindowGone reports that the mirror's local window is affirmatively no
+// longer there. A window leaves by routes this daemon never sees — its last
+// renderer pane exiting, a local kill — and a mirrorWindow holds the dead id
+// indefinitely, so every command a later pass aims at it can only fail (#487).
+//
+// Positive evidence only: an unreadable answer returns false and leaves the
+// mirror alone, since retiring on a transient read would rebuild a healthy
+// window. That rules out testing the error, which is never set here anyway:
+// `display-message -p -t @<dead>` exits 0 with EMPTY output (#152/#169), so the
+// id itself is the only thing that distinguishes gone from alive.
+func localWindowGone(cfg Config, localWin string) bool {
+	if cfg.LocalTmuxOut == nil {
+		return false
+	}
+	out, err := cfg.LocalTmuxOut("display-message", "-p", "-t", localWin, "-F", "#{window_id}")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != localWin
+}

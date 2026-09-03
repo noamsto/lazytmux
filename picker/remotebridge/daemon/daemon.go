@@ -587,7 +587,9 @@ func Run(cfg Config) error {
 		case controlmode.LayoutChange:
 			if len(l.Args) > 0 {
 				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
-					reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt)
+					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
+						retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, l.Args[0])
+					}
 				}
 			}
 		case controlmode.WindowRenamed:
@@ -662,7 +664,9 @@ func Run(cfg Config) error {
 				// A layout intent for a window reconcileWindows just closed has
 				// nothing to reconcile.
 				if mw, ok := reg.byRemoteID(remoteID); ok {
-					reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt)
+					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
+						retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, remoteID)
+					}
 				}
 			}
 		}
@@ -877,6 +881,22 @@ func closeWindow(cfg Config, router *Router, cst *ctlState, reg *registry, cv *c
 		c.Close()
 	}
 	cfg.LocalTmux("kill-window", "-t", mw.localWin)
+}
+
+// retireMirror drops the mirror for a remote window whose LOCAL window is gone,
+// then rebuilds it from the remote's own window list. The remote window is
+// still there — only this side's rendering of it died — so leaving the entry
+// retired would silently lose a window the remote still has.
+//
+// Teardown reuses closeWindow: its trailing kill-window against an
+// already-dead window is a no-op, and every other step (registry, converger,
+// ctl state, sinks, conns) has to happen either way. The rebuild goes through
+// reconcileWindows rather than a create here, so the replacement is made by
+// mirrorNewWindow — the one path that stamps @bridge_win, names the window from
+// the remote's own name, and rolls back a half-built mirror.
+func retireMirror(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip, remoteID string) {
+	closeWindow(cfg, router, cst, reg, cv, remoteID)
+	reconcileWindows(cfg, send, router, waitHellos, cst, reg, cv, rt)
 }
 
 // asyncQueue holds the notifications a reply reader met while awaiting a reply.
