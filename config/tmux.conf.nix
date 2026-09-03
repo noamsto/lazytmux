@@ -729,6 +729,9 @@
     set -g allow-passthrough on
     set -g visual-activity off
 
+    # update-environment: clear stale entries first so source-file is idempotent.
+    # Without this, repeated config reloads duplicate TERM, KITTY_LISTEN_ON, etc.
+    set -gu update-environment
     # Preserve terminal environment variables
     set -ga update-environment TERM
     set -ga update-environment TERM_PROGRAM

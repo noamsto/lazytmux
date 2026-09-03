@@ -414,6 +414,18 @@
               touch $out
             '';
 
+          update-environment-conf-assertions =
+            pkgs.runCommand "update-environment-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              grep -q 'set -gu update-environment' "$CONF"
+              clear=$(grep -n 'set -gu update-environment' "$CONF" | head -1 | cut -d: -f1)
+              first_append=$(grep -n 'set -ga update-environment' "$CONF" | head -1 | cut -d: -f1)
+              [ "$clear" -lt "$first_append" ]
+              touch $out
+            '';
+
           # The float-refit WIRING (#371). tmux bakes a float's percentage
           # geometry into cells at creation and never revisits it, so every
           # float bind must hand its percentages to @float_geom for the
