@@ -771,6 +771,26 @@ bridge_up_failed() {
 	tail -40 "$BATS_TEST_TMPDIR/$1.log" >&3 2>/dev/null || true
 }
 
+# @bridge_state=disconnected is stamped at reattach entry, but a warm
+# --test-local reconnect can clear it within a few ms. Poll tightly so darwin
+# CI catches the transient stamp (100ms sleeps miss it reliably).
+wait_bridge_disconnected() {
+	local tag="$1" log="${2:-}"
+	local state="" i
+	for i in $(seq 1 200); do
+		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
+		[ "$state" = disconnected ] && return 0
+		if [ "$i" -le 50 ]; then
+			sleep 0.01
+		else
+			sleep 0.02
+		fi
+	done
+	printf 'wait_bridge_disconnected(%s): last @bridge_state=%q\n--- daemon log ---\n' "$tag" "$state" >&3
+	[ -n "$log" ] && tail -60 "$log" >&3 2>/dev/null || true
+	return 1
+}
+
 # Regression for the pre-existing reconcile hole M2.3 had to close: layout
 # traversal order means a split of a NON-LAST pane is a mid-list INSERT
 # (measured: %0 %1 %2 split at %0 -> %0 %3 %1 %2), which the old three-case
@@ -2180,13 +2200,7 @@ transport_child() {
 	[ -n "$old_transport" ]
 	kill -9 "$old_transport"
 
-	state=""
-	for _ in $(seq 1 40); do
-		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
-		[ "$state" = disconnected ] && break
-		sleep 0.1
-	done
-	[ "$state" = disconnected ]
+	wait_bridge_disconnected lwo "$BATS_TEST_TMPDIR/lwo.log"
 
 	# The kill lands while there is no stream to report it on.
 	$DST kill-window -t "$doomed"
