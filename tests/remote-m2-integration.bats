@@ -46,6 +46,13 @@ setup() {
 		CTL="$BATS_TEST_TMPDIR/ctl"
 		(cd "$BATS_TEST_DIRNAME/../picker" && go build -o "$CTL" ./remotebridge/cmd/ctl)
 	fi
+	# pane_current_command truncates a long comm to macOS's MAXCOMLEN (15
+	# usable chars) but not Linux's (which reads the full cmdline) — the nix
+	# build's RENDERER is the long store binary name
+	# "lztmux-remote-bridge-renderer", so grepping the literal "renderer"
+	# substring never matches once macOS cuts the pane's reported command
+	# short of it. A prefix this short survives that truncation everywhere.
+	RENDERER_PROBE="$(basename "$RENDERER" | cut -c1-15)"
 
 	$SRC kill-server 2>/dev/null || true
 	$DST kill-server 2>/dev/null || true
@@ -1580,7 +1587,7 @@ m2_pane_gate_failed() {
 	# mirror pane exists.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
 	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
-		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
+		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
 	done
@@ -1671,7 +1678,7 @@ m2_pane_gate_failed() {
 	# remote pane across every mirrored window, same gate as the setup-leg test.
 	want_panes="$($SRC list-panes -s -t rem -F '#{pane_id}' | wc -l)"
 	for _ in $(seq 1 "$((BRIDGE_UP_BUDGET_SECS * 10))"); do
-		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
+		got_panes="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
 	done
