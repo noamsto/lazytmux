@@ -241,6 +241,15 @@ what a reinstalled host looks like, and also what an interception looks like;
 resolving it means comparing the fingerprint out of band and editing
 `known_hosts` yourself.
 
+A host running Tailscale SSH under an ACL rule that requires a periodic
+interactive re-check (`"action": "check"`) shows as
+`<host>  (tailscale check — run: ssh <host>)` and Enter does nothing — this
+is not ssh's own auth prompt, so the `ssh-copy-id`/`ControlMaster` remedy
+above cannot clear it, and it re-arms on the ACL's `checkPeriod` regardless
+of keys or multiplexing. Run `ssh <host>` yourself in a terminal; tailscaled
+prints a login URL there and the session completes once you finish the check
+in a browser.
+
 macOS hosts work as bridge targets too: the launcher finds the server at
 tmux's default `/tmp/tmux-<uid>` socket dir, and cold-starts via
 `launchctl kickstart` of the `org.nix-community.home.tmux-startup` agent
