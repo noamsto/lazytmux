@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
@@ -372,6 +373,153 @@ func TestCarouselSrcValidation(t *testing.T) {
 		if got := string(out); got != tc.want {
 			t.Errorf("src=%q: got %q, want %q", tc.src, got, tc.want)
 		}
+	}
+}
+
+// TestCarouselResolveScriptManifestCheck runs the ACTUAL "carousel" verb
+// command through a real, private tmux server via run-shell — not a bare
+// /bin/sh -c of carouselResolveScript's return value. That distinction is
+// load-bearing: run-shell format-expands its whole argument before /bin/sh
+// ever sees it, collapsing a run of literal '#' characters pairwise (`####`
+// -> `##`, measured against the pinned tmux build), so a script executed
+// directly never exercises that collapse and would silently miss a broken
+// manifest-field extraction underneath it.
+func TestCarouselResolveScriptManifestCheck(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not on PATH")
+	}
+	tests := []struct {
+		name        string
+		hasManifest bool
+	}{
+		{"empty manifest falls back to a visible split", false},
+		{"present manifest launches the carousel, no split", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stubDir := filepath.Join(dir, "bin")
+			if err := os.Mkdir(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			launchLog := filepath.Join(dir, "launch.log")
+			manifest := filepath.Join(dir, "manifest.jsonl")
+			if tc.hasManifest {
+				if err := os.WriteFile(manifest, []byte("{}\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeStub(t, filepath.Join(stubDir, "tmux-claude-images"), `#!/bin/sh
+if [ "$1" = --resolve ]; then
+	printf 'tmux\tkey\t`+manifest+`\n'
+	exit 0
+fi
+echo launched >>"`+launchLog+`"
+`)
+
+			tmux := startIsolatedTmux(t, "PATH="+stubDir+":"+os.Getenv("PATH"))
+
+			paneOut, err := tmux("display-message", "-p", "-t", "w", "#{pane_id}").Output()
+			if err != nil {
+				t.Fatalf("display-message: %v", err)
+			}
+			pane := strings.TrimSpace(string(paneOut))
+
+			cmds, err := verbs["carousel"].build(pane, "@0", "w", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conf := filepath.Join(dir, "cmd.conf")
+			if err := os.WriteFile(conf, []byte(cmds[0]+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// source-file drives the same command grammar (and the same
+			// format-expansion pass) a control-mode client's command would.
+			if out, err := tmux("source-file", conf).CombinedOutput(); err != nil {
+				t.Fatalf("source-file: %v\n%s", err, out)
+			}
+
+			// run-shell -b is asynchronous; poll for its effect (either the
+			// stub's launch marker, or a second, split-window-spawned pane).
+			deadline := time.Now().Add(3 * time.Second)
+			var launched bool
+			var paneCount int
+			for time.Now().Before(deadline) {
+				if b, _ := os.ReadFile(launchLog); len(b) > 0 {
+					launched = true
+				}
+				out, err := tmux("list-panes", "-t", "w").Output()
+				if err == nil {
+					paneCount = len(strings.Split(strings.TrimSpace(string(out)), "\n"))
+				}
+				if launched || paneCount > 1 {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			if tc.hasManifest {
+				if !launched {
+					t.Fatal("tmux-claude-images was never exec'd for a present manifest")
+				}
+				if paneCount > 1 {
+					t.Fatalf("a fallback split was also opened (%d panes) for a present manifest", paneCount)
+				}
+				return
+			}
+			if launched {
+				t.Fatal("tmux-claude-images was exec'd despite an empty manifest")
+			}
+			if paneCount <= 1 {
+				t.Fatal("no fallback split appeared for an empty manifest")
+			}
+			capOut, err := tmux("capture-pane", "-p", "-t", "w.1").Output()
+			if err != nil {
+				t.Fatalf("capture-pane: %v", err)
+			}
+			if !strings.Contains(string(capOut), "no images yet for this pane") {
+				t.Fatalf("fallback split content = %q, want the no-images-yet message", capOut)
+			}
+		})
+	}
+}
+
+func writeStub(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("writeStub %s: %v", path, err)
+	}
+}
+
+// startIsolatedTmux starts a private tmux server whose unix socket path stays
+// within macOS sun_path (104 bytes). Nix-build sandboxes give t.TempDir() a
+// long prefix; a -S path derived from it plus the test name exceeds that
+// limit, while -L with a fixed name under os.MkdirTemp("", "lz") does not.
+func startIsolatedTmux(t *testing.T, extraEnv ...string) func(args ...string) *exec.Cmd {
+	t.Helper()
+	tmpdir, err := os.MkdirTemp("", "lz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpdir) })
+	const socket = "s"
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmpdir)
+	env = append(env, extraEnv...)
+	start := exec.Command("tmux", "-L", socket, "-f", "/dev/null",
+		"new-session", "-d", "-s", "w", "-x", "80", "-y", "24")
+	start.Env = env
+	if out, err := start.CombinedOutput(); err != nil {
+		t.Fatalf("new-session: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		stop := exec.Command("tmux", "-L", socket, "kill-server")
+		stop.Env = env
+		stop.Run()
+	})
+	return func(args ...string) *exec.Cmd {
+		cmd := exec.Command("tmux", append([]string{"-L", socket}, args...)...)
+		cmd.Env = env
+		return cmd
 	}
 }
 
