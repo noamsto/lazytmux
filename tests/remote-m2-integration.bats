@@ -1233,11 +1233,20 @@ remote_pane_of() {
 	# inherits this environment when it starts.
 	stub="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$stub"
+	# carouselResolveScript (ctl.go) probes `tmux-claude-images --resolve` first
+	# — the real script's side-effect-free seam that prints MODE\tKEY\tMANIFEST.
+	# Point it at a real non-empty file so the manifest check passes.
+	manifest="$BATS_TEST_TMPDIR/manifest"
+	echo img >"$manifest"
 	# /bin/sh, not /usr/bin/env bash: the Linux nix build sandbox has no
 	# /usr/bin/env, so an env shebang leaves the stub unexecutable there and the
 	# assertion below fails with an empty capture rather than a wrong one.
 	cat >"$stub/tmux-claude-images" <<-EOF
 		#!/bin/sh
+		if [ "\$1" = --resolve ]; then
+			printf 'tmux\tkey\t%s\n' "$manifest"
+			exit 0
+		fi
 		source="\$TMUX_PANE"
 		printf '%s %s\n' "\$source" "\$AEYE_BRIDGED" >>"$BATS_TEST_TMPDIR/toggled"
 		viewer="\$(tmux list-panes -a -F '#{pane_id} #{@claude_img_src}' 2>>"$BATS_TEST_TMPDIR/stub.err" | awk -v source="\$source" '\$2 == source { print \$1; exit }')"
