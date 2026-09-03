@@ -35,7 +35,7 @@ var errLocalPanesDesynced = errors.New("local panes desynced from the remote ord
 // nothing this pass aims at it can land. The caller owns that recovery — it
 // holds the registry, and the rebuild goes back through reconcileWindows so the
 // replacement is built by the one path that stamps and names a mirror window.
-func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) (retire bool) {
+func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
 	target := remoteWinTarget(cfg, w.remoteID)
 
 	L, remoteActive, zoomed, err := readLayout(rt, target)
@@ -64,7 +64,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 
 		switch {
 		case ops.Reset:
-			if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
+			if err := resetWindow(cfg, w, send, router, waitHellos, cst, cv, rt); err != nil {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 				w.remotePanes = remote
 				return resetLostWindow(cfg, w)
@@ -75,7 +75,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			err := applyPaneOps(cfg, w, ops, L, remote, newRemote, send, router, waitHellos, rt)
 			if errors.Is(err, errLocalPanesDesynced) {
 				fmt.Fprintf(os.Stderr, "daemon: layout-change %s: %v; rebuilding\n", w.remoteID, err)
-				if err := resetWindow(cfg, w, send, router, waitHellos, cst, rt); err != nil {
+				if err := resetWindow(cfg, w, send, router, waitHellos, cst, cv, rt); err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change reset %s: %v\n", w.remoteID, err)
 					w.remotePanes = remote
 					return resetLostWindow(cfg, w)
@@ -339,7 +339,13 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // resetWindow rebuilds w from scratch, for the case where no current pane
 // survives (planPaneOps.Reset). Killing every pane instead would make tmux
 // destroy the mirror window and leave a registry entry pointing at nothing.
-func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, rt roundTrip) error {
+//
+// The SHARED converger, like every other setupWindow caller: this reads
+// cfg.LocalArea() independently of watchResize's own read and writes to the
+// same stream, so a throwaway map lets the two disagree — a stale size written
+// last while the shared record holds the new one, which watchResize then never
+// re-sends. setupWindow's own cv.forget is what makes the reset re-cap.
+func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) error {
 	for _, id := range w.remotePanes {
 		router.Unregister(id)
 		if c := w.conns[id]; c != nil {
@@ -348,7 +354,7 @@ func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router,
 		}
 	}
 	dropMirroredPanes(cfg, w)
-	return setupWindow(cfg, send, router, waitHellos, cst, w, newConverger(), rt)
+	return setupWindow(cfg, send, router, waitHellos, cst, w, cv, rt)
 }
 
 // dropMirroredPanes kills every mirrored pane but the first, which resetWindow

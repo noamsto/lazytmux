@@ -420,7 +420,7 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	cv.need("@2", 100, 30)
 
 	var sent []string
-	send := func(s string) { sent = append(sent, s) }
+	send := func(s string) bool { sent = append(sent, s); return true }
 
 	done := make(chan struct{})
 	go func() { watchResize(area, nudged, reg, cv, send, stop, tick); close(done) }()
@@ -466,6 +466,56 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)
+	}
+}
+
+// TestWatchResizeDoesNotRecordAWriteThatDidNotHappen pins the converger
+// invariant: its recorded size is never ahead of what the remote was actually
+// told. need() records at the moment it returns true, before the write — so a
+// send onto a dead stream would otherwise latch that size and the window would
+// never be re-sent it.
+func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
+	tick := make(chan time.Time)
+	stop := make(chan struct{})
+	nudgeCh := make(chan nudgeResult)
+	sizeCh := make(chan [2]int)
+	nudged := func() (time.Time, bool) { n := <-nudgeCh; return n.t, n.ok }
+	area := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
+
+	reg := newRegistry()
+	reg.add("@1", "@101")
+	cv := newConverger()
+
+	var sent []string
+	send := func(s string) bool { sent = append(sent, s); return false }
+
+	done := make(chan struct{})
+	go func() { watchResize(area, nudged, reg, cv, send, stop, tick); close(done) }()
+
+	// One tick with a fresh touch and a new size: both the client size and the
+	// window's cap are attempted, and both writes report failure.
+	tick <- time.Now()
+	nudgeCh <- nudgeResult{t: time.Now(), ok: true}
+	sizeCh <- [2]int{120, 40}
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchResize did not return after stop was closed")
+	}
+
+	want := []string{ClientSizeCmd(120, 40), ConvergeCmd("@1", 120, 40)}
+	sort.Strings(sent)
+	sort.Strings(want)
+	if !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %v, want %v", sent, want)
+	}
+	if !cv.need("@1", 120, 40) {
+		t.Error("@1's cap was recorded despite a failed write, so the next tick would skip it")
+	}
+	if !cv.need(clientSizeKey, 120, 40) {
+		t.Error("the client size was recorded despite a failed write")
 	}
 }
 
@@ -640,5 +690,29 @@ func TestParseWindowIDRejectsAnIndex(t *testing.T) {
 		if got, err := parseWindowID(in); err == nil {
 			t.Errorf("parseWindowID(%q) = %q, want an error", in, got)
 		}
+	}
+}
+
+// A mirror pane must be opted into unrestricted passthrough at creation. With
+// the global left at `on`, tmux drops a kitty image store aimed at a pane whose
+// window is not the client's current one, and never retransmits it — so a
+// carousel opened by reconcile rather than by the keypress paints chrome around
+// an empty picture (#464). Both creation paths stamp through this function, so
+// asserting it here covers respawn-pane and the mirrored split alike.
+func TestMarkRendererPaneStampsBridgePaneAndPassthrough(t *testing.T) {
+	var calls [][]string
+	cfg := Config{LocalTmux: func(args ...string) error {
+		calls = append(calls, args)
+		return nil
+	}}
+
+	markRendererPane(cfg, "%7", "%42")
+
+	want := [][]string{
+		{"set-option", "-p", "-t", "%7", "@bridge_pane", "%42"},
+		{"set-option", "-p", "-t", "%7", "allow-passthrough", "all"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("markRendererPane calls =\n%q\nwant\n%q", calls, want)
 	}
 }

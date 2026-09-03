@@ -85,22 +85,28 @@ func TestScanCompleteNonGraphicsPassthroughForwardsVerbatim(t *testing.T) {
 	}
 }
 
-// A wrapper holding more than its first sequence is forwarded whole. Decoding
-// only the leading sequence would drop whatever trailed it, and a proxy must
-// never lose bytes it was asked to relay.
-func TestScanWrapperWithTrailingBytesForwardsWhole(t *testing.T) {
+// A wrapper holding a kitty sequence plus trailing bytes is DROPPED, not
+// forwarded whole.
+//
+// This assertion is the inverse of what it used to be. Forwarding preserved
+// every byte the sender asked us to relay, which reads like the conservative
+// choice — but among those bytes is a t=f payload that never passed the
+// localiser, so the terminal is handed a path chosen by the far end. D7 already
+// settles the direction for a store we cannot localise: drop it, because a
+// missing image renders blank and self-heals where a wrong one renders wrong.
+//
+// The cost is that a legitimate multi-sequence wrapper loses its trailer too.
+// Nothing produces one — tmuxPassthrough wraps exactly one sequence — and
+// paying that uniformly beats teaching the scanner which payloads are dangerous.
+func TestScanWrapperWithTrailingBytesIsDropped(t *testing.T) {
 	const in = "\x1bPtmux;\x1b\x1b_Gi=1,a=T;abc\x1b\x1b\\extra\x1b\\"
 	s := NewScanner()
 	cs := s.Feed([]byte(in))
-	var got []byte
-	for _, c := range cs {
-		if c.Seq != nil {
-			t.Fatal("wrapper with trailing bytes decoded as a graphics sequence")
-		}
-		got = append(got, c.Literal...)
+	if len(cs) != 0 {
+		t.Fatalf("emitted %d chunk(s), want the wrapper dropped: %+v", len(cs), cs)
 	}
-	if string(got) != in {
-		t.Fatalf("forwarded %q, want byte-identical %q", got, in)
+	if s.Malformed != 1 {
+		t.Fatalf("Malformed = %d, want 1 — a drop nobody can count is a silent drop", s.Malformed)
 	}
 	if len(s.held) != 0 {
 		t.Fatalf("held %q, want nothing held", s.held)

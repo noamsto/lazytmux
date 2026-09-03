@@ -201,8 +201,10 @@ const resizeFallbackInterval = 30 * time.Second
 // reconcile + re-seed (and the re-fit of the local window to the remote's new
 // size). send is the same mutex-guarded, no-op-when-closed sender the main
 // loop uses; this only injects fire-and-forget commands (their %begin/%end
-// acks are consumed harmlessly by the main loop's own nextLine read).
-func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *registry, cv *converger, send func(string), stop <-chan struct{}, tick <-chan time.Time) {
+// acks are consumed harmlessly by the main loop's own nextLine read) — but it
+// reports whether the line was written, so a send onto a dead stream undoes
+// the converger's record rather than latching a size the remote never got.
+func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
 	var lastNudge time.Time
 	lastCheck := time.Now()
 	for {
@@ -226,12 +228,12 @@ func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *r
 			// The client size first: it governs what a window created after this
 			// point is born at, while the per-window caps below govern the ones
 			// that already exist (#449).
-			if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) {
-				send(ClientSizeCmd(w, h))
+			if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !send(ClientSizeCmd(w, h)) {
+				cv.unrecord(clientSizeKey, w, h)
 			}
 			for _, remoteID := range reg.remoteIDs() {
-				if cv.need(remoteID, w, h) {
-					send(ConvergeCmd(remoteID, w, h))
+				if cv.need(remoteID, w, h) && !send(ConvergeCmd(remoteID, w, h)) {
+					cv.unrecord(remoteID, w, h)
 				}
 			}
 		}
@@ -381,8 +383,9 @@ func newRoundTrip(reader lineReader, router *Router, async *asyncQueue, st *stre
 func Run(cfg Config) error {
 	pump := startCtlPump(controlmode.NewReader(cfg.Ctl))
 	st := newStream(cfg.Ctl)
-	// send is the fire-and-forget form the mirror paths use; the ctl path takes
-	// st.send directly, since it has to report whether the line was written.
+	// send is the fire-and-forget form the mirror paths use; the ctl and resize
+	// paths take st.send directly, since they act on whether the line was
+	// written.
 	send := func(s string) { st.send(s) }
 
 	router := NewRouter()
@@ -394,9 +397,12 @@ func Run(cfg Config) error {
 
 	// Before anything else the remote might act on: give this control client a
 	// size, so a window created on the remote is born at the local client's
-	// size instead of tmux's 80-column control-client default (#449).
-	if w, h := cfg.LocalArea(); w > 0 && h > 0 && cv.need(clientSizeKey, w, h) {
-		st.send(ClientSizeCmd(w, h))
+	// size instead of tmux's 80-column control-client default (#449). watchResize
+	// re-sends this slot only on a CHANGE, so a lost write here has nothing to
+	// correct it — every window created afterwards is born at the default —
+	// which is why the record is undone when the write did not happen.
+	if w, h := cfg.LocalArea(); w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !st.send(ClientSizeCmd(w, h)) {
+		cv.unrecord(clientSizeKey, w, h)
 	}
 
 	// The implicit attach reply needs no draining: it is flagged 0, so the reply
@@ -564,7 +570,7 @@ func Run(cfg Config) error {
 	ticker := time.NewTicker(resizePollInterval)
 	go func() {
 		defer ticker.Stop()
-		watchResize(cfg.LocalArea, nudged, reg, cv, send, stopWatch, ticker.C)
+		watchResize(cfg.LocalArea, nudged, reg, cv, st.send, stopWatch, ticker.C)
 	}()
 
 	// Ship the remote's agent state into the local claude-status tree.
@@ -581,7 +587,7 @@ func Run(cfg Config) error {
 		case controlmode.LayoutChange:
 			if len(l.Args) > 0 {
 				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
-					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, rt) {
+					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
 						retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, l.Args[0])
 					}
 				}
@@ -658,7 +664,7 @@ func Run(cfg Config) error {
 				// A layout intent for a window reconcileWindows just closed has
 				// nothing to reconcile.
 				if mw, ok := reg.byRemoteID(remoteID); ok {
-					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, rt) {
+					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
 						retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, remoteID)
 					}
 				}
@@ -713,9 +719,22 @@ func Run(cfg Config) error {
 // layout.
 func setupWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, mw *mirrorWindow, cv *converger, rt roundTrip) error {
 	// Cap the remote window at what the local clients can show before reading
-	// its layout, so the layout that gets mirrored is the converged one.
+	// its layout, so the layout that gets mirrored is the converged one. The
+	// opt-out first, and unconditionally: it is a property of the window's whole
+	// life, not of a size, so a re-setup of a window whose size the converger
+	// already records must still assert it.
+	send(AggressiveResizeOffCmd(mw.remoteID))
+	// reg.add publishes the window before this runs, so watchResize can already
+	// have capped it — a cap tmux discarded, since the opt-out above had not
+	// landed yet, and which cv.need would then read as asserted. Changing a
+	// window's sizing eligibility invalidates any record made against it by
+	// definition: whatever was recorded was recorded against a window that could
+	// not accept it.
+	cv.forget(mw.remoteID)
 	if w, h := cfg.LocalArea(); cv.need(mw.remoteID, w, h) {
-		one(rt, ConvergeCmd(mw.remoteID, w, h))
+		if _, ok := one(rt, ConvergeCmd(mw.remoteID, w, h)); !ok {
+			cv.unrecord(mw.remoteID, w, h)
+		}
 	}
 
 	L, _, _, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
@@ -1161,9 +1180,29 @@ func rendererSpawnArgs(cfg Config, remotePane string) []string {
 }
 
 // markRendererPane stamps the reverse mapping a keybind reads to reach the
-// remote pane this local one renders.
+// remote pane this local one renders, and opts the pane into unrestricted
+// passthrough.
+//
+// allow-passthrough is per pane, and the global stays `on`: with `on`, tmux
+// hands a passthrough sequence to a client only while the pane's window is that
+// client's current one, and a kitty image store dropped that way is gone —
+// tmux stores nothing and never retransmits, while the placeholders naming the
+// image are grid text and redraw without it, so the pane paints chrome around
+// an empty picture. A mirror carousel would trip that on nearly every open,
+// since the split is created by reconcile rather than by the keypress.
+//
+// `all` here rather than globally because a mirror pane replays a remote host's
+// bytes verbatim: the widened reach is confined to the panes that already carry
+// remote output by design (#464). It does not help a client attached to a
+// *different* session — `all` still requires session_has — which is why #465
+// and #468 exist.
+//
+// Both creation paths reach this function (respawn-pane and the mirrored
+// split), and pane options survive respawn-pane -k, select-layout and
+// swap-pane, so this is the only place either option needs writing.
 func markRendererPane(cfg Config, target, remotePane string) {
 	cfg.LocalTmux("set-option", "-p", "-t", target, "@bridge_pane", remotePane)
+	cfg.LocalTmux("set-option", "-p", "-t", target, "allow-passthrough", "all")
 }
 
 // acceptConns accepts connections on l until it's closed and dispatches each on

@@ -333,10 +333,16 @@ local_sess="$base_local_sess"
 # host/session bridge. @bridge_session makes the choice unambiguous even when
 # either side contains a hyphen; the host-only fallback keeps old mirrors
 # reusable while they are upgraded.
+#
+# show-options does not accept the "=" exact-match prefix has-session takes one
+# line up: it answers "no such session", which -q turns into an empty string
+# indistinguishable from an unset option — so these reads use the bare name
+# (#474). has-session has already proved the exact name exists, and an exact
+# match beats a prefix match, so the bare form cannot resolve to a sibling.
 collision=0
 while tmux has-session -t "=$local_sess" 2>/dev/null; do
-	existing_bridge_host="$(tmux show-options -t "=$local_sess" -qv @bridge_host 2>/dev/null || true)"
-	existing_bridge_session="$(tmux show-options -t "=$local_sess" -qv @bridge_session 2>/dev/null || true)"
+	existing_bridge_host="$(tmux show-options -t "$local_sess" -qv @bridge_host 2>/dev/null || true)"
+	existing_bridge_session="$(tmux show-options -t "$local_sess" -qv @bridge_session 2>/dev/null || true)"
 	if [[ $existing_bridge_host == "$host" && $existing_bridge_session == "$sess" ]] ||
 		[[ $existing_bridge_host == "$host" && -z $existing_bridge_session && $local_sess == "$base_local_sess" ]]; then
 		break

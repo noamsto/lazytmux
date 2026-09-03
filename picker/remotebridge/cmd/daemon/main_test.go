@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,5 +83,45 @@ func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 	// discriminating assertion.
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("embedded #(...) job executed — format-layer injection not blocked")
+	}
+}
+
+// The keepalive options are the whole of #471: without them ssh never notices a
+// host that died without closing the connection, so the control stream never
+// reaches EOF and the daemon never runs the teardown it already has. Nothing
+// else in the suite would fail if they were dropped, hence this test.
+func TestSSHControlArgsCarryKeepalives(t *testing.T) {
+	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "xterm-kitty", "lazytmux",
+		[]string{"tmux"})
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"ServerAliveInterval=15",
+		"ServerAliveCountMax=4",
+		"ControlMaster=auto",
+		"ControlPath=/tmp/ctl.sock",
+		"ControlPersist=no",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %q", want, joined)
+		}
+	}
+
+	// The keepalive options must precede the host: ssh stops parsing options at
+	// the first non-option argument, so one placed after it would be handed to
+	// the remote shell as a command word instead.
+	hostAt := slices.Index(args, "tp-g6")
+	if hostAt < 0 {
+		t.Fatalf("host missing from %q", joined)
+	}
+	for i, a := range args {
+		if strings.HasPrefix(a, "ServerAlive") && i > hostAt {
+			t.Errorf("%s sits after the host at %d; ssh would pass it to the remote", a, hostAt)
+		}
+	}
+
+	// The session is the attach target and must stay one token even with spaces.
+	if got := args[len(args)-1]; got != shellQuote("lazytmux") {
+		t.Errorf("last arg = %q, want the shell-quoted session", got)
 	}
 }

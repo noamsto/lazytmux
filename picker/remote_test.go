@@ -949,17 +949,66 @@ func TestHostColorFunc(t *testing.T) {
 	for _, p := range hostPalette {
 		palette[ansiFg(p[1])] = true
 	}
-	for _, host := range []string{"tp-g6", "lab", "mbp", "g5"} {
-		got := hostColor(host)
+	inPalette := func(t *testing.T, host, got string) {
+		t.Helper()
 		if !palette[got] {
 			t.Errorf("%s got %q, which is not in the palette", host, got)
 		}
+	}
+	distinctColors := func(t *testing.T, hosts []string, colorFn func(string) string) {
+		t.Helper()
+		seen := make(map[string]string)
+		for _, h := range hosts {
+			c := colorFn(h)
+			inPalette(t, h, c)
+			if other, ok := seen[c]; ok {
+				t.Errorf("%s and %s both got color %q", h, other, c)
+			}
+			seen[c] = h
+		}
+	}
+	for _, host := range []string{"tp-g6", "lab", "mbp", "g5"} {
+		got := hostColor(host)
+		inPalette(t, host, got)
 		if again := hostColor(host); again != got {
 			t.Errorf("%s got %q then %q", host, got, again)
 		}
 		if fresh := hostColorFunc(nil)(host); fresh != got {
 			t.Errorf("%s got %q, a fresh func gave %q", host, got, fresh)
 		}
+	}
+
+	opts3 := map[string]string{"@remote_bridge_hosts": "tp-g6 mbp halo"}
+	distinctColors(t, []string{"tp-g6", "mbp", "halo"}, hostColorFunc(opts3))
+
+	opts4 := map[string]string{"@remote_bridge_hosts": "tp-g6 mbp halo g5"}
+	color4 := hostColorFunc(opts4)
+	distinctColors(t, []string{"tp-g6", "mbp", "halo", "g5"}, color4)
+
+	a := hostColorFunc(opts3)
+	b := hostColorFunc(opts3)
+	for _, h := range []string{"tp-g6", "mbp", "halo"} {
+		if a(h) != b(h) {
+			t.Errorf("%s: first call %q, second call %q", h, a(h), b(h))
+		}
+	}
+
+	// tp-g6's preferred slot is unique; removing it must not recolour mbp/halo/g5.
+	reduced := map[string]string{"@remote_bridge_hosts": "mbp halo g5"}
+	afterRemove := hostColorFunc(reduced)
+	for _, h := range []string{"mbp", "halo", "g5"} {
+		if color4(h) != afterRemove(h) {
+			t.Errorf("removing tp-g6 changed %s: was %q, now %q", h, color4(h), afterRemove(h))
+		}
+	}
+
+	inPalette(t, "unknown-host", hostColorFunc(opts3)("unknown-host"))
+
+	manyHosts := []string{"h1", "h2", "h3", "h4", "h5", "h6", "h7"}
+	manyOpts := map[string]string{"@remote_bridge_hosts": strings.Join(manyHosts, " ")}
+	manyFn := hostColorFunc(manyOpts)
+	for _, h := range manyHosts {
+		inPalette(t, h, manyFn(h))
 	}
 }
 

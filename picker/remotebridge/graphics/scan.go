@@ -31,7 +31,15 @@ type Chunk struct {
 
 // Scanner splits a pane's byte stream into Chunks across successive Feed calls,
 // holding an incomplete trailing sequence until the rest arrives.
-type Scanner struct{ held []byte }
+//
+// Malformed counts kitty sequences dropped because they could not be decoded
+// whole (dropMalformed). Exported so the proxy can report them: a drop emits no
+// chunk at all, and a security-relevant one nobody can observe is how a bridge
+// failure turns into an afternoon of guessing.
+type Scanner struct {
+	held      []byte
+	Malformed int
+}
 
 func NewScanner() *Scanner { return &Scanner{} }
 
@@ -72,8 +80,12 @@ func (s *Scanner) Feed(p []byte) []Chunk {
 			}
 			s.held = append([]byte(nil), buf...)
 			return out
-		case drop:
+		case drop == dropSixel:
 			// Complete sixel (bare or passthrough-wrapped): consume, emit nothing.
+		case drop == dropMalformed:
+			// Ours, but not decodable whole — consume and emit nothing rather
+			// than forward a store the localiser never saw (see decodeSeq).
+			s.Malformed++
 		case seq == nil:
 			// A complete passthrough carrying something else (OSC 52, …).
 			// Forward it verbatim: it is already wrapped for one tmux layer,

@@ -54,7 +54,7 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 			return "%l3 0\n", nil
 		},
 	}
-	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), rt)
+	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
 	// The resize lands first (dims are pushed right after select-layout), then
 	// the repaint. Both matter, and the order is the point: a seed sized for the

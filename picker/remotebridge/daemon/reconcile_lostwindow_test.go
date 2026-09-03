@@ -83,7 +83,7 @@ func TestReconcileLayoutReportsRetireWhenTheWindowIsGone(t *testing.T) {
 		},
 	}
 
-	if retire := reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), rt); !retire {
+	if retire := reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt); !retire {
 		t.Fatal("reconcileLayout retire = false, want true so the caller rebuilds the mirror")
 	}
 }

@@ -33,7 +33,15 @@ func New(loc Localizer, logf func(format string, args ...any)) *Proxy {
 // Filter returns the bytes to forward to the renderer. An incomplete trailing
 // sequence is held until the next call.
 func (p *Proxy) Filter(data []byte) []byte {
+	before := p.sc.Malformed
 	chunks := Coalesce(p.sc.Feed(data))
+	if n := p.sc.Malformed - before; n > 0 {
+		// Never reaches the per-sequence log below, because a scanner drop
+		// yields no chunk at all: this is the scanner refusing to forward a
+		// kitty sequence it could not decode whole. No legitimate sender emits
+		// one, so it is worth a line.
+		p.logf("graphics: dropped %d undecodable kitty sequence(s)", n)
+	}
 	var out []byte
 	for _, c := range chunks {
 		if c.Seq == nil {
