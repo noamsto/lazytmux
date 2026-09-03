@@ -407,6 +407,12 @@ sorted_dims() {
 	done
 	if [ "$dims" != "120x40" ]; then
 		echo "resize converge timeout after ${RESIZE_CONVERGE_BUDGET_SECS}s: wanted 120x40, got ${dims:-empty}" >&3
+		# The daemon log is the only witness to why the watcher never pushed;
+		# without it a platform-specific failure here is undiagnosable from CI.
+		echo "--- local: $($DST display-message -p -t host-sess:1 -F '#{window_width}x#{window_height}' 2>&1)" >&3
+		echo "--- daemon alive: $(kill -0 "$daemon_pid" 2>/dev/null && echo yes || echo no)" >&3
+		echo "--- dz.log ---" >&3
+		sed -n '1,60p' "$BATS_TEST_TMPDIR/dz.log" >&3 2>&1 || true
 		kill "$daemon_pid" 2>/dev/null || true
 		wait "$daemon_pid" 2>/dev/null || true
 		return 1
