@@ -34,21 +34,23 @@ type listItem struct {
 	session     string // owning session name (for kill)
 	groupKey    string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
-	bridgeHost      string // @bridge_host — set when this session mirrors a remote host
-	bridgePane      string // window row: @bridge_pane — the remote pane whose window this mirrors
-	bridgeSock      string // window row: @bridge_sock — ctl socket of the daemon mirroring it
-	hasActiveAgent  bool   // used for --agent filter
-	isScratch       bool   // scratch-* session
-	createPath      string // zoxide suggestion: dir to create a session at ("" = normal row)
-	createName      string // zoxide suggestion: derived session name
-	isRemoteRow     bool   // belongs to the Remote section (set even when unselectable)
-	remoteHost      string // remote bridge row: ssh host for lztmux-remote-open
-	remoteSess      string // remote bridge row: optional remote session name
-	displayEnd      string // remote session row: display with the closing tree glyph
-	plainEnd        string // remote session row: plain with the closing tree glyph
-	remoteRestore   bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
-	remoteNeedsAuth bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs lztmux-remote-auth
-	remoteInert     bool   // remote host row: host key changed — Enter must refuse to act, never offer to connect
+	bridgeHost           string // @bridge_host — set when this session mirrors a remote host
+	bridgePane           string // window row: @bridge_pane — the remote pane whose window this mirrors
+	bridgeSock           string // window row: @bridge_sock — ctl socket of the daemon mirroring it
+	hasActiveAgent       bool   // used for --agent filter
+	isScratch            bool   // scratch-* session
+	createPath           string // zoxide suggestion: dir to create a session at ("" = normal row)
+	createName           string // zoxide suggestion: derived session name
+	isRemoteRow          bool   // belongs to the Remote section (set even when unselectable)
+	remoteHost           string // remote bridge row: ssh host for lztmux-remote-open
+	remoteSess           string // remote bridge row: optional remote session name
+	displayEnd           string // remote session row: display with the closing tree glyph
+	plainEnd             string // remote session row: plain with the closing tree glyph
+	remoteRestore        bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
+	remoteNeedsAuth      bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs lztmux-remote-auth
+	remoteInert          bool   // remote host row: host key changed — Enter must refuse to act, never offer to connect
+	remoteTailscaleCheck bool   // remote host row: a Tailscale ACL "check" blocked the probe — Enter must refuse to act, like remoteInert; lztmux-remote-auth cannot clear this
+	remoteTailscaleURL   string // remote host row: the login URL captured from the probe's stdout, if any — supplementary only, may be stale
 }
 
 // pickerMode selects which renderer draws the body. One model, three
@@ -1212,6 +1214,16 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 			m.statusMsg = "host key changed for " + item.remoteHost + " — verify the fingerprint, then update known_hosts by hand"
 			return m, nil
 		}
+		// A Tailscale ACL "check" re-arms on its own checkPeriod regardless of
+		// keys or multiplexing — lztmux-remote-auth's ssh-copy-id/ControlMaster
+		// flow can't clear it, so Enter must not pretend it can (#486). Same
+		// refuse-to-act shape as remoteInert; note that resolveEmitPick's emit-mode
+		// path doesn't consult this flag either, same pre-existing gap remoteInert
+		// already has (out of scope here).
+		if item.remoteTailscaleCheck {
+			m.statusMsg = "tailscale check required for " + item.remoteHost + " — run: ssh " + item.remoteHost
+			return m, nil
+		}
 		// ssh needs a terminal to ask its question and the picker is holding the
 		// only one. ExecProcess releases the popup's pty for the duration, so
 		// ssh prompts for itself and the secret never passes through this
@@ -1609,6 +1621,7 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 	if item.remoteHost != "" {
 		host, sess := item.remoteHost, item.remoteSess
 		inert, needsAuth := item.remoteInert, item.remoteNeedsAuth
+		tailscaleCheck, tailscaleURL := item.remoteTailscaleCheck, item.remoteTailscaleURL
 		return func() tea.Msg {
 			var msg string
 			switch {
@@ -1618,6 +1631,15 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 					"\nreinstalled host looks like — and also what an interception looks" +
 					"\nlike. Compare the fingerprint out of band, then fix known_hosts by" +
 					"\nhand. Enter does nothing here."
+			case tailscaleCheck:
+				msg = "remote bridge → " + host +
+					"\n\nA Tailscale ACL check is blocking this host, not ssh auth —" +
+					"\nlztmux-remote-auth's remedy can't clear it. Enter does nothing" +
+					"\nhere.\n\nRun this yourself in a terminal:\n\n  ssh " + host
+				if tailscaleURL != "" {
+					msg += "\n\n(last-seen login URL, may be stale — the probe that" +
+						"\ncaptured it already timed out):\n" + tailscaleURL
+				}
 			case needsAuth:
 				msg = "remote bridge → " + host +
 					"\n\nEnter runs lztmux-remote-auth: ssh takes this popup and asks for" +

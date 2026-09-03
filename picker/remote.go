@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +74,7 @@ var (
 	errRemoteNoServer       = errors.New("remote tmux server not running")
 	errRemoteNeedsAuth      = errors.New("remote needs interactive authentication")
 	errRemoteHostKeyChanged = errors.New("remote host key changed")
+	errRemoteTailscaleCheck = errors.New("remote requires a Tailscale SSH check")
 )
 
 type remoteProbeState int
@@ -83,6 +85,7 @@ const (
 	remoteProbeUnreachable
 	remoteProbeNeedsAuth
 	remoteProbeHostKeyChanged
+	remoteProbeTailscaleCheck
 )
 
 // Tree prefixes for a host's session rows; markRemoteTreeEnds decides which
@@ -317,6 +320,8 @@ func remoteSessionsForHost(host string, bridges map[string]bool, probe func(stri
 			return nil, remoteProbeNeedsAuth
 		case errors.Is(err, errRemoteHostKeyChanged):
 			return nil, remoteProbeHostKeyChanged
+		case errors.Is(err, errRemoteTailscaleCheck):
+			return nil, remoteProbeTailscaleCheck
 		}
 		return nil, remoteProbeUnreachable
 	}
@@ -363,14 +368,51 @@ const hostKeyChangedPattern = "REMOTE HOST IDENTIFICATION HAS CHANGED"
 // authFailurePatterns and offer to connect to a host ssh has already refused.
 const revokedHostKeyPattern = "REVOKED HOST KEY DETECTED"
 
+// tailscaleCheckPattern is Tailscale SSH's own banner when the peer's ACL
+// rule requires an interactive re-check (`action: "check"`). It arrives on
+// STDOUT over the already-established ssh session, not through ssh's own
+// auth flow, and blocks until the check clears — which is why the probe
+// always exhausts remoteProbeTimeout instead of exiting 255 (#486).
+const tailscaleCheckPattern = "Tailscale SSH requires an additional check"
+
+// tailscaleCheckURLPattern extracts the per-attempt login URL tailscaled
+// prints on the line after tailscaleCheckPattern (e.g. "# To authenticate,
+// visit: https://login.tailscale.com/a/xyz"). Restricted to a URL-safe
+// character class and capped in length deliberately: this is
+// remote-controlled stdout, and an unrestricted \S capture matches ESC
+// (0x1B) — the remote-row preview is not run through stripStringEscapes,
+// so an uncapped capture could carry ANSI into a row fitVisibleWidth
+// accounts for in visible cells.
+var tailscaleCheckURLPattern = regexp.MustCompile(`To authenticate, visit:\s*([A-Za-z0-9:/_.\-]{1,200})`)
+
+// detectTailscaleCheck reports whether stdout carries tailscaled's "check"
+// banner and, if so, the login URL it printed (empty if the banner's shape
+// ever changes upstream and the URL line isn't found).
+func detectTailscaleCheck(stdout string) (url string, ok bool) {
+	if !strings.Contains(stdout, tailscaleCheckPattern) {
+		return "", false
+	}
+	if m := tailscaleCheckURLPattern.FindStringSubmatch(stdout); len(m) == 2 {
+		return m[1], true
+	}
+	return "", true
+}
+
 // classifyProbeErr decides which failure a non-zero probe was. ssh exits 255
 // when it could not reach the host; any other status is the remote command's
 // own, so the host answered and only its tmux server is missing (#266). Within
 // 255, stderr distinguishes a host that merely wants an interactive answer from
 // one that is genuinely down (#357) — an unrecognised 255 stays unreachable, so
-// being wrong costs a stale label rather than a pointless password prompt.
-func classifyProbeErr(err error, stderr string, timedOut bool) error {
+// being wrong costs a stale label rather than a pointless password prompt. The
+// timeout branch also inspects stdout: a Tailscale SSH "check" host is killed
+// by the probe's own deadline rather than exiting 255, but tailscaled's check
+// banner still arrives on stdout before the process is killed, so a killed
+// probe's stdout is still usable evidence (#486).
+func classifyProbeErr(err error, stdout, stderr string, timedOut bool) error {
 	if timedOut {
+		if url, ok := detectTailscaleCheck(stdout); ok {
+			return &tailscaleCheckErr{url: url}
+		}
 		return fmt.Errorf("%w: probe timed out", errRemoteUnreachable)
 	}
 	var exitErr *exec.ExitError
@@ -386,6 +428,35 @@ func classifyProbeErr(err error, stderr string, timedOut bool) error {
 		}
 	}
 	return fmt.Errorf("%w: %w", errRemoteUnreachable, err)
+}
+
+// tailscaleCheckErr carries the login URL classifyProbeErr captured for a
+// Tailscale SSH "check" host. A typed error rather than string-encoding the
+// URL into the message (as the other classifyProbeErr branches do, where
+// there is no payload to carry) — tailscaleCheckURL recovers it via
+// errors.As, so a future change to this file's %w-wrapping conventions can't
+// silently break URL recovery.
+type tailscaleCheckErr struct {
+	url string
+}
+
+func (e *tailscaleCheckErr) Error() string {
+	if e.url == "" {
+		return errRemoteTailscaleCheck.Error()
+	}
+	return errRemoteTailscaleCheck.Error() + ": " + e.url
+}
+
+func (e *tailscaleCheckErr) Unwrap() error { return errRemoteTailscaleCheck }
+
+// tailscaleCheckURL recovers the login URL classifyProbeErr captured for a
+// Tailscale SSH "check" host, or "" if err isn't that state or carried none.
+func tailscaleCheckURL(err error) string {
+	var e *tailscaleCheckErr
+	if errors.As(err, &e) {
+		return e.url
+	}
+	return ""
 }
 
 // remoteAuthStartFailure classifies the tea.ExecProcess callback error for the
@@ -425,7 +496,7 @@ func sshListRemoteSessions(host string) (remoteProbeResult, error) {
 	err := cmd.Run()
 	parsed := parseRemoteProbeOutput(stdout.String())
 	if err != nil {
-		return parsed, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
+		return parsed, classifyProbeErr(err, stdout.String(), stderr.String(), ctx.Err() != nil)
 	}
 	return parsed, nil
 }
@@ -569,7 +640,7 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return remuxManifest{}, classifyProbeErr(err, stderr.String(), ctx.Err() != nil)
+		return remuxManifest{}, classifyProbeErr(err, stdout.String(), stderr.String(), ctx.Err() != nil)
 	}
 	return restorableFromProbeOutput(stdout.String())
 }
@@ -818,6 +889,7 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 		restorable      []remuxManifestSession
 		manifestSavedAt int64
 		drop            bool
+		tailscaleURL    string
 	}
 	results := make([]hostResult, len(hosts))
 	var wg sync.WaitGroup
@@ -841,6 +913,9 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 				return result, nil
 			})
 			res := hostResult{host: h, sess: sess, state: state}
+			if state == remoteProbeTailscaleCheck {
+				res.tailscaleURL = tailscaleCheckURL(err)
+			}
 			if state == remoteProbeNoServer {
 				if m, err := restoreProbe(h); err == nil && len(m.Sessions) > 0 {
 					res.restorable = m.Sessions
@@ -872,6 +947,12 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 			note = "(auth needed — Enter to connect)"
 		case remoteProbeHostKeyChanged:
 			note = "(host key changed — verify manually)"
+		case remoteProbeTailscaleCheck:
+			// Not ssh auth — tailscaled intercepts and blocks on the remote's ACL
+			// check, which lztmux-remote-auth's ssh-copy-id/ControlMaster flow
+			// can't clear regardless of keys or multiplexing (#486). The one
+			// remedy that reliably works is running ssh interactively yourself.
+			note = "(tailscale check — run: ssh " + r.host + ")"
 		case remoteProbeNoServer:
 			// The launcher cold-starts the host's own startup session (#287).
 			// The host row itself never restores — it carries no
@@ -890,6 +971,9 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 			hostRow.remoteNeedsAuth = true
 		case remoteProbeHostKeyChanged:
 			hostRow.remoteInert = true
+		case remoteProbeTailscaleCheck:
+			hostRow.remoteTailscaleCheck = true
+			hostRow.remoteTailscaleURL = r.tailscaleURL
 		}
 		items = append(items, hostRow)
 		cH := hostColor(r.host)
