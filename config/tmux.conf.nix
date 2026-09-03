@@ -309,6 +309,7 @@
   # else branch — a regression in normal keybind behavior would defeat the whole
   # point of the bridge (zero blast radius on the human's live session).
   bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}";
+  # @bridge_sock is always in --sock= form, never word-initial; bridgeGate guarantees it is non-empty.
   bridgeCtl = "${picker-bridge-ctl-bin} --display-error=#{q:client_name} --sock=#{q:@bridge_sock}";
 
   # A mirror window's own @crew_*/@pr_* describe the launcher's repo; the daemon
@@ -663,6 +664,7 @@
   pluginConfigs = ''
     # catppuccin theme
     # Detect theme from state file on first load (theme-toggle sets flavor before re-source)
+    # The x-prefix keeps @catppuccin_flavor non-word-initial and safe when empty.
     if-shell '[ x#{q:@catppuccin_flavor} = x ]' \
       'if-shell "grep -q light \"$HOME/.local/state/theme-state.json\" 2>/dev/null" \
         "set -g @catppuccin_flavor latte" \
@@ -727,6 +729,9 @@
     set -g allow-passthrough on
     set -g visual-activity off
 
+    # update-environment: clear stale entries first so source-file is idempotent.
+    # Without this, repeated config reloads duplicate TERM, KITTY_LISTEN_ON, etc.
+    set -gu update-environment
     # Preserve terminal environment variables
     set -ga update-environment TERM
     set -ga update-environment TERM_PROGRAM
@@ -802,15 +807,16 @@
     # remote pane, so the remote program keeps rendering at its old size and
     # the rows gained are dead space.
     bind z if-shell -F '${bridgeGate}' { run-shell "${bridgeCtl} zoom #{q:@bridge_pane}" } { resize-pane -Z }
+    # client_name is tty-derived (never ~-initial); conditionals/--display-error= make empty values harmless.
     # #{q:} and NOT \"...\", as at client-attached[50]. Bare #{q:client_name}
     # would be zero words when no client exists, sliding the session name into
     # --client's slot; #{?...} emits the flag and its value together or neither,
     # which is what this script's `$1 == --client` parsing needs (no = form).
-    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad #{?client_name,--client #{q:client_name},} #{q:session_name}'
+    bind S run-shell '${script.tmux-scratchpad}/bin/tmux-scratchpad #{?client_name,--client #{q:client_name},} #{qs:session_name}'
     ${carouselBind}
 
     # Yank pane's current working directory to system clipboard
-    bind Y run-shell 'tmux display-message -p #{q:pane_current_path} | wl-copy'
+    bind Y run-shell 'tmux display-message -p #{qs:pane_current_path} | wl-copy'
 
     # Resize panes. In a mirror window the resize lands on the remote pane and the
     # mirror re-fits from the remote's new layout; -r still repeats.
@@ -849,8 +855,8 @@
     # the reflowed multi-line window grid (no-op when there is no row that way).
     bind -n M-H previous-window
     bind -n M-L next-window
-    bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{q:session_name} #{q:window_index} #{q:@window_per}'
-    bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{q:session_name} #{q:window_index} #{q:@window_per}'
+    bind -n M-J run-shell '${script.tmux-window-nav}/bin/tmux-window-nav down #{qs:session_name} #{q:window_index} #{q:@window_per}'
+    bind -n M-K run-shell '${script.tmux-window-nav}/bin/tmux-window-nav up #{qs:session_name} #{q:window_index} #{q:@window_per}'
 
     # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
@@ -924,7 +930,7 @@
     # In a mirror window the guard would be reading the wrong process — a mirror
     # pane runs the renderer, not the remote workload — so a bridge kill always
     # confirms, naming the remote pane, then kills it on the remote.
-    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}#{?@bridge_proc, (#{@bridge_proc}),} on #{@bridge_host}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{q:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
+    bind-key x if-shell -F '${bridgeGate}' { confirm-before -p "kill remote pane #{@bridge_pane}#{?@bridge_proc, (#{@bridge_proc}),} on #{@bridge_host}? (y/n)" { run-shell "${bridgeCtl} kill-pane #{q:@bridge_pane}" } } { if-shell '${script.tmux-kill-pane-guard}/bin/tmux-kill-pane-guard #{q:pane_id} #{qs:pane_current_command}' kill-pane 'confirm-before -p "kill-pane #P (#{pane_current_command})? (y/n)" kill-pane' }
     bind-key & if-shell -F '${bridgeGate}' { confirm-before -p "kill remote window #{@window_bridge_name}? (y/n)" { run-shell "${bridgeCtl} kill-window #{q:@bridge_pane}" } } { confirm-before -p "kill-window #W? (y/n)" kill-window }
     # detach-client is not lost in a mirror, just deferred: the detach kills the
     # mirror session, and detach-on-destroy off (below) lands the client on
@@ -933,7 +939,7 @@
     # -b is load-bearing, not just responsiveness: the script waits for the
     # daemon's teardown to kill the mirror session, and that teardown issues its
     # kill-session through the same command queue a foreground run-shell holds.
-    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.lztmux-remote-detach}/bin/lztmux-remote-detach #{q:session_name}" } { detach-client }
+    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.lztmux-remote-detach}/bin/lztmux-remote-detach #{qs:session_name}" } { detach-client }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
@@ -1029,7 +1035,7 @@
     # passing.
     # ticker per client attach — whenever that first tick exceeds 1s, i.e. under
     # CPU load.
-    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons #{q:session_name} '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session #{q:session_name} --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
+    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons #{qs:session_name} '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session #{qs:session_name} --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
     # A window tagged by an external fan-out orchestrator (@crew_name codename +
     # @crew_color) shows the codename as a badge after "index: ", tinted by that
@@ -1082,23 +1088,23 @@
     # server's command queue instead of wedging it. session-window-changed
     # fires on every switch but is a win_count:WIDTH cache hit that exits before
     # the lock, so it stays synchronous.
-    set-hook -g after-new-window        'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
-    set-hook -g window-unlinked         'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
-    set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g after-new-window        'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
+    set-hook -g window-unlinked         'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
+    set-hook -g session-window-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
     # client-resized fires on every step of a terminal drag; each distinct width
     # is a cache miss → full O(N) recompute. Background it (-b, off the server's
     # command queue) with --debounce so a drag coalesces to one reflow at the
     # final width — see the debounce block in tmux-reflow-windows.
-    set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{q:session_name} #{q:client_width}"'
-    set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
-    set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g client-resized          'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows --debounce #{qs:session_name} #{q:client_width}"'
+    set-hook -g after-new-session       'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
+    set-hook -g client-session-changed  'run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
     # A cold attach to an existing session (tmux attach, terminal reconnect, a
     # 2nd client at a different width) fires client-attached but not
     # client-session-changed, so the window-list grid would stay sized for the
     # last reflow's width until a resize/switch nudged it (issue #188). Indexed
     # [10] so it coexists with the splash/carousel client-attached[50]/[60]
     # hooks; the bare `set-hook -gu client-attached` above clears it on reload.
-    set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"'
+    set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
 
     # Refit floating panes to the new window size (#371). window-resized, not
     # client-resized: it carries the window that actually changed, and it also
@@ -1146,11 +1152,11 @@
     # every-5th-tick full-server sweep in tmux-update-icons.sh (issue #341).
 
     # A scratchpad dies with its parent session ([99] is tmux-remux's capture-event)
-    set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t =scratch-#{q:hook_session_name} 2>/dev/null || true"'
+    set-hook -g session-closed[98] 'run-shell -b "tmux kill-session -t =scratch-#{qs:hook_session_name} 2>/dev/null || true"'
 
     # Clear unseen claude status flags when user focuses a window
-    set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{q:session_name} --window #{q:window_index}"'
-    set-hook -g client-session-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{q:session_name} --window #{q:window_index}"'
+    set-hook -g session-window-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{qs:session_name} --window #{q:window_index}"'
+    set-hook -g client-session-changed[99] 'run-shell "${script.claude-status-update}/bin/claude-status-update mark-seen --session #{qs:session_name} --window #{q:window_index}"'
 
     # Pane borders
     setw -g pane-border-status top
@@ -1208,20 +1214,21 @@
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
     # Synchronous init on config load so icons + window bar are ready before the user sees it
-    run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{q:session_name}"
-    run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{q:session_name} #{q:client_width}"
+    run-shell "${script.tmux-update-icons}/bin/tmux-update-icons #{qs:session_name}"
+    run-shell "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"
 
     ${lib.optionalString splashEnable ''
       # Welcome buffer: indexed ([50]) so it coexists with the reflow hooks'
       # index-0 bindings on the same events (a bare set-hook would clobber them).
       # _name (not #{hook_session}) sidesteps the $0 re-expansion hazard at :960-961.
+      # hook_client is tty-derived (never ~-initial); tmux-splash-maybe defaults its final positional when empty.
       # #{q:} and NOT \"...\": the whole string is format-expanded before sh -c sees
       # it, so a quote in the name breaks out and executes — and a bridged session's
       # name comes from the remote host (lztmux-remote-open builds it from the
       # remote's list). || true stops the gate's fail-closed exit from pushing the
       # hook's pane into view-mode.
-      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
-      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{q:hook_session_name} #{q:hook_client} || true"'
+      set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{qs:hook_session_name} #{q:hook_client} || true"'
+      set-hook -g client-session-changed[50] 'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{qs:hook_session_name} #{q:hook_client} || true"'
     ''}
 
     ${lib.optionalString notifyEnable ''

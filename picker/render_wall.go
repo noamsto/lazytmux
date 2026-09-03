@@ -245,6 +245,11 @@ func (m tuiModel) renderWallHints() string {
 		hint("^/", "list"),
 		quitHint,
 	}
+	if item, ok := m.currentItem(); ok {
+		if _, live := remotePickHost(item, true); live {
+			parts = append(parts, hint("^o", "browse"))
+		}
+	}
 	if pages := m.wallPageCount(); pages > 1 {
 		parts = append(parts, dim.Render(fmt.Sprintf("page %d/%d", m.wallPage+1, pages)))
 	}

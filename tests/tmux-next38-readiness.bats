@@ -377,6 +377,18 @@ wait_for_client() {
 	grep -q 'set-hook -gu after-select-pane' "$(store_conf)"
 }
 
+# update-environment appends must not stack on reload — the bare `set -gu`
+# reverts to tmux defaults, then the seven `-ga` lines reapply our additions.
+@test "update-environment appends are reload-idempotent" {
+	grep -q 'set -gu update-environment' "$(store_conf)"
+
+	before="$(t show-options -g update-environment | wc -l)"
+	t source-file "$(store_conf)"
+	t source-file "$(store_conf)"
+	after="$(t show-options -g update-environment | wc -l)"
+	[ "$before" -eq "$after" ]
+}
+
 # Guards the general defect class behind #341 (a `set-hook -g` that tmux
 # silently discards, e.g. `pane-exited` on the pinned tmux), not just that one
 # hook name: every hook the generated config registers must actually be

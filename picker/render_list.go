@@ -218,8 +218,10 @@ func (m tuiModel) renderHints() string {
 		}
 		parts = append(parts, hint("^g", groupLabel))
 	}
-	if hasItem && item.remoteHost != "" {
-		parts = append(parts, hint("^o", "browse"))
+	if hasItem {
+		if _, ok := remotePickHost(item, m.windowMode); ok {
+			parts = append(parts, hint("^o", "browse"))
+		}
 	}
 	parts = append(parts,
 		hint("^/", toggleLabel),

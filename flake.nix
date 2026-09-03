@@ -414,6 +414,18 @@
               touch $out
             '';
 
+          update-environment-conf-assertions =
+            pkgs.runCommand "update-environment-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              grep -q 'set -gu update-environment' "$CONF"
+              clear=$(grep -n 'set -gu update-environment' "$CONF" | head -1 | cut -d: -f1)
+              first_append=$(grep -n 'set -ga update-environment' "$CONF" | head -1 | cut -d: -f1)
+              [ "$clear" -lt "$first_append" ]
+              touch $out
+            '';
+
           # The float-refit WIRING (#371). tmux bakes a float's percentage
           # geometry into cells at creation and never revisits it, so every
           # float bind must hand its percentages to @float_geom for the
@@ -816,6 +828,22 @@
               [ -n "$CTL_PROTOCOL_VERSION" ] || { echo "no CtlProtocolVersion in $protocol_go" >&2; exit 1; }
               export CTL_PROTOCOL_VERSION
               bats tests/rename-bind-integration.bats
+              touch $out
+            '';
+
+          # `qs:` silently degrades to a raw expansion on tmux 3.7, so the
+          # shell-word mechanism is exercised only through the pinned wrapper.
+          conf-shell-quoting-integration-tests =
+            pkgs.runCommand "conf-shell-quoting-integration-tests" {
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/conf-shell-quoting-integration.bats
               touch $out
             '';
 

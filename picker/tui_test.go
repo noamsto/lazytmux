@@ -1178,6 +1178,29 @@ func TestActivateHostKeyChangedRowRefuses(t *testing.T) {
 	}
 }
 
+// Enter on a Tailscale-check row must not act either. lztmux-remote-auth's
+// ssh-copy-id/ControlMaster remedy can't clear a Tailscale ACL check, so the
+// only real remedy is running ssh interactively — Enter must say so, not try.
+func TestActivateTailscaleCheckRowRefuses(t *testing.T) {
+	m := tuiModel{
+		visible: []listItem{{
+			isRemoteRow:          true,
+			remoteHost:           "mbp",
+			remoteTailscaleCheck: true,
+			target:               "remote:mbp",
+		}},
+		cursor: 0,
+	}
+	next, cmd := m.activateCurrent()
+	if cmd != nil {
+		t.Error("cmd != nil, want nil — a tailscale-check row must neither quit nor bridge")
+	}
+	got := next.(tuiModel).statusMsg
+	if !strings.Contains(got, "ssh") || !strings.Contains(got, "mbp") {
+		t.Errorf("statusMsg = %q, want an explanation naming ssh and the host", got)
+	}
+}
+
 func TestRenderWindowItemsCarriesBridgeCtlTarget(t *testing.T) {
 	// ^x on a mirror row routes to the daemon (#393); it can only do that if the
 	// row carries the pane + socket, and an empty pair silently falls back to a

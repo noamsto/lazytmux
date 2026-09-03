@@ -8,9 +8,11 @@
 # metacharacters sh -c would otherwise see. This file walks the EMITTED
 # tmux.conf (a Nix store file, not the Nix source) and fails on every #{...}
 # inside a shell-string argument that isn't one of tmux's two SHELL-quoting
-# forms -- `#{q:NAME}` or `#{qs:NAME}` -- with a plain, unnested body. The style
-# modifiers `#{qe:}`/`#{qh:}` and the argument-escaping `#{qa:}` stay flagged:
-# they double `#` for the format drawer, they do not quote for a shell.
+# forms -- `#{q:NAME}` or `#{qs:NAME}` -- with a plain, unnested body. The four
+# formats that can lose a word or expand a leading `~` must use bare `#{qs:}`:
+# putting it inside shell quotes is weaker than `#{q:}`. The style modifiers
+# `#{qe:}`/`#{qh:}` and the argument-escaping `#{qa:}` stay flagged: they double
+# `#` for the format drawer, they do not quote for a shell.
 # It also fails on a `%%`/`%N` command-prompt placeholder in a shell string.
 #
 # Scope, precisely:
@@ -30,6 +32,16 @@
 # shell argument -- but this scanner reads the emitted text, where the use site
 # says only `$is_vim`. Quoting inside a macro body is therefore on the author,
 # not on this guard; the one such macro in this conf is commented accordingly.
+
+WRAP_REQUIRED_FORMATS=(session_name hook_session_name pane_current_command pane_current_path)
+
+is_wrap_required_format() {
+	local format="$1" required
+	for required in "${WRAP_REQUIRED_FORMATS[@]}"; do
+		[[ $format == "$required" ]] && return 0
+	done
+	return 1
+}
 
 # --- tokenizer ---------------------------------------------------------
 # Splits one logical tmux config line into tokens, matching tmux's own
@@ -115,10 +127,15 @@ record_violation() {
 # Scans one shell-command string (already stripped of its own outer quotes)
 # for #{...} expansions and for %%/%N placeholders. Every expansion must be
 # #{q:NAME} or #{qs:NAME}, with no further #{ nested inside NAME -- #{q:#{X}}
-# does NOT quote, it's #{q:} of a body that is itself unquoted.
+# does NOT quote, it's #{q:} of a body that is itself unquoted. The
+# WRAP_REQUIRED_FORMATS must use bare #{qs:NAME}: single quotes become syntax
+# from the expansion, and double quotes leave $ and backticks live.
+# With wrap_only=1, only enforces the WRAP_REQUIRED_FORMATS rules. This lets
+# #(...) keep its deliberate presentation-format exemption while sharing the
+# shell quote-state tracker.
 # Reports every offender, not just the first.
 scan_shell_string() {
-	local str="$1" lineno="$2"
+	local str="$1" lineno="$2" quote_state="${3:-out}" wrap_only="${4:-0}"
 	local n=${#str}
 	local excerpt="${str:0:80}"
 	local i=0
@@ -160,9 +177,47 @@ scan_shell_string() {
 						k=$((k + 1))
 					fi
 				done
-				((k < bn)) && scan_shell_string "${body:$((k + 1))}" "$lineno"
-			elif [[ $group != '#{q:'* && $group != '#{qs:'* ]] || ((nested)); then
-				record_violation "$lineno" "$group" "$excerpt"
+				((k < bn)) && scan_shell_string "${body:$((k + 1))}" "$lineno" "$quote_state" "$wrap_only"
+			else
+				local modifier="" format=""
+				if [[ $group == '#{qs:'* ]]; then
+					modifier="qs"
+					format="${group:5:$((${#group} - 6))}"
+				elif [[ $group == '#{q:'* ]]; then
+					modifier="q"
+					format="${group:4:$((${#group} - 5))}"
+				fi
+				if ((nested)); then
+					if ((wrap_only)); then
+						local required
+						for required in "${WRAP_REQUIRED_FORMATS[@]}"; do
+							if [[ $group == *"#{$required}"* || $group == *"#{q:$required}"* || $group == *"#{qs:$required}"* ]]; then
+								record_violation "$lineno" "$group" "$excerpt"
+								break
+							fi
+						done
+					else
+						record_violation "$lineno" "$group" "$excerpt"
+					fi
+				elif [[ -z $modifier ]]; then
+					local bare_format="${group:2:$((${#group} - 3))}"
+					# A style modifier (qe:/qh:/qa:) doesn't quote for a shell, so a
+					# wrap-required format wrapped in one must still be flagged in
+					# wrap_only mode -- strip it before the comparison below.
+					local wrap_check_format="$bare_format"
+					case $wrap_check_format in
+					qe:* | qh:* | qa:*) wrap_check_format="${wrap_check_format#*:}" ;;
+					esac
+					if ((wrap_only)) && is_wrap_required_format "$wrap_check_format"; then
+						record_violation "$lineno" "$group" "$excerpt"
+					elif ((! wrap_only)); then
+						record_violation "$lineno" "$group" "$excerpt"
+					fi
+				elif [[ $modifier == qs && $quote_state != out ]]; then
+					record_violation "$lineno" "$group" "$excerpt"
+				elif [[ $modifier == q ]] && is_wrap_required_format "$format"; then
+					record_violation "$lineno" "$group" "$excerpt"
+				fi
 			fi
 			i=$j
 		elif [[ ${str:i:2} == '%%' || ${str:i:2} =~ ^%[1-9]$ ]]; then
@@ -179,9 +234,29 @@ scan_shell_string() {
 			# %% in an unrelated shell string (a printf format, say) would trip it
 			# too. Zero such cases exist in the conf today; if you hit one, that is
 			# the reason, and the fix is to rewrite the format, not to weaken this.
-			record_violation "$lineno" "${str:i:2}" "$excerpt"
+			((wrap_only)) || record_violation "$lineno" "${str:i:2}" "$excerpt"
 			i=$((i + 2))
 		else
+			local c="${str:i:1}"
+			case "$quote_state:$c" in
+			out:\\)
+				i=$((i + 2))
+				continue
+				;;
+			out:\') quote_state=single ;;
+			out:\") quote_state=double ;;
+			single:\') quote_state=out ;;
+			double:\\)
+				# In double quotes, a backslash only protects $, `, ", \\, and a
+				# newline. Any other following byte leaves the quote state unchanged.
+				local next="${str:i+1:1}"
+				if [[ $next == '$' || $next == '`' || $next == '"' || $next == \\ || $next == $'\n' ]]; then
+					i=$((i + 2))
+					continue
+				fi
+				;;
+			double:\") quote_state=out ;;
+			esac
 			i=$((i + 1))
 		fi
 	done
@@ -331,6 +406,8 @@ check_conf_quoting() {
 # What must never appear here unquoted is the identity set below — the values
 # an untrusted REMOTE host can steer, which is the trust boundary this whole
 # guard exists for (a bridged session is named from the remote's session list).
+# scan_shell_string's wrap-only mode holds every wrap-required format to bare
+# #{qs:} without widening this check to presentation-only formats.
 IDENTITY_FORMATS=(session_name hook_session_name window_name pane_title)
 
 check_hashparen_identity() {
@@ -362,10 +439,11 @@ check_hashparen_identity() {
 			done
 			body="${line:$((i + 2)):$((j - i - 3))}"
 			for name in "${IDENTITY_FORMATS[@]}"; do
-				if [[ $body == *"#{$name}"* ]]; then
+				if ! is_wrap_required_format "$name" && [[ $body == *"#{$name}"* ]]; then
 					record_violation "$lineno" "#{$name}" "${body:0:80}"
 				fi
 			done
+			scan_shell_string "$body" "$lineno" out 1
 			i=$j
 		done
 	done
@@ -435,6 +513,40 @@ EOF
 	[ -z "$output" ]
 }
 
+@test "requires bare qs: for wrap-required shell formats" {
+	cat >"$BATS_TEST_TMPDIR/wrap-q.conf" <<'EOF'
+run-shell "/bin/x #{q:session_name}"
+run-shell "/bin/x #{q:hook_session_name}"
+run-shell "/bin/x #{q:pane_current_command}"
+run-shell "/bin/x #{q:pane_current_path}"
+EOF
+	run check_conf_quoting "$BATS_TEST_TMPDIR/wrap-q.conf"
+	[ "$status" -eq 1 ]
+	[ "$(echo "$output" | grep -c .)" -eq 4 ]
+
+	cat >"$BATS_TEST_TMPDIR/wrap-qs.conf" <<'EOF'
+run-shell "/bin/x #{qs:session_name}"
+run-shell "/bin/x #{qs:hook_session_name}"
+run-shell "/bin/x #{qs:pane_current_command}"
+run-shell "/bin/x #{qs:pane_current_path}"
+EOF
+	run check_conf_quoting "$BATS_TEST_TMPDIR/wrap-qs.conf"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "flags qs: inside shell single and double quotes" {
+	cat >"$BATS_TEST_TMPDIR/quoted-qs.conf" <<'EOF'
+run-shell "/bin/x '#{qs:session_name}'"
+run-shell '/bin/x "#{qs:pane_current_command}"'
+EOF
+	run check_conf_quoting "$BATS_TEST_TMPDIR/quoted-qs.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{qs:session_name}'* ]]
+	[[ $output == *'#{qs:pane_current_command}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 2 ]
+}
+
 @test "the emitted tmux.conf has zero shell-quoting violations" {
 	# Hard failure, never skip: a skip reports `ok`, so a broken CONF binding
 	# would retire this guard silently — the one outcome it exists to prevent.
@@ -467,13 +579,73 @@ EOF
 	[ "$(echo "$output" | cut -d' ' -f2)" = '#{session_name}:' ]
 }
 
-@test "accepts a quoted identity format inside a #(...) shell format" {
+@test "accepts a wrap-required identity format inside a #(...) shell format" {
 	cat >"$BATS_TEST_TMPDIR/hp-good.conf" <<'EOF'
-set -g status-format[0] "#(/bin/statusline --session #{q:session_name} --thm-bg '#{@thm_bg}')"
+set -g status-format[0] "#(/bin/statusline --session #{qs:session_name} --thm-bg '#{@thm_bg}')"
 EOF
 	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-good.conf"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
+}
+
+@test "flags q: for a wrap-required identity format inside #(...)" {
+	cat >"$BATS_TEST_TMPDIR/hp-wrap-q.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --session #{q:session_name})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-wrap-q.conf"
+	[ "$status" -eq 1 ]
+	[ "$(echo "$output" | grep -c .)" -eq 1 ]
+	[ "$(echo "$output" | cut -d' ' -f2)" = '#{q:session_name}:' ]
+}
+
+@test "flags q: for every wrap-required format inside #(...)" {
+	cat >"$BATS_TEST_TMPDIR/hp-wrap-formats.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --command #{q:pane_current_command} --path #{q:pane_current_path})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-wrap-formats.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{q:pane_current_command}'* ]]
+	[[ $output == *'#{q:pane_current_path}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 2 ]
+}
+
+@test "flags qe:/qh:/qa: for a wrap-required identity format inside #(...)" {
+	# wrap_only counterpart to the header's qe:/qh:/qa: rule (format_quote_style /
+	# format_quote_shell -a don't quote for a shell) -- see scan_shell_string above.
+	cat >"$BATS_TEST_TMPDIR/hp-wrap-style.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --session #{qe:session_name})"
+set -g status-format[1] "#(/bin/statusline --session #{qh:session_name})"
+set -g status-format[2] "#(/bin/statusline --session #{qa:session_name})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-wrap-style.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{qe:session_name}'* ]]
+	[[ $output == *'#{qh:session_name}'* ]]
+	[[ $output == *'#{qa:session_name}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 3 ]
+}
+
+@test "flags bare pane formats inside #(...)" {
+	cat >"$BATS_TEST_TMPDIR/hp-bare-pane.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --command #{pane_current_command} --path #{pane_current_path})"
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-bare-pane.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{pane_current_command}'* ]]
+	[[ $output == *'#{pane_current_path}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 2 ]
+}
+
+@test "flags qs: inside single and double quotes in #(...)" {
+	cat >"$BATS_TEST_TMPDIR/hp-quoted-qs.conf" <<'EOF'
+set -g status-format[0] "#(/bin/statusline --session '#{qs:session_name}')"
+set -g status-format[1] '#(/bin/statusline --command "#{qs:pane_current_command}")'
+EOF
+	run check_hashparen_identity "$BATS_TEST_TMPDIR/hp-quoted-qs.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{qs:session_name}'* ]]
+	[[ $output == *'#{qs:pane_current_command}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 2 ]
 }
 
 @test "the emitted tmux.conf never puts an identity format bare in #(...)" {
