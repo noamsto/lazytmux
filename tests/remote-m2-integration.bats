@@ -92,7 +92,7 @@ sorted_dims() {
 	# Gate: wait until the pane is a renderer so the layout pipeline has settled.
 	for _ in $(seq 1 40); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -126,7 +126,7 @@ sorted_dims() {
 	# Gate: wait until the pane is a renderer before capturing state.
 	for _ in $(seq 1 40); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -163,7 +163,7 @@ sorted_dims() {
 	# window's initial shell pane) is what makes the timing deterministic.
 	for _ in $(seq 1 40); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -214,7 +214,7 @@ sorted_dims() {
 	# reader is running is discarded (B3), so it is the daemon's post-setup
 	# reconcile that recovers them.
 	for _ in $(seq 1 100); do
-		rendered="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c renderer || true)"
+		rendered="$($DST list-panes -s -t host-sess -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE" || true)"
 		[ "$rendered" -eq 3 ] && break
 		sleep 0.1
 	done
@@ -252,7 +252,7 @@ sorted_dims() {
 	# Gate: wait until the first window's pane is a renderer (daemon in its loop).
 	for _ in $(seq 1 40); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -271,7 +271,7 @@ sorted_dims() {
 	# non-routing-aware reader used during that pipeline and gets dropped.
 	for _ in $(seq 1 40); do
 		cmd2="$($DST list-panes -t host-sess:2 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd2 == *renderer* ]] && break
+		[[ $cmd2 == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -387,7 +387,7 @@ sorted_dims() {
 	# the watcher goroutine is running) before resizing.
 	for _ in $(seq 1 40); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -421,10 +421,10 @@ sorted_dims() {
 		>"$BATS_TEST_TMPDIR/dg.log" 2>&1 &
 	daemon_pid=$!
 
-	# Gate on an observable paint rather than pane_current_command: tmux reports
-	# renderer process names differently on Darwin. Retry the startup marker so
-	# an output emitted while the daemon is still wiring its first pane is not
-	# lost to setup's reply reader.
+	# Gate on an observable paint, not RENDERER_PROBE: this test's whole point is
+	# proving the daemon repaints, so an actual paint is the more direct signal.
+	# Retry the startup marker so an output emitted while the daemon is still
+	# wiring its first pane is not lost to setup's reply reader.
 	painted=no
 	for _ in $(seq 1 20); do
 		$SRC send-keys -t rem "printf 'RESEED_GEOMETRY_9F3Q\\n'" Enter
@@ -495,7 +495,7 @@ sorted_dims() {
 	# dst_dims below would be read against a window not yet shaped.
 	want_panes="$($SRC list-panes -t rem -F '#{pane_id}' | wc -l)"
 	for _ in $(seq 1 60); do
-		got_panes="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c renderer)" || got_panes=0
+		got_panes="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null | grep -c "$RENDERER_PROBE")" || got_panes=0
 		[ "$got_panes" -eq "$want_panes" ] && break
 		sleep 0.1
 	done
@@ -621,7 +621,7 @@ sorted_dims() {
 	# Gate: renderer wired (daemon in its main loop, pause-after armed).
 	for _ in $(seq 1 50); do
 		cmd="$($DST list-panes -t host-sess:1 -F '#{pane_current_command}' 2>/dev/null)"
-		[[ $cmd == *renderer* ]] && break
+		[[ $cmd == *"$RENDERER_PROBE"* ]] && break
 		sleep 0.1
 	done
 
@@ -658,13 +658,13 @@ pane_map() {
 # bridge_up starts a daemon mirroring SRC session "rem" into DST "host-sess" and
 # blocks until the mirror is actually live. Sets `daemon_pid` and `sock`.
 #
-# It deliberately does NOT gate on pane_current_command containing "renderer":
-# tmux reports renderer process names differently on Darwin, so that gate never
-# matches there (the same reason PR #233 switched its own gate to an observable
-# paint). The pre-existing cases in this file only *poll* that condition and fall
-# through, so they survive it; a case that asserts it fails on Darwin only.
-#
-# Two portable observables instead:
+# It deliberately does NOT gate on pane_current_command containing the literal
+# "renderer": that substring never survives macOS's MAXCOMLEN truncation (see
+# setup()'s RENDERER_PROBE comment) — the same reason PR #233 switched its own
+# gate to an observable paint, and #481 introduced RENDERER_PROBE for the
+# sites where a truncation-safe prefix match is the right fix. bridge_up uses
+# stronger observables instead, ones that need no process-name assumption at
+# all:
 #   1. every mirror pane carries @bridge_pane, which the daemon stamps itself;
 #   2. output typed on the remote actually paints into the mirror, which is what
 #      proves the daemon reached its main read loop and the router is wired — the
