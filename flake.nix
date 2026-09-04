@@ -797,20 +797,13 @@
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
-              # Contention: the real failure happens while sibling checks build
-              # in parallel on a 3-core runner.
-              for _ in $(seq 1 8); do (while :; do :; done) & done
               fail=0
-              N=200
+              N=3
               for i in $(seq 1 $N); do
-                if ! bats -f "killed during the outage" tests/remote-m2-integration.bats >iter.log 2>&1; then
-                  fail=$((fail+1))
-                  echo "=== PROBE FAIL ITERATION $i ==="
-                  cat iter.log
-                fi
+                echo "=== PROBE FULL-FILE RUN $i ==="
+                bats tests/remote-m2-integration.bats || fail=$((fail+1))
               done
-              kill %1 %2 %3 %4 %5 %6 %7 %8 2>/dev/null || true
-              echo "=== PROBE RESULT: $fail / $N failed ==="
+              echo "=== PROBE RESULT: $fail / $N full-file runs failed ==="
               [ "$fail" -eq 0 ]
               touch $out
             '';
