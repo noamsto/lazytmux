@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -332,19 +334,20 @@ func TestCarouselVerbBuildsRemoteToggle(t *testing.T) {
 		"AEYE_BRIDGED=1",
 		"tmux-claude-images",
 		"command -v",
-		"split-window",
+		"new-pane",
+		remoteFloatFull,
 	} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
 		}
 	}
-	for _, ban := range []string{"display-message", "#{@claude_img_src}", "''|*"} {
+	for _, ban := range []string{"display-message", "#{@claude_img_src}", "''|*", "split-window", "@float_geom"} {
 		if strings.Contains(cmds[0], ban) {
 			t.Fatalf("command %q must not contain %q", cmds[0], ban)
 		}
 	}
 	if !v.moves || !v.layout {
-		t.Fatal("the toggle opens a split that takes focus: needs moves+layout")
+		t.Fatal("the toggle opens a float that takes focus: needs moves+layout")
 	}
 }
 
@@ -440,7 +443,7 @@ echo launched >>"`+launchLog+`"
 			}
 
 			// run-shell -b is asynchronous; poll for its effect (either the
-			// stub's launch marker, or a second, split-window-spawned pane).
+			// stub's launch marker, or a second, new-pane float).
 			deadline := time.Now().Add(3 * time.Second)
 			var launched bool
 			var paneCount int
@@ -463,7 +466,7 @@ echo launched >>"`+launchLog+`"
 					t.Fatal("tmux-claude-images was never exec'd for a present manifest")
 				}
 				if paneCount > 1 {
-					t.Fatalf("a fallback split was also opened (%d panes) for a present manifest", paneCount)
+					t.Fatalf("a fallback float was also opened (%d panes) for a present manifest", paneCount)
 				}
 				return
 			}
@@ -471,14 +474,61 @@ echo launched >>"`+launchLog+`"
 				t.Fatal("tmux-claude-images was exec'd despite an empty manifest")
 			}
 			if paneCount <= 1 {
-				t.Fatal("no fallback split appeared for an empty manifest")
+				t.Fatal("no fallback float appeared for an empty manifest")
 			}
-			capOut, err := tmux("capture-pane", "-p", "-t", "w.1").Output()
-			if err != nil {
-				t.Fatalf("capture-pane: %v", err)
+			// Floats are not reliably addressable as w.N; find the floating
+			// pane by flag (or any pane that is not the original). The float
+			// can exist a tick before its shell command paints, so poll the
+			// capture too.
+			var (
+				fallback string
+				floating bool
+				capOut   []byte
+				listOut  []byte
+			)
+			for time.Now().Before(deadline) {
+				var err error
+				listOut, err = tmux("list-panes", "-t", "w", "-F", "#{pane_id} #{pane_floating_flag}").Output()
+				if err != nil {
+					t.Fatalf("list-panes: %v", err)
+				}
+				fallback, floating = "", false
+				for _, line := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
+					fields := strings.Fields(line)
+					if len(fields) != 2 {
+						continue
+					}
+					id, flag := fields[0], fields[1]
+					if flag == "1" {
+						fallback = id
+						floating = true
+						break
+					}
+					if id != pane && fallback == "" {
+						fallback = id
+					}
+				}
+				if fallback == "" {
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+				capOut, err = tmux("capture-pane", "-p", "-t", fallback).Output()
+				if err != nil {
+					t.Fatalf("capture-pane: %v", err)
+				}
+				if strings.Contains(string(capOut), "no images yet for this pane") {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if fallback == "" {
+				t.Fatalf("could not find fallback pane among %q", listOut)
+			}
+			if !floating {
+				t.Fatalf("fallback pane %s is not floating (pane_floating_flag!=1); list=%q", fallback, listOut)
 			}
 			if !strings.Contains(string(capOut), "no images yet for this pane") {
-				t.Fatalf("fallback split content = %q, want the no-images-yet message", capOut)
+				t.Fatalf("fallback float content = %q, want the no-images-yet message", capOut)
 			}
 		})
 	}
@@ -523,29 +573,50 @@ func startIsolatedTmux(t *testing.T, extraEnv ...string) func(args ...string) *e
 	}
 }
 
-func TestToolVerbBuildsRemoteSplitInRemoteCwd(t *testing.T) {
+func TestToolVerbBuildsRemoteFloatInRemoteCwd(t *testing.T) {
 	v, ok := verbs["tool"]
 	if !ok {
 		t.Fatal("no tool verb")
 	}
+	// Exact shape per tool, matching config/tmux.conf.nix's floatShort/floatFull
+	// binds byte for byte.
+	tests := []struct {
+		tool  string
+		flags string
+	}{
+		{"prdash", remoteFloatShort},
+		{"yazi", remoteFloatShort},
+		{"lazygit", remoteFloatFull},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tool, func(t *testing.T) {
+			cmds, err := v.build("%5", "@2", "sess", []string{tc.tool})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cmds) != 1 {
+				t.Fatalf("want one command, got %v", cmds)
+			}
+			script := toolResolveScript(tc.tool)
+			if strings.Contains(script, "'") {
+				t.Fatalf("resolve script must have zero single quotes: %q", script)
+			}
+			wantCmd := fmt.Sprintf("new-pane -t %%5 -c '#{pane_current_path}' %s %s",
+				tc.flags, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+			if cmds[0] != wantCmd {
+				t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
+			}
+			if strings.Contains(cmds[0], "@float_geom") {
+				t.Fatalf("command %q must not stamp @float_geom: the remote's own tmux-float-refit would fight the mirror for authority over it", cmds[0])
+			}
+		})
+	}
+	// The cwd must stay a format for the remote to expand, and the tool must be
+	// resolved off the remote PATH rather than a local store path.
 	cmds, err := v.build("%5", "@2", "sess", []string{"prdash"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmds) != 1 {
-		t.Fatalf("want one command, got %v", cmds)
-	}
-	script := toolResolveScript("prdash")
-	if strings.Contains(script, "'") {
-		t.Fatalf("resolve script must have zero single quotes: %q", script)
-	}
-	wantCmd := fmt.Sprintf("split-window -t %%5 -c '#{pane_current_path}' %s",
-		tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
-	if cmds[0] != wantCmd {
-		t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
-	}
-	// The cwd must stay a format for the remote to expand, and the tool must be
-	// resolved off the remote PATH rather than a local store path.
 	for _, want := range []string{"-c '#{pane_current_path}'", "show-environment -g PATH", "command -v prdash", "exec prdash"} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
@@ -555,7 +626,7 @@ func TestToolVerbBuildsRemoteSplitInRemoteCwd(t *testing.T) {
 		t.Fatalf("command %q must not carry a local store path", cmds[0])
 	}
 	if !v.moves || !v.layout {
-		t.Fatal("the verb opens a split that takes focus: needs moves+layout")
+		t.Fatal("the verb opens a float that takes focus: needs moves+layout")
 	}
 }
 
@@ -670,5 +741,95 @@ func TestThemeVerbRejectsUnlistedTheme(t *testing.T) {
 		if _, err := v.build("%5", "@2", "sess", []string{theme}); err != nil {
 			t.Fatalf("theme %q rejected: %v", theme, err)
 		}
+	}
+}
+
+// parseCtl refuses a pane it cannot map to a window, and the refusal reaches the
+// user as a --display-error banner — so a gesture inside a mirrored float has to
+// resolve from the moment the float exists. Two windows in the mapping: the
+// reconcile's setWindowPanes clears every pane mapped to its own window before
+// re-setting, and the float has to come back with them.
+//
+// Mid-pass as well as after: reconcileLayout's trailing re-read can send it round
+// again, and the in-loop assertion is what keeps the float routable meanwhile.
+// The probe rides the round-trip seam, which is the only place inside the loop a
+// test can observe.
+func TestCtlResolvesAMirroredFloatDuringAReconcile(t *testing.T) {
+	f := &layoutTmux{windowLayout: localMatchingLayout, windowID: "@101\n"}
+	w := newRegistry().add("@1", "@101")
+	w.remotePanes = []string{"%0", "%1"}
+	w.localPanes = []string{"%l0", "%l1"}
+	w.localFloats["%9"] = "%l9"
+	w.floatGeom["%9"] = float9
+	w.layout = "stale"
+
+	c := newCtlState()
+	c.setWindowPanes("@1", w.allRemotePanes())
+
+	base := setupWindowRT(strings.Join([]string{
+		"%begin 1 1 1", tiledFloatLayout + " %0 0", "%end 1 1 1", // readLayout
+		"%begin 1 2 1", tiledFloatLayout + " %0 0", "%end 1 2 1", // trailing re-read: converged
+	}, "\n") + "\n")
+	reads := 0
+	var midPass error
+	rt := func(cmds ...string) replies {
+		for _, cmd := range cmds {
+			if !strings.Contains(cmd, "window_layout") {
+				continue
+			}
+			reads++
+			// The trailing re-read of the first pass: the in-loop
+			// setWindowPanes has run, the post-loop one has not.
+			if reads == 2 {
+				_, midPass = c.parseCtl([]string{wire.CtlProtocolVersion, "zoom", "%9"}, "rem")
+			}
+		}
+		return base(cmds...)
+	}
+
+	reconcileLayout(f.config(), w, func(string) {}, NewRouter(), noHellos, c, newConverger(), rt)
+
+	if reads != 2 {
+		t.Fatalf("%d layout reads, want 2 — the probe never ran mid-pass", reads)
+	}
+	if midPass != nil {
+		t.Errorf("mid-pass zoom on the float: %v", midPass)
+	}
+	if _, err := c.parseCtl([]string{wire.CtlProtocolVersion, "zoom", "%9"}, "rem"); err != nil {
+		t.Errorf("zoom on the float after the reconcile: %v", err)
+	}
+}
+
+// A float the reconcile itself created has to be routable too: reconcileFloats
+// runs after the pass loop, so only the trailing re-assert can know about it.
+func TestCtlResolvesAFloatAddedByTheReconcile(t *testing.T) {
+	f := &layoutTmux{windowLayout: localMatchingLayout, windowID: "@101\n", newPaneIDs: []string{"%l9\n"}}
+	w := newRegistry().add("@1", "@101")
+	w.remotePanes = []string{"%0", "%1"}
+	w.localPanes = []string{"%l0", "%l1"}
+	w.layout = "stale"
+
+	c := newCtlState()
+	c.setWindowPanes("@1", w.allRemotePanes())
+
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+	go io.Copy(io.Discard, peer)
+
+	rt := setupWindowRT(strings.Join([]string{
+		"%begin 1 1 1", tiledFloatLayout + " %0 0", "%end 1 1 1", // readLayout: the float is already there
+		"%begin 1 2 1", tiledFloatLayout + " %0 0", "%end 1 2 1", // trailing re-read: converged
+		"%begin 1 3 1", "0 0 0 0", "%end 1 3 1", // the new float's seed: cursor
+		"%begin 1 4 1", "FLOAT", "%end 1 4 1", // the new float's seed: capture
+	}, "\n") + "\n")
+
+	reconcileLayout(f.config(), w, func(string) {}, NewRouter(), hellos(map[string]net.Conn{"%9": conn}), c, newConverger(), rt)
+
+	if w.localFloats["%9"] != "%l9" {
+		t.Fatalf("localFloats = %v, want the reconcile to have mirrored %%9", w.localFloats)
+	}
+	if _, err := c.parseCtl([]string{wire.CtlProtocolVersion, "zoom", "%9"}, "rem"); err != nil {
+		t.Errorf("zoom on the freshly mirrored float: %v", err)
 	}
 }

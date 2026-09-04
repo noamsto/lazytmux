@@ -15,8 +15,10 @@ type Layout struct {
 	W, H  int
 	Panes []PaneCell
 	// Floats holds panes that are floating (tmux next-3.8's trailing
-	// "<...>" layout section — see ParseLayout). Not mirrored yet;
-	// exposed for follow-up work.
+	// "<...>" layout section — see ParseLayout). Each cell is the INNER box
+	// and equals the pane's usable size, so it feeds a renderer's dims
+	// unconverted; only tmux's create/resize/move flags take the border
+	// inset. Mirrored by the daemon as local floating panes.
 	Floats []PaneCell
 	// Raw is the layout string for the TILED panes only, incl. checksum
 	// prefix, safe to feed to `select-layout` (tmux rejects its own

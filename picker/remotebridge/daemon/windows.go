@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"net"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
 
 // mirrorWindow is one remote window's local mirror: the remote window id it
@@ -13,7 +16,11 @@ import (
 //
 // localPanes is index-parallel to remotePanes and holds only the window's
 // *tiled* panes: a float takes an ordinal slot of its own, so the local pane
-// rendering remotePanes[i] is not reliably the window's i'th pane.
+// rendering remotePanes[i] is not reliably the window's i'th pane. Floats are
+// tracked separately, in localFloats and floatGeom, for the same reason: a
+// float has no cell in the tiled layout string and no ordinal slot in that
+// index-parallel pair, so it cannot live alongside remotePanes/localPanes
+// without breaking the invariant every reader of those two relies on.
 type mirrorWindow struct {
 	remoteID string
 	// localWin is a local tmux window ID ("@7"), never "<sess>:<index>":
@@ -23,13 +30,51 @@ type mirrorWindow struct {
 	localWin    string
 	remotePanes []string
 	localPanes  []string
-	layout      string // last tiled layout string applied locally, "" = none yet
-	conns       map[string]net.Conn
+	// localFloats maps a remote float pane id to the local float pane
+	// rendering it.
+	localFloats map[string]string
+	// floatGeom maps a remote float pane id to the geometry last applied to
+	// its local mirror — the "have" side of planFloatOps, so a reconcile only
+	// ever reasserts what actually changed.
+	floatGeom map[string]controlmode.PaneCell
+	// floatsDropped records that this reconcile pass has already discarded the
+	// window's mirrored floats, whether to get a select-layout through or for a
+	// rebuild. It gates applyLayout against killing them twice in one pass, and
+	// tells a failing exit that owes them a re-add.
+	floatsDropped bool
+	// shapeFailedFor is the L.Raw a select-layout last failed on, so the
+	// failure is reported once rather than on every reconcile that re-runs
+	// against an unchanged remote. Cleared whenever a shape lands.
+	shapeFailedFor string
+	layout         string // last tiled layout string applied locally, "" = none yet
+	conns          map[string]net.Conn
 	// spawned reports whether the last setupWindow reached its spawnRenderer
 	// loop — the point after which a kept pane's old renderer is dead
 	// (respawn-pane -k) and its old conn must not be merged back on failure.
 	// Reset at setupWindow entry; read by resetWindow's failure path.
 	spawned bool
+}
+
+// allRemotePanes returns every remote pane id this window mirrors — tiled
+// panes followed by floats — for call sites that must not miss a float:
+// ctl's pane->window registration, teardown/unregister, and the session-pin
+// reseed all need every live renderer, tiled or not. planPaneOps,
+// localPaneAt, and select-layout must NOT use this — they depend on
+// remotePanes/localPanes staying index-parallel and tiled-only.
+//
+// Float ids are sorted since localFloats is a map and iteration order is not
+// deterministic; remotePanes is already in a defined order and is left alone.
+// Returns a fresh slice so the caller can't alias and corrupt remotePanes's
+// backing array via append.
+func (w *mirrorWindow) allRemotePanes() []string {
+	out := make([]string, len(w.remotePanes), len(w.remotePanes)+len(w.localFloats))
+	copy(out, w.remotePanes)
+	floats := make([]string, 0, len(w.localFloats))
+	for id := range w.localFloats {
+		floats = append(floats, id)
+	}
+	sort.Strings(floats)
+	return append(out, floats...)
 }
 
 // registry maps remote window ids (@N) to their local mirror windows.
@@ -48,7 +93,13 @@ func newRegistry() *registry {
 func (r *registry) add(remoteID, localWin string) *mirrorWindow {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	w := &mirrorWindow{remoteID: remoteID, localWin: localWin, conns: map[string]net.Conn{}}
+	w := &mirrorWindow{
+		remoteID:    remoteID,
+		localWin:    localWin,
+		conns:       map[string]net.Conn{},
+		localFloats: map[string]string{},
+		floatGeom:   map[string]controlmode.PaneCell{},
+	}
 	r.byRemote[remoteID] = w
 	return w
 }

@@ -179,12 +179,15 @@ func reseedPanes(reg *registry, router *Router, rt roundTrip, reason string) {
 	wins := reg.all()
 	n := 0
 	for _, mw := range wins {
-		n += len(mw.remotePanes)
+		n += len(mw.remotePanes) + len(mw.localFloats)
 	}
 	ids := make([]string, 0, n)
 	sinks := make([]*outputSink, 0, n)
 	for _, mw := range wins {
-		for _, id := range mw.remotePanes {
+		// Floats too: a mirrored float's renderer holds no back-buffer either,
+		// so an excursion or an outage leaves it on a screen the remote has
+		// already moved past.
+		for _, id := range mw.allRemotePanes() {
 			if s := router.sink(id); s != nil {
 				ids = append(ids, id)
 				sinks = append(sinks, s)

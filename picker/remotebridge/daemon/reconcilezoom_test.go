@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -245,5 +246,144 @@ func TestReconcileKeepsPaneCellDimsOnZoomToggleFailure(t *testing.T) {
 	}
 	if wB != 94 || hB != 45 {
 		t.Errorf("pane 1 dims = %dx%d, want 94x45 (its own cell)", wB, hB)
+	}
+}
+
+// TestReconcileZoomToggleNeverTargetsAFloat pins the #409/#517 merge bug: a
+// float can be remoteActive while the window is zoomed, and localPaneFor would
+// hand that float to resize-pane -Z. Zoom-on against a float converts it into a
+// zoomed tiled pane (measured on next-3.8). When remoteActive is a float, skip
+// the toggle entirely rather than guessing a tiled pane — pane 0 would zoom the
+// wrong cell if the remote had zoomed a different one before focusing the float.
+func TestReconcileZoomToggleNeverTargetsAFloat(t *testing.T) {
+	localA, peerA := net.Pipe()
+	defer localA.Close()
+	defer peerA.Close()
+	localB, peerB := net.Pipe()
+	defer localB.Close()
+	defer peerB.Close()
+
+	router := NewRouter()
+	router.Register("%0", newOutputSink(localA, nil))
+	router.Register("%1", newOutputSink(localB, nil))
+
+	// w.layout == ParseLayout(tiledFloatLayout).Raw so applyLayout short-circuits
+	// without dropping the mirrored float — the bug is only reachable while the
+	// float is still in localFloats when the zoom toggle fires.
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+		localFloats: map[string]string{"%9": "%l9"},
+		floatGeom:   map[string]controlmode.PaneCell{"%9": float9},
+		layout:      tiledLayout,
+	}
+
+	script := strings.Join([]string{
+		"%begin 1 1 1", tiledFloatLayout + " %9 1", "%end 1 1 1", // readLayout: zoomed, float active
+		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
+		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
+		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
+		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
+		"%begin 1 6 1", tiledFloatLayout + " %9 1", "%end 1 6 1", // trailing re-read: unchanged, stop
+	}, "\n") + "\n"
+
+	rt := scriptedRTRouter(script, router)
+
+	var zoomTargets []string
+	cfg := Config{
+		LocalTmux: func(args ...string) error {
+			if len(args) >= 4 && args[0] == "resize-pane" && args[1] == "-Z" && args[2] == "-t" {
+				zoomTargets = append(zoomTargets, args[3])
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> mismatch
+	}
+
+	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	if len(zoomTargets) != 0 {
+		t.Errorf("resize-pane -Z issued %v; want none when remoteActive is a float", zoomTargets)
+	}
+	for _, target := range zoomTargets {
+		if target == "%l9" {
+			t.Errorf("resize-pane -Z targeted float local id %q", target)
+		}
+	}
+
+	// Drain so a hung sink pump can't outlive the test.
+	peerA.SetDeadline(time.Now().Add(5 * time.Second))
+	peerB.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := wire.ReadFrame(peerA); err != nil {
+		t.Fatalf("read pane 0 frame: %v", err)
+	}
+	if _, err := wire.ReadFrame(peerB); err != nil {
+		t.Fatalf("read pane 1 frame: %v", err)
+	}
+}
+
+// TestReconcileZoomToggleTargetsTiledPaneBesideFloat is the happy-path twin:
+// remoteActive is a tiled pane while a float exists — the toggle must still
+// land on that tiled local, not skip or hit the float.
+func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
+	localA, peerA := net.Pipe()
+	defer localA.Close()
+	defer peerA.Close()
+	localB, peerB := net.Pipe()
+	defer localB.Close()
+	defer peerB.Close()
+
+	router := NewRouter()
+	router.Register("%0", newOutputSink(localA, nil))
+	router.Register("%1", newOutputSink(localB, nil))
+
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+		localFloats: map[string]string{"%9": "%l9"},
+		floatGeom:   map[string]controlmode.PaneCell{"%9": float9},
+		layout:      tiledLayout,
+	}
+
+	script := strings.Join([]string{
+		"%begin 1 1 1", tiledFloatLayout + " %0 1", "%end 1 1 1", // readLayout: zoomed, tiled %0 active
+		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
+		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
+		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
+		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
+		"%begin 1 6 1", tiledFloatLayout + " %0 1", "%end 1 6 1", // trailing re-read: unchanged, stop
+	}, "\n") + "\n"
+
+	rt := scriptedRTRouter(script, router)
+
+	var zoomTargets []string
+	cfg := Config{
+		LocalTmux: func(args ...string) error {
+			if len(args) >= 4 && args[0] == "resize-pane" && args[1] == "-Z" && args[2] == "-t" {
+				zoomTargets = append(zoomTargets, args[3])
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> toggle fires
+	}
+
+	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	if len(zoomTargets) != 1 || zoomTargets[0] != "%l0" {
+		t.Errorf("resize-pane -Z targets = %v, want [%%l0]", zoomTargets)
+	}
+	for _, target := range zoomTargets {
+		if target == "%l9" {
+			t.Errorf("resize-pane -Z targeted float local id %q", target)
+		}
+	}
+
+	peerA.SetDeadline(time.Now().Add(5 * time.Second))
+	peerB.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := wire.ReadFrame(peerA); err != nil {
+		t.Fatalf("read pane 0 frame: %v", err)
+	}
+	if _, err := wire.ReadFrame(peerB); err != nil {
+		t.Fatalf("read pane 1 frame: %v", err)
 	}
 }

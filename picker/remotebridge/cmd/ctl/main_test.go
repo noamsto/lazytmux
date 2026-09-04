@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -73,23 +74,40 @@ func TestShowErrorWithTmuxServer(t *testing.T) {
 		t.Skip("tmux is not available")
 	}
 
-	socket := "ctl-error-test-" + strings.ReplaceAll(t.Name(), "/", "-")
-	if out, err := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "ctl-error", "sleep 30").CombinedOutput(); err != nil {
+	tmpdir, err := os.MkdirTemp("", "lz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpdir) })
+	const socket = "s"
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmpdir)
+
+	start := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "ctl-error", "sleep 30")
+	start.Env = env
+	if out, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("start tmux: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
+	t.Cleanup(func() {
+		stop := exec.Command("tmux", "-L", socket, "kill-server")
+		stop.Env = env
+		_ = stop.Run()
+	})
 
 	original := runTmux
 	t.Cleanup(func() { runTmux = original })
 	runTmux = func(args ...string) error {
-		return exec.Command("tmux", append([]string{"-L", socket}, args...)...).Run()
+		cmd := exec.Command("tmux", append([]string{"-L", socket}, args...)...)
+		cmd.Env = env
+		return cmd.Run()
 	}
 
 	want := "bridge daemon unreachable: connection refused"
 	if err := showError("ctl-error:0.0", errors.New(want)); err != nil {
 		t.Fatalf("show error through tmux: %v", err)
 	}
-	out, err := exec.Command("tmux", "-L", socket, "show-messages", "-t", "ctl-error:0.0").CombinedOutput()
+	show := exec.Command("tmux", "-L", socket, "show-messages", "-t", "ctl-error:0.0")
+	show.Env = env
+	out, err := show.CombinedOutput()
 	if err != nil {
 		t.Fatalf("show tmux messages: %v: %s", err, out)
 	}

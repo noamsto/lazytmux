@@ -108,7 +108,14 @@
             # scoped to this check alone — the package itself is reused for
             # prebuilt binaries by the remote bridge integration checks, which
             # don't need a test-only dependency.
-            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.tmux];
+            #
+            # mkTmux, not pkgs.tmux, matching every other live-tmux check here:
+            # these tests assert version-sensitive command grammar, so the binary
+            # under them has to be the one that ships. 3.7c is not merely older,
+            # it is actively misleading — its `list-commands new-pane` advertises
+            # -A and -B while its parser rejects both, so a capability probe
+            # passes and the command still fails.
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [(mkTmux pkgs)];
             # Tells TestReflowRunShellArgsSurvivesFormatInjection (#368) to fail
             # rather than skip if tmux is somehow still missing, so pruning the
             # nativeBuildInputs entry above breaks loudly instead of silently
