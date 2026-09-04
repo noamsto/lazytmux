@@ -367,3 +367,44 @@ func TestZoxideSuggestionsSymlinkDedupe(t *testing.T) {
 		t.Errorf("symlinked dir not deduped against session at target: %v", got)
 	}
 }
+
+func TestFlooredClientSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		w, h  int
+		ok    bool
+		wantW int
+		wantH int
+	}{
+		{200, 55, true, 200, 55},
+		{40, 20, true, 80, 24},
+		{0, 24, false, 0, 0},
+		{80, 0, false, 0, 0},
+	}
+	for _, tc := range tests {
+		gotW, gotH, ok := flooredClientSize(tc.w, tc.h)
+		if ok != tc.ok || gotW != tc.wantW || gotH != tc.wantH {
+			t.Errorf("flooredClientSize(%d,%d) = (%d,%d,%v), want (%d,%d,%v)",
+				tc.w, tc.h, gotW, gotH, ok, tc.wantW, tc.wantH, tc.ok)
+		}
+	}
+}
+
+func TestNewSessionSizeArgs(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"200|55\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got := newSessionSizeArgs()
+	want := []string{"-x", "200", "-y", "55"}
+	if len(got) != len(want) {
+		t.Fatalf("newSessionSizeArgs() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("newSessionSizeArgs()[%d] = %q, want %q (full %v)", i, got[i], want[i], got)
+		}
+	}
+}

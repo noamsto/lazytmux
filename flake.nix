@@ -457,6 +457,27 @@
               touch $out
             '';
 
+          default-size-conf-assertions =
+            pkgs.runCommand "default-size-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+            } ''
+              grep -q 'set-hook -g client-attached\[20\]' "$CONF"
+              grep -q 'set-hook -g client-resized\[20\]' "$CONF"
+              grep -q 'set-hook -gu client-attached\[20\]' "$CONF"
+              grep -q 'set-hook -gu client-resized\[20\]' "$CONF"
+              grep -E 'client-attached\[20\].*/nix/store/[^ ]*/bin/tmux-default-size' "$CONF"
+              grep -E 'client-resized\[20\].*/nix/store/[^ ]*/bin/tmux-default-size' "$CONF"
+
+              attach_clear=$(grep -n 'set-hook -gu client-attached\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              attach_set=$(grep -n 'set-hook -g client-attached\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              [ "$attach_clear" -lt "$attach_set" ]
+              resize_clear=$(grep -n 'set-hook -gu client-resized\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              resize_set=$(grep -n 'set-hook -g client-resized\[20\]' "$CONF" | head -1 | cut -d: -f1)
+              [ "$resize_clear" -lt "$resize_set" ]
+              touch $out
+            '';
+
           # A control byte is invisible in review and only misbehaves for clients
           # without a UTF-8 locale, so the delimiter rule needs a build-time gate
           # rather than vigilance (#373). Shell sources: scripts/, config/, modules/.
@@ -709,6 +730,16 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/reflow-fanout.bats
+              touch $out
+            '';
+
+          default-size-tests =
+            pkgs.runCommand "default-size-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/default-size.bats
               touch $out
             '';
 

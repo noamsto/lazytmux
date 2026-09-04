@@ -348,6 +348,7 @@
     "tmux-smart-nav"
     "tmux-reconcile-window"
     "tmux-float-refit"
+    "tmux-default-size"
     "tmux-worktree-match"
     "tmux-apply-theme-colors"
     "tmux-scratchpad"
@@ -1061,9 +1062,11 @@
     set-hook -gu after-new-window
     set-hook -gu session-window-changed
     set-hook -gu client-resized
+    set-hook -gu client-resized[20]
     set-hook -gu after-new-session
     set-hook -gu client-session-changed
     set-hook -gu client-attached
+    set-hook -gu client-attached[20]
     set-hook -gu window-resized
 
     # Also clear hooks from older config versions that may linger
@@ -1105,6 +1108,12 @@
     # [10] so it coexists with the splash/carousel client-attached[50]/[60]
     # hooks; the bare `set-hook -gu client-attached` above clears it on reload.
     set-hook -g client-attached[10]     'run-shell -b "${script.tmux-reflow-windows}/bin/tmux-reflow-windows #{qs:session_name} #{q:client_width}"'
+
+    # Birth-only knob for detached sessions under window-size latest (#494).
+    # Indexed [20] beside reflow [10] and splash [50]; -gu [20] in the block
+    # above clears on reload (bare -gu on the hook name clears every index too).
+    set-hook -g client-attached[20]     'run-shell -b "${script.tmux-default-size}/bin/tmux-default-size"'
+    set-hook -g client-resized[20]      'run-shell -b "${script.tmux-default-size}/bin/tmux-default-size"'
 
     # Refit floating panes to the new window size (#371). window-resized, not
     # client-resized: it carries the window that actually changed, and it also

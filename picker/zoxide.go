@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -252,12 +253,54 @@ func collectZoxide(sessions []sessionData, exclude []string) []suggestion {
 	return zoxideSuggestions(paths, sessionPaths, sessionNames, maxZoxideSuggestions)
 }
 
+const (
+	minDefaultWidth  = 80
+	minDefaultHeight = 24
+)
+
+// flooredClientSize applies the same floor tmux-default-size uses.
+func flooredClientSize(width, height int) (int, int, bool) {
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	if width < minDefaultWidth {
+		width = minDefaultWidth
+	}
+	if height < minDefaultHeight {
+		height = minDefaultHeight
+	}
+	return width, height, true
+}
+
+func newSessionSizeArgs() []string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_width}|#{client_height}").Output()
+	if err != nil {
+		return nil
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "|")
+	if len(parts) != 2 {
+		return nil
+	}
+	w, errW := strconv.Atoi(parts[0])
+	h, errH := strconv.Atoi(parts[1])
+	if errW != nil || errH != nil {
+		return nil
+	}
+	w, h, ok := flooredClientSize(w, h)
+	if !ok {
+		return nil
+	}
+	return []string{"-x", strconv.Itoa(w), "-y", strconv.Itoa(h)}
+}
+
 // createAndSwitch creates a detached session at path (unless name already
 // exists) and switches the attached client to it. zoxide add keeps the dir's
 // rank fresh: the new session's shell never cd's, so zoxide never sees it.
 func createAndSwitch(name, path string) error {
 	if exec.Command("tmux", "has-session", "-t", "="+name).Run() != nil {
-		if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", path).CombinedOutput(); err != nil {
+		args := []string{"new-session", "-d", "-s", name, "-c", path}
+		args = append(args, newSessionSizeArgs()...)
+		if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("new-session: %s", strings.TrimSpace(string(out)))
 		}
 	}
