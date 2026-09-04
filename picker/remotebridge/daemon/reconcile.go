@@ -139,12 +139,12 @@ passes:
 			localIsZoomed, zoomKnown := localZoomed(cfg, w.localWin)
 			if zoomKnown && localIsZoomed != zoomed {
 				// Never -Z a float: zoom-on converts it into a zoomed tiled pane
-				// (measured on next-3.8). Any tiled -Z toggles window zoom and
-				// leaves the float intact — including when remoteActive is one.
+				// (measured on next-3.8). When remoteActive is a float, skip the
+				// toggle (same as #517's localPaneAt miss) rather than guessing a
+				// tiled pane — pane 0 would zoom the wrong cell when the remote
+				// had zoomed a different tiled pane before focusing the float.
+				// (-A floats stay active under a tiled -Z; no focus restore.)
 				target, ok := localPaneAt(w, indexOf(newRemote, remoteActive))
-				if !ok && len(newRemote) > 0 {
-					target, ok = localPaneAt(w, 0)
-				}
 				if ok {
 					if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
 						fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
@@ -162,18 +162,13 @@ passes:
 			// fix — it reports the window as single-pane and reconcile would kill
 			// every hidden pane's renderer (#413). The others keep their cell
 			// because tmux's zoom drops them from the layout without resizing
-			// them. When the active pane is a float (legal while zoomed), no
-			// tiled id matches remoteActive — hand the root dims to the same
-			// fallback the toggle used rather than leaving every tiled pane at
-			// its cell size.
-			resizeID := remoteActive
-			if localIsZoomed && indexOf(newRemote, remoteActive) < 0 && len(newRemote) > 0 {
-				resizeID = newRemote[0]
-			}
+			// them. When remoteActive is a float, no tiled id matches — leave
+			// every tiled pane at its cell size rather than guessing which one
+			// holds the zoom (same skip as the -Z toggle above).
 			for i, id := range newRemote {
 				if s := router.sink(id); s != nil {
 					pw, ph := L.Panes[i].W, L.Panes[i].H
-					if localIsZoomed && id == resizeID {
+					if localIsZoomed && id == remoteActive {
 						pw, ph = L.W, L.H
 					}
 					s.enqueue(wire.FrameResize, wire.EncodeResize(pw, ph))
