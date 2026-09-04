@@ -224,3 +224,37 @@ func TestSplitInvalidatesRemoteActiveBelief(t *testing.T) {
 		t.Errorf("remoteActivePane = %q, want invalidated after a split", got)
 	}
 }
+
+// A verb carrying moves:true can land the remote's focus on a float — prefix + g
+// opens lazygit floating — and a float holds no slot in the tiled pane order, so
+// the ordinal lookup could only ever miss it and leave local focus on a renderer
+// the user is not typing into.
+func TestFocusLocalPaneFollowsAMirroredFloat(t *testing.T) {
+	c := newCtlState()
+	w := newRegistry().add("@1", "@101")
+	w.remotePanes = []string{"%0", "%1"}
+	w.localPanes = []string{"%l0", "%l1"}
+	w.localFloats["%9"] = "%l9"
+	c.setWindowPanes("@1", w.allRemotePanes())
+
+	var argv [][]string
+	notedFirst := false
+	cfg := Config{LocalTmux: func(a ...string) error {
+		argv = append(argv, a)
+		c.mu.Lock()
+		notedFirst = c.focus["@1"].localActive == "%9"
+		c.mu.Unlock()
+		return nil
+	}}
+
+	focusLocalPane(cfg, c, w, w.remotePanes, "%9")
+
+	if len(argv) != 1 || argv[0][0] != "select-pane" || argv[0][len(argv[0])-1] != "%l9" {
+		t.Fatalf("issued %v, want one select-pane against the local float %%l9", argv)
+	}
+	// The local select-pane fires after-select-pane, so the note has to be in
+	// place by then or the resulting ctl report reads as a fresh gesture.
+	if !notedFirst {
+		t.Error("noteLocalFocus had not run when select-pane was issued")
+	}
+}

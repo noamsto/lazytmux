@@ -134,6 +134,27 @@ var (
 	// one in.
 	remoteTools  = map[string]bool{"prdash": true, "lazygit": true, "yazi": true}
 	remoteThemes = map[string]bool{"dark": true, "light": true}
+	// remoteToolFloat gives each remoteTools entry its float shape, matching
+	// config/tmux.conf.nix's floatShort/floatFull mkFloat shapes byte for byte
+	// so a bridged tool opens at the same geometry the purely-local bind uses.
+	// Not itself an authorization list — remoteTools stays that; a tool present
+	// there but absent here (should never happen, kept in sync by hand) falls
+	// back to remoteFloatFull rather than build a flagless new-pane.
+	remoteToolFloat = map[string]string{
+		"prdash":  remoteFloatShort,
+		"yazi":    remoteFloatShort,
+		"lazygit": remoteFloatFull,
+	}
+)
+
+// remoteFloatShort and remoteFloatFull are config/tmux.conf.nix's
+// floatShort/floatFull mkFloat shapes, always carrying -A: the local bind's
+// version-guarded flagsNoA fallback exists only for a tmux old enough to lack
+// new-pane -A, and every remote this daemon opens a ctl connection to is on
+// this revision.
+const (
+	remoteFloatShort = "-x 90% -y 85% -X 5% -Y 8% -B heavy -A"
+	remoteFloatFull  = "-x 90% -y 90% -X 5% -Y 5% -B heavy -A"
 )
 
 var verbs = map[string]verb{
@@ -230,22 +251,31 @@ var verbs = map[string]verb{
 		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
-	// The tool binds (prefix p/g/G/y) open a float locally, but a float created
-	// on the remote is pruned out of the tiled tree and never mirrored
-	// (controlmode.Layout.Floats has no consumer), so the remote leg is a split,
-	// as carousel's is. The cwd has to be the remote tmux's own expansion: the
-	// mirror pane's cwd is the daemon's, not the worktree on screen.
+	// The tool binds (prefix p/g/G/y) open a float locally, and this is the
+	// remote leg: it now opens a float on the remote too, at the same shape
+	// (remoteToolFloat) the local bind uses, so the mirror can reconcile it
+	// into a local float the same way it reconciles any other remote float.
+	// The cwd still has to be the remote tmux's own expansion: the mirror
+	// pane's cwd is the daemon's, not the worktree on screen.
 	//
 	// A bare command name, never the local ${tool}/bin/tool store path, which
 	// exists on this host only. A remote missing the tool degrades to a
 	// short-lived message pane, as carousel does.
+	//
+	// Never stamps @float_geom on the remote pane: that option is read by the
+	// remote's own tmux-float-refit, which would then fight the mirror for
+	// authority over this float's geometry on the remote's next resize.
 	"tool": {args: 1, layout: true, moves: true, build: func(pane, _, _ string, a []string) ([]string, error) {
 		if !remoteTools[a[0]] {
 			return nil, fmt.Errorf("tool: unknown tool %q", a[0])
 		}
+		flags, ok := remoteToolFloat[a[0]]
+		if !ok {
+			flags = remoteFloatFull
+		}
 		script := toolResolveScript(a[0])
-		cmd := fmt.Sprintf("split-window -t %s -c '#{pane_current_path}' %s",
-			pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		cmd := fmt.Sprintf("new-pane -t %s -c '#{pane_current_path}' %s %s",
+			pane, flags, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
 	// A mirror's pane content is bytes the remote's programs coloured from the
@@ -315,7 +345,7 @@ func toolResolveScript(tool string) string {
 // status line and evaporates, same as the missing-binary case above it — so
 // this uses `tmux-claude-images --resolve` (prints MODE\tKEY\tMANIFEST,
 // launches nothing) to test the manifest itself and falls back to the same
-// short-lived split.
+// short-lived float.
 //
 // manifest=${res####*$tab}, not ${res##*$tab}: run-shell format-expands its
 // whole command string before /bin/sh ever sees it, and a run of `#`
@@ -334,11 +364,11 @@ func carouselResolveScript(pane string) string {
 			"if [ -n \"$manifest\" ] && [ -s \"$manifest\" ]; then "+
 			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 tmux-claude-images; "+
 			"fi; "+
-			`tmux split-window -t "$src" -l 3 "echo lazytmux: no images yet for this pane; sleep 5"; `+
+			`tmux new-pane -t "$src" %s "echo lazytmux: no images yet for this pane; sleep 5"; `+
 			"exit 0; "+
 			"fi; "+
-			`tmux split-window -t "$src" -l 3 "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
-		pane, pane, pane,
+			`tmux new-pane -t "$src" %s "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
+		pane, pane, pane, remoteFloatFull, remoteFloatFull,
 	)
 }
 

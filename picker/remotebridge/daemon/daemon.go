@@ -634,7 +634,8 @@ func Run(cfg Config) error {
 		for _, mw := range reg.all() {
 			// Unregister closes each pane's output sink, stopping its pump
 			// goroutine (mirrors closeWindow); then drop the renderer conns.
-			for _, id := range mw.remotePanes {
+			// Floats included, or their sinks outlive the daemon they belong to.
+			for _, id := range mw.allRemotePanes() {
 				router.Unregister(id)
 			}
 			for _, c := range mw.conns {
@@ -1084,6 +1085,18 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		}
 		go pumpInput(mw.conns[remotePane], remotePane, send, cfg.paster())
 	}
+
+	// A window that already holds a float when the bridge opens mirrors it now
+	// rather than waiting for an unrelated %layout-change.
+	reconcileFloats(cfg, mw, L, send, router, waitHellos, rt)
+	// The setWindowPanes above asserted the TILED set, before any float
+	// existed, and setWindowPanes clears every pane mapped to the window before
+	// re-setting — so the float-inclusive set has to be asserted after the
+	// floats are created. Without it parseCtl cannot map a float's pane to a
+	// window and refuses the first keybind pressed inside one, including the
+	// focus ctl after-select-pane fires on a mere click, with a visible
+	// --display-error banner.
+	cst.setWindowPanes(mw.remoteID, mw.allRemotePanes())
 	return nil
 }
 
@@ -1145,7 +1158,7 @@ func closeWindow(cfg Config, router *Router, cst *ctlState, reg *registry, cv *c
 	}
 	cv.forget(remoteID)
 	cst.forgetWindow(remoteID)
-	for _, id := range mw.remotePanes {
+	for _, id := range mw.allRemotePanes() {
 		router.Unregister(id)
 	}
 	for _, c := range mw.conns {
