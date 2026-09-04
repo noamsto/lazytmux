@@ -365,9 +365,12 @@ func extractClipboardImage(tool clipboardTool, target string) func() ([]byte, er
 // bridgeProc reads the mirror pane's @bridge_proc — the REMOTE pane's
 // foreground command, stamped by the agent shipper because the local pane
 // only ever runs a renderer. One fork per ctrl+v: the gesture is rare, so
-// freshness beats caching. Bounded by clipTimeout so a wedged local tmux
-// server costs this synchronous call at most that, not indefinitely — it ran
-// on the input pump with no bound at all before (#361 review finding 4).
+// freshness beats caching. clipTimeout bounds the input pump's WAIT for this
+// call, not the underlying LocalTmuxOut exec itself (its signature carries no
+// context, so a genuinely wedged local tmux server leaks the goroutine and its
+// child process rather than being killed) — still strictly better than
+// blocking the pump indefinitely, which is what ran here before (#361 review
+// finding 4).
 func bridgeProc(cfg Config, remotePane string) string {
 	type result struct {
 		out string

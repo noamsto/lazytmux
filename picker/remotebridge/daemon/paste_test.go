@@ -299,6 +299,38 @@ func TestPasteFailuresNotifyAndSendNothing(t *testing.T) {
 	}
 }
 
+// TestPasteFailureStillForwardsKeptPrefix guards finding 6's ordering
+// guarantee on the FAILURE path too: paste() forwards a frame's kept prefix
+// unconditionally, before any of the ext/extract/upload/path checks that can
+// fail. Every case in TestPasteFailuresNotifyAndSendNothing uses a bare
+// "\x16" (kept is empty), which can't tell a correct "forward kept, then
+// fail" from a regression that returns before forwarding kept at all.
+func TestPasteFailureStillForwardsKeptPrefix(t *testing.T) {
+	f := newPasteFixture()
+	f.h.probeClipboard = func() (clipboardProbe, bool, error) {
+		return clipboardProbe{ext: "png", extract: func() ([]byte, error) { return make([]byte, pasteMaxBytes+1), nil }}, true, nil
+	}
+	if got := f.h.handle("%1", []byte("x\x16")); len(got) != 0 {
+		t.Fatalf("byte not swallowed: %q", got)
+	}
+	first, notified := f.awaitOutcome(t)
+	if notified != "" {
+		t.Fatalf("kept prefix step produced a notify instead of a send: %q", notified)
+	}
+	if !strings.HasPrefix(first, "send-keys -H -t %1 78") { // 0x78 = 'x'
+		t.Fatalf("first send %q is not the kept prefix", first)
+	}
+	_, notified = f.awaitOutcome(t)
+	if !strings.Contains(notified, "too large") {
+		t.Errorf("notify %q lacks the oversize failure text", notified)
+	}
+	select {
+	case extra := <-f.sent:
+		t.Errorf("a failed paste should inject no path; extra send: %q", extra)
+	default:
+	}
+}
+
 func TestHandleClipboardProbeErrorNotifies(t *testing.T) {
 	f := newPasteFixture()
 	f.h.probeClipboard = func() (clipboardProbe, bool, error) {
