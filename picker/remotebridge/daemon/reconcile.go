@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
@@ -311,11 +312,8 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			// Dims come from the pane's cell in the REMOTE order, not from the
 			// temporary local index it was appended at — the swaps below have
 			// not run yet, so the two differ.
-			if seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)], cfg.graphicsFor(id)) {
-				go pumpInput(c, id, send)
-			} else {
-				delete(w.conns, id)
-			}
+			seedRenderer(rt, router, c, id, L.Panes[indexOf(newRemote, id)], cfg.graphicsFor(id))
+			go pumpInput(c, id, send)
 		}
 	}
 
@@ -339,6 +337,9 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // resetWindow rebuilds w from scratch, for the case where no current pane
 // survives (planPaneOps.Reset). Killing every pane instead would make tmux
 // destroy the mirror window and leave a registry entry pointing at nothing.
+// Closing a pane's conn kills that pane just as surely as kill-pane does, which
+// is why the kept pane's conn must outlive setupWindow until a replacement
+// renderer is known.
 //
 // The SHARED converger, like every other setupWindow caller: this reads
 // cfg.LocalArea() independently of watchResize's own read and writes to the
@@ -348,13 +349,43 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) error {
 	for _, id := range w.remotePanes {
 		router.Unregister(id)
-		if c := w.conns[id]; c != nil {
-			c.Close()
-			delete(w.conns, id)
+	}
+	oldConns := w.conns
+	w.conns = map[string]net.Conn{}
+	dropMirroredPanes(cfg, w)
+	err := setupWindow(cfg, send, router, waitHellos, cst, w, cv, rt)
+
+	closed := map[string]bool{}
+	for remoteID, oldConn := range oldConns {
+		if newConn, ok := w.conns[remoteID]; ok && newConn != oldConn {
+			oldConn.Close()
+			closed[remoteID] = true
 		}
 	}
-	dropMirroredPanes(cfg, w)
-	return setupWindow(cfg, send, router, waitHellos, cst, w, cv, rt)
+	if err == nil || w.spawned {
+		for remoteID, oldConn := range oldConns {
+			if closed[remoteID] {
+				continue
+			}
+			oldConn.Close()
+		}
+		if err == nil {
+			return nil
+		}
+		return err
+	}
+	for remoteID, oldConn := range oldConns {
+		if closed[remoteID] {
+			continue
+		}
+		if _, ok := w.conns[remoteID]; !ok {
+			w.conns[remoteID] = oldConn
+			// Output while unrouted is lost; the pane stays live but drifts
+			// until the next successful reset/reseed repairs the screen.
+			router.Register(remoteID, newOutputSink(oldConn, cfg.graphicsFor(remoteID)))
+		}
+	}
+	return err
 }
 
 // dropMirroredPanes kills every mirrored pane but the first, which resetWindow

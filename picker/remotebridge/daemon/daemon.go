@@ -969,6 +969,7 @@ func Run(cfg Config) error {
 // renderer, matching dims — since PlanWindow emits zero splits for a 1-pane
 // layout.
 func setupWindow(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, mw *mirrorWindow, cv *converger, rt roundTrip) error {
+	mw.spawned = false
 	// Cap the remote window at what the local clients can show before reading
 	// its layout, so the layout that gets mirrored is the converged one. The
 	// opt-out first, and unconditionally: it is a property of the window's whole
@@ -1013,6 +1014,9 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		return fmt.Errorf("daemon: mirror for %s: %d local panes for %d remote",
 			mw.remoteID, len(mw.localPanes), len(mw.remotePanes))
 	}
+	// Past here respawn-pane -k has killed any kept pane's old renderer; a
+	// mid-spawn failure must not merge that dead conn back.
+	mw.spawned = true
 	for i, remotePane := range mw.remotePanes {
 		if err := spawnRenderer(cfg, mw.localPanes[i], remotePane); err != nil {
 			return fmt.Errorf("daemon: spawn renderer for %s: %w", remotePane, err)
@@ -1060,9 +1064,12 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		// mirrorNewWindow tear the half-created mirror window down instead of
 		// leaving a blank one behind a live registry entry.
 		if len(mw.remotePanes) == 1 {
+			router.Unregister(remotePane)
+			mw.conns[remotePane].Close()
+			delete(mw.conns, remotePane)
 			return fmt.Errorf("daemon: seed failed for sole pane %s", remotePane)
 		}
-		delete(mw.conns, remotePane)
+		go pumpInput(mw.conns[remotePane], remotePane, send)
 	}
 	return nil
 }
@@ -1546,22 +1553,25 @@ func seedRenderer(rt roundTrip, router *Router, conn net.Conn, remotePane string
 	return wireRenderer(router, conn, remotePane, seed, err, dims, gfx)
 }
 
-// wireRenderer, on a successful seed, registers conn's output sink with router,
-// then enqueues the FrameSeed followed by a FrameResize (dims from the pane's
-// layout cell) through that sink. Register-then-enqueue keeps the seed the
-// sink's first frame (FIFO), so it precedes any routed output — no frame
-// bypasses the sink (frozen wire invariant). Returns false — logging to stderr
-// rather than crashing — if the pane closed between listing and seeding: the
-// caller decides whether that's fatal (sole pane) or just leaves that pane
-// unwired.
+// wireRenderer registers conn's output sink with router, then enqueues frames
+// through that sink. On a successful seed it enqueues FrameSeed followed by
+// FrameResize (dims from the pane's layout cell). Register-then-enqueue keeps
+// the seed the sink's first frame (FIFO), so it precedes any routed output —
+// no frame bypasses the sink (frozen wire invariant).
+//
+// On seed failure the pane is wired unseeded: only FrameResize is enqueued, the
+// conn stays open, and false is returned. For such a pane there is no seed, so
+// its sink's first frame may legitimately be a FrameOutput or FrameResize; the
+// seed-before-output guarantee binds a seed and the output of the same pane, it
+// does not require a seed to exist. The pane starts blank rather than stale.
 func wireRenderer(router *Router, conn net.Conn, remotePane string, seed []byte, err error, dims controlmode.PaneCell, gfx *graphics.Proxy) bool {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (skipping renderer)\n", remotePane, err)
-		conn.Close()
-		return false
-	}
 	sink := newOutputSink(conn, gfx)
 	router.Register(remotePane, sink)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: seed %s: %v (wired unseeded; trailing reseed will repair)\n", remotePane, err)
+		sink.enqueue(wire.FrameResize, wire.EncodeResize(dims.W, dims.H))
+		return false
+	}
 	sink.enqueue(wire.FrameSeed, seed)
 	sink.enqueue(wire.FrameResize, wire.EncodeResize(dims.W, dims.H))
 	return true
