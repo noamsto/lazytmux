@@ -94,3 +94,26 @@ func mirrorNewWindow(cfg Config, send func(string), router *Router, waitHellos h
 	}
 	return true
 }
+
+// healLostWindows retires every mirror whose local window has gone, rebuilding
+// it from the remote's own window list.
+//
+// The reattach sweep already asks this, but only there and only once. A lookup
+// that comes back unreadable leaves the dead entry in place (localWindowGone
+// answers on positive evidence alone), and no other pass re-reads the local
+// window set — so the mirror stayed a window short for the rest of the session
+// while the label poll aimed a `set-option` at the dead id every second (#514).
+// Riding the coarse tick bounds that at one interval instead of forever.
+func healLostWindows(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	// By id, re-read each time: retireMirror reconciles the whole registry, so
+	// an entry taken before it ran may no longer be the one for that window.
+	for _, remoteID := range reg.remoteIDs() {
+		mw, ok := reg.byRemoteID(remoteID)
+		if !ok {
+			continue
+		}
+		if localWindowGone(cfg, mw.localWin) {
+			retireMirror(cfg, send, router, waitHellos, cst, reg, cv, rt, remoteID)
+		}
+	}
+}
