@@ -396,6 +396,63 @@ option.
   split mirrored back like any other structural change.
 - Remote host needs `tmux-claude-images` and `resvg` on PATH.
 
+### Bridge Image Paste
+
+`ctrl+v` with an image on the *local* clipboard works inside a mirror pane
+(#361), even though the agent reading it runs on the remote host. The
+mechanism is in `picker/remotebridge/daemon/paste.go`; the design spec
+(`docs/superpowers/specs/2026-09-03-clipboard-image-paste-mirror-design.md`)
+carries the measured evidence.
+
+- **A paste is one byte.** Claude Code's `ctrl+v` delivers `0x16` on stdin
+  and the agent then reads the *system clipboard itself* — so in a mirror the
+  byte reaches the remote and the remote clipboard (headless: absent) is
+  read. The daemon intercepts the byte in `pumpInput`, the only component
+  that is both local (can read the local clipboard) and holding the ssh
+  `ControlMaster` (can ship the bytes).
+- **Gated and conservative, not a security boundary.** Interception fires
+  only when the remote pane's `@bridge_proc` is in the agent set (`claude`
+  alone is verified; codex has no clipboard read at all) AND the local
+  clipboard actually holds an image. Everything else — shells' quoted-insert,
+  text clipboards, empty clipboards — forwards the byte unchanged. A `0x16`
+  inside a bracketed paste is content, not the gesture, and is kept. The
+  process-name gate is a usability heuristic like every other `@bridge_*`
+  field: it's daemon-sanitized but remote-derived, and a hostile remote that
+  stamped it falsely would already need code execution in the foreground of
+  the pane the user is mirroring — a stronger foothold than the exfil buys.
+- **Only the TARGETS probe runs on the input pump.** It has to — it decides
+  forward-vs-swallow — and it is bounded (`clipTimeout`, one fork per tool).
+  Everything after a swallow (extracting the bytes, capping at 8 MiB,
+  uploading over the daemon's ControlMaster with a 5s timeout, injecting the
+  path) runs async in a goroutine, so a slow transfer or a wedged clipboard
+  owner never freezes the pane.
+- **The remote half is a path.** The image rides the daemon's ControlMaster to
+  a fresh, per-paste `mktemp -d` directory (0700 by construction, unpredictable
+  name — nothing to pre-create) under `/tmp/lazytmux-paste-*` on the remote,
+  landing at a plain-named file inside it, and the daemon hex-`send-keys` the
+  path plus a trailing space into the pane. Claude Code resolves an existing
+  image path in the prompt into an attachment at submit (verified live), so
+  the agent receives the image exactly as if the paste were local. The
+  trailing space keeps the user's next keystrokes from merging into the path
+  token, which would silently break that resolution.
+- **One pane's paste is serialized against its own later input.** The
+  handler's lock is acquired for every frame and, when a frame triggers a
+  paste, handed off to the paste goroutine rather than released — so nothing
+  typed on that pane afterwards (including Enter) can reach the remote ahead
+  of the kept prefix and the path injection. Otherwise a prompt could submit
+  imageless with no notification if the user hit Enter inside the upload
+  window.
+- **Cleanup is a janitor, not a delete.** The path is read at *submit*, which
+  can be minutes after the paste, so the store script sweeps sibling
+  directories older than 60 minutes on each paste instead of deleting on
+  inject.
+- **Failures are visible.** After the byte is swallowed, any failure (BMP —
+  which the agent's path regex excludes — oversize, timeout, unwritable
+  remote dir, malformed reply, a dropped send while the bridge reconnects) is
+  a local `display-message`, never a silent no-op and never a frozen pane.
+  Disabled entirely when the daemon has no ssh transport (`--test-local`),
+  where `Config.PasteUpload` is nil.
+
 ### Bridge Session Pinning
 
 A control-mode client receives `%output` **only for the session it is currently
@@ -527,6 +584,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 | Remote-side picker (`prefix + s` `^o`) | `lztmux-remote-picker` (`remote.exposePickOnPath`, default true) |
 | Tool binds across a mirror (`prefix + p`/`g`/`y`) | whichever of `prdash`, `lazygit`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. |
 | Theme fan-out (any light/dark toggle) | `theme-toggle` — it ships from the desktop profile, so a headless remote has none and the verb is silently a no-op there. |
+| Image paste into a mirror (`ctrl+v`) | nothing beyond POSIX `sh`/`mktemp`/`find` — the requirement is on the *local* host: `xclip` or `wl-paste` (without one the byte is forwarded, i.e. pre-#361 behaviour). |
 
 `lztmux-remote-picker` doubles as the picker's capability probe, so its absence
 is the one requirement that reports itself: the asking side prints

@@ -128,6 +128,33 @@ func TestSSHControlArgsCarryKeepalives(t *testing.T) {
 	}
 }
 
+// TestPasteUploadArgs pins the upload's ssh argv: it must ride the control
+// connection's ControlMaster (-S), never allocate a tty (-T), and hand the
+// store script to sh -c as ONE quoted element — the remote login shell is
+// fish, which would otherwise parse (and mangle) it. The extension rides as
+// a separate argv element ($1), never interpolated into the script.
+func TestPasteUploadArgs(t *testing.T) {
+	args := pasteUploadArgs("ssh", "/tmp/ctl.sock", "tp-g6", "png")
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{"-S /tmp/ctl.sock", "-T tp-g6", "-- sh -c"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %q", want, joined)
+		}
+	}
+	// The script must be single-quoted whole, so fish never parses it.
+	scriptAt := slices.Index(args, shellQuote(remoteStoreScript))
+	if scriptAt < 0 {
+		t.Fatalf("store script not shell-quoted as one element in %q", joined)
+	}
+	if args[scriptAt+1] != "_" || args[scriptAt+2] != "png" {
+		t.Errorf("argv after script = %q, want _ <ext>", args[scriptAt+1:])
+	}
+	if strings.Contains(remoteStoreScript, "'") {
+		t.Error("store script contains a single quote; shellQuote only wraps, it cannot escape one inside sh -c")
+	}
+}
+
 // TestTransportStartAfterStopEndsTheChild makes transport.start's race
 // deterministic: a stop that lands before a child is published must still end
 // it, or the ssh child outlives the daemon holding the ControlMaster open.
