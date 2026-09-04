@@ -68,8 +68,8 @@ func TestDecodeBridgeName(t *testing.T) {
 
 func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1",
-		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1",
+		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",
+		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1|",
 	}
 	items := buildSessionItems(nil, snap, nil, "dark", false)
 	hdr := items[0]
@@ -111,6 +111,35 @@ func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 	}
 }
 
+// A mirror pane's own pane_current_command is the bridge renderer, not the
+// remote's real command — @bridge_proc carries the remote's, and must win
+// when non-empty (#513).
+func TestSessionsBridgeProcOverride(t *testing.T) {
+	snap := panesSnapshot{
+		"%1|mirror-sess|0|/home/noams/git/lazytmux|1900000300|tp-g6|fish|1|claude",
+		"%2|local-sess|0|/home/noams/src|1900000200||bash|2|",
+	}
+	sessions := snap.sessions()
+	byName := map[string]sessionData{}
+	for _, s := range sessions {
+		byName[s.name] = s
+	}
+	mirror, ok := byName["mirror-sess"]
+	if !ok {
+		t.Fatal("mirror-sess missing from sessions()")
+	}
+	if len(mirror.procs) != 1 || mirror.procs[0] != "claude" {
+		t.Errorf("mirror-sess procs = %v, want [claude] (bridge_proc must override the renderer's fish)", mirror.procs)
+	}
+	local, ok := byName["local-sess"]
+	if !ok {
+		t.Fatal("local-sess missing from sessions()")
+	}
+	if len(local.procs) != 1 || local.procs[0] != "bash" {
+		t.Errorf("local-sess procs = %v, want [bash] (empty bridge_proc must fall through to pane_current_command)", local.procs)
+	}
+}
+
 func TestUnquoteTmuxOptValue(t *testing.T) {
 	cases := map[string]string{
 		`''`:              "",          // tmux's rendering of an option set to ""
@@ -132,7 +161,7 @@ func TestUnquoteTmuxOptValue(t *testing.T) {
 // windowPaneRow builds one list-panes -a row in parseWindowPaneRows' field
 // order (see collectWindows' -F string), for tests below.
 func windowPaneRow(fields ...string) string {
-	const n = 29
+	const n = 30
 	row := make([]string, n)
 	copy(row, fields)
 	return strings.Join(row, "|")
@@ -253,6 +282,41 @@ func TestParseWindowPaneRowsBareBridgeKeepsDecodedWindowName(t *testing.T) {
 	}
 	if wi.bridgeName != "feat#1" {
 		t.Errorf("bridgeName = %q, want feat#1 (decoded)", wi.bridgeName)
+	}
+}
+
+// Same override as TestSessionsBridgeProcOverride, for the window-mode
+// collector: a mirror pane's pane_current_command is the bridge renderer
+// ("fish"), and @bridge_proc (the trailing field) carries the remote's real
+// command, which must win when non-empty.
+func TestParseWindowPaneRowsBridgeProcOverride(t *testing.T) {
+	mirrorRow := windowPaneRow(
+		"sess", "0", "winname", "0", "fish", "1", "", "/some/path",
+		"", "", "", "", "", "",
+		"", "", "", "", "",
+		"1", "", "", "", "",
+		"", "", "", "",
+		"tp-g6", "claude",
+	)
+	localRow := windowPaneRow(
+		"sess", "1", "winname2", "0", "bash", "1", "feature/x", "/some/path",
+		"", "", "", "", "", "",
+		"", "", "", "", "",
+		"", "", "", "", "",
+		"", "", "", "",
+		"", "",
+	)
+	order, m := parseWindowPaneRows([]string{mirrorRow, localRow})
+	if len(order) != 2 {
+		t.Fatalf("got %d windows, want 2", len(order))
+	}
+	mirror := m[order[0]]
+	if len(mirror.procs) != 1 || mirror.procs[0] != "claude" {
+		t.Errorf("mirror procs = %v, want [claude] (bridge_proc must override the renderer's fish)", mirror.procs)
+	}
+	local := m[order[1]]
+	if len(local.procs) != 1 || local.procs[0] != "bash" {
+		t.Errorf("local procs = %v, want [bash] (empty bridge_proc must fall through to pane_current_command)", local.procs)
 	}
 }
 

@@ -132,10 +132,12 @@ type panesSnapshot []string
 // collectPanesSnapshot fetches the union of the fields sessions() and paneMap()
 // read. Fields are pipe-delimited; wrong field count fails closed (session_path
 // and pane_current_command may contain |). @bridge_host is mid-format; pane_pid
-// is the trailing field and is never empty on a live pane.
+// is the trailing field and is never empty on a live pane. @bridge_proc is
+// appended last: a mirror pane's own pane_current_command is the bridge
+// renderer, not the remote's real command (#513).
 func collectPanesSnapshot() panesSnapshot {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}|#{session_name}|#{window_index}|#{session_path}|#{session_last_attached}|#{@bridge_host}|#{pane_current_command}|#{pane_pid}").Output()
+		"#{pane_id}|#{session_name}|#{window_index}|#{session_path}|#{session_last_attached}|#{@bridge_host}|#{pane_current_command}|#{pane_pid}|#{@bridge_proc}").Output()
 	if err != nil {
 		return nil
 	}
@@ -161,10 +163,15 @@ func (snap panesSnapshot) sessions() []sessionData {
 
 	for _, line := range snap {
 		parts := strings.Split(line, "|")
-		if len(parts) != 8 {
+		if len(parts) != 9 {
 			continue
 		}
 		name, path, actStr, proc := parts[1], parts[3], parts[4], parts[6]
+		// A mirror pane runs the bridge renderer; @bridge_proc carries what the
+		// remote pane is really running.
+		if bp := parts[8]; bp != "" {
+			proc = bp
+		}
 		// Expand %h (tmux may store literal %h for home dir)
 		if home := os.Getenv("HOME"); home != "" {
 			path = strings.Replace(path, "%h", home, 1)
@@ -295,7 +302,7 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 	}
 	for _, line := range lines {
 		parts := strings.Split(line, "|")
-		if len(parts) != 29 {
+		if len(parts) != 30 {
 			continue
 		}
 		sess := parts[0]
@@ -303,6 +310,11 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 		wName := stripTmuxColors(parts[2])
 		zoomed := parts[3] == "1"
 		proc := parts[4]
+		// A mirror pane runs the bridge renderer; @bridge_proc carries what the
+		// remote pane is really running.
+		if bp := field(parts, 29); bp != "" {
+			proc = bp
+		}
 		active := parts[5] == "1"
 		branch := stripTmuxColors(field(parts, 6))
 		panePath := field(parts, 7)
@@ -375,7 +387,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}|#{@bridge_host}").Output()
+		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}|#{@bridge_host}|#{@bridge_proc}").Output()
 	if err != nil {
 		return nil
 	}

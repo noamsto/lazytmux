@@ -50,21 +50,30 @@ func loadUsageCaches(dir string) map[string]usageCache {
 
 // agentsRunning is the display gate: the segment only matters while a coding
 // agent is running somewhere. A failed list-panes returns true — a transient
-// tmux error shouldn't blink the segment off.
+// tmux error shouldn't blink the segment off. A mirror pane's own
+// pane_current_command is the bridge renderer, not the remote's real command,
+// so @bridge_proc (the remote's, stamped by the daemon) is checked too (#513).
 func agentsRunning() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_current_command}").Output()
+	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_current_command}|#{@bridge_proc}").Output()
 	if err != nil {
 		return true
 	}
 	known := map[string]bool{"claude": true, "codex": true, "cursor-agent": true}
-	for line := range strings.Lines(string(out)) {
-		base := path.Base(strings.TrimSpace(line))
+	isKnown := func(cmd string) bool {
+		base := path.Base(strings.TrimSpace(cmd))
 		if m := wrappedRe.FindStringSubmatch(base); m != nil {
 			base = m[1]
 		}
-		if known[base] {
+		return known[base]
+	}
+	for line := range strings.Lines(string(out)) {
+		parts := strings.SplitN(strings.TrimRight(line, "\n"), "|", 2)
+		if isKnown(parts[0]) {
+			return true
+		}
+		if len(parts) == 2 && parts[1] != "" && isKnown(parts[1]) {
 			return true
 		}
 	}
