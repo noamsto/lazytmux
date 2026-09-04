@@ -49,6 +49,13 @@ type Config struct {
 	// ssh ControlMaster and returns the remote path it landed at (#361). nil
 	// disables ctrl+v image-paste interception (tests, --test-local).
 	PasteUpload func(ctx context.Context, ext string, data []byte) (string, error)
+	// SendCtl is Run's sendCtl, the bool-reporting form of send, stamped onto
+	// cfg once per Run so paster() can hand it to pasteHandler without
+	// threading a parameter through the whole reconcile call chain (#361 review
+	// finding 2: the fire-and-forget send left a dropped path injection with no
+	// failure surface). Unset in every test Config that builds a pasteHandler
+	// directly rather than through Run.
+	SendCtl func(cmd string) bool
 	// HandOff opens a remote session this bridge was switched to as a mirror of
 	// its own (injected; prod = lztmux-remote-open, nil = off). See sessionPin.
 	HandOff func(remoteSession string)
@@ -459,6 +466,7 @@ func Run(cfg Config) error {
 	send := func(s string) { hold.send(s) }
 	sendCtl := hold.send
 	rt := hold.roundTrip
+	cfg.SendCtl = sendCtl
 
 	c, err := dialConn(cfg)
 	if err != nil {
@@ -1838,7 +1846,7 @@ func pumpInput(conn net.Conn, remotePane string, send func(string), paste *paste
 		}
 		payload := f.Payload
 		if paste != nil {
-			payload = paste.handle(remotePane, payload, send)
+			payload = paste.handle(remotePane, payload)
 		}
 		for _, args := range controlmode.SendKeysArgs(remotePane, payload, controlmode.InputChunkBytes) {
 			send(strings.Join(args, " "))

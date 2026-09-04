@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -25,12 +26,38 @@ func TestSplitPasteDrops(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			kept, drops := splitPasteDrops([]byte(c.in))
+			h := &pasteHandler{}
+			kept, drops := h.splitPasteDrops([]byte(c.in))
 			if string(kept) != c.wantKept || drops != c.wantDrops {
 				t.Errorf("splitPasteDrops(%q) = %q, %d — want %q, %d",
 					c.in, kept, drops, c.wantKept, c.wantDrops)
 			}
 		})
+	}
+}
+
+// TestSplitPasteDropsCrossesFrames pins finding 5: the bracketed-paste scan
+// state must survive across separate handle calls (pty reads), since a paste
+// longer than one 4096-byte frame arrives as several. A 0x16 in a later frame,
+// still inside the bracket opened by an earlier one, must be kept.
+func TestSplitPasteDropsCrossesFrames(t *testing.T) {
+	h := &pasteHandler{}
+	kept1, drops1 := h.splitPasteDrops([]byte("\x1b[200~start"))
+	if drops1 != 0 || string(kept1) != "\x1b[200~start" {
+		t.Fatalf("frame 1: kept=%q drops=%d", kept1, drops1)
+	}
+	if !h.inPaste {
+		t.Fatal("frame 1 did not leave inPaste set")
+	}
+	kept2, drops2 := h.splitPasteDrops([]byte("mid\x16dle\x1b[201~"))
+	if drops2 != 0 {
+		t.Fatalf("frame 2: a 0x16 mid-bracket was dropped: kept=%q drops=%d", kept2, drops2)
+	}
+	if string(kept2) != "mid\x16dle\x1b[201~" {
+		t.Errorf("frame 2: kept=%q, want the 0x16 preserved as content", kept2)
+	}
+	if h.inPaste {
+		t.Error("frame 2 did not close the bracket")
 	}
 }
 
@@ -68,28 +95,48 @@ type pasteFixture struct {
 	uploadOut string
 	sent      chan string
 	notified  chan string
+
+	mu       sync.Mutex
+	sentAll  []string
+	refuseAt int // sendCtl returns false starting at this 0-based call index; -1 = never
 }
 
 func newPasteFixture() *pasteFixture {
 	f := &pasteFixture{
-		uploadOut: "/tmp/lazytmux-paste/img-abc123.png",
-		sent:      make(chan string, 4),
-		notified:  make(chan string, 1),
+		uploadOut: "/tmp/lazytmux-paste-abc123/img.png",
+		sent:      make(chan string, 8),
+		notified:  make(chan string, 8),
+		refuseAt:  -1,
 	}
 	f.h = &pasteHandler{
 		upload: func(_ context.Context, _ string, _ []byte) (string, error) {
 			return f.uploadOut, f.uploadErr
 		},
-		readClipboard: func() ([]byte, string, bool, error) {
-			return []byte("png-bytes"), "png", true, nil
+		probeClipboard: func() (clipboardProbe, bool, error) {
+			return clipboardProbe{
+				ext:     "png",
+				extract: func() ([]byte, error) { return []byte("png-bytes"), nil },
+			}, true, nil
 		},
 		procFor: func(string) string { return "claude" },
 		notify:  func(msg string) { f.notified <- msg },
+		sendCtl: f.sendCtl,
 	}
 	return f
 }
 
-func (f *pasteFixture) send(s string) { f.sent <- s }
+func (f *pasteFixture) sendCtl(s string) bool {
+	f.mu.Lock()
+	idx := len(f.sentAll)
+	f.sentAll = append(f.sentAll, s)
+	refuse := f.refuseAt >= 0 && idx >= f.refuseAt
+	f.mu.Unlock()
+	if refuse {
+		return false
+	}
+	f.sent <- s
+	return true
+}
 
 // awaitOutcome blocks until the async paste produces its first observable
 // (a send-keys command or a notify) and returns it with the channel it came
@@ -110,7 +157,7 @@ func (f *pasteFixture) awaitOutcome(t *testing.T) (sent, notified string) {
 func TestHandleForwardsWithoutCtrlV(t *testing.T) {
 	f := newPasteFixture()
 	in := []byte("ls -la\r")
-	if got := f.h.handle("%1", in, f.send); string(got) != string(in) {
+	if got := f.h.handle("%1", in); string(got) != string(in) {
 		t.Errorf("handle rewrote %q to %q", in, got)
 	}
 }
@@ -119,25 +166,36 @@ func TestHandleForwardsOnNonAgentPane(t *testing.T) {
 	f := newPasteFixture()
 	f.h.procFor = func(string) string { return "fish" }
 	in := []byte("\x16")
-	if got := f.h.handle("%1", in, f.send); string(got) != string(in) {
+	if got := f.h.handle("%1", in); string(got) != string(in) {
 		t.Errorf("shell pane: handle dropped the byte: %q", got)
 	}
 }
 
 func TestHandleForwardsWhenNoImage(t *testing.T) {
 	f := newPasteFixture()
-	f.h.readClipboard = func() ([]byte, string, bool, error) { return nil, "", false, nil }
+	f.h.probeClipboard = func() (clipboardProbe, bool, error) { return clipboardProbe{}, false, nil }
 	in := []byte("\x16")
-	if got := f.h.handle("%1", in, f.send); string(got) != string(in) {
+	if got := f.h.handle("%1", in); string(got) != string(in) {
 		t.Errorf("empty clipboard: handle dropped the byte: %q", got)
 	}
 }
 
+// TestHandleSwallowsAndInjectsOnImage pins the ordering fix (finding 6): the
+// byte is swallowed from handle's own return (nothing left for pumpInput's
+// normal forwarding loop), and the goroutine it starts sends the kept prefix
+// BEFORE the path injection, in that order, on the same channel.
 func TestHandleSwallowsAndInjectsOnImage(t *testing.T) {
 	f := newPasteFixture()
-	got := f.h.handle("%1", []byte("x\x16"), f.send)
-	if string(got) != "x" {
-		t.Fatalf("handle kept the ctrl+v: %q", got)
+	got := f.h.handle("%1", []byte("x\x16"))
+	if len(got) != 0 {
+		t.Fatalf("handle returned bytes for pumpInput to forward directly: %q", got)
+	}
+	first, notified := f.awaitOutcome(t)
+	if notified != "" {
+		t.Fatalf("unexpected notify: %q", notified)
+	}
+	if !strings.HasPrefix(first, "send-keys -H -t %1 78") { // 0x78 = 'x'
+		t.Fatalf("first send %q is not the kept prefix", first)
 	}
 	cmd, notified := f.awaitOutcome(t)
 	if notified != "" {
@@ -153,8 +211,45 @@ func TestHandleSwallowsAndInjectsOnImage(t *testing.T) {
 	}
 	select {
 	case extra := <-f.sent:
-		t.Errorf("more than one command sent; extra: %q", extra)
+		t.Errorf("more than two commands sent; extra: %q", extra)
 	default:
+	}
+}
+
+// TestHandleSerializesAgainstLaterFrames pins finding 6 directly: a frame
+// arriving on the same pane while a paste is in flight must not be forwarded
+// (by pumpInput's own loop, which calls handle for every frame) ahead of the
+// paste's own sends — handle must block until the prior paste releases the
+// lock it was handed.
+func TestHandleSerializesAgainstLaterFrames(t *testing.T) {
+	f := newPasteFixture()
+	release := make(chan struct{})
+	f.h.upload = func(_ context.Context, _ string, _ []byte) (string, error) {
+		<-release
+		return f.uploadOut, nil
+	}
+	got := f.h.handle("%1", []byte("\x16"))
+	if len(got) != 0 {
+		t.Fatalf("handle returned bytes: %q", got)
+	}
+
+	unblocked := make(chan []byte, 1)
+	go func() { unblocked <- f.h.handle("%1", []byte("\r")) }()
+
+	select {
+	case <-unblocked:
+		t.Fatal("a later frame's handle returned before the pending paste released the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case got := <-unblocked:
+		if string(got) != "\r" {
+			t.Errorf("later frame returned %q, want \\r forwarded", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("later frame's handle never returned after the paste finished")
 	}
 }
 
@@ -165,11 +260,18 @@ func TestPasteFailuresNotifyAndSendNothing(t *testing.T) {
 		wantInMsg string
 	}{
 		{"bmp unsupported", func(f *pasteFixture) {
-			f.h.readClipboard = func() ([]byte, string, bool, error) { return []byte("b"), "bmp", true, nil }
+			f.h.probeClipboard = func() (clipboardProbe, bool, error) {
+				return clipboardProbe{ext: "bmp", extract: func() ([]byte, error) { return []byte("b"), nil }}, true, nil
+			}
 		}, "not pasteable"},
+		{"extract error", func(f *pasteFixture) {
+			f.h.probeClipboard = func() (clipboardProbe, bool, error) {
+				return clipboardProbe{ext: "png", extract: func() ([]byte, error) { return nil, errors.New("xclip died") }}, true, nil
+			}
+		}, "clipboard image read failed"},
 		{"oversize", func(f *pasteFixture) {
-			f.h.readClipboard = func() ([]byte, string, bool, error) {
-				return make([]byte, pasteMaxBytes+1), "png", true, nil
+			f.h.probeClipboard = func() (clipboardProbe, bool, error) {
+				return clipboardProbe{ext: "png", extract: func() ([]byte, error) { return make([]byte, pasteMaxBytes+1), nil }}, true, nil
 			}
 		}, "too large"},
 		{"upload error", func(f *pasteFixture) {
@@ -183,7 +285,7 @@ func TestPasteFailuresNotifyAndSendNothing(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newPasteFixture()
 			c.mutate(f)
-			if got := f.h.handle("%1", []byte("\x16"), f.send); len(got) != 0 {
+			if got := f.h.handle("%1", []byte("\x16")); len(got) != 0 {
 				t.Fatalf("byte not swallowed: %q", got)
 			}
 			sent, notified := f.awaitOutcome(t)
@@ -197,12 +299,12 @@ func TestPasteFailuresNotifyAndSendNothing(t *testing.T) {
 	}
 }
 
-func TestHandleClipboardReadErrorNotifies(t *testing.T) {
+func TestHandleClipboardProbeErrorNotifies(t *testing.T) {
 	f := newPasteFixture()
-	f.h.readClipboard = func() ([]byte, string, bool, error) {
-		return nil, "", false, errors.New("xclip died")
+	f.h.probeClipboard = func() (clipboardProbe, bool, error) {
+		return clipboardProbe{}, false, errors.New("xclip died")
 	}
-	if got := f.h.handle("%1", []byte("\x16"), f.send); len(got) != 0 {
+	if got := f.h.handle("%1", []byte("\x16")); len(got) != 0 {
 		t.Fatalf("byte not swallowed: %q", got)
 	}
 	select {
@@ -212,6 +314,59 @@ func TestHandleClipboardReadErrorNotifies(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no notify on read error")
+	}
+}
+
+// TestHandleNotifiesOnRefusedSend pins finding 2: a dropped send-keys (e.g.
+// the bridge mid-reconnect) must surface a notify rather than vanishing.
+func TestHandleNotifiesOnRefusedSend(t *testing.T) {
+	f := newPasteFixture()
+	f.refuseAt = 0
+	if got := f.h.handle("%1", []byte("\x16")); len(got) != 0 {
+		t.Fatalf("byte not swallowed: %q", got)
+	}
+	select {
+	case msg := <-f.notified:
+		if !strings.Contains(msg, "dropped") {
+			t.Errorf("notify %q does not describe the dropped send", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no notify on refused send")
+	}
+	select {
+	case s := <-f.sent:
+		t.Errorf("a refused send should not also land as sent: %q", s)
+	default:
+	}
+}
+
+// TestHandleNotifiesOnExtraBurstedDrop pins finding 7 (clarity): two 0x16 in
+// one frame trigger exactly one paste, and the extra gesture is notified
+// rather than silently discarded.
+func TestHandleNotifiesOnExtraBurstedDrop(t *testing.T) {
+	f := newPasteFixture()
+	got := f.h.handle("%1", []byte("\x16\x16"))
+	if len(got) != 0 {
+		t.Fatalf("byte(s) not swallowed: %q", got)
+	}
+	var sawExtraNotice, sawInjection bool
+	for range 2 {
+		select {
+		case msg := <-f.notified:
+			if strings.Contains(msg, "extra") {
+				sawExtraNotice = true
+			}
+		case <-f.sent:
+			sawInjection = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("paste produced fewer outcomes than expected")
+		}
+	}
+	if !sawExtraNotice {
+		t.Error("no notify about the extra swallowed ctrl+v")
+	}
+	if !sawInjection {
+		t.Error("the single paste never injected a path")
 	}
 }
 

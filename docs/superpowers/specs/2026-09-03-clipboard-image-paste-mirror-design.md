@@ -68,6 +68,14 @@ that is what tmux reports for a CC pane, nix wrapper included). The gate is a
 set, so another agent joins it once its path-inlining is verified the same
 way.
 
+This gate is a usability heuristic, not a security boundary: `@bridge_proc`
+is daemon-sanitized but remote-derived, trusted the same way every other
+`@bridge_*` field is. A hostile remote that stamped `@bridge_proc=claude` on
+a pane it doesn't actually run claude in would need code execution in the
+foreground of the specific pane the user is already mirroring to exfiltrate
+anything through it — a stronger foothold than the exfil buys, so it's not
+treated as a threat this design defends against.
+
 ## Design
 
 The bridge daemon is the only component that sees both sides: it is a *local*
@@ -91,10 +99,13 @@ direction (remote→local) and is not reused beyond the socket pattern.
    xclip/wl-paste probe CC uses). **No image → the byte is forwarded
    unchanged** — text paste and every other `ctrl+v` meaning behave exactly
    as today.
-4. Image present → the byte is swallowed and the rest runs **async**, off the
-   input pump, so a slow transfer never freezes the pane:
+4. Image present → the byte is swallowed. Only the TARGETS probe that decided
+   this (step 3) ran on the input pump; everything from here runs **async**,
+   in a goroutine, so a slow transfer or a wedged clipboard owner never
+   freezes the pane:
    - extract the image bytes (png preferred; jpeg/gif/webp pass through with
-     matching extension; bmp-only → visible "unsupported" message);
+     matching extension; bmp-only → visible "unsupported" message) through a
+     bounded reader, so an oversize clipboard is never buffered whole;
    - cap at 8 MiB (the graphics fetcher's `gfx-max-bytes` default);
    - ship over the daemon's own ssh `ControlMaster` socket —
      `ssh -S <sock> -T <host> -- sh -c '<store>' _ <ext>` with the bytes on
@@ -121,17 +132,24 @@ quoting pattern is followed exactly — the script is single-quoted as one
 argv element, so fish never parses it):
 
 ```sh
-d=/tmp/lazytmux-paste
 umask 077
-mkdir -p "$d" || exit 1
-find "$d" -type f -mmin +60 -delete 2>/dev/null
-f=$(mktemp "$d/img-XXXXXXXX.$1") || exit 1
-cat > "$f" || { rm -f "$f"; exit 1; }
-printf '%s' "$f"
+d=$(mktemp -d /tmp/lazytmux-paste-XXXXXXXX) || exit 1
+find /tmp -maxdepth 1 -name "lazytmux-paste-*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+f="$d/img.$1"
+cat > "$f" || { rm -rf "$d"; exit 1; }
+printf "%s" "$f"
 ```
 
-- **Cleanup answer (issue question):** the janitor is the sweep on line 4 —
-  every paste deletes sibling files older than 60 minutes. The file must
+- **Per-paste directory, not a fixed shared path.** `mktemp -d`'s random
+  suffix means nothing can be pre-created ahead of a paste, and its 0700 mode
+  (by construction, not umask) means no other local account can write into it
+  at all — a fixed shared dir let a second local account pre-create the path
+  (any owner, mode, or a symlink) and escalate image substitution to an
+  arbitrary-file overwrite as the victim's own uid. This also sidesteps the
+  unverified BSD/macOS question of a `mktemp` suffix trailing the X's, since
+  the extension no longer rides in the template.
+- **Cleanup answer (issue question):** the janitor is the sweep on line 3 —
+  every paste deletes sibling directories older than 60 minutes. The file must
   outlive prompt editing (the path is read at *submit*, which can be minutes
   later), so delete-on-inject is wrong; a time-boxed sweep needs no daemon
   state and no extra round trip. `/tmp` on the remote is the right home:
@@ -139,7 +157,7 @@ printf '%s' "$f"
 - `ext` (`$1`) is validated daemon-side against `^(png|jpe?g|gif|webp)$`
   before it is ever interpolated.
 - The returned path is validated against
-  `^/tmp/lazytmux-paste/img-[A-Za-z0-9]+\.(png|jpe?g|gif|webp)$` before it
+  `^/tmp/lazytmux-paste-[A-Za-z0-9]+/img\.(png|jpe?g|gif|webp)$` before it
   reaches a `send-keys` command line.
 
 ### Seam and sibling boundaries
@@ -187,7 +205,7 @@ natural seam.
 | image > 8 MiB | swallowed; "image too large" message |
 | ssh/transfer timeout or error | swallowed; "upload failed" message |
 | remote dir unwritable / bad reply | swallowed; legible message |
-| daemon mid-reconnect (no socket) | swallowed; "bridge reconnecting" message |
+| daemon mid-reconnect | swallowed; upload still runs over the daemon's own ControlMaster (independent of the control-mode connection), but the send-keys injection is refused — "input to the mirror pane was dropped" message |
 
 "Swallowed + message" is deliberate: forwarding `0x16` after a *failed image
 transfer* would make the remote agent report its own clipboard (empty),

@@ -74,22 +74,33 @@ func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []stri
 }
 
 // remoteStoreScript is the paste upload's remote half (#361): it lands the
-// image bytes (stdin) in a 0600 mktemp file under a fixed dir and prints the
-// path. The find sweep is the cleanup answer — the file must outlive prompt
-// editing (the agent reads the path at SUBMIT, possibly minutes later), so
-// delete-on-inject is wrong and a per-paste janitor needs no daemon state.
+// image bytes (stdin) in a fresh 0700 mktemp -d directory and prints the path
+// of a plain-named file inside it. The find sweep is the cleanup answer — the
+// file must outlive prompt editing (the agent reads the path at SUBMIT,
+// possibly minutes later), so delete-on-inject is wrong and a per-paste
+// janitor needs no daemon state.
+//
+// The directory is per-invocation (mktemp -d's random suffix) rather than a
+// fixed shared path: a fixed path can be pre-created by another local account
+// ahead of the victim's first paste (any owner, any mode, or a symlink), which
+// escalates from image substitution to an arbitrary-file overwrite as the
+// victim's own uid (#361 review finding 1, verified locally). mktemp -d's
+// create is atomic and unpredictable, so there is nothing to pre-create, and
+// its 0700 mode (by construction, not umask) means no other local account can
+// write into it at all. It also sidesteps the unverified BSD/macOS mktemp
+// question of a suffix trailing the X's, since the extension no longer rides
+// in the template.
 //
 // It runs under sh -c exactly like graphics' remoteFetch: ssh space-joins the
 // post-host argv for the remote LOGIN shell (fish on the normal host), which
 // never parses the script because shellQuote makes it one argv element.
 // $1 is the extension, validated against pasteExtRe before it is ever
 // interpolated.
-const remoteStoreScript = `d=/tmp/lazytmux-paste
-umask 077
-mkdir -p "$d" || exit 1
-find "$d" -type f -mmin +60 -delete 2>/dev/null
-f=$(mktemp "$d/img-XXXXXXXX.$1") || exit 1
-cat > "$f" || { rm -f "$f"; exit 1; }
+const remoteStoreScript = `umask 077
+d=$(mktemp -d /tmp/lazytmux-paste-XXXXXXXX) || exit 1
+find /tmp -maxdepth 1 -name "lazytmux-paste-*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+f="$d/img.$1"
+cat > "$f" || { rm -rf "$d"; exit 1; }
 printf "%s" "$f"`
 
 // pasteExtRe gates the extension before it reaches the remote mktemp

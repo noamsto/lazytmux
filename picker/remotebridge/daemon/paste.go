@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
@@ -21,9 +24,10 @@ import (
 // into an attachment at submit (verified live, see the design spec), so the
 // agent receives the image exactly as if the paste had been local.
 //
-// Everything here runs off pumpInput's goroutine except the cheap gate and
-// clipboard probe; the upload+inject runs async so a slow link never freezes
-// the pane's input.
+// The TARGETS probe (which decides forward-vs-swallow) is synchronous on
+// pumpInput's goroutine; everything after that — extracting the bytes,
+// uploading, injecting the path — runs async so a slow link or a wedged
+// clipboard owner never freezes the pane's input.
 
 const (
 	// pasteMaxBytes mirrors the graphics fetcher's gfx-max-bytes default.
@@ -34,7 +38,8 @@ const (
 	pasteTimeout = 5 * time.Second
 	// clipTimeout bounds one clipboard probe/extract: xclip asks the X
 	// selection's owner for the data, and a wedged owner would otherwise
-	// block the input pump's goroutine.
+	// block the input pump's goroutine. It also bounds the @bridge_proc gate
+	// lookup (bridgeProc), the other unbounded fork on that same goroutine.
 	clipTimeout = 2 * time.Second
 )
 
@@ -42,29 +47,78 @@ const (
 // means "attach the clipboard image". Only claude is verified (codex has no
 // clipboard read at all; cursor-agent is unmeasured). A pane running anything
 // else gets the byte forwarded, preserving readline quoted-insert.
+//
+// This is a usability heuristic, not a security boundary: @bridge_proc is
+// daemon-sanitized but remote-derived, like every other @bridge_* field, and
+// trusted the same way. A hostile remote that stamped @bridge_proc=claude on
+// a pane it doesn't actually run claude in would need code execution in the
+// foreground of the specific pane the user is already mirroring to exfiltrate
+// anything — a stronger foothold than the exfil buys.
 var pasteAgentProcs = map[string]bool{"claude": true}
 
 // pastePathRe validates the path the remote store script prints before it is
 // interpolated anywhere. The script is ours, but the reply crosses ssh and a
-// remote shell, so it is treated as untrusted.
-var pastePathRe = regexp.MustCompile(`^/tmp/lazytmux-paste/img-[A-Za-z0-9]+\.(png|jpe?g|gif|webp)$`)
+// remote shell, so it is treated as untrusted. The directory carries a
+// per-invocation random suffix (mktemp -d) rather than a fixed shared path,
+// so nothing can be pre-created ahead of a paste (#361 review finding 1).
+var pastePathRe = regexp.MustCompile(`^/tmp/lazytmux-paste-[A-Za-z0-9]+/img\.(png|jpe?g|gif|webp)$`)
 
 // pasteExtRe gates the extension before it is interpolated into the remote
 // mktemp template.
 var pasteExtRe = regexp.MustCompile(`^(png|jpe?g|gif|webp)$`)
 
+// bracketedPasteBegin/End are hoisted to package scope so splitPasteDrops's
+// per-byte scan does zero allocation: converting a string constant to []byte
+// inside the loop (even a short one) copied it on every non-marker byte,
+// making the scan quadratic (#361 review finding 3).
+var (
+	bracketedPasteBegin = []byte("\x1b[200~")
+	bracketedPasteEnd   = []byte("\x1b[201~")
+)
+
+// clipboardProbe is the result of listing the local clipboard's TARGETS: the
+// image type on offer (if any) and how to fetch it. Built synchronously —
+// TARGETS decides forward-vs-swallow, so it has to run on the input pump —
+// but extract is called only from the async paste goroutine, so a slow read
+// never blocks it.
+type clipboardProbe struct {
+	ext     string
+	extract func() ([]byte, error)
+}
+
 // pasteHandler intercepts ctrl+v on agent panes. Every side effect is an
-// injected field so tests never touch ssh, tmux, or a clipboard.
+// injected field so tests never touch ssh, tmux, or a clipboard. One handler
+// is built per pumpInput (see paster), so its fields are effectively
+// per-pane state.
 type pasteHandler struct {
 	upload func(ctx context.Context, ext string, data []byte) (string, error)
-	// readClipboard returns the local clipboard's image bytes and extension;
-	// ok is false when the clipboard holds no image (or no clipboard tool
-	// exists), err only when an image was seen but could not be extracted.
-	readClipboard func() (data []byte, ext string, ok bool, err error)
+	// probeClipboard lists the local clipboard's TARGETS and returns how to
+	// extract the best image on offer; ok is false when the clipboard holds
+	// no image (or no clipboard tool exists), err only when a tool listed a
+	// target and then malfunctioned probing it.
+	probeClipboard func() (probe clipboardProbe, ok bool, err error)
 	// procFor reports the remote pane's foreground command (@bridge_proc).
 	procFor func(remotePane string) string
 	// notify shows a message on the mirror session's client.
 	notify func(msg string)
+	// sendCtl injects a command and reports whether it was written, so a
+	// dropped injection (e.g. mid-reconnect) is a visible failure rather than
+	// a silently discarded ssh keystroke (#361 review finding 2).
+	sendCtl func(cmd string) bool
+
+	// mu serializes one pane's pastes against its own later input frames.
+	// handle locks it for every frame and, when a frame triggers a paste,
+	// hands the held lock to the paste goroutine rather than unlocking —
+	// legal in Go, since sync.Mutex has no goroutine affinity. That pins
+	// every later frame (including a same-burst Enter) behind the pending
+	// upload+inject, so a prompt can never submit imageless while the path
+	// is still in flight (#361 review finding 6).
+	mu sync.Mutex
+	// inPaste is the bracketed-paste scan state, carried across frames: a
+	// paste spanning more than one 4096-byte pty read must not lose track of
+	// being inside ESC[200~...ESC[201~ at the frame boundary (#361 review
+	// finding 5).
+	inPaste bool
 }
 
 // paster builds the handler for one pumpInput, or nil when the Config cannot
@@ -74,58 +128,83 @@ func (c Config) paster() *pasteHandler {
 		return nil
 	}
 	return &pasteHandler{
-		upload:        c.PasteUpload,
-		readClipboard: readClipboardImage,
-		procFor:       func(remotePane string) string { return bridgeProc(c, remotePane) },
-		notify:        func(msg string) { notifyLocal(c, msg) },
+		upload:         c.PasteUpload,
+		probeClipboard: probeClipboardImage,
+		procFor:        func(remotePane string) string { return bridgeProc(c, remotePane) },
+		notify:         func(msg string) { notifyLocal(c, msg) },
+		sendCtl:        c.SendCtl,
 	}
 }
 
 // handle returns the bytes to forward to the remote pane. A 0x16 outside a
 // bracketed paste on an agent pane with an image on the clipboard is
-// swallowed and replaced by an async upload+inject; every other case forwards
-// the payload untouched, so text paste, quoted-insert and empty clipboards
-// behave exactly as they did before this interception existed.
-func (h *pasteHandler) handle(remotePane string, payload []byte, send func(string)) []byte {
-	kept, drops := splitPasteDrops(payload)
+// swallowed; the goroutine it starts sends everything for this pane from
+// here on — the rest of this frame's kept bytes, then the upload+injection —
+// so ordering against whatever the user types next is preserved. Every other
+// case forwards the payload untouched, so text paste, quoted-insert and empty
+// clipboards behave exactly as they did before this interception existed.
+//
+// mu is held for the duration of the call, or — when a paste is triggered —
+// handed off to the paste goroutine, so a later frame on this same pane
+// cannot race ahead of a pending upload (finding 6).
+func (h *pasteHandler) handle(remotePane string, payload []byte) []byte {
+	h.mu.Lock()
+	kept, drops := h.splitPasteDrops(payload)
 	if drops == 0 {
+		h.mu.Unlock()
 		return payload
 	}
 	if !pasteAgentProcs[h.procFor(remotePane)] {
+		h.mu.Unlock()
 		return payload
 	}
-	data, ext, ok, err := h.readClipboard()
+	probe, ok, err := h.probeClipboard()
 	switch {
 	case err != nil:
 		h.notify("lazytmux: clipboard image read failed: " + err.Error())
+		h.mu.Unlock()
 		return kept
 	case !ok:
+		h.mu.Unlock()
 		return payload
 	default:
-		go h.paste(remotePane, data, ext, send)
-		return kept
+		if drops > 1 {
+			h.notify(fmt.Sprintf("lazytmux: ignored %d extra clipboard-paste keystroke(s) in one burst", drops-1))
+		}
+		go h.paste(remotePane, kept, probe)
+		return nil
 	}
 }
 
 // paste ships one clipboard image to the remote and injects the resulting
-// path into the pane's prompt. Every failure is a visible no-op: the byte was
-// already swallowed, so nothing reaching for the remote's (empty) clipboard
-// runs in its place and lies about what happened.
-func (h *pasteHandler) paste(remotePane string, data []byte, ext string, send func(string)) {
+// path into the pane's prompt. It owns mu (handed off by handle) for its
+// whole run, so nothing typed on this pane after the triggering frame can
+// reach the remote ahead of it. Every failure is a visible no-op: the byte
+// was already swallowed, so nothing reaching for the remote's (empty)
+// clipboard runs in its place and lies about what happened.
+func (h *pasteHandler) paste(remotePane string, kept []byte, probe clipboardProbe) {
+	defer h.mu.Unlock()
+	if len(kept) > 0 {
+		h.sendChunks(remotePane, kept)
+	}
 	// Claude Code's path-inlining regex excludes bmp, and no converter is
 	// guaranteed on either host — report rather than ship a dead path.
-	if !pasteExtRe.MatchString(ext) {
-		h.notify("lazytmux: clipboard image format not pasteable (." + ext + "; copy as png)")
+	if !pasteExtRe.MatchString(probe.ext) {
+		h.notify("lazytmux: clipboard image format not pasteable (." + probe.ext + "; copy as png)")
+		return
+	}
+	data, err := probe.extract()
+	if err != nil {
+		h.notify("lazytmux: clipboard image read failed: " + err.Error())
 		return
 	}
 	if int64(len(data)) > pasteMaxBytes {
-		h.notify(fmt.Sprintf("lazytmux: clipboard image too large (%.1f MiB, cap %d MiB)",
-			float64(len(data))/(1<<20), pasteMaxBytes>>20))
+		h.notify(fmt.Sprintf("lazytmux: clipboard image too large (cap %d MiB)", pasteMaxBytes>>20))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pasteTimeout)
 	defer cancel()
-	path, err := h.upload(ctx, ext, data)
+	path, err := h.upload(ctx, probe.ext, data)
 	if err != nil {
 		h.notify("lazytmux: image upload to remote failed: " + err.Error())
 		return
@@ -136,36 +215,44 @@ func (h *pasteHandler) paste(remotePane string, data []byte, ext string, send fu
 	}
 	// The trailing space keeps whatever the user types next from merging into
 	// the path token, which would silently stop the agent recognising it.
-	// Hex send-keys sidesteps every quoting layer between here and the pane.
-	for _, args := range controlmode.SendKeysArgs(remotePane, append([]byte(path), ' '), controlmode.InputChunkBytes) {
-		send(strings.Join(args, " "))
+	h.sendChunks(remotePane, append([]byte(path), ' '))
+}
+
+// sendChunks hex-send-keys payload to remotePane, sidestepping every quoting
+// layer between here and the pane. A refused chunk (the bridge reconnecting,
+// or the remote pane having closed) is a visible notify, not a silent no-op
+// (#361 review finding 2) — the rest of payload is abandoned, since the
+// pane's input is already out of order at that point.
+func (h *pasteHandler) sendChunks(remotePane string, payload []byte) {
+	for _, args := range controlmode.SendKeysArgs(remotePane, payload, controlmode.InputChunkBytes) {
+		if !h.sendCtl(strings.Join(args, " ")) {
+			h.notify("lazytmux: input to the mirror pane was dropped (bridge reconnecting?)")
+			return
+		}
 	}
 }
 
 // splitPasteDrops copies payload without its ctrl+v bytes (0x16), counting
 // the drops. A 0x16 inside a bracketed-paste bracket (ESC[200~ … ESC[201~)
-// is pasted content, not the gesture, and is kept. The in-paste state is per
-// payload: tmux delivers a bracketed paste in one read in practice, and a
-// marker split across two reads is pathological enough to ignore.
-func splitPasteDrops(payload []byte) (kept []byte, drops int) {
-	const (
-		begin = "\x1b[200~"
-		end   = "\x1b[201~"
-	)
+// is pasted content, not the gesture, and is kept. h.inPaste carries the
+// scan state across calls (frames), since a paste can span more than one
+// 4096-byte pty read (#361 review finding 5): a lost ESC[201~ pins it true,
+// which forwards every later byte on this pane rather than intercepting —
+// the safe direction to fail in.
+func (h *pasteHandler) splitPasteDrops(payload []byte) (kept []byte, drops int) {
 	kept = make([]byte, 0, len(payload))
-	inPaste := false
 	for i := 0; i < len(payload); {
 		switch {
-		case !inPaste && strings.HasPrefix(string(payload[i:]), begin):
-			inPaste = true
-			kept = append(kept, begin...)
-			i += len(begin)
-		case inPaste && strings.HasPrefix(string(payload[i:]), end):
-			inPaste = false
-			kept = append(kept, end...)
-			i += len(end)
+		case !h.inPaste && bytes.HasPrefix(payload[i:], bracketedPasteBegin):
+			h.inPaste = true
+			kept = append(kept, bracketedPasteBegin...)
+			i += len(bracketedPasteBegin)
+		case h.inPaste && bytes.HasPrefix(payload[i:], bracketedPasteEnd):
+			h.inPaste = false
+			kept = append(kept, bracketedPasteEnd...)
+			i += len(bracketedPasteEnd)
 		default:
-			if payload[i] == 0x16 && !inPaste {
+			if payload[i] == 0x16 && !h.inPaste {
 				drops++
 			} else {
 				kept = append(kept, payload[i])
@@ -201,25 +288,33 @@ func imageTarget(targets []string) (target, ext string) {
 	return "", ""
 }
 
-// readClipboardImage probes the local clipboard with the same tools Claude
-// Code itself uses (xclip, then wl-paste) and extracts the image with the
-// tool that listed it. A missing tool, a missing display, or a clipboard
-// with no image target is ok=false — the caller forwards the keypress and
-// nothing about today's behaviour changes.
-func readClipboardImage() (data []byte, ext string, ok bool, err error) {
-	tools := []struct {
-		name       string
-		listArgs   []string
-		extractArg func(target string) []string
-	}{
-		{"xclip",
-			[]string{"-selection", "clipboard", "-t", "TARGETS", "-o"},
-			func(t string) []string { return []string{"-selection", "clipboard", "-t", t, "-o"} }},
-		{"wl-paste",
-			[]string{"-l"},
-			func(t string) []string { return []string{"--type", t} }},
-	}
-	for _, tool := range tools {
+// clipboardTool is one clipboard backend probeClipboardImage tries, in CC's
+// own preference order (xclip, then wl-paste).
+type clipboardTool struct {
+	name       string
+	listArgs   []string
+	extractArg func(target string) []string
+}
+
+var clipboardTools = []clipboardTool{
+	{"xclip",
+		[]string{"-selection", "clipboard", "-t", "TARGETS", "-o"},
+		func(t string) []string { return []string{"-selection", "clipboard", "-t", t, "-o"} }},
+	{"wl-paste",
+		[]string{"-l"},
+		func(t string) []string { return []string{"--type", t} }},
+}
+
+// probeClipboardImage lists the local clipboard's TARGETS with the same tools
+// Claude Code itself uses and picks the tool+target that offers an image. A
+// missing tool, a missing display, or a clipboard with no image target is
+// ok=false — the caller forwards the keypress and nothing about today's
+// behaviour changes. It does not read the image bytes: that happens in
+// probe.extract, called only from the async paste goroutine, so a wedged
+// clipboard owner costs this synchronous call at most clipTimeout per tool
+// rather than blocking on the extract too (#361 review finding 4).
+func probeClipboardImage() (probe clipboardProbe, ok bool, err error) {
+	for _, tool := range clipboardTools {
 		if _, lookErr := exec.LookPath(tool.name); lookErr != nil {
 			continue
 		}
@@ -233,38 +328,79 @@ func readClipboardImage() (data []byte, ext string, ok bool, err error) {
 		if target == "" {
 			continue
 		}
-		ctx, cancel = context.WithTimeout(context.Background(), clipTimeout)
-		data, err := exec.CommandContext(ctx, tool.name, tool.extractArg(target)...).Output()
-		cancel()
-		if err != nil {
-			return nil, "", false, fmt.Errorf("%s extract %s: %w", tool.name, target, err)
-		}
-		return data, ext, true, nil
+		return clipboardProbe{ext: ext, extract: extractClipboardImage(tool, target)}, true, nil
 	}
-	return nil, "", false, nil
+	return clipboardProbe{}, false, nil
+}
+
+// extractClipboardImage builds the bounded, async-only read of one clipboard
+// target: a LimitReader one byte past pasteMaxBytes so an oversize clipboard
+// is caught without ever buffering it whole (exec.Cmd.Output's unbounded
+// bytes.Buffer was the finding-4 gap), and its own clipTimeout so a wedged
+// selection owner cannot hang the goroutine indefinitely.
+func extractClipboardImage(tool clipboardTool, target string) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), clipTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, tool.name, tool.extractArg(target)...)
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(pipe, pasteMaxBytes+1))
+		waitErr := cmd.Wait()
+		if readErr != nil {
+			return nil, fmt.Errorf("%s extract %s: %w", tool.name, target, readErr)
+		}
+		if waitErr != nil {
+			return nil, fmt.Errorf("%s extract %s: %w", tool.name, target, waitErr)
+		}
+		return data, nil
+	}
 }
 
 // bridgeProc reads the mirror pane's @bridge_proc — the REMOTE pane's
 // foreground command, stamped by the agent shipper because the local pane
 // only ever runs a renderer. One fork per ctrl+v: the gesture is rare, so
-// freshness beats caching.
+// freshness beats caching. Bounded by clipTimeout so a wedged local tmux
+// server costs this synchronous call at most that, not indefinitely — it ran
+// on the input pump with no bound at all before (#361 review finding 4).
 func bridgeProc(cfg Config, remotePane string) string {
-	out, err := cfg.LocalTmuxOut("list-panes", "-s", "-t", cfg.LocalSess, "-F", "#{@bridge_pane}|#{@bridge_proc}")
-	if err != nil {
+	type result struct {
+		out string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		out, err := cfg.LocalTmuxOut("list-panes", "-s", "-t", cfg.LocalSess, "-F", "#{@bridge_pane}|#{@bridge_proc}")
+		ch <- result{out, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(strings.TrimSpace(r.out), "\n") {
+			pane, proc, found := strings.Cut(line, "|")
+			if found && pane == remotePane {
+				return proc
+			}
+		}
+		return ""
+	case <-time.After(clipTimeout):
 		return ""
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		pane, proc, found := strings.Cut(line, "|")
-		if found && pane == remotePane {
-			return proc
-		}
-	}
-	return ""
 }
 
 // notifyLocal shows msg on the client viewing the mirror session. A detached
 // session has no client to show it on, and the paste's async context has no
-// better channel — the message is best-effort by construction.
+// better channel — the message is best-effort by construction. msg is
+// escaped and passed after -- per this repo's display-message convention
+// (scripts/lztmux-notify.sh): the argument is format-expanded and
+// strftime-run, and a leading "-" would otherwise be read as a flag.
 func notifyLocal(cfg Config, msg string) {
 	out, err := cfg.LocalTmuxOut("list-clients", "-t", cfg.LocalSess, "-F", "#{client_name}")
 	if err != nil {
@@ -274,5 +410,6 @@ func notifyLocal(cfg Config, msg string) {
 	if client == "" {
 		return
 	}
-	cfg.LocalTmux("display-message", "-c", client, "-d", "5000", msg)
+	esc := strings.NewReplacer("#", "##", "%", "%%").Replace(msg)
+	cfg.LocalTmux("display-message", "-c", client, "-d", "5000", "--", esc)
 }

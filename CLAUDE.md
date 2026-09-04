@@ -410,28 +410,48 @@ carries the measured evidence.
   read. The daemon intercepts the byte in `pumpInput`, the only component
   that is both local (can read the local clipboard) and holding the ssh
   `ControlMaster` (can ship the bytes).
-- **Gated and conservative.** Interception fires only when the remote pane's
-  `@bridge_proc` is in the agent set (`claude` alone is verified; codex has
-  no clipboard read at all) AND the local clipboard actually holds an image.
-  Everything else — shells' quoted-insert, text clipboards, empty clipboards
-  — forwards the byte unchanged. A `0x16` inside a bracketed paste is
-  content, not the gesture, and is kept.
-- **The remote half is a path.** The image (cap 8 MiB, 5s timeout, async off
-  the input pump) rides the daemon's ControlMaster to a 0600 `mktemp` file
-  under `/tmp/lazytmux-paste/` on the remote, and the daemon hex-`send-keys`
-  the path plus a trailing space into the pane. Claude Code resolves an
-  existing image path in the prompt into an attachment at submit (verified
-  live), so the agent receives the image exactly as if the paste were local.
-  The trailing space keeps the user's next keystrokes from merging into the
-  path token, which would silently break that resolution.
+- **Gated and conservative, not a security boundary.** Interception fires
+  only when the remote pane's `@bridge_proc` is in the agent set (`claude`
+  alone is verified; codex has no clipboard read at all) AND the local
+  clipboard actually holds an image. Everything else — shells' quoted-insert,
+  text clipboards, empty clipboards — forwards the byte unchanged. A `0x16`
+  inside a bracketed paste is content, not the gesture, and is kept. The
+  process-name gate is a usability heuristic like every other `@bridge_*`
+  field: it's daemon-sanitized but remote-derived, and a hostile remote that
+  stamped it falsely would already need code execution in the foreground of
+  the pane the user is mirroring — a stronger foothold than the exfil buys.
+- **Only the TARGETS probe runs on the input pump.** It has to — it decides
+  forward-vs-swallow — and it is bounded (`clipTimeout`, one fork per tool).
+  Everything after a swallow (extracting the bytes, capping at 8 MiB,
+  uploading over the daemon's ControlMaster with a 5s timeout, injecting the
+  path) runs async in a goroutine, so a slow transfer or a wedged clipboard
+  owner never freezes the pane.
+- **The remote half is a path.** The image rides the daemon's ControlMaster to
+  a fresh, per-paste `mktemp -d` directory (0700 by construction, unpredictable
+  name — nothing to pre-create) under `/tmp/lazytmux-paste-*` on the remote,
+  landing at a plain-named file inside it, and the daemon hex-`send-keys` the
+  path plus a trailing space into the pane. Claude Code resolves an existing
+  image path in the prompt into an attachment at submit (verified live), so
+  the agent receives the image exactly as if the paste were local. The
+  trailing space keeps the user's next keystrokes from merging into the path
+  token, which would silently break that resolution.
+- **One pane's paste is serialized against its own later input.** The
+  handler's lock is acquired for every frame and, when a frame triggers a
+  paste, handed off to the paste goroutine rather than released — so nothing
+  typed on that pane afterwards (including Enter) can reach the remote ahead
+  of the kept prefix and the path injection. Otherwise a prompt could submit
+  imageless with no notification if the user hit Enter inside the upload
+  window.
 - **Cleanup is a janitor, not a delete.** The path is read at *submit*, which
-  can be minutes after the paste, so the store script sweeps sibling files
-  older than 60 minutes on each paste instead of deleting on inject.
+  can be minutes after the paste, so the store script sweeps sibling
+  directories older than 60 minutes on each paste instead of deleting on
+  inject.
 - **Failures are visible.** After the byte is swallowed, any failure (BMP —
   which the agent's path regex excludes — oversize, timeout, unwritable
-  remote dir, malformed reply) is a local `display-message`, never a silent
-  no-op and never a frozen pane. Disabled entirely when the daemon has no
-  ssh transport (`--test-local`), where `Config.PasteUpload` is nil.
+  remote dir, malformed reply, a dropped send while the bridge reconnects) is
+  a local `display-message`, never a silent no-op and never a frozen pane.
+  Disabled entirely when the daemon has no ssh transport (`--test-local`),
+  where `Config.PasteUpload` is nil.
 
 ### Bridge Session Pinning
 
