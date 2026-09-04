@@ -36,10 +36,10 @@ func TestSplitPasteDrops(t *testing.T) {
 	}
 }
 
-// TestSplitPasteDropsCrossesFrames pins finding 5: the bracketed-paste scan
-// state must survive across separate handle calls (pty reads), since a paste
-// longer than one 4096-byte frame arrives as several. A 0x16 in a later frame,
-// still inside the bracket opened by an earlier one, must be kept.
+// TestSplitPasteDropsCrossesFrames pins that the bracketed-paste scan state
+// must survive across separate handle calls (pty reads), since a paste
+// longer than one 4096-byte frame arrives as several. A 0x16 in a later
+// frame, still inside the bracket opened by an earlier one, must be kept.
 func TestSplitPasteDropsCrossesFrames(t *testing.T) {
 	h := &pasteHandler{}
 	kept1, drops1 := h.splitPasteDrops([]byte("\x1b[200~start"))
@@ -180,10 +180,10 @@ func TestHandleForwardsWhenNoImage(t *testing.T) {
 	}
 }
 
-// TestHandleSwallowsAndInjectsOnImage pins the ordering fix (finding 6): the
-// byte is swallowed from handle's own return (nothing left for pumpInput's
-// normal forwarding loop), and the goroutine it starts sends the kept prefix
-// BEFORE the path injection, in that order, on the same channel.
+// TestHandleSwallowsAndInjectsOnImage pins the ordering: the byte is
+// swallowed from handle's own return (nothing left for pumpInput's normal
+// forwarding loop), and the goroutine it starts sends the kept prefix BEFORE
+// the path injection, in that order, on the same channel.
 func TestHandleSwallowsAndInjectsOnImage(t *testing.T) {
 	f := newPasteFixture()
 	got := f.h.handle("%1", []byte("x\x16"))
@@ -216,11 +216,11 @@ func TestHandleSwallowsAndInjectsOnImage(t *testing.T) {
 	}
 }
 
-// TestHandleSerializesAgainstLaterFrames pins finding 6 directly: a frame
-// arriving on the same pane while a paste is in flight must not be forwarded
-// (by pumpInput's own loop, which calls handle for every frame) ahead of the
-// paste's own sends — handle must block until the prior paste releases the
-// lock it was handed.
+// TestHandleSerializesAgainstLaterFrames verifies that a frame arriving on
+// the same pane while a paste is in flight is not forwarded (by pumpInput's
+// own loop, which calls handle for every frame) ahead of the paste's own
+// sends — handle must block until the prior paste releases the lock it was
+// handed.
 func TestHandleSerializesAgainstLaterFrames(t *testing.T) {
 	f := newPasteFixture()
 	release := make(chan struct{})
@@ -299,8 +299,8 @@ func TestPasteFailuresNotifyAndSendNothing(t *testing.T) {
 	}
 }
 
-// TestPasteFailureStillForwardsKeptPrefix guards finding 6's ordering
-// guarantee on the FAILURE path too: paste() forwards a frame's kept prefix
+// TestPasteFailureStillForwardsKeptPrefix guards the ordering guarantee on
+// the FAILURE path too: paste() forwards a frame's kept prefix
 // unconditionally, before any of the ext/extract/upload/path checks that can
 // fail. Every case in TestPasteFailuresNotifyAndSendNothing uses a bare
 // "\x16" (kept is empty), which can't tell a correct "forward kept, then
@@ -349,8 +349,8 @@ func TestHandleClipboardProbeErrorNotifies(t *testing.T) {
 	}
 }
 
-// TestHandleNotifiesOnRefusedSend pins finding 2: a dropped send-keys (e.g.
-// the bridge mid-reconnect) must surface a notify rather than vanishing.
+// TestHandleNotifiesOnRefusedSend pins that a dropped send-keys (e.g. the
+// bridge mid-reconnect) surfaces a notify rather than vanishing.
 func TestHandleNotifiesOnRefusedSend(t *testing.T) {
 	f := newPasteFixture()
 	f.refuseAt = 0
@@ -372,9 +372,9 @@ func TestHandleNotifiesOnRefusedSend(t *testing.T) {
 	}
 }
 
-// TestHandleNotifiesOnExtraBurstedDrop pins finding 7 (clarity): two 0x16 in
-// one frame trigger exactly one paste, and the extra gesture is notified
-// rather than silently discarded.
+// TestHandleNotifiesOnExtraBurstedDrop pins that two 0x16 in one frame
+// trigger exactly one paste, and the extra gesture is notified rather than
+// silently discarded.
 func TestHandleNotifiesOnExtraBurstedDrop(t *testing.T) {
 	f := newPasteFixture()
 	got := f.h.handle("%1", []byte("\x16\x16"))

@@ -60,7 +60,7 @@ var pasteAgentProcs = map[string]bool{"claude": true}
 // interpolated anywhere. The script is ours, but the reply crosses ssh and a
 // remote shell, so it is treated as untrusted. The directory carries a
 // per-invocation random suffix (mktemp -d) rather than a fixed shared path,
-// so nothing can be pre-created ahead of a paste (#361 review finding 1).
+// so nothing can be pre-created ahead of a paste.
 var pastePathRe = regexp.MustCompile(`^/tmp/lazytmux-paste-[A-Za-z0-9]+/img\.(png|jpe?g|gif|webp)$`)
 
 // pasteExtRe gates the extension before it is interpolated into the remote
@@ -70,7 +70,7 @@ var pasteExtRe = regexp.MustCompile(`^(png|jpe?g|gif|webp)$`)
 // bracketedPasteBegin/End are hoisted to package scope so splitPasteDrops's
 // per-byte scan does zero allocation: converting a string constant to []byte
 // inside the loop (even a short one) copied it on every non-marker byte,
-// making the scan quadratic (#361 review finding 3).
+// making the scan quadratic.
 var (
 	bracketedPasteBegin = []byte("\x1b[200~")
 	bracketedPasteEnd   = []byte("\x1b[201~")
@@ -103,7 +103,7 @@ type pasteHandler struct {
 	notify func(msg string)
 	// sendCtl injects a command and reports whether it was written, so a
 	// dropped injection (e.g. mid-reconnect) is a visible failure rather than
-	// a silently discarded ssh keystroke (#361 review finding 2).
+	// a silently discarded ssh keystroke.
 	sendCtl func(cmd string) bool
 
 	// mu serializes one pane's pastes against its own later input frames.
@@ -112,12 +112,11 @@ type pasteHandler struct {
 	// legal in Go, since sync.Mutex has no goroutine affinity. That pins
 	// every later frame (including a same-burst Enter) behind the pending
 	// upload+inject, so a prompt can never submit imageless while the path
-	// is still in flight (#361 review finding 6).
+	// is still in flight.
 	mu sync.Mutex
 	// inPaste is the bracketed-paste scan state, carried across frames: a
 	// paste spanning more than one 4096-byte pty read must not lose track of
-	// being inside ESC[200~...ESC[201~ at the frame boundary (#361 review
-	// finding 5).
+	// being inside ESC[200~...ESC[201~ at the frame boundary.
 	inPaste bool
 }
 
@@ -146,7 +145,7 @@ func (c Config) paster() *pasteHandler {
 //
 // mu is held for the duration of the call, or — when a paste is triggered —
 // handed off to the paste goroutine, so a later frame on this same pane
-// cannot race ahead of a pending upload (finding 6).
+// cannot race ahead of a pending upload.
 func (h *pasteHandler) handle(remotePane string, payload []byte) []byte {
 	h.mu.Lock()
 	kept, drops := h.splitPasteDrops(payload)
@@ -220,9 +219,9 @@ func (h *pasteHandler) paste(remotePane string, kept []byte, probe clipboardProb
 
 // sendChunks hex-send-keys payload to remotePane, sidestepping every quoting
 // layer between here and the pane. A refused chunk (the bridge reconnecting,
-// or the remote pane having closed) is a visible notify, not a silent no-op
-// (#361 review finding 2) — the rest of payload is abandoned, since the
-// pane's input is already out of order at that point.
+// or the remote pane having closed) is a visible notify, not a silent no-op —
+// the rest of payload is abandoned, since the pane's input is already out of
+// order at that point.
 func (h *pasteHandler) sendChunks(remotePane string, payload []byte) {
 	for _, args := range controlmode.SendKeysArgs(remotePane, payload, controlmode.InputChunkBytes) {
 		if !h.sendCtl(strings.Join(args, " ")) {
@@ -236,9 +235,9 @@ func (h *pasteHandler) sendChunks(remotePane string, payload []byte) {
 // the drops. A 0x16 inside a bracketed-paste bracket (ESC[200~ … ESC[201~)
 // is pasted content, not the gesture, and is kept. h.inPaste carries the
 // scan state across calls (frames), since a paste can span more than one
-// 4096-byte pty read (#361 review finding 5): a lost ESC[201~ pins it true,
-// which forwards every later byte on this pane rather than intercepting —
-// the safe direction to fail in.
+// 4096-byte pty read: a lost ESC[201~ pins it true, which forwards every
+// later byte on this pane rather than intercepting — the safe direction to
+// fail in.
 func (h *pasteHandler) splitPasteDrops(payload []byte) (kept []byte, drops int) {
 	kept = make([]byte, 0, len(payload))
 	for i := 0; i < len(payload); {
@@ -312,7 +311,7 @@ var clipboardTools = []clipboardTool{
 // behaviour changes. It does not read the image bytes: that happens in
 // probe.extract, called only from the async paste goroutine, so a wedged
 // clipboard owner costs this synchronous call at most clipTimeout per tool
-// rather than blocking on the extract too (#361 review finding 4).
+// rather than blocking on the extract too.
 func probeClipboardImage() (probe clipboardProbe, ok bool, err error) {
 	for _, tool := range clipboardTools {
 		if _, lookErr := exec.LookPath(tool.name); lookErr != nil {
@@ -369,8 +368,7 @@ func extractClipboardImage(tool clipboardTool, target string) func() ([]byte, er
 // call, not the underlying LocalTmuxOut exec itself (its signature carries no
 // context, so a genuinely wedged local tmux server leaks the goroutine and its
 // child process rather than being killed) — still strictly better than
-// blocking the pump indefinitely, which is what ran here before (#361 review
-// finding 4).
+// blocking the pump indefinitely, which is what ran here before.
 func bridgeProc(cfg Config, remotePane string) string {
 	type result struct {
 		out string

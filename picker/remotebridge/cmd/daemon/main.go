@@ -84,12 +84,11 @@ func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []stri
 // fixed shared path: a fixed path can be pre-created by another local account
 // ahead of the victim's first paste (any owner, any mode, or a symlink), which
 // escalates from image substitution to an arbitrary-file overwrite as the
-// victim's own uid (#361 review finding 1, verified locally). mktemp -d's
-// create is atomic and unpredictable, so there is nothing to pre-create, and
-// its 0700 mode (by construction, not umask) means no other local account can
-// write into it at all. It also sidesteps the unverified BSD/macOS mktemp
-// question of a suffix trailing the X's, since the extension no longer rides
-// in the template.
+// victim's own uid. mktemp -d's create is atomic and unpredictable, so there
+// is nothing to pre-create, and its 0700 mode (by construction, not umask)
+// means no other local account can write into it at all. It also sidesteps
+// the unverified BSD/macOS mktemp question of a suffix trailing the X's,
+// since the extension no longer rides in the template.
 //
 // It runs under sh -c exactly like graphics' remoteFetch: ssh space-joins the
 // post-host argv for the remote LOGIN shell (fish on the normal host), which
