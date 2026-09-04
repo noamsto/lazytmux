@@ -82,8 +82,9 @@ func floatSeedScript(seq int, screen string) string {
 
 // layoutTmux fakes the local tmux seam for the shape path, recording every argv
 // and answering each read by what it asks for rather than by call order — the
-// code under test interleaves window_layout, window_zoomed_flag, window_id and
-// list-panes reads, so a positional script would break on any reordering.
+// code under test interleaves window_layout, window_zoomed_flag, list-windows
+// (#{window_id} lines for localWindowGone) and list-panes reads, so a
+// positional script would break on any reordering.
 type layoutTmux struct {
 	mu   sync.Mutex
 	argv [][]string
@@ -123,6 +124,8 @@ func (f *layoutTmux) out(argv ...string) (string, error) {
 			return f.windowID, nil
 		}
 		return "0\n", nil // #{window_zoomed_flag}: not zoomed
+	case "list-windows":
+		return f.windowID, nil
 	case "list-panes":
 		i := f.panesRead
 		f.panesRead++
@@ -147,6 +150,7 @@ func (f *layoutTmux) out(argv ...string) (string, error) {
 func (f *layoutTmux) config() Config {
 	return Config{
 		RendererBin:  "/nix/store/renderer",
+		LocalSess:    "host-sess",
 		LocalTmux:    f.run,
 		LocalTmuxOut: f.out,
 		LocalArea:    func() (int, int) { return 190, 45 },
