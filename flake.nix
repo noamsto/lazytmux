@@ -797,7 +797,13 @@
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
-              bats tests/remote-m2-integration.bats
+              fail=0
+              for i in $(seq 1 30); do
+                echo "=== PROBE ITERATION $i ==="
+                bats -f "killed during the outage" tests/remote-m2-integration.bats || fail=$((fail+1))
+              done
+              echo "=== PROBE RESULT: $fail / 30 failed ==="
+              [ "$fail" -eq 0 ]
               touch $out
             '';
 
