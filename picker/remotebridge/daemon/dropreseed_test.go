@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -93,5 +94,50 @@ func TestReseedDroppedRepaintsFromCapture(t *testing.T) {
 	}
 	if f.Type != wire.FrameSeed || !strings.Contains(string(f.Payload), "FRESH-CAPTURE") {
 		t.Fatalf("frame = %v %q, want a seed carrying FRESH-CAPTURE", f.Type, f.Payload)
+	}
+}
+
+// TestReseedDroppedReplaysRetainedKittyStoreAfterSeed pins #465 on the
+// drop-recovery path: seed first, then the last localised store for each id.
+func TestReseedDroppedReplaysRetainedKittyStoreAfterSeed(t *testing.T) {
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	s := newOutputSink(local, p)
+	s.Write(testKittyStore("5"))
+	storeFrame, err := wire.ReadFrame(peer)
+	if err != nil {
+		t.Fatalf("read store frame: %v", err)
+	}
+	if storeFrame.Type != wire.FrameOutput || !strings.Contains(string(storeFrame.Payload), kittyLocalisedMarker) {
+		t.Fatalf("store frame = %v %q", storeFrame.Type, storeFrame.Payload)
+	}
+
+	s.mu.Lock()
+	s.dropped = 1
+	s.mu.Unlock()
+
+	router := NewRouter()
+	router.Register("%1", s)
+
+	rt, _ := scriptedRT(strings.Join([]string{
+		"%begin 1 1 1",
+		"0 0 0 0",
+		"%end 1 1 1",
+		"%begin 1 2 1",
+		"FRESH-CAPTURE",
+		"%end 1 2 1",
+	}, "\n") + "\n")
+
+	go reseedDropped(router, rt)
+
+	seed, replay := seedThenReplayFrames(t, peer)
+	if seed.Type != wire.FrameSeed || !strings.Contains(string(seed.Payload), "FRESH-CAPTURE") {
+		t.Fatalf("seed = %v %q", seed.Type, seed.Payload)
+	}
+	if replay.Type != wire.FrameOutput || !strings.Contains(string(replay.Payload), kittyLocalisedMarker) {
+		t.Fatalf("replay = %v %q, want localised store after seed", replay.Type, replay.Payload)
 	}
 }

@@ -1321,7 +1321,7 @@ func handleContinue(router *Router, rt roundTrip, paneID string) {
 		return
 	}
 	if seed, err := PaneSeed(rt, paneID); err == nil {
-		s.enqueue(wire.FrameSeed, seed)
+		enqueueSeedWithReplay(s, seed)
 	} else {
 		fmt.Fprintf(os.Stderr, "daemon: %%continue reseed for %s: %v\n", paneID, err)
 	}
@@ -1356,7 +1356,7 @@ func reseedDropped(router *Router, rt roundTrip) {
 			fmt.Fprintf(os.Stderr, "daemon: re-seed after drop for %s: %v\n", ids[i], err)
 			return
 		}
-		sinks[i].enqueue(wire.FrameSeed, seed)
+		enqueueSeedWithReplay(sinks[i], seed)
 	})
 }
 
@@ -1586,6 +1586,7 @@ type sinkFrame struct {
 type outputSink struct {
 	mu     sync.Mutex
 	ch     chan sinkFrame
+	gfx    *graphics.Proxy
 	closed bool
 	paused bool
 	// dropped counts frames lost to a full buffer since the last re-seed.
@@ -1594,15 +1595,25 @@ type outputSink struct {
 	// positional, so the bytes that would have repaired those cells are the
 	// ones that went missing.
 	dropped int
+	// done closes when the pump goroutine returns. Close only signals the
+	// pump to stop; the pump may still be mid-flush (draining kn/gfx state on
+	// teardown) after Close returns. Wait is how a caller that needs to
+	// inspect gfx directly — outside the pump's own goroutine confinement —
+	// gets a happens-before edge instead of racing that flush.
+	done chan struct{}
 }
 
 // newOutputSink constructs the sink and starts its pump immediately; see
 // start's doc for what the pump does and why it's a separate method.
 func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
-	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf)}
-	s.start(conn, gfx)
+	s := &outputSink{ch: make(chan sinkFrame, outputSinkBuf), gfx: gfx}
+	s.start(conn)
 	return s
 }
+
+// Wait blocks until the pump goroutine has exited. See done's doc: this is
+// the synchronization a caller needs before touching gfx after Close.
+func (s *outputSink) Wait() { <-s.done }
 
 // start launches the pump goroutine, which batch-drains queued FrameOutput
 // frames before handing them to gfx: coalescing can only drop a store a later
@@ -1617,8 +1628,13 @@ func newOutputSink(conn net.Conn, gfx *graphics.Proxy) *outputSink {
 // enqueue frames directly onto s.ch, and only then call start —
 // guaranteeing the pump's first receive sees the whole burst instead of
 // racing its startup against the writer.
-func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
+func (s *outputSink) start(conn net.Conn) {
+	if s.done == nil {
+		s.done = make(chan struct{})
+	}
 	go func() {
+		defer close(s.done)
+		gfx := s.gfx
 		// kn strips modifyOtherKeys negotiation sequences a remote pane's
 		// occupant wrote for itself before they reach the local mirror
 		// pane's pty, where local tmux would otherwise treat them as a
@@ -1671,6 +1687,13 @@ func (s *outputSink) start(conn net.Conn, gfx *graphics.Proxy) {
 			}
 			if err := wire.WriteFrame(conn, f.typ, f.payload); err != nil {
 				return
+			}
+			if f.typ == wire.FrameSeed && gfx != nil {
+				if replay := gfx.Replay(); len(replay) > 0 {
+					if err := wire.WriteFrame(conn, wire.FrameOutput, replay); err != nil {
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -1741,6 +1764,16 @@ func (s *outputSink) enqueue(typ wire.FrameType, payload []byte) {
 	}
 }
 
+// enqueueSeedWithReplay enqueues a FrameSeed; the sink pump appends any
+// retained kitty stores immediately after writing the seed (same goroutine as
+// gfx.Filter, so Replay stays race-free).
+func enqueueSeedWithReplay(s *outputSink, seed []byte) {
+	if s == nil {
+		return
+	}
+	s.enqueue(wire.FrameSeed, seed)
+}
+
 // takeDirty reports how many frames this sink dropped, and clears the count, but
 // only once the sink has drained: while a pane is still congested a re-seed
 // would be dropped in its turn, and it is a whole extra screen on a queue that
@@ -1763,7 +1796,9 @@ func (s *outputSink) resume() { s.mu.Lock(); s.paused = false; s.mu.Unlock() }
 // Close stops the sink's pump goroutine so it doesn't leak once its pane is
 // torn down (reconcile-removal, teardown); the channel is otherwise never
 // closed and an idle sink would linger until process exit. Safe to call more
-// than once, and safe to race with a concurrent Write.
+// than once, and safe to race with a concurrent Write. Close only asks the
+// pump to stop — it does not wait for it; a caller that needs to know gfx has
+// gone quiet (there is no other reason to) must Wait too.
 func (s *outputSink) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

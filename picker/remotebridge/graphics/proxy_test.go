@@ -152,3 +152,110 @@ func TestProxyStillForwardsANonGraphicsPassthrough(t *testing.T) {
 		t.Fatalf("forwarded %q, want byte-identical %q", got, in)
 	}
 }
+
+func TestProxyReplayEmptyUntilStoreRetained(t *testing.T) {
+	p := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	if got := p.Replay(); len(got) != 0 {
+		t.Fatalf("Replay() = %q before any store, want empty", got)
+	}
+}
+
+func TestProxyRetainsLocalisedStoreForReplay(t *testing.T) {
+	p := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	out := p.Filter([]byte(bareSeq))
+	if len(out) == 0 {
+		t.Fatal("Filter dropped the store")
+	}
+	replay := p.Replay()
+	if len(replay) == 0 {
+		t.Fatal("Replay() empty after a localised store passed through")
+	}
+	if countSub(string(replay), passStart) != 1 {
+		t.Fatalf("Replay() = %q, want one wrapped store", replay)
+	}
+	if !strings.Contains(string(replay), "L2xvY2FsL2EuYmlu") {
+		t.Fatalf("Replay() not localised: %q", replay)
+	}
+}
+
+func TestProxyDeleteEvictsReplayState(t *testing.T) {
+	p := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	p.Filter([]byte(bareSeq))
+	del := "\x1b_Ga=d,i=31\x1b\\"
+	p.Filter([]byte(del))
+	if got := p.Replay(); len(got) != 0 {
+		t.Fatalf("Replay() = %q after delete, want empty", got)
+	}
+}
+
+func TestProxyBulkDeleteClearsReplayState(t *testing.T) {
+	p := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	p.Filter([]byte("\x1b_Gi=1,a=T,t=f;L3RtcC94LnBuZw==\x1b\\"))
+	p.Filter([]byte("\x1b_Gi=2,a=T,t=f;L3RtcC94LnBuZw==\x1b\\"))
+	p.Filter([]byte("\x1b_Ga=d,d=A\x1b\\"))
+	if got := p.Replay(); len(got) != 0 {
+		t.Fatalf("Replay() = %q after bulk delete, want empty", got)
+	}
+}
+
+func TestProxySameIDKeepsNewestForReplay(t *testing.T) {
+	loc := &seqLocalizer{locals: []string{"/local/old.bin", "/local/new.bin"}}
+	p := New(loc, nil)
+	p.Filter([]byte("\x1b_Gi=7,a=T,t=f;L3RtcC9hLnBuZw==\x1b\\"))
+	p.Filter([]byte("\x1b_Gi=7,a=T,t=f;L3RtcC9iLnBuZw==\x1b\\"))
+	replay := string(p.Replay())
+	if strings.Contains(replay, "L2xvY2FsL29sZC5iaW4=") { // /local/old.bin
+		t.Fatalf("kept stale same-id store: %q", replay)
+	}
+	if !strings.Contains(replay, "L2xvY2FsL25ldy5iaW4=") { // /local/new.bin
+		t.Fatalf("missing newest same-id store: %q", replay)
+	}
+	if countSub(replay, passStart) != 1 {
+		t.Fatalf("Replay() = %q, want one retained store for the id", replay)
+	}
+}
+
+// seqLocalizer returns locals[i] on the i-th Localize call (clamped to last).
+type seqLocalizer struct {
+	locals []string
+	n      int
+}
+
+func (s *seqLocalizer) Localize(context.Context, string) (string, error) {
+	i := s.n
+	if i >= len(s.locals) {
+		i = len(s.locals) - 1
+	}
+	s.n++
+	return s.locals[i], nil
+}
+
+func TestProxyRetentionIsPerInstance(t *testing.T) {
+	a := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	b := New(&fakeLocalizer{local: "/local/b.bin"}, nil)
+	a.Filter([]byte(bareSeq))
+	if len(b.Replay()) != 0 {
+		t.Fatal("retention leaked across proxy instances")
+	}
+	if len(a.Replay()) == 0 {
+		t.Fatal("store missing from owning proxy")
+	}
+}
+
+func TestProxyRetentionCapEvictsOldestID(t *testing.T) {
+	p := New(&fakeLocalizer{local: "/local/a.bin"}, nil)
+	p.retainCap = 2
+	store := func(id string) string {
+		return "\x1b_Gi=" + id + ",a=T,t=f;L3RtcC94LnBuZw==\x1b\\"
+	}
+	p.Filter([]byte(store("1")))
+	p.Filter([]byte(store("2")))
+	p.Filter([]byte(store("3")))
+	replay := string(p.Replay())
+	if strings.Contains(replay, "i=1") {
+		t.Fatalf("oldest id survived cap: %q", replay)
+	}
+	if countSub(replay, passStart) != 2 {
+		t.Fatalf("Replay() = %q, want two retained stores", replay)
+	}
+}

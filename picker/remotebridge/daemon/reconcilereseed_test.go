@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
@@ -75,5 +76,74 @@ func TestStructuralReconcileReseedsTheSurvivor(t *testing.T) {
 	}
 	if f.Type != wire.FrameSeed || !strings.Contains(string(f.Payload), "SURVIVOR-REPAINT") {
 		t.Fatalf("second frame = %v %q, want a seed carrying the remote's screen", f.Type, f.Payload)
+	}
+}
+
+// TestStructuralReconcileReplaysRetainedKittyStoreAfterSeed pins #465 on the
+// layout-reshape re-seed path.
+func TestStructuralReconcileReplaysRetainedKittyStoreAfterSeed(t *testing.T) {
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	p := graphics.New(&stubLocalizer{local: "/local/a.bin"}, nil)
+	sink := newOutputSink(local, p)
+	sink.Write(testKittyStore("3"))
+	storeFrame, err := wire.ReadFrame(peer)
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if storeFrame.Type != wire.FrameOutput || !strings.Contains(string(storeFrame.Payload), kittyLocalisedMarker) {
+		t.Fatalf("store frame = %v %q", storeFrame.Type, storeFrame.Payload)
+	}
+
+	router := NewRouter()
+	router.Register("%3", sink)
+
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%3", "%4"}, localPanes: []string{"%l3", "%l4"},
+	}
+
+	const onePane = "bd67,190x45,0,0,3"
+	rt, _ := scriptedRT(strings.Join([]string{
+		"%begin 1 1 1", onePane + " %3 0", "%end 1 1 1",
+		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1",
+		"%begin 1 3 1", "SURVIVOR-REPAINT", "%end 1 3 1",
+		"%begin 1 4 1", onePane + " %3 0", "%end 1 4 1",
+	}, "\n") + "\n")
+
+	var killed bool
+	cfg := Config{
+		LocalTmux: func(argv ...string) error {
+			if argv[0] == "kill-pane" {
+				killed = true
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) {
+			if !killed {
+				return "%l3 0\n%l4 0\n", nil
+			}
+			return "%l3 0\n", nil
+		},
+	}
+	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	peer.SetDeadline(time.Now().Add(5 * time.Second))
+
+	resize, err := wire.ReadFrame(peer)
+	if err != nil {
+		t.Fatalf("read resize: %v", err)
+	}
+	if resize.Type != wire.FrameResize {
+		t.Fatalf("first frame = %v, want FrameResize", resize.Type)
+	}
+	seed, replay := seedThenReplayFrames(t, peer)
+	if seed.Type != wire.FrameSeed || !strings.Contains(string(seed.Payload), "SURVIVOR-REPAINT") {
+		t.Fatalf("seed = %v %q", seed.Type, seed.Payload)
+	}
+	if replay.Type != wire.FrameOutput || !strings.Contains(string(replay.Payload), kittyLocalisedMarker) {
+		t.Fatalf("replay = %v %q, want localised store after seed", replay.Type, replay.Payload)
 	}
 }
