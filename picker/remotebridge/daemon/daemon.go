@@ -841,6 +841,7 @@ func Run(cfg Config) error {
 			// tick below is for.
 			agents.poll(cfg, rt)
 			labels.poll(cfg, reg, rt)
+			healLostWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 			reseedDropped(router, rt)
 			// Enable pause-after only now that every window is set up. Setup does
 			// drain the stream (its round-trips route, and so does the hello wait),

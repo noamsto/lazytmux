@@ -77,16 +77,23 @@ func localZoomed(cfg Config, localWin string) (zoomed, ok bool) {
 //
 // Positive evidence only: an unreadable answer returns false and leaves the
 // mirror alone, since retiring on a transient read would rebuild a healthy
-// window. That rules out testing the error, which is never set here anyway:
-// `display-message -p -t @<dead>` exits 0 with EMPTY output (#152/#169), so the
-// id itself is the only thing that distinguishes gone from alive.
+// window. Hence the whole session's listing rather than a lookup aimed at the
+// window itself: `display-message -p -t @<dead>` exits 0 with empty output
+// (#152/#169), so a lookup that fails for any other reason cannot be told from
+// a live window. A listing fails as a whole or answers in full, and absence
+// from a complete reply is evidence the target could never give.
 func localWindowGone(cfg Config, localWin string) bool {
 	if cfg.LocalTmuxOut == nil {
 		return false
 	}
-	out, err := cfg.LocalTmuxOut("display-message", "-p", "-t", localWin, "-F", "#{window_id}")
+	out, err := cfg.LocalTmuxOut("list-windows", "-t", cfg.LocalSess, "-F", "#{window_id}")
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(out) != localWin
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) == localWin {
+			return false
+		}
+	}
+	return true
 }
