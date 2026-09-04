@@ -2287,3 +2287,83 @@ transport_child() {
 
 	[ "$crew" = pine ]
 }
+
+# The zoom test above asserts the flag and the pane dims agree; this one
+# asserts the mirror's SCREEN does, which flags and dims can converge without
+# (#511).
+@test "the mirror repaints zoomed content at the zoomed geometry" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	# The alternate screen (\033[?1049h) is what makes a wrong-geometry paint
+	# permanent: it has no history and is never reflowed, where the main screen
+	# pulls scrolled lines back out of history as a pane grows and rejoins
+	# wrapped rows as it widens (both measured), healing the very damage this
+	# test looks for. 40 lines is more than the ~20-row unzoomed pane holds.
+	# sleep 300 keeps the pane alive — SRC_CONF sets no remain-on-exit, so a
+	# command that finished would take the pane, and the 2-pane mirror, with it;
+	# bounded, since BSD sleep on the darwin leg rejects `sleep infinity`. sh -c
+	# because the pane's shell is whatever default-shell resolves to.
+	$SRC split-window -v -t rem \
+		"sh -c 'printf \"\\033[?1049h\"; i=1; while [ \$i -le 40 ]; do printf \"ZOOMFILL_%02d\\n\" \$i; i=\$((i+1)); done; sleep 300'"
+	# bridge_up send-keys its startup marker to the active pane, which
+	# split-window just made the content pane — and the marker would land in the
+	# very alternate grid this test byte-compares. Aim it at the shell instead.
+	$SRC select-pane -t rem:1.1
+
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 zct
+
+	# split-window -v puts the new pane at layout index 1, so the content pane
+	# is remote rem:1.2 / local host-sess:1.1 (both servers run
+	# pane-base-index 1; the daemon stamps 0 on mirror windows). It has to be
+	# this pane: index 0 is the shell, on the main screen, which self-heals.
+	pane="$(remote_pane_of 1)"
+	[ -n "$pane" ]
+
+	# Gate on the fill crossing, separately from the zoom below: a fill that
+	# never arrived is a different bug, and worth failing as one.
+	filled=no
+	for _ in $(seq 1 60); do
+		if $DST capture-pane -p -t host-sess:1.1 2>/dev/null | grep -q ZOOMFILL_40; then
+			filled=yes
+			break
+		fi
+		sleep 0.15
+	done
+	[ "$filled" = yes ]
+
+	# Match before zooming, so a red compare below can only be the zoom.
+	# $(...) strips trailing blank rows from both sides, making this an equality
+	# over content rows — don't "fix" that with -J or a sentinel line.
+	src_screen="$($SRC capture-pane -p -t rem:1.2)"
+	dst_screen="$($DST capture-pane -p -t host-sess:1.1)"
+	[ "$dst_screen" = "$src_screen" ]
+
+	run "$CTL" --sock "$sock" zoom "$pane"
+	[ "$status" -eq 0 ]
+
+	# Both captures are re-read every iteration, not once after the dims
+	# settle: content is the observable that lags here, since a zoomed pane's
+	# capture carries one line per row including trailing blanks (measured: 23
+	# lines for a 23-row pane holding 10), and painting those overflow rows
+	# into a pane still at the old size scrolls the content off for good.
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		src_screen="$($SRC capture-pane -p -t rem:1.2)"
+		dst_screen="$($DST capture-pane -p -t host-sess:1.1)"
+		[ "$src_z" = 1 ] && [ "$dst_z" = 1 ] && [ "$src_dims" = "$dst_dims" ] && [ "$dst_screen" = "$src_screen" ] && break
+		sleep 0.15
+	done
+
+	# The screens are already captured above: teardown takes the DST session
+	# down with the daemon, so they cannot be read after this.
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_z" = 1 ]
+	[ "$dst_z" = 1 ]
+	[ "$src_dims" = "$dst_dims" ]
+	[ "$dst_screen" = "$src_screen" ]
+}

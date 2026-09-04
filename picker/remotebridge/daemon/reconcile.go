@@ -92,11 +92,48 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 		}
 
 		applyLayout(cfg, w, L)
+		// Bounded on both sides: after applyLayout, because select-layout unzooms
+		// the window it shapes (measured), and before the dims and seeds below,
+		// which describe and paint the pane at whatever geometry it holds now.
+		//
+		// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
+		// have cleared a local one first: applyLayout skips select-layout when the
+		// tiled layout string is unchanged, which is exactly what a zoom-only
+		// reconcile is. So read both sides and toggle only on a mismatch —
+		// applying the remote's flag outright would turn an unzoom into a zoom.
+		// The zoomed pane is by definition the active one.
+		//
+		// localIsZoomed then carries what this daemon imposed rather than what the
+		// remote reported, which is what the dims below are entitled to claim. A
+		// zoom that never landed must not stop the pass: the reseed still owes
+		// every pane a fresh screen, and skipping it reopens #233/#417.
+		localIsZoomed, zoomKnown := localZoomed(cfg, w.localWin)
+		if zoomKnown && localIsZoomed != zoomed {
+			if target, ok := localPaneAt(w, indexOf(newRemote, remoteActive)); ok {
+				if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
+					fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
+				} else {
+					localIsZoomed = zoomed
+				}
+			}
+		}
 		// select-layout reshapes every surviving pane, so push each its new
 		// dims (layout is daemon-authoritative — renderers only record them).
 		for i, id := range newRemote {
 			if s := router.sink(id); s != nil {
-				s.enqueue(wire.FrameResize, wire.EncodeResize(L.Panes[i].W, L.Panes[i].H))
+				pw, ph := L.Panes[i].W, L.Panes[i].H
+				if localIsZoomed && id == remoteActive {
+					// A zoomed pane's cell IS the layout root: #{window_layout}
+					// keeps reporting the saved, unzoomed tree, so L.Panes[i]
+					// names a cell this pane has left. Reading
+					// #{window_visible_layout} instead is not the fix — it
+					// reports the window as single-pane and reconcile would kill
+					// every hidden pane's renderer (#413). The others keep their
+					// cell because tmux's zoom drops them from the layout without
+					// resizing them.
+					pw, ph = L.W, L.H
+				}
+				s.enqueue(wire.FrameResize, wire.EncodeResize(pw, ph))
 			}
 		}
 		// Every pane gets a fresh screen once the reshape has landed. The
@@ -125,19 +162,6 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 			}
 			enqueueSeedWithReplay(sinks[i], seed)
 		})
-		// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
-		// have cleared a local one first: applyLayout skips select-layout when the
-		// tiled layout string is unchanged, which is exactly what a zoom-only
-		// reconcile is. So read both sides and toggle only on a mismatch —
-		// applying the remote's flag outright would turn an unzoom into a zoom.
-		// The zoomed pane is by definition the active one.
-		if local, ok := localZoomed(cfg, w.localWin); ok && local != zoomed {
-			if target, ok := localPaneAt(w, indexOf(newRemote, remoteActive)); ok {
-				if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
-					fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
-				}
-			}
-		}
 
 		// Follow the remote's active pane, but only when the pane set or order
 		// moved: a pure resize must not yank local focus. remoteActive comes
