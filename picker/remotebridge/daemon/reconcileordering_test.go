@@ -19,6 +19,148 @@ func scriptedRTRouter(script string, router *Router) roundTrip {
 	return newRoundTrip(newTestReader(script), router, &asyncQueue{}, testStream())
 }
 
+// scriptedRTRouterW is scriptedRTRouter, except the control stream's writes go
+// to w rather than io.Discard — for a test that needs to see the commands the
+// stream itself wrote, not just its scripted replies.
+func scriptedRTRouterW(script string, router *Router, w io.Writer) roundTrip {
+	return newRoundTrip(newTestReader(script), router, &asyncQueue{}, newStream(w))
+}
+
+// orderedLog collects LocalTmux calls and control-stream writes in the order
+// reconcileLayout actually issues them. Both seams run on reconcileLayout's own
+// goroutine — Config.LocalTmux is called directly, and stream.stampAll flushes
+// its bufio.Writer before returning — so a plain unlocked append preserves call
+// order with no need for a mutex.
+type orderedLog struct {
+	entries []string
+}
+
+func (l *orderedLog) append(s string) { l.entries = append(l.entries, s) }
+
+// Write lets orderedLog stand in for the control stream's underlying writer:
+// newStream wraps it in a bufio.Writer, and each stampAll call's Flush turns
+// its whole batch of commands into one Write here.
+func (l *orderedLog) Write(p []byte) (int, error) {
+	l.append(string(p))
+	return len(p), nil
+}
+
+// indexContainingAll returns the index of the first entry containing every one
+// of substrs, or -1 if none does.
+func (l *orderedLog) indexContainingAll(substrs ...string) int {
+	for i, e := range l.entries {
+		all := true
+		for _, s := range substrs {
+			if !strings.Contains(e, s) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestReconcileZoomsBeforeReseeding is #511: reconcileLayout used to fire the
+// local zoom toggle last, after the reseed loop had already issued its
+// capture-pane commands — so a capture taken before the toggle could paint a
+// seed sized for the wrong (pre-toggle) geometry into a pane whose dims the
+// toggle was about to change, the #233/#417 defect class one level up. The
+// toggle now runs immediately after applyLayout, before FrameResize is pushed
+// and before PaneSeeds issues any capture-pane, and this pins that against the
+// commands reconcileLayout actually sent.
+//
+// Both directions are covered: the zoom case (remote zoomed, local not) and
+// the unzoom case (remote unzoomed, local zoomed) each fall through the #431
+// dedup on a mismatched zoom flag and fire the toggle — see
+// TestReconcileLayoutFallsThroughOnZoomChange for the same fall-through on the
+// single-direction case.
+func TestReconcileZoomsBeforeReseeding(t *testing.T) {
+	const layout = "bd67,190x45,0,0,3"
+
+	cases := []struct {
+		name         string
+		remoteZoom   string // #{window_zoomed_flag} readLayout reports for the remote
+		localZoomOut string // LocalTmuxOut's reply for the local window's own zoom flag
+	}{
+		{name: "zoom", remoteZoom: "1", localZoomOut: "0\n"},
+		{name: "unzoom", remoteZoom: "0", localZoomOut: "1\n"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			local, peer := net.Pipe()
+			defer local.Close()
+			defer peer.Close()
+			// Nothing here is asserted from the wire; drain it so the sink's
+			// pump goroutine never blocks writing to a pipe nobody reads.
+			go io.Copy(io.Discard, peer)
+
+			router := NewRouter()
+			router.Register("%3", newOutputSink(local, nil))
+
+			w := &mirrorWindow{
+				remoteID: "@1", localWin: "@101",
+				remotePanes: []string{"%3"}, localPanes: []string{"%l3"},
+				layout: layout,
+			}
+
+			// A zoom-only pass: same shape as
+			// TestReconcileLayoutFallsThroughOnZoomChange (reconcilededup_test.go)
+			// but with one registered sink, so it also runs the PaneSeeds
+			// round-trip: readLayout, PaneSeed(%3) cursor, PaneSeed(%3) capture,
+			// trailing readLayout.
+			script := strings.Join([]string{
+				"%begin 1 1 1", layout + " %3 " + tc.remoteZoom, "%end 1 1 1", // readLayout
+				"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%3): cursor
+				"%begin 1 3 1", "SEED", "%end 1 3 1", // PaneSeed(%3): capture
+				"%begin 1 4 1", layout + " %3 " + tc.remoteZoom, "%end 1 4 1", // trailing re-read: unchanged, stop
+			}, "\n") + "\n"
+
+			log := &orderedLog{}
+			rt := scriptedRTRouterW(script, router, log)
+
+			cfg := Config{
+				LocalTmux: func(args ...string) error {
+					log.append(strings.Join(args, " "))
+					return nil
+				},
+				LocalTmuxOut: func(...string) (string, error) { return tc.localZoomOut, nil },
+			}
+
+			// Synchronous, not backgrounded: the only thing under test is the
+			// order of two seams' writes, both of which happen on this call's
+			// own goroutine. This cannot deadlock — enqueue is a non-blocking
+			// select over a 4096-deep channel, and the scripted reader EOFs
+			// rather than hanging once the script runs out.
+			reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+			zoomIdx := log.indexContainingAll("resize-pane", "-Z")
+			captureIdx := log.indexContainingAll("capture-pane")
+
+			// Fail explicitly rather than let a missing entry sit at -1 and
+			// pass a `zoomIdx < captureIdx` comparison vacuously.
+			if zoomIdx == -1 {
+				t.Fatalf("no resize-pane -Z entry in log: %v", log.entries)
+			}
+			if captureIdx == -1 {
+				t.Fatalf("no capture-pane entry in log: %v", log.entries)
+			}
+
+			// This over-constrains on purpose: the invariant that actually
+			// matters is zoom-before-FrameSeed, and zoom-before-capture-pane
+			// implies it (a seed can't be enqueued before the capture-pane
+			// reply it carries). The stricter form is what's assertable here
+			// without racing the sink's pump goroutine for FrameSeed's arrival.
+			if zoomIdx >= captureIdx {
+				t.Fatalf("zoom toggle at log[%d], capture-pane at log[%d]; want the toggle strictly before the capture that feeds the reseed\nlog: %v", zoomIdx, captureIdx, log.entries)
+			}
+		})
+	}
+}
+
 // TestReconcileSeedsPaneBeforeItsLaterOutputArrives pins the load-bearing
 // invariant the whole batched-roundTrip design rests on (the design doc's
 // "ordering hazard" section): a pane's FrameSeed must reach its sink before any
