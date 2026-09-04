@@ -129,7 +129,8 @@ passes:
 			// tiled layout string is unchanged, which is exactly what a zoom-only
 			// reconcile is. So read both sides and toggle only on a mismatch —
 			// applying the remote's flag outright would turn an unzoom into a zoom.
-			// The zoomed pane is by definition the active one.
+			// A zoomed pane is usually the active one, but a float can be active
+			// while the window stays zoomed — see the -Z targeting note below.
 			//
 			// localIsZoomed then carries what this daemon imposed rather than what the
 			// remote reported, which is what the dims below are entitled to claim. A
@@ -137,7 +138,14 @@ passes:
 			// every pane a fresh screen, and skipping it reopens #233/#417.
 			localIsZoomed, zoomKnown := localZoomed(cfg, w.localWin)
 			if zoomKnown && localIsZoomed != zoomed {
-				if target, ok := localPaneFor(w, newRemote, remoteActive); ok {
+				// Never -Z a float: zoom-on converts it into a zoomed tiled pane
+				// (measured on next-3.8). Any tiled -Z toggles window zoom and
+				// leaves the float intact — including when remoteActive is one.
+				target, ok := localPaneAt(w, indexOf(newRemote, remoteActive))
+				if !ok && len(newRemote) > 0 {
+					target, ok = localPaneAt(w, 0)
+				}
+				if ok {
 					if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
 						fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
 					} else {
@@ -147,18 +155,25 @@ passes:
 			}
 			// select-layout reshapes every surviving pane, so push each its new
 			// dims (layout is daemon-authoritative — renderers only record them).
+			//
+			// A zoomed pane's cell IS the layout root: #{window_layout} keeps
+			// reporting the saved, unzoomed tree, so L.Panes[i] names a cell this
+			// pane has left. Reading #{window_visible_layout} instead is not the
+			// fix — it reports the window as single-pane and reconcile would kill
+			// every hidden pane's renderer (#413). The others keep their cell
+			// because tmux's zoom drops them from the layout without resizing
+			// them. When the active pane is a float (legal while zoomed), no
+			// tiled id matches remoteActive — hand the root dims to the same
+			// fallback the toggle used rather than leaving every tiled pane at
+			// its cell size.
+			resizeID := remoteActive
+			if localIsZoomed && indexOf(newRemote, remoteActive) < 0 && len(newRemote) > 0 {
+				resizeID = newRemote[0]
+			}
 			for i, id := range newRemote {
 				if s := router.sink(id); s != nil {
 					pw, ph := L.Panes[i].W, L.Panes[i].H
-					if localIsZoomed && id == remoteActive {
-						// A zoomed pane's cell IS the layout root: #{window_layout}
-						// keeps reporting the saved, unzoomed tree, so L.Panes[i]
-						// names a cell this pane has left. Reading
-						// #{window_visible_layout} instead is not the fix — it
-						// reports the window as single-pane and reconcile would kill
-						// every hidden pane's renderer (#413). The others keep their
-						// cell because tmux's zoom drops them from the layout without
-						// resizing them.
+					if localIsZoomed && id == resizeID {
 						pw, ph = L.W, L.H
 					}
 					s.enqueue(wire.FrameResize, wire.EncodeResize(pw, ph))

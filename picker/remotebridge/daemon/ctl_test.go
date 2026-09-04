@@ -443,7 +443,7 @@ echo launched >>"`+launchLog+`"
 			}
 
 			// run-shell -b is asynchronous; poll for its effect (either the
-			// stub's launch marker, or a second, split-window-spawned pane).
+			// stub's launch marker, or a second, new-pane float).
 			deadline := time.Now().Add(3 * time.Second)
 			var launched bool
 			var paneCount int
@@ -466,7 +466,7 @@ echo launched >>"`+launchLog+`"
 					t.Fatal("tmux-claude-images was never exec'd for a present manifest")
 				}
 				if paneCount > 1 {
-					t.Fatalf("a fallback split was also opened (%d panes) for a present manifest", paneCount)
+					t.Fatalf("a fallback float was also opened (%d panes) for a present manifest", paneCount)
 				}
 				return
 			}
@@ -474,14 +474,61 @@ echo launched >>"`+launchLog+`"
 				t.Fatal("tmux-claude-images was exec'd despite an empty manifest")
 			}
 			if paneCount <= 1 {
-				t.Fatal("no fallback split appeared for an empty manifest")
+				t.Fatal("no fallback float appeared for an empty manifest")
 			}
-			capOut, err := tmux("capture-pane", "-p", "-t", "w.1").Output()
-			if err != nil {
-				t.Fatalf("capture-pane: %v", err)
+			// Floats are not reliably addressable as w.N; find the floating
+			// pane by flag (or any pane that is not the original). The float
+			// can exist a tick before its shell command paints, so poll the
+			// capture too.
+			var (
+				fallback string
+				floating bool
+				capOut   []byte
+				listOut  []byte
+			)
+			for time.Now().Before(deadline) {
+				var err error
+				listOut, err = tmux("list-panes", "-t", "w", "-F", "#{pane_id} #{pane_floating_flag}").Output()
+				if err != nil {
+					t.Fatalf("list-panes: %v", err)
+				}
+				fallback, floating = "", false
+				for _, line := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
+					fields := strings.Fields(line)
+					if len(fields) != 2 {
+						continue
+					}
+					id, flag := fields[0], fields[1]
+					if flag == "1" {
+						fallback = id
+						floating = true
+						break
+					}
+					if id != pane && fallback == "" {
+						fallback = id
+					}
+				}
+				if fallback == "" {
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+				capOut, err = tmux("capture-pane", "-p", "-t", fallback).Output()
+				if err != nil {
+					t.Fatalf("capture-pane: %v", err)
+				}
+				if strings.Contains(string(capOut), "no images yet for this pane") {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if fallback == "" {
+				t.Fatalf("could not find fallback pane among %q", listOut)
+			}
+			if !floating {
+				t.Fatalf("fallback pane %s is not floating (pane_floating_flag!=1); list=%q", fallback, listOut)
 			}
 			if !strings.Contains(string(capOut), "no images yet for this pane") {
-				t.Fatalf("fallback split content = %q, want the no-images-yet message", capOut)
+				t.Fatalf("fallback float content = %q, want the no-images-yet message", capOut)
 			}
 		})
 	}
