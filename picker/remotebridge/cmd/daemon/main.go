@@ -340,10 +340,23 @@ func localArea(localTmuxArgv []string, localSess string) (int, int) {
 	if w, h := clientArea(localTmuxArgv, localSess); w > 0 && h > 0 {
 		return w, h
 	}
-	// No attached client: the launcher creates the mirror session before
-	// switching a client to it, and it can be left detached afterwards. Fall
-	// back to the session's own window dims, which is what tmux hands a client
-	// when one does attach.
+	// No client on THIS session, which is the ordinary state of every mirror the
+	// user is not currently looking at: each bridged session has its own daemon,
+	// and only one of them is on screen. Ask the local server instead — the
+	// terminal the user is actually sitting at is the size this mirror will be
+	// shown at the moment they switch to it.
+	//
+	// Not sessionWinSize here: FitWindowCmd pins the mirror window to the
+	// remote's size (window-size manual), so its dims are this daemon's own last
+	// assertion. Reading them back makes every resize look like "no change" to
+	// the converger, and the mirror then keeps the stale size until watchResize's
+	// 30s fallback poll happens to run with a client attached (#532).
+	if w, h := clientArea(localTmuxArgv, ""); w > 0 && h > 0 {
+		return w, h
+	}
+	// Nothing attached anywhere. The pin is now the best answer available, and
+	// asserting it is a no-op — which is the point: 80x24 below would actively
+	// shrink a remote nobody is watching.
 	if w, h := sessionWinSize(localTmuxArgv, localSess); w > 0 && h > 0 {
 		return w, h
 	}
@@ -376,9 +389,16 @@ func localPaneMap(localTmuxArgv []string, localSess string) map[string]string {
 // the daemon pins each mirror window to its remote's size (window-size
 // manual), so a mirror window's own dims no longer track the terminal it is
 // shown in. Returns 0,0 when no client is attached.
+//
+// An empty localSess drops the -t and measures every client on the local
+// server — see localArea for why that is the right second question to ask.
 func clientArea(localTmuxArgv []string, localSess string) (int, int) {
-	out, err := exec.Command(localTmuxArgv[0], append(append([]string{}, localTmuxArgv[1:]...),
-		"list-clients", "-t", localSess, "-F", "#{client_width} #{client_height} #{status}")...).Output()
+	args := []string{"list-clients", "-F", "#{client_width} #{client_height} #{status}"}
+	if localSess != "" {
+		args = append(args, "-t", localSess)
+	}
+	out, err := exec.Command(localTmuxArgv[0],
+		append(append([]string{}, localTmuxArgv[1:]...), args...)...).Output()
 	if err != nil {
 		return 0, 0
 	}
