@@ -1949,13 +1949,7 @@ transport_child() {
 
 	# @bridge_state is stamped BEFORE the first re-dial attempt, so it must
 	# appear within about one status tick of the drop.
-	state=""
-	for _ in $(seq 1 40); do
-		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
-		[ "$state" = disconnected ] && break
-		sleep 0.1
-	done
-	[ "$state" = disconnected ]
+	wait_bridge_disconnected drc "$BATS_TEST_TMPDIR/drc.log"
 
 	# The mirror itself must survive: same session, same window, same pane —
 	# nothing torn down by the drop.
@@ -2124,13 +2118,7 @@ transport_child() {
 	[ -n "$old_transport" ]
 	kill -9 "$old_transport"
 
-	state=""
-	for _ in $(seq 1 40); do
-		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
-		[ "$state" = disconnected ] && break
-		sleep 0.1
-	done
-	[ "$state" = disconnected ]
+	wait_bridge_disconnected drz "$BATS_TEST_TMPDIR/drz.log"
 
 	# Resize the LOCAL mirror while disconnected. watchResize keeps polling
 	# through the outage and records the new size into the converger before
@@ -2253,13 +2241,7 @@ transport_child() {
 	[ -n "$old_transport" ]
 	kill -9 "$old_transport"
 
-	state=""
-	for _ in $(seq 1 40); do
-		state="$($DST show-options -v -t host-sess -q @bridge_state 2>/dev/null || true)"
-		[ "$state" = disconnected ] && break
-		sleep 0.1
-	done
-	[ "$state" = disconnected ]
+	wait_bridge_disconnected lbr "$BATS_TEST_TMPDIR/lbr.log"
 
 	# Set while there is no stream to carry it.
 	$SRC set -w -t rem:1 @crew_name nova
