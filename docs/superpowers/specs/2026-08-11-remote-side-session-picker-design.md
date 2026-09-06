@@ -334,6 +334,12 @@ Leg 2 (status only, per D1's disambiguation table):
 
 ### D7 — The mirror-window gate lives in the picker, and refuses in place
 
+> **Superseded.** The gate was removed once a float the daemon did not create
+> stopped breaking layout reconcile (#535); `^o` now works from inside a mirror
+> window like anywhere else. Retiring it was already Stage 3 of the float-mirroring
+> plan (`docs/superpowers/plans/2026-08-31-bridge-float-panes.md`), left undone when
+> that work landed. The rest of this section is kept as the record of why it existed.
+
 A floating pane inside a bridged window is its own problem space (#348/#351).
 The gate is the same conjunction `bridgeGate` uses
 (`config/tmux.conf.nix:302`) — window `@bridge_win` **and** pane `@bridge_pane`

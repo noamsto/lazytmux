@@ -99,14 +99,6 @@ func remotePickHost(item listItem, windowMode bool) (string, bool) {
 	return "", false
 }
 
-// remotePickGated parses the mirror-window gate probe — tmux display-message
-// evaluating `#{&&:#{@bridge_win},#{@bridge_pane}}` — into a bool. Only "1"
-// means gated (spec D7); "0", empty, and any whitespace/newline padding
-// display-message adds around either are not.
-func remotePickGated(raw string) bool {
-	return strings.TrimSpace(raw) == "1"
-}
-
 // shellQuote single-quotes s for the local float pane's shell (fish),
 // escaping embedded single quotes only — the Go twin of the house helper for
 // that purpose, not a full fish-safe backslash quoter.

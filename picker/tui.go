@@ -570,14 +570,6 @@ func (m tuiModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !ok || !live {
 			return m, nil
 		}
-		if item.remoteHost != "" {
-			raw, _ := exec.Command("tmux", "display-message", "-p",
-				"#{&&:#{@bridge_win},#{@bridge_pane}}").Output()
-			if remotePickGated(string(raw)) {
-				m.statusMsg = "mirror window — open the remote picker from a local window"
-				return m, nil
-			}
-		}
 		bin := envOrMap("REMOTE_PICK_BIN", m.tmuxOpts, "@remote_pick_bin", "")
 		if bin == "" {
 			m.statusMsg = "remote picker not configured — reload tmux"
