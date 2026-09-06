@@ -46,7 +46,7 @@ func twoPaneAppendHarness(t *testing.T, send func(string)) (cfg Config, w *mirro
 	w = &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%1"}, localPanes: []string{"%l1"},
-		conns:       map[string]net.Conn{},
+		conns: map[string]net.Conn{},
 	}
 	router = NewRouter()
 
@@ -200,7 +200,7 @@ func TestResetWindowKeepsKeptPaneConnOnSetupFailure(t *testing.T) {
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%1"}, localPanes: []string{"%l1"},
-		conns:       map[string]net.Conn{"%1": keptConn},
+		conns: map[string]net.Conn{"%1": keptConn},
 	}
 
 	router := NewRouter()
@@ -270,7 +270,7 @@ func TestResetWindowClosesKeptPaneConnAfterSuccessfulReshape(t *testing.T) {
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0"}, localPanes: []string{"%l0"},
-		conns:       map[string]net.Conn{"%0": oldConn},
+		conns: map[string]net.Conn{"%0": oldConn},
 	}
 
 	if err := resetWindow(cfg, w, func(string) {}, NewRouter(), waiter, newCtlState(), newConverger(), setupWindowRT(script)); err != nil {
@@ -358,7 +358,7 @@ func TestResetWindowClosesKeptPaneConnOnSpawnedSetupFailure(t *testing.T) {
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0"}, localPanes: []string{"%l0"},
-		conns:       map[string]net.Conn{"%0": keptConn},
+		conns: map[string]net.Conn{"%0": keptConn},
 	}
 
 	err := resetWindow(cfg, w, func(string) {}, NewRouter(), waiter, newCtlState(), newConverger(), setupWindowRT(script))
