@@ -291,3 +291,55 @@ func TestTransportStartFailureReleasesThePipes(t *testing.T) {
 		t.Error("stdout pipe still readable after a failed Start; the fd leaked")
 	}
 }
+
+// fakeTmuxScript writes an executable stand-in for tmux whose body is `body`,
+// dispatching on "$*". Returns its path, for use as localTmuxArgv[0].
+func fakeTmuxScript(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tmux")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A mirror whose session has no client of its own must resolve the area from a
+// client attached elsewhere on the server, never from #{window_width}:
+// FitWindowCmd pins the mirror window to the remote's size (window-size
+// manual), so that value is this daemon's own last assertion. Feeding it back
+// makes the converger read every resize as "no change", and the mirror keeps
+// the stale size until watchResize's 30s fallback poll happens to catch a
+// client attached (#532).
+func TestLocalAreaPrefersAnotherClientOverTheSessionsOwnPin(t *testing.T) {
+	tmux := fakeTmuxScript(t, `
+case "$1" in
+list-clients)
+	case "$*" in
+	*"-t mirror"*) exit 0 ;;
+	*) echo "200 60 off" ;;
+	esac
+	;;
+display-message) echo "138 40" ;;
+esac
+`)
+	w, h := localArea([]string{tmux}, "mirror")
+	if w != 200 || h != 60 {
+		t.Errorf("localArea = %dx%d, want 200x60 — the attached client, not the 138x40 pin", w, h)
+	}
+}
+
+// With nothing attached anywhere the pin is the best answer available, and
+// asserting it is a no-op. Falling through to the 80x24 default instead would
+// actively shrink a remote nobody is watching.
+func TestLocalAreaFallsBackToThePinOnlyWhenNoClientExists(t *testing.T) {
+	tmux := fakeTmuxScript(t, `
+case "$1" in
+list-clients) exit 0 ;;
+display-message) echo "138 40" ;;
+esac
+`)
+	w, h := localArea([]string{tmux}, "mirror")
+	if w != 138 || h != 40 {
+		t.Errorf("localArea = %dx%d, want 138x40 — the pin, not the 80x24 default", w, h)
+	}
+}
