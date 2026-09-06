@@ -373,6 +373,17 @@ option.
   text, so they cross the bridge (and survive `capture-pane` reseeds) on the
   normal text path. Only the store's `t=f`/`t=t` payload — a path on the
   remote filesystem — is host-bound.
+- **`allow-passthrough all` is asserted on both ends, for the same reason.**
+  The global stays `on`, and `on` releases a DCS passthrough only for a pane a
+  client can see — which a *control* client never is. `markRendererPane` stamps
+  the local mirror pane (#464); `PassthroughAllCmd`, sent from `setupWindow`
+  beside `AggressiveResizeOffCmd`, stamps the remote window (#529). Without the
+  remote half a store never reaches `%output` at all, and since tmux stores
+  nothing and never retransmits, it is gone — while the placeholders naming it
+  redraw regardless, so the pane paints full chrome around an empty picture.
+  The remote half is `-w`, not `-p`: pane options inherit from the window's, so
+  one command covers panes the remote splits later — which the carousel always
+  is.
 - **The proxy** scans kitty APCs out of the stream (bare and `\ePtmux;`-wrapped),
   rewrites `t=f`/`t=t` payloads to a locally-fetched copy, drops `t=s` and any
   fetch it cannot satisfy (a stale path renders the *wrong* image; a blank one

@@ -137,7 +137,7 @@ func TestSetupWindowResizesEachPaneFromItsOwnLayoutCell(t *testing.T) {
 //
 // The script fails readLayout, which is the first thing after the cap: the
 // opt-out precedes anything that can go wrong, and nothing else is sent.
-func TestSetupWindowOptsTheWindowOutOfAggressiveResize(t *testing.T) {
+func TestSetupWindowOptsTheWindowOutOfAggressiveResizeAndIntoPassthrough(t *testing.T) {
 	script := strings.Join([]string{
 		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
 		"%begin 1 2 1", "%error 1 2 1", // readLayout, window gone
@@ -155,7 +155,7 @@ func TestSetupWindowOptsTheWindowOutOfAggressiveResize(t *testing.T) {
 	if err := setupWindow(cfg, send, NewRouter(), noHellos, newCtlState(), mw, newConverger(), setupWindowRT(script)); err == nil {
 		t.Fatal("setupWindow err = nil, want the readLayout failure the script scripts")
 	}
-	want := []string{AggressiveResizeOffCmd("@1")}
+	want := []string{AggressiveResizeOffCmd("@1"), PassthroughAllCmd("@1")}
 	if !reflect.DeepEqual(sent, want) {
 		t.Errorf("sent = %v, want %v", sent, want)
 	}
