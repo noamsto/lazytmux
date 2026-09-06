@@ -179,21 +179,29 @@ wait_for_client() {
 	[[ $output == *"s"* ]]
 }
 
-@test "display-popup opens for an attached control client" {
+# A popup for a control client used to open and take the whole remote server
+# down with it (#346); upstream af3e4d2 makes display-popup a silent no-op for
+# such a client instead.
+@test "display-popup is refused for an attached control client" {
 	marker="$BATS_TEST_TMPDIR/popup-ran"
+	sentinel="$BATS_TEST_TMPDIR/sentinel-ran"
 	coproc CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
 
 	wait_for_client
 
 	printf 'display-popup -E "printf popup-ok > %q"\n' "$marker" >&"${CTL[1]}"
+	# The refusal is silent, so a missing marker alone would also pass on a
+	# command that never arrived. This one does reach a control client.
+	printf 'run-shell "printf sentinel-ok > %q"\n' "$sentinel" >&"${CTL[1]}"
 	for _ in {1..30}; do
-		[[ -f $marker ]] && break
+		[[ -f $sentinel ]] && break
 		sleep 0.1
 	done
 	printf 'detach-client\n' >&"${CTL[1]}" || true
 	kill "$CTL_PID" 2>/dev/null || true
 
-	[ "$(cat "$marker")" = "popup-ok" ]
+	[ "$(cat "$sentinel")" = "sentinel-ok" ]
+	[ ! -f "$marker" ]
 }
 
 # === Remote bridge structural-input gate (M2.3) ===
