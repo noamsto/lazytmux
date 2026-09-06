@@ -7,6 +7,12 @@ setup() {
 	# interrupt verdict cache these tests write) from this at source time.
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
 	setup_lib_claude
+	PROGRESS_LOG="$BATS_TEST_TMPDIR/progress.log"
+	: >"$PROGRESS_LOG"
+	# shellcheck disable=SC2329  # invoked from read_pane_state
+	claude_progress_emit() {
+		printf '%s %s\n' "$1" "$2" >>"$PROGRESS_LOG"
+	}
 	PANE_DIR="$BATS_TEST_TMPDIR/panes"
 	mkdir -p "$PANE_DIR"
 }
@@ -42,6 +48,7 @@ write_screen() {
 	[ "$REPLY" = "interrupted" ]
 	[ "$REPLY_FADE" -eq 0 ]
 	[ "$REPLY_UNSEEN" -eq 1 ]
+	grep -qx 'p1 clear' "$PROGRESS_LOG"
 }
 
 @test "read_pane_state: fresh processing is not checked → processing" {
@@ -50,6 +57,7 @@ write_screen() {
 	write_pane "$PANE_DIR/p1" processing 2 "$tr"
 	read_pane_state "$PANE_DIR/p1"
 	[ "$REPLY" = "processing" ]
+	[ ! -s "$PROGRESS_LOG" ]
 }
 
 @test "read_pane_state: stale processing without marker (long tool) → processing" {
@@ -173,6 +181,13 @@ write_screen() {
 	write_screen "$PANE_DIR/p1" idle
 	read_pane_state "$PANE_DIR/p1"
 	[ "$REPLY" = "idle" ]
+
+	: >"$PROGRESS_LOG"
+	write_pane "$PANE_DIR/p1" processing 400 # past CLAUDE_STALE_PROCESSING (300)
+	write_screen "$PANE_DIR/p1" idle
+	read_pane_state "$PANE_DIR/p1"
+	[ "$REPLY" = "idle" ]
+	grep -qx 'p1 clear' "$PROGRESS_LOG"
 }
 
 @test "claude_priority_state: denied outranks compacting/processing, loses to waiting/error" {

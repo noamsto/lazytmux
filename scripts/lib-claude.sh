@@ -111,6 +111,26 @@ claude_prune_stale_state() {
 	printf '%s\n' "$server_start" >"$marker"
 }
 
+# claude_progress_emit PANE_ID STATE
+# Writes ConEmu/kitty OSC 9;4 to the pane's tty. processing/compacting set
+# indeterminate progress (no fake percent); anything else, including clear,
+# unsets it. One-shot: tmux resends the stored sequence when the client later
+# focuses the pane. Never aborts the caller — missing tmux, empty tty, and a
+# failed write (dead pane, Permission denied) are all success.
+claude_progress_emit() {
+	local pane=$1 state=$2 tty seq
+	command -v tmux >/dev/null || return 0
+	[[ $pane == %* ]] || pane="%${pane}"
+	tty=$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null) || return 0
+	[[ -n $tty ]] || return 0
+	case "$state" in
+	processing | compacting) seq=$'\033]9;4;3;0\033\\' ;;
+	*) seq=$'\033]9;4;0;0\033\\' ;;
+	esac
+	{ printf '%s' "$seq" >"$tty"; } 2>/dev/null || true
+	return 0
+}
+
 # claude_reap_dead_panes ROWS
 # ROWS is tmux list-panes -a output: "%N|..." per line, extra columns
 # ignored. Removes panes/screen/interrupt/watchers state for any pane id not
@@ -140,12 +160,18 @@ claude_reap_dead_panes() {
 	done <<<"$rows"
 
 	local dir f id
+	local -A cleared=()
 	for dir in "$CLAUDE_PANES_DIR" "$CLAUDE_SCREEN_DIR" "$CLAUDE_INTERRUPT_DIR" "$CLAUDE_WATCHERS_DIR"; do
 		[[ -d $dir ]] || continue
 		for f in "$dir"/*; do
 			[[ -f $f ]] || continue
 			id="${f##*/}"
-			[[ -n ${live[$id]:-} ]] || rm -f "$f"
+			[[ -n ${live[$id]:-} ]] && continue
+			if [[ -z ${cleared[$id]:-} ]]; then
+				claude_progress_emit "$id" clear
+				cleared[$id]=1
+			fi
+			rm -f "$f"
 		done
 	done
 }
@@ -277,6 +303,9 @@ read_pane_state() {
 			unseen=""
 			session=""
 			transcript=""
+			if [[ $state != processing && $state != compacting ]]; then
+				claude_progress_emit "${pane_file##*/}" clear
+			fi
 		else
 			# Hook governs (fresh, no threshold, or stale with no screen
 			# fallback). Reclassify a long-quiet `processing` pane as
@@ -304,6 +333,7 @@ read_pane_state() {
 				if [[ $verdict == 1 ]]; then
 					state="interrupted"
 					unseen="1"
+					claude_progress_emit "${pane_file##*/}" clear
 				fi
 			fi
 		fi
@@ -315,6 +345,7 @@ read_pane_state() {
 	fi
 
 	if ((CLAUDE_ASSUME_DEAD_AFTER > 0)) && claude_agent_gone "$state" "$timestamp" "${pane_file##*/}"; then
+		claude_progress_emit "${pane_file##*/}" clear
 		return 1
 	fi
 

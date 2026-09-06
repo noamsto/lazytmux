@@ -61,20 +61,34 @@ write_live() {
 
 @test "stale state + lagging stamp + fresh sweep → withdrawn" {
 	load_lib 60
+	PROGRESS_LOG="$BATS_TEST_TMPDIR/progress.log"
+	: >"$PROGRESS_LOG"
+	# shellcheck disable=SC2329  # invoked from read_pane_state
+	claude_progress_emit() {
+		printf '%s %s\n' "$1" "$2" >>"$PROGRESS_LOG"
+	}
 	write_pane "$PANE_DIR/p1" processing 600
 	write_live p1 600
 	write_live .sweep 0
 	run read_pane_state "$PANE_DIR/p1"
 	[ "$status" -eq 1 ]
+	grep -qx 'p1 clear' "$PROGRESS_LOG"
 }
 
 @test "a stamp the sweep is still refreshing keeps the state" {
 	load_lib 60
+	PROGRESS_LOG="$BATS_TEST_TMPDIR/progress.log"
+	: >"$PROGRESS_LOG"
+	# shellcheck disable=SC2329  # invoked from read_pane_state
+	claude_progress_emit() {
+		printf '%s %s\n' "$1" "$2" >>"$PROGRESS_LOG"
+	}
 	write_pane "$PANE_DIR/p1" processing 600
 	write_live p1 2
 	write_live .sweep 0
 	read_pane_state "$PANE_DIR/p1"
 	[ "$REPLY" = "processing" ]
+	[ ! -s "$PROGRESS_LOG" ]
 }
 
 @test "a stale sweep deactivates presence entirely" {
