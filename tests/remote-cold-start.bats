@@ -222,6 +222,29 @@ teardown() {
 	grep -q 'new-session -d -s tp-g6-workstation -n workstation -x 200 -y 50' "$TMUX_LOG"
 }
 
+@test "new dir: the remote session is created at the invoking client's content size" {
+	# Without -x/-y the remote gives it default-size (80x24) and anything the
+	# shell autostarts sees 80 columns until the daemon's converge lands.
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export FAKE_CLIENT_SIZE='200 50 off'
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 0 ]
+
+	grep -q "new-session -d -s 'proj' -c '/srv/proj' -x 200 -y 50" "$SSH_LOG"
+}
+
+@test "new dir: an unmeasurable client leaves the remote size to tmux" {
+	touch "$REMOTE_SERVER"
+	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+
+	run bash "$LAUNCHER" tp-g6 proj
+	[ "$status" -eq 0 ]
+
+	grep -q "new-session -d -s 'proj' -c '/srv/proj'$" "$SSH_LOG"
+}
+
 @test "an ordinary local session survives a colliding mirror name" {
 	export REMOTE_SESSION=config
 	export FAKE_LOCAL_SESSION=nix-config
