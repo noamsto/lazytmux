@@ -63,6 +63,9 @@ tmpdir=/run/user/1000"
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>"$TMUX_LOG"
+		case "$*" in
+		"show -gv @remote_auth_persist") printf '%s\n' "${FAKE_PERSIST-}" ;;
+		esac
 		exit 0
 	EOF
 
@@ -464,7 +467,8 @@ bash: lztmux-remote-picker: Permission denied"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 	[ ! -s "$OPEN_LOG" ]
-	[ ! -s "$TMUX_LOG" ] # no error message either
+	run grep -q display-message "$TMUX_LOG" # no error message either
+	[ "$status" -ne 0 ]
 }
 
 @test "cancel: a whitespace-only payload is still a cancel" {
@@ -586,5 +590,48 @@ name=workstation"
 	grep -qF 'argv: [tp-g6] [workstation]' "$OPEN_LOG"
 	run grep -cE 'has-session|list-sessions|new-session' "$SSH_LOG"
 	[ "$status" -ne 0 ]
-	[ ! -s "$TMUX_LOG" ]
+	# The one tmux call it does make is the ControlPersist read, which is about
+	# the ssh connection, not about any mirror.
+	run grep -qvF 'show -gv @remote_auth_persist' "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
+# --- Step 15: ssh connection sharing ----------------------------------------
+
+@test "legs: all three ssh legs share one connection via ControlMaster=auto" {
+	pick "kind=session
+name=work"
+	[ "$status" -eq 0 ]
+
+	# Three legs logged, and not one of them without the sharing options: the
+	# probe leg builds the master, the other two ride it.
+	run grep -c . "$SSH_LOG"
+	[ "$output" -eq 3 ]
+	run grep -qv 'ControlMaster=auto' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	run grep -qv 'ControlPersist=' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+	# Host * sets ServerAliveInterval to 0, which would let a half-open master
+	# hang every later leg.
+	run grep -qv 'ServerAliveInterval=15' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+}
+
+@test "legs: ControlPersist comes from @remote_auth_persist, rejecting a non-positive value" {
+	export FAKE_PERSIST=900
+	pick "kind=session
+name=work"
+	[ "$status" -eq 0 ]
+	run grep -qv 'ControlPersist=900' "$SSH_LOG"
+	[ "$status" -ne 0 ]
+
+	# 0 means "persist forever" to ssh, not "off" — a hand-set option carrying it
+	# must fall back to the default rather than pass through.
+	: >"$SSH_LOG"
+	export FAKE_PERSIST=0
+	pick "kind=session
+name=work"
+	[ "$status" -eq 0 ]
+	run grep -qv 'ControlPersist=14400' "$SSH_LOG"
+	[ "$status" -ne 0 ]
 }

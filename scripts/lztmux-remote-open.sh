@@ -20,11 +20,11 @@ shell_quote() {
 	printf "'%s'" "$s"
 }
 
-# The detached mirror has no client yet, so tmux otherwise gives its first
-# window a small default size. Claude can start before the daemon's resize poll
-# observes the real client, and some terminal UIs do not repaint after that
-# first undersized PTY geometry. Seed the window with the invoking client's
-# content area before launching the daemon.
+# Neither the detached mirror nor a session we create on the remote has a client
+# yet, so tmux otherwise gives the first window `default-size` (80x24). Claude
+# can start before the daemon's resize poll observes the real client, and some
+# terminal UIs do not repaint after that first undersized PTY geometry. Seed
+# both with the invoking client's content area.
 initial_mirror_area() {
 	local raw width height status status_rows
 	local client_target=()
@@ -283,6 +283,16 @@ if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
 	fi
 fi
 
+# Read once, here: the remote creation below and the local mirror further down
+# seed their first window from the same measurement.
+initial_area="$(initial_mirror_area)"
+initial_width=""
+initial_height=""
+if [[ $initial_area =~ ^([1-9][0-9]*)[[:space:]]+([1-9][0-9]*)$ ]]; then
+	initial_width="${BASH_REMATCH[1]}"
+	initial_height="${BASH_REMATCH[2]}"
+fi
+
 # The picker's row was a remote zoxide directory, not a session (#356): the name
 # is derived, so nothing by it exists yet. Creation lives here rather than in the
 # remote-side picker so there is one creator resolving one socket dir, and so the
@@ -297,8 +307,12 @@ if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n $sess ]]; then
 		if [[ -z "$(first_remote_session)" ]]; then
 			start_remote_server
 		fi
+		remote_size=""
+		if [[ -n $initial_width ]]; then
+			remote_size=" -x $initial_width -y $initial_height"
+		fi
 		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux new-session -d -s $(shell_quote "$sess") -c $(shell_quote "$LZTMUX_REMOTE_NEW_DIR")"; then
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux new-session -d -s $(shell_quote "$sess") -c $(shell_quote "$LZTMUX_REMOTE_NEW_DIR")$remote_size"; then
 			echo "lztmux-remote-open: could not create session '$sess' in '$LZTMUX_REMOTE_NEW_DIR' on $host" >&2
 			exit 1
 		fi
@@ -412,9 +426,8 @@ tmux kill-session -t "=$local_sess" 2>/dev/null || true
 # Create the local session with a single initial window; the daemon reuses it
 # for the first remote window and creates the rest.
 new_session_args=(new-session -d -s "$local_sess" -n "$sess")
-initial_area="$(initial_mirror_area)"
-if [[ $initial_area =~ ^([1-9][0-9]*)[[:space:]]+([1-9][0-9]*)$ ]]; then
-	new_session_args+=(-x "${BASH_REMATCH[1]}" -y "${BASH_REMATCH[2]}")
+if [[ -n $initial_width ]]; then
+	new_session_args+=(-x "$initial_width" -y "$initial_height")
 fi
 tmux "${new_session_args[@]}"
 

@@ -33,7 +33,20 @@ fi
 # BatchMode on the interactive leg too: the bridge already requires
 # non-interactive auth, and without it a key-less host parks a password prompt
 # in a floating pane — a hang, not a message.
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=2)
+#
+# ControlMaster=auto so the probe leg's connection carries the interactive and
+# collect legs too, instead of each paying its own handshake (0.22s vs 0.06s on
+# a LAN host, and the gap only widens with distance). lztmux-remote-auth builds
+# the same master, but only a host that fails key auth ever offers that row —
+# a working host would never get one. ControlPath stays the user's config's:
+# `none` there (OpenSSH's own default) makes this a silent no-op, which is the
+# right outcome for someone who has deliberately disabled sharing.
+# ServerAliveInterval is explicit for the same reason it is there — `Host *`
+# sets it to 0, and a half-open master would hang every later leg.
+#
+# Filled by local_pick, not here: the --probe/--serve roles run on the remote,
+# where reading the persist value would be a tmux fork for nothing.
+SSH_OPTS=()
 
 # shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
 # mirroring lztmux-remote-open — remote-derived paths must not break out.
@@ -186,8 +199,17 @@ work=""
 
 local_pick() {
 	local host="$1"
-	local probe_out payload rc key script emit_dir tmpdir token kind name msg
+	local probe_out payload rc key script emit_dir tmpdir token kind name msg persist
 	local open_env=()
+
+	# Same reading as lztmux-remote-auth's: 0 tells ssh to persist forever, not
+	# "off", so a hand-set tmux option carrying it is rejected like any other
+	# non-positive value rather than passed through.
+	persist="$(tmux show -gv @remote_auth_persist 2>/dev/null || true)"
+	[[ $persist =~ ^[1-9][0-9]*$ ]] || persist=14400
+	SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=2
+		-o ControlMaster=auto -o ControlPersist="$persist"
+		-o ServerAliveInterval=15)
 
 	work="$(mktemp -d "${TMPDIR:-/tmp}/lztmux-remote-picker.XXXXXX")"
 	trap 'rm -rf "$work"' EXIT

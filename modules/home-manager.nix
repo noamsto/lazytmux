@@ -371,10 +371,13 @@ in {
         type = lib.types.ints.between 60 86400;
         default = 14400;
         description = ''
-          How long an ssh ControlMaster created by the picker's auth handshake
-          survives idle, in seconds (clamped 60–86400, default 4h). Passed
-          straight to ssh's `ControlPersist`. This is an *idle* timer covering
-          only the picker's probe and launcher calls, which ride this master:
+          How long an ssh ControlMaster lazytmux creates survives idle, in
+          seconds (clamped 60–86400, default 4h). Passed straight to ssh's
+          `ControlPersist`. Two things build one: the picker's auth handshake,
+          and the remote-side picker's own probe leg (so its three legs share a
+          connection on a host that never needs the handshake). This is an
+          *idle* timer covering only the picker's probe and launcher calls,
+          which ride this master:
           the remote-bridge daemon opens its own ssh connection with its own
           `ControlPath` and never rides this one, so a live bridge does not
           extend this value — the timer measures time since the last probe or
