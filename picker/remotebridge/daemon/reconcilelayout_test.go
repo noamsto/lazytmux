@@ -816,3 +816,57 @@ func TestReconcileLayoutReAddsFloatsAfterAFailedDesyncReset(t *testing.T) {
 		t.Errorf("localFloats = %v, want the dropped float re-added", w.localFloats)
 	}
 }
+
+// #535: the float over the mirror is the USER's — prefix + b/k/I are unguarded
+// float binds — so w.localFloats is empty and the remote has no float at all.
+// The window still holds one as far as tmux is concerned, so select-layout
+// would be refused ("have 3 panes but need 2") and the mirror would sit on its
+// last-good screen until the float closed. The cells check has to run on
+// w.localFloats being empty, not only on it being non-empty.
+func TestApplyLayoutShortCircuitsForAFloatTheDaemonDidNotCreate(t *testing.T) {
+	f := &layoutTmux{windowLayout: localMatchingLayout}
+	w := newRegistry().add("@1", "@101")
+	w.remotePanes = []string{"%0", "%1"}
+	w.localPanes = []string{"%l0", "%l1"}
+	w.layout = "stale"
+	// No localFloats entry: nothing here mirrors a remote float.
+	L := mustLayout(t, tiledLayout)
+
+	if !applyLayout(f.config(), w, L, NewRouter()) {
+		t.Fatal("applyLayout ok = false, want true: the window already carries L's cells")
+	}
+	if got := f.verbs("select-layout"); got != nil {
+		t.Errorf("issued %v — real tmux refuses that outright while the user's float is open", got)
+	}
+	if got := f.verbs("kill-pane"); got != nil {
+		t.Errorf("issued %v, want the user's float left alone — it is not ours to reap", got)
+	}
+	if w.layout != L.Raw {
+		t.Errorf("w.layout = %q, want %q so the next pass reads as converged", w.layout, L.Raw)
+	}
+	if w.floatsDropped {
+		t.Error("floatsDropped = true, but this daemon created no float to drop")
+	}
+}
+
+// The float-free case must keep working, and now also skips the select-layout
+// when the fit alone already reproduced the cells — one read in place of one
+// write, not a read on top of one.
+func TestApplyLayoutShortCircuitsWithNoFloatsAnywhere(t *testing.T) {
+	f := &layoutTmux{windowLayout: "0000,190x45,0,0{95x45,0,0,70,94x45,96,0,71}"}
+	w := newRegistry().add("@1", "@101")
+	w.remotePanes = []string{"%0", "%1"}
+	w.localPanes = []string{"%l0", "%l1"}
+	w.layout = "stale"
+	L := mustLayout(t, tiledLayout)
+
+	if !applyLayout(f.config(), w, L, NewRouter()) {
+		t.Fatal("applyLayout ok = false, want true")
+	}
+	if got := f.verbs("select-layout"); got != nil {
+		t.Errorf("issued %v, want none: the window already carries L's cells", got)
+	}
+	if w.layout != L.Raw {
+		t.Errorf("w.layout = %q, want %q", w.layout, L.Raw)
+	}
+}

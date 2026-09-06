@@ -349,6 +349,16 @@ func retireOrRestoreFloats(cfg Config, w *mirrorWindow, L controlmode.Layout, se
 // the remote's cells (localCellsMatch), and only otherwise kill the mirrored
 // floats, which the caller's trailing reconcileFloats then re-creates.
 //
+// The cells check runs before any float bookkeeping is consulted, because the
+// window can hold a float this daemon did not make: prefix + b/k/I are
+// unguarded float binds, and one open over a mirror used to skip the check
+// entirely — w.localFloats is empty for a float we did not create — and go
+// straight to a select-layout that could only fail, freezing the mirror on its
+// last-good screen for as long as the float stayed open (#535). It is also
+// the cheaper order outright: a matching window needs no select-layout at all,
+// float or no float. Only the drop below stays keyed on w.localFloats — a
+// float the user opened is still not ours to reap.
+//
 // ok is false only when select-layout itself failed. The caller gates the
 // remote's dims and screen on it: painting them into panes that never took the
 // shape is the blank-mirror failure.
@@ -359,21 +369,22 @@ func applyLayout(cfg Config, w *mirrorWindow, L controlmode.Layout, router *Rout
 	if L.Raw == w.layout {
 		return true
 	}
+	if localCellsMatch(cfg, w, L) {
+		w.layout = L.Raw
+		w.shapeFailedFor = ""
+		return true
+	}
 	if len(w.localFloats) > 0 {
-		if localCellsMatch(cfg, w, L) {
-			w.layout = L.Raw
-			w.shapeFailedFor = ""
-			return true
-		}
 		// Once per reconcileLayout call, never once per applyLayout: this runs
 		// twice a pass (here and from applyPaneOps) and up to maxReconcilePasses
 		// times, and each drop respawns every mirrored renderer.
 		if !w.floatsDropped {
 			w.floatsDropped = true
-			// Only what this daemon created. A mirror window can also hold a
-			// float the user opened (prefix + b/k/i are unguarded float binds);
-			// select-layout then still fails and the caller keeps the mirror's
-			// last-good screen — a documented degradation, not a handled case.
+			// Only what this daemon created: a float the user opened over the
+			// mirror is not ours to reap. A genuine reshape with one of those
+			// open is the case this cannot rescue — select-layout still fails
+			// and the caller keeps the last-good screen, which is the whole of
+			// what remains of #535's degradation.
 			for _, id := range sortedFloatIDs(w.localFloats) {
 				removeFloat(cfg, w, router, id)
 			}
