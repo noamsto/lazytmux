@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
@@ -100,17 +101,25 @@ func mirrorNewWindow(cfg Config, send func(string), router *Router, waitHellos h
 //
 // The reattach sweep asks the same question, but once: localWindowGone answers
 // on positive evidence alone, so a read it cannot make leaves the dead entry in
-// place, and no other pass re-reads the local window set. Riding the coarse
-// tick bounds a missed retire at one interval rather than the session (#514).
+// place, and no other pass re-reads the local window set. Riding the sweep
+// bounds a missed retire at one sweep interval rather than the session (#514).
 func healLostWindows(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	live, ok := localWindowSet(cfg)
+	if !ok {
+		return
+	}
+	// Verdicts first, retires after: retireMirror rebuilds the mirror under a
+	// fresh local window, which the listing predates and would read as gone.
+	var gone []string
+	for _, remoteID := range reg.remoteIDs() {
+		if mw, ok := reg.byRemoteID(remoteID); ok && !live[mw.localWin] {
+			gone = append(gone, remoteID)
+		}
+	}
 	// By id, re-read each time: retireMirror reconciles the whole registry, so
 	// an entry taken before it ran may no longer be the one for that window.
-	for _, remoteID := range reg.remoteIDs() {
-		mw, ok := reg.byRemoteID(remoteID)
-		if !ok {
-			continue
-		}
-		if localWindowGone(cfg, mw.localWin) {
+	for _, remoteID := range gone {
+		if mw, ok := reg.byRemoteID(remoteID); ok && !live[mw.localWin] {
 			retireMirror(cfg, send, router, waitHellos, cst, reg, cv, rt, remoteID)
 		}
 	}
@@ -164,4 +173,25 @@ func localWindowHasFloat(cfg Config, localWin string) bool {
 	}
 	_, floats := parseLocalPaneList(out)
 	return len(floats) > 0
+}
+
+// windowSweepInterval is the floor between two maintenance sweeps, the agent
+// and label shippers'. Both passes fork a local tmux client (~30ms measured),
+// and the main loop's maintenance block runs once per control-stream LINE, not
+// once per coarse tick: unfloored, a pane redrawing itself charges every mirror
+// window a fork per line and the loop stops keeping up with the stream.
+const windowSweepInterval = time.Second
+
+// windowSweeper carries that floor across the main loop's iterations, and
+// across a reconnect: neither pass holds connection-scoped state.
+type windowSweeper struct{ lastPass time.Time }
+
+// sweep runs the two registry-wide repair passes, at most once per interval.
+func (s *windowSweeper) sweep(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	if time.Since(s.lastPass) < windowSweepInterval {
+		return
+	}
+	s.lastPass = time.Now()
+	healLostWindows(cfg, send, router, waitHellos, cst, reg, cv, rt)
+	retryFailedShapes(cfg, send, router, waitHellos, cst, reg, cv, rt)
 }

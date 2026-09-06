@@ -723,6 +723,9 @@ func Run(cfg Config) error {
 	// window labels onto the mirror windows as @bridge_* options.
 	agents = newAgentShipper(cfg.LocalSess, remoteClockSkew(rt))
 	labels = newLabelShipper()
+	// Session-lifetime like the tick: a sweeper built per attach would restart
+	// its floor on every reconnect.
+	sweeper := &windowSweeper{}
 
 	// dispatch handles one notification, whether it came straight off the stream
 	// or a reply reader queued it while awaiting a reply. It reports whether the
@@ -842,8 +845,7 @@ func Run(cfg Config) error {
 			// tick below is for.
 			agents.poll(cfg, rt)
 			labels.poll(cfg, reg, rt)
-			healLostWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
-			retryFailedShapes(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
+			sweeper.sweep(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 			reseedDropped(router, rt)
 			// Enable pause-after only now that every window is set up. Setup does
 			// drain the stream (its round-trips route, and so does the hello wait),

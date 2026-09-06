@@ -83,17 +83,27 @@ func localZoomed(cfg Config, localWin string) (zoomed, ok bool) {
 // a live window. A listing fails as a whole or answers in full, and absence
 // from a complete reply is evidence the target could never give.
 func localWindowGone(cfg Config, localWin string) bool {
-	if cfg.LocalTmuxOut == nil {
+	live, ok := localWindowSet(cfg)
+	if !ok {
 		return false
+	}
+	return !live[localWin]
+}
+
+// localWindowSet is that listing, for a caller asking about every mirror at
+// once: one fork answers for the whole registry. ok is false when the listing
+// could not be made — same positive-evidence rule as above.
+func localWindowSet(cfg Config) (map[string]bool, bool) {
+	if cfg.LocalTmuxOut == nil {
+		return nil, false
 	}
 	out, err := cfg.LocalTmuxOut("list-windows", "-t", cfg.LocalSess, "-F", "#{window_id}")
 	if err != nil {
-		return false
+		return nil, false
 	}
+	live := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) == localWin {
-			return false
-		}
+		live[strings.TrimSpace(line)] = true
 	}
-	return true
+	return live, true
 }
