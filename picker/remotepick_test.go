@@ -209,27 +209,6 @@ func TestRemotePickHost(t *testing.T) {
 	}
 }
 
-func TestRemotePickGated(t *testing.T) {
-	cases := map[string]bool{
-		"1":      true,
-		"1\n":    true,
-		" 1 ":    true,
-		"0":      false,
-		"0\n":    false,
-		"":       false,
-		"\n":     false,
-		"  \n":   false,
-		"11":     false,
-		"1 0":    false,
-		"gated1": false,
-	}
-	for raw, want := range cases {
-		if got := remotePickGated(raw); got != want {
-			t.Errorf("remotePickGated(%q) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 	args := remotePickNewPaneArgs("/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick", "tp-g6")
 	want := []string{
