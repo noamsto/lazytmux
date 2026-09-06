@@ -36,6 +36,15 @@ else
 	detach() { (nohup "$@" >/dev/null 2>&1 &) }
 fi
 
+# Progress OSC helper. Guarded like lib-log so the RAW script still runs under
+# bats, where @lib_claude@ is not substituted.
+# shellcheck source=/dev/null
+if [[ -f "@lib_claude@" ]]; then
+	source "@lib_claude@"
+else
+	claude_progress_emit() { :; }
+fi
+
 # Notification seam. A value still starting with '@' means the placeholder was
 # never substituted — the raw script under bats, or a build with notifications
 # disabled — and is the single "notifications off" mechanism. Never empty: an
@@ -85,6 +94,7 @@ cleanup_stale_panes() {
 		local pane_file="${pf##*/}"
 
 		if [[ -z ${pane_exists[$pane_file]+x} ]]; then
+			claude_progress_emit "$pane_file" clear
 			rm -f "$pf" "$ISSUES_DIR/${pf##*/}" "$TASKS_DIR/${pf##*/}" "$NAMES_DIR/${pf##*/}" "$IMAGES_DIR/${pf##*/}.jsonl" "$SCREEN_DIR/${pf##*/}"
 		fi
 	done
@@ -440,6 +450,7 @@ pane_file="${pane_id#%}"
 
 # Handle clear state (cleanup)
 if [[ $state == "clear" ]]; then
+	claude_progress_emit "$pane_id" clear
 	rm -f "$PANES_DIR/$pane_file" "$ISSUES_DIR/$pane_file" "$TASKS_DIR/$pane_file" "$NAMES_DIR/$pane_file" "$SCREEN_DIR/$pane_file"
 	bridge_stamp @claude_status ""
 	exit 0
@@ -544,6 +555,11 @@ EOF
 # reader can split on whitespace and the '|' row delimiter stays free for the
 # free-form task. See bridge_stamp.
 bridge_stamp @claude_status "$state $ts ${unseen_line:+1}"
+
+case "$state" in
+processing | compacting) claude_progress_emit "$pane_id" "$state" ;;
+*) claude_progress_emit "$pane_id" clear ;;
+esac
 
 # Notify on a real transition into an attention state, and only there. The gate
 # is `prior != new`, not `new ∈ {waiting,error,denied}`, so the repeated

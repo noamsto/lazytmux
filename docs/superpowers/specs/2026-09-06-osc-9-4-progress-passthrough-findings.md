@@ -175,3 +175,32 @@ implies, (3) wire the `terminal-features 'xterm-kitty*:progressbar'` line
 into `config/tmux.conf.nix` alongside the existing `terminalTerm` pattern, (4)
 implement the enumerated clear paths. The scratch-probe commands above are
 reusable verbatim for that work.
+
+## 4. Resend-on-focus (resolved)
+
+tmux 3.7c **does resend** a pane's stored OSC 9;4 when the client focuses that
+pane later. Emission is therefore one-shot at write time — no 1s re-emit loop
+in `tmux-update-icons`.
+
+Harness (two panes held with `sleep 3600`, `terminal-features
+xterm-256color:progressbar`, `script` capturing a `TERM=xterm-256color`
+attach):
+
+- Wrote `\033]9;4;1;77\033\\` to the **inactive** pane's `#{pane_tty}`. Pane
+  stayed alive (no Permission denied).
+- Stored: inactive pane `pane_pb_state=normal pane_pb_progress=77`; active pane
+  stayed `hidden|0`.
+- Client byte stream had **zero** OSC 9;4 while that pane was inactive.
+- After `select-pane` onto it: client received `\x1b]9;4;1;77\x1b\\` at the
+  previous capture offset.
+
+Killing an active pane that had progress caused tmux to emit `\x1b]9;4;0;0`
+because the remaining pane was `hidden|0`. Dead-pane clear is therefore mostly
+tmux's own resend; the enumerated call sites (`claude-status-update` state
+writes / `clear` / `cleanup_stale_panes`, `read_pane_state` interrupt and
+dead-agent withdrawal, `claude_reap_dead_panes`) still emit once and no-op if
+the tty is gone.
+
+Chosen mapping: `processing`/`compacting` → OSC 9;4;3;0 (indeterminate, no
+fake percent); everything else including explicit `clear` → OSC 9;4;0;0.
+Remote bridge remains out of scope.

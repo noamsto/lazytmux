@@ -235,6 +235,16 @@
               touch $out
             '';
 
+          claude-progress-tests =
+            pkgs.runCommand "claude-progress-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/claude-progress.bats
+              touch $out
+            '';
+
           mark-seen-tests =
             pkgs.runCommand "mark-seen-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

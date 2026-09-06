@@ -273,7 +273,7 @@
 
   mkScriptWithLog = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
-    patched = builtins.replaceStrings ["@lib_log@" "@notify@"] ["${lib-log}" notifyBin] raw;
+    patched = builtins.replaceStrings ["@lib_log@" "@notify@" "@lib_claude@"] ["${lib-log}" notifyBin "${lib-claude}"] raw;
   in
     pkgs.writeShellScriptBin name patched;
 
@@ -756,6 +756,7 @@
     set -g extended-keys on
     set -g extended-keys-format csi-u
     ${terminalConfig}set -as terminal-features '*:hyperlinks'
+    set -as terminal-features 'xterm-kitty*:progressbar'
     set -s set-clipboard on
     set -s copy-command '${
       if pkgs.stdenv.hostPlatform.isDarwin
