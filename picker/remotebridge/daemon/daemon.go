@@ -990,6 +990,10 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 	// life, not of a size, so a re-setup of a window whose size the converger
 	// already records must still assert it.
 	send(AggressiveResizeOffCmd(mw.remoteID))
+	// Same shape and the same reason to be unconditional: a property of the
+	// window's whole life, and the only client the mirrored session has is a
+	// control client, which no visibility test passes (#529).
+	send(PassthroughAllCmd(mw.remoteID))
 	// reg.add publishes the window before this runs, so watchResize can already
 	// have capped it — a cap tmux discarded, since the opt-out above had not
 	// landed yet, and which cv.need would then read as asserted. Changing a
