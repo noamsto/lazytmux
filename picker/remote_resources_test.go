@@ -108,7 +108,7 @@ func TestRemoteResourcesCmdFishSafe(t *testing.T) {
 	if strings.Contains(remoteResourcesCmd, "td=") || strings.Contains(remoteResourcesCmd, "; t=") {
 		t.Fatalf("must not use shell assignments (fish-incompatible): %q", remoteResourcesCmd)
 	}
-	for _, want := range []string{"getconf _NPROCESSORS_ONLN", "list-panes -a", "TMUX_TMPDIR=/tmp/tmux-$(id -u)", "ps -Ao"} {
+	for _, want := range []string{"getconf _NPROCESSORS_ONLN", "list-panes -a", "TMUX_TMPDIR=/tmp ", "ps -Ao"} {
 		if !strings.Contains(remoteResourcesCmd, want) {
 			t.Errorf("missing %q in %q", want, remoteResourcesCmd)
 		}

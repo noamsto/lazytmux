@@ -133,10 +133,15 @@ if [[ -n ${LZTMUX_REMOTE_TMPDIR:-} ]]; then
 tmpdir_lit=$(shell_quote "$LZTMUX_REMOTE_TMPDIR")
 tmpdir=\"\$tmpdir_lit\""
 else
+	# tmux appends tmux-<uid> to $TMUX_TMPDIR itself, so both arms name the
+	# PARENT of the socket dir, not the socket dir: /run/user/<uid> resolves to
+	# /run/user/<uid>/tmux-<uid>/default, /tmp to /tmp/tmux-<uid>/default. macOS
+	# has no $XDG_RUNTIME_DIR and its launchd startup agent sets no TMUX_TMPDIR,
+	# so tmux's own default is the one to match there (#531).
 	# shellcheck disable=SC2016
 	probe_script+='
 case "$os" in
-	Darwin) tmpdir="/tmp/tmux-$uid" ;;
+	Darwin) tmpdir="/tmp" ;;
 	*) tmpdir="/run/user/$uid" ;;
 esac'
 fi

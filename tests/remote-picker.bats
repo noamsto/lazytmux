@@ -249,7 +249,7 @@ tmpdir=/run/user/1000"
 @test "--probe reports absolute paths and mutates nothing" {
 	local expect_tmpdir
 	if [[ "$(uname -s)" == Darwin ]]; then
-		expect_tmpdir="/tmp/tmux-$(id -u)"
+		expect_tmpdir="/tmp"
 	else
 		expect_tmpdir="/run/user/$(id -u)"
 	fi
@@ -264,6 +264,20 @@ tmpdir=/run/user/1000"
 	# Resolution only: the emit dir is --serve's job, and a probe that created it
 	# would leave a directory behind on every host the picker ever asks.
 	[ ! -e "$XDG_RUNTIME_DIR" ]
+}
+
+# A shape assertion rather than a round trip through real tmux: the Darwin arm
+# cannot run on Linux CI, and the Linux arm's /run/user/<uid> does not exist in
+# the nix sandbox, so neither host could execute the round trip that matters
+# (#531).
+@test "--probe reports the parent of the socket dir, never the socket dir" {
+	run bash "$SCRIPT" --probe </dev/null
+	[ "$status" -eq 0 ]
+
+	local tmpdir
+	tmpdir="$(printf '%s\n' "$output" | sed -n 's/^tmpdir=//p')"
+	[ -n "$tmpdir" ]
+	[[ $tmpdir != */tmux-$(id -u) ]]
 }
 
 @test "--serve rejects a token that could escape the path join" {
