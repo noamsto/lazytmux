@@ -39,9 +39,11 @@ var remoteListSessionsBody = remoteTmuxCmd(`list-sessions -F '#{session_name}'`)
 const remoteTmuxBin = `$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux)`
 
 // remoteTmuxCmd runs one tmux argument string under the same TMUX_TMPDIR /
-// binary resolution as lztmux-remote-open. The socket dir is OS-dependent:
-// /run/user/<uid> on Linux, tmux's default /tmp/tmux-<uid> on macOS (no
-// $XDG_RUNTIME_DIR), so it tries Linux first and a wrong guess costs a stat.
+// binary resolution as lztmux-remote-open. Both legs name the PARENT of the
+// socket dir — tmux appends tmux-<uid> to $TMUX_TMPDIR itself — so
+// /run/user/<uid> on Linux and /tmp on macOS, which has no $XDG_RUNTIME_DIR
+// and keeps its server at tmux's own /tmp/tmux-<uid> default. It tries Linux
+// first and a wrong guess costs a stat.
 // Both legs are silenced and OR'd, so a missing server yields empty stdout
 // rather than an error a caller would read as unreachable. Everything it emits
 // must stay fish-safe: no `var=value` assignments — fish login shells reject
@@ -50,7 +52,7 @@ func remoteTmuxCmd(args string) string {
 	leg := func(tmpdir string) string {
 		return `env TMUX_TMPDIR=` + tmpdir + ` ` + remoteTmuxBin + ` ` + args + ` 2>/dev/null`
 	}
-	return leg(`/run/user/$(id -u)`) + ` || ` + leg(`/tmp/tmux-$(id -u)`)
+	return leg(`/run/user/$(id -u)`) + ` || ` + leg(`/tmp`)
 }
 
 var remoteListSessionsCmd = remoteIdentityPreamble + `; ` + remoteListSessionsBody

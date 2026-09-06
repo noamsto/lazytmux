@@ -52,7 +52,15 @@ setup() {
 		*": lztmux-probe;"*)
 			os="${FAKE_UNAME:-Linux}"
 			uid=1000
-			if [ "$os" = Darwin ]; then tmpdir="/tmp/tmux-$uid"; else tmpdir="/run/user/$uid"; fi
+			# Read the launcher's own resolution out of the probe script it
+			# sent, rather than restating it here: a fake that duplicates the
+			# rule under test agrees with the launcher however wrong it is (#531).
+			if [ "$os" = Darwin ]; then
+				tmpdir=$(printf '%s\n' "$cmd" | sed -n 's/.*Darwin) tmpdir="\([^"]*\)".*/\1/p')
+			else
+				tmpdir=$(printf '%s\n' "$cmd" | sed -n 's/.*\*) tmpdir="\([^"]*\)".*/\1/p')
+			fi
+			tmpdir=$(printf '%s\n' "$tmpdir" | sed "s/[\$]uid/$uid/")
 			case "$cmd" in
 			*"tmpdir_lit="*) tmpdir=$(printf '%s\n' "$cmd" | sed -n "s/.*tmpdir_lit='\([^']*\)'.*/\1/p") ;;
 			esac
@@ -396,8 +404,11 @@ teardown() {
 	[ "$status" -eq 0 ]
 
 	grep -q 'launchctl kickstart gui/1000/org.nix-community.home.tmux-startup' "$SSH_LOG"
-	# macOS socket dir, never the Linux one.
-	grep -q 'TMUX_TMPDIR=/tmp/tmux-1000' "$SSH_LOG"
+	# macOS socket dir's parent, never the Linux one and never the doubled
+	# tmux-<uid> segment (#531).
+	grep -q 'TMUX_TMPDIR=/tmp ' "$SSH_LOG"
+	run grep -c 'TMUX_TMPDIR=/tmp/tmux-' "$SSH_LOG"
+	[ "$status" -ne 0 ]
 	run grep -c 'TMUX_TMPDIR=/run/user' "$SSH_LOG"
 	[ "$status" -ne 0 ]
 	# Two probes: the empty one that triggered the kickstart, and the one after.

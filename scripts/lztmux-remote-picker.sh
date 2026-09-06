@@ -66,12 +66,13 @@ last_non_empty_line() {
 }
 
 # Mirrors lztmux-remote-open's client-side resolver, run here on the host that
-# owns the answer: the OS decides the tmux socket dir.
+# owns the answer: the OS decides the tmux socket dir. Both arms name the
+# PARENT of that dir — tmux appends tmux-<uid> itself (#531).
 resolve_tmpdir() {
 	local uid
 	uid="$(id -u)"
 	if [[ "$(uname -s)" == Darwin ]]; then
-		printf '/tmp/tmux-%s\n' "$uid"
+		printf '/tmp\n'
 	else
 		printf '/run/user/%s\n' "$uid"
 	fi
