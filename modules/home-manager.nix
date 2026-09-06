@@ -1412,9 +1412,11 @@ in {
         "tmux/tmux.conf".source = tmuxConfig.tmuxConf;
       };
     }
-    # Never restart on switch — killing the tmux server destroys all sessions and
-    # history. The startup script resolves tmux via the user profile, so the
-    # unit/plist doesn't change when lazytmux updates (preventing sd-switch restart).
+    # Never restart on switch — Type=forking with no KillMode override means
+    # stopping the unit kills the tmux server's whole cgroup, taking every
+    # session with it. Byte-stability of the unit can't be relied on to prevent
+    # that: TERMINFO embeds the terminal's store path, which churns on unrelated
+    # nixpkgs rebuilds.
     (lib.mkIf isLinux {
       systemd.user = {
         services = {
@@ -1422,6 +1424,7 @@ in {
             Unit =
               {
                 Description = "Start tmux server on login";
+                X-SwitchMethod = "keep-old";
               }
               // lib.optionalAttrs (!cfg.startupSession.headless) {
                 After = ["graphical-session.target"];
