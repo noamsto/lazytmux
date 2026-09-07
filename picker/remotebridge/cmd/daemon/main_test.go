@@ -93,8 +93,8 @@ func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 // reaches EOF and the daemon never runs the teardown it already has. Nothing
 // else in the suite would fail if they were dropped, hence this test.
 func TestSSHControlArgsCarryKeepalives(t *testing.T) {
-	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "xterm-kitty", "lazytmux",
-		[]string{"tmux"})
+	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "xterm-kitty", "truecolor", "iTerm.app",
+		"lazytmux", []string{"tmux"})
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -122,9 +122,50 @@ func TestSSHControlArgsCarryKeepalives(t *testing.T) {
 		}
 	}
 
+	// TERM/COLORTERM/TERM_PROGRAM (#543) are part of the remote `env ...`
+	// command, so they must sit after the host (an ssh option there would be
+	// misparsed as a remote command word) and before the trailing attach args.
+	envAt := slices.Index(args, "env")
+	if envAt < 0 || envAt < hostAt {
+		t.Fatalf("env token missing or before the host in %q", joined)
+	}
+	attachAt := slices.Index(args, "-C")
+	if attachAt < 0 {
+		t.Fatalf("-C attach-session missing from %q", joined)
+	}
+	for _, tc := range []struct{ name, value string }{
+		{"TERM", "xterm-kitty"},
+		{"COLORTERM", "truecolor"},
+		{"TERM_PROGRAM", "iTerm.app"},
+	} {
+		// Mirrors sshControlArgs' own "NAME="+shellQuote(value) construction.
+		want := tc.name + "=" + shellQuote(tc.value)
+		at := slices.Index(args, want)
+		if at < 0 {
+			t.Errorf("missing %q in %q", want, joined)
+			continue
+		}
+		if at < envAt || at > attachAt {
+			t.Errorf("%s at %d, want between env (%d) and -C attach-session (%d)", want, at, envAt, attachAt)
+		}
+	}
+
 	// The session is the attach target and must stay one token even with spaces.
 	if got := args[len(args)-1]; got != shellQuote("lazytmux") {
 		t.Errorf("last arg = %q, want the shell-quoted session", got)
+	}
+}
+
+// TestSSHControlArgsOmitsEmptyColortermAndTermProgram: an empty local value
+// (no client, or a terminal that never set it) must not ship a bogus/empty
+// env assignment to the remote.
+func TestSSHControlArgsOmitsEmptyColortermAndTermProgram(t *testing.T) {
+	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "", "", "", "lazytmux", []string{"tmux"})
+	joined := strings.Join(args, " ")
+	for _, unwanted := range []string{"TERM=", "COLORTERM=", "TERM_PROGRAM="} {
+		if strings.Contains(joined, unwanted) {
+			t.Errorf("unexpected %q in %q", unwanted, joined)
+		}
 	}
 }
 
