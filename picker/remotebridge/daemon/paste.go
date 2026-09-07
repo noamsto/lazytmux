@@ -396,21 +396,26 @@ func bridgeProc(cfg Config, remotePane string) string {
 	}
 }
 
-// notifyLocal shows msg on the client viewing the mirror session. A detached
-// session has no client to show it on, and the paste's async context has no
-// better channel — the message is best-effort by construction. msg is
-// escaped and passed after -- per this repo's display-message convention
-// (scripts/lztmux-notify.sh): the argument is format-expanded and
-// strftime-run, and a leading "-" would otherwise be read as a flag.
-func notifyLocal(cfg Config, msg string) {
+// notifyLocal shows msg on the client viewing the mirror session and reports
+// whether one was found to show it on. A detached session has no client to
+// show it on, and the paste's async context has no better channel — the
+// message is best-effort by construction. msg is escaped and passed after --
+// per this repo's display-message convention (scripts/lztmux-notify.sh): the
+// argument is format-expanded and strftime-run, and a leading "-" would
+// otherwise be read as a flag.
+func notifyLocal(cfg Config, msg string) bool {
+	if cfg.LocalTmuxOut == nil || cfg.LocalTmux == nil {
+		return false
+	}
 	out, err := cfg.LocalTmuxOut("list-clients", "-t", cfg.LocalSess, "-F", "#{client_name}")
 	if err != nil {
-		return
+		return false
 	}
 	client, _, _ := strings.Cut(string(out), "\n")
 	if client == "" {
-		return
+		return false
 	}
 	esc := strings.NewReplacer("#", "##", "%", "%%").Replace(msg)
 	cfg.LocalTmux("display-message", "-c", client, "-d", "5000", "--", esc)
+	return true
 }
