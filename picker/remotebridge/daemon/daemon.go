@@ -181,10 +181,20 @@ func parseWindowID(s string) (string, error) {
 // Panes are addressed 0-based (spawnRenderer/reconcileLayout use index starting
 // at 0); the pane-base-index override keeps that true regardless of the host's
 // global (real hosts set 1).
+//
+// remain-on-exit goes on because a renderer's exit must not be structural. A
+// renderer wired by pane environment (spawnRenderer's -e) dies at dial the
+// moment anything re-runs its command without that environment — which a bare
+// respawn-pane does, and four default binds offer it (prefix + < and >, and
+// both right-click pane menus) — and with the host's global off the pane then
+// closes, taking the window and, for a single-pane mirror, the whole mirror
+// session with it (#547). A dead pane instead of a lost session is the
+// difference; sweepDeadRenderers repairs it from there.
 func stampMirrorWindow(cfg Config, localWin, remoteName string) {
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "automatic-rename", "off")
+	cfg.LocalTmux("set-option", "-w", "-t", localWin, "remain-on-exit", "on")
 	applyMirrorName(cfg, localWin, remoteName)
 }
 

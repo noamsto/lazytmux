@@ -34,14 +34,13 @@ func TestHealLostWindowsRetiresAMirrorTheSweepMissed(t *testing.T) {
 			}
 			return nil
 		},
-		// @0 survived; @143 is the window that went away unseen.
-		LocalTmuxOut: func(argv ...string) (string, error) { return "@0\n", nil },
 	}
 
 	reg := newRegistry()
 	reg.add("@1", "@143")
 
-	healLostWindows(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
+	// @0 survived; @143 is the window that went away unseen.
+	healLostWindows(cfg, map[string]bool{"@0": true}, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
 
 	if _, ok := reg.byRemoteID("@1"); ok {
 		t.Error("the entry for the dead window survived the heal; the mirror stays short and the label poll keeps aiming at it")
@@ -57,14 +56,13 @@ func TestHealLostWindowsRetiresAMirrorTheSweepMissed(t *testing.T) {
 // so a false positive would tear down and rebuild a healthy mirror on a loop.
 func TestHealLostWindowsLeavesLiveMirrorsAlone(t *testing.T) {
 	cfg := Config{
-		LocalSess:    "host-sess",
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "@0\n@143\n", nil },
+		LocalSess: "host-sess",
+		LocalTmux: func(...string) error { return nil },
 	}
 	reg := newRegistry()
 	reg.add("@1", "@143")
 
-	healLostWindows(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
+	healLostWindows(cfg, map[string]bool{"@0": true, "@143": true}, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
 
 	if _, ok := reg.byRemoteID("@1"); !ok {
 		t.Error("retired a mirror whose window is still listed")

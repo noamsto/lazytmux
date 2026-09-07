@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
@@ -103,11 +104,10 @@ func mirrorNewWindow(cfg Config, send func(string), router *Router, waitHellos h
 // on positive evidence alone, so a read it cannot make leaves the dead entry in
 // place, and no other pass re-reads the local window set. Riding the sweep
 // bounds a missed retire at one sweep interval rather than the session (#514).
-func healLostWindows(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
-	live, ok := localWindowSet(cfg)
-	if !ok {
-		return
-	}
+//
+// live comes from the caller because the sweep's other pass needs the same
+// snapshot (see mirrorPaneRows) and the sweep is budgeted at one local fork.
+func healLostWindows(cfg Config, live map[string]bool, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
 	// Verdicts first, retires after: retireMirror rebuilds the mirror under a
 	// fresh local window, which the listing predates and would read as gone.
 	var gone []string
@@ -121,6 +121,110 @@ func healLostWindows(cfg Config, send func(string), router *Router, waitHellos h
 	for _, remoteID := range gone {
 		if mw, ok := reg.byRemoteID(remoteID); ok && !live[mw.localWin] {
 			retireMirror(cfg, send, router, waitHellos, cst, reg, cv, rt, remoteID)
+		}
+	}
+}
+
+// mirrorPaneListFormat asks tmux for every pane in the mirror session, tagged
+// with the window it sits in, whether its command has exited, and the remote
+// pane the daemon wired it to render. Pipe-delimited rather than the space
+// localPaneListFormat can afford: @bridge_pane is unset on a pane the daemon
+// never created, and the empty trailing field has to survive the split.
+const mirrorPaneListFormat = "#{window_id}|#{pane_id}|#{pane_dead}|#{@bridge_pane}"
+
+// mirrorPaneRows reads the whole mirror session's panes in one fork, which is
+// what both sweep passes run off: the window set healLostWindows needs and the
+// dead-renderer set healDeadRenderers needs are two views of one listing, and
+// the sweep is budgeted at one local fork per pass (see windowSweepInterval).
+// A window always holds at least one pane, so the window ids in this reply are
+// the same set list-windows would give.
+//
+// Positive evidence only, the localWindowGone rule: a listing that cannot be
+// made returns ok=false and the sweep does nothing, since retiring or
+// rebuilding on a transient read tears down healthy mirrors.
+func mirrorPaneRows(cfg Config) (live, deadRenderer map[string]bool, ok bool) {
+	if cfg.LocalTmuxOut == nil {
+		return nil, nil, false
+	}
+	out, err := cfg.LocalTmuxOut("list-panes", "-s", "-t", cfg.LocalSess, "-F", mirrorPaneListFormat)
+	if err != nil {
+		return nil, nil, false
+	}
+	live, deadRenderer = map[string]bool{}, map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Split(strings.TrimSpace(line), "|")
+		if len(f) != 4 || !strings.HasPrefix(f[0], "@") {
+			continue
+		}
+		live[f[0]] = true
+		// Keyed on @bridge_pane being set, not on the pane merely being dead. A
+		// mirror window can hold a float this daemon never created (prefix +
+		// b/k/I, and ^o's remote picker), remain-on-exit keeps that float's
+		// corpse too, and it is not ours to reap — rebuilding the window on its
+		// death drops the user's float. @bridge_pane is the daemon's own stamp,
+		// written only on panes it spawned as renderers, and it survives
+		// respawn-pane -k.
+		if f[2] == "1" && f[3] != "" {
+			deadRenderer[f[0]] = true
+		}
+	}
+	return live, deadRenderer, true
+}
+
+// deadRendererStrikes caps how many times one mirror is rebuilt for a dead
+// renderer before the sweep gives up on it. A renderer that dies at spawn every
+// time — its binary gone from the store under a live session, say — would
+// otherwise be rebuilt once per sweep for the life of the daemon. A window left
+// bearing a corpse is a worse mirror; a window rebuilt every second is a worse
+// session.
+const deadRendererStrikes = 3
+
+// healDeadRenderers rebuilds every mirror holding a dead renderer pane.
+//
+// A renderer's exit is not structural any more — stampMirrorWindow sets
+// remain-on-exit on the mirror window, so the pane goes dead instead of
+// closing and taking the window (and, for a single-pane mirror, the session)
+// with it (#547). That leaves a corpse nothing else will ever notice: a dead
+// pane is still a pane to list-panes, so the pane diff reads the local set as
+// matching the remote's and reconcile correctly does nothing. This is the pass
+// that notices.
+//
+// resetWindow rather than retireMirror, and rather than respawning the one
+// pane. Retiring is what healLostWindows does to a window that is already
+// gone, and closeWindow's kill-window would here destroy a live window — which
+// for a single-window mirror session takes the session, the very failure this
+// is repairing. resetWindow keeps the window and re-runs the whole
+// plan/spawn/hello/seed pipeline through setupWindow, which is where the seed
+// ordering and the geometry each pane is painted at already live (#233, #412
+// and #417 are all bugs in exactly that arithmetic); a per-pane respawn would
+// re-derive it out of band for no gain, since the corpse holds no content
+// worth preserving.
+func (s *windowSweeper) healDeadRenderers(cfg Config, dead map[string]bool, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
+	if s.deadStrikes == nil {
+		s.deadStrikes = map[string]int{}
+	}
+	for _, remoteID := range reg.remoteIDs() {
+		mw, ok := reg.byRemoteID(remoteID)
+		if !ok {
+			continue
+		}
+		if !dead[mw.localWin] {
+			// A pass that finds this mirror healthy returns its budget: the cap
+			// exists to stop a repeating failure, not to ration repairs over a
+			// session in which renderers die once and come back.
+			delete(s.deadStrikes, remoteID)
+			continue
+		}
+		if s.deadStrikes[remoteID] >= deadRendererStrikes {
+			continue
+		}
+		s.deadStrikes[remoteID]++
+		if err := resetWindow(cfg, mw, send, router, waitHellos, cst, cv, rt); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: dead renderer in %s: %v\n", remoteID, err)
+		}
+		if s.deadStrikes[remoteID] == deadRendererStrikes {
+			fmt.Fprintf(os.Stderr, "daemon: %s: renderer keeps dying after %d rebuilds; leaving it\n",
+				remoteID, deadRendererStrikes)
 		}
 	}
 }
@@ -183,15 +287,28 @@ func localWindowHasFloat(cfg Config, localWin string) bool {
 const windowSweepInterval = time.Second
 
 // windowSweeper carries that floor across the main loop's iterations, and
-// across a reconnect: neither pass holds connection-scoped state.
-type windowSweeper struct{ lastPass time.Time }
+// across a reconnect: no pass holds connection-scoped state. deadStrikes is
+// the exception to "no state" — it has to outlive the mirrorWindow it counts
+// against, which a rebuild replaces.
+type windowSweeper struct {
+	lastPass    time.Time
+	deadStrikes map[string]int
+}
 
-// sweep runs the two registry-wide repair passes, at most once per interval.
+// sweep runs the registry-wide repair passes, at most once per interval.
 func (s *windowSweeper) sweep(cfg Config, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, reg *registry, cv *converger, rt roundTrip) {
 	if time.Since(s.lastPass) < windowSweepInterval {
 		return
 	}
 	s.lastPass = time.Now()
-	healLostWindows(cfg, send, router, waitHellos, cst, reg, cv, rt)
+	live, dead, ok := mirrorPaneRows(cfg)
+	if !ok {
+		return
+	}
+	// Lost windows first: a retire rebuilds under a fresh local window, which
+	// the snapshot predates — so it cannot appear in dead, and the pass below
+	// leaves the replacement alone rather than rebuilding it again.
+	healLostWindows(cfg, live, send, router, waitHellos, cst, reg, cv, rt)
+	s.healDeadRenderers(cfg, dead, send, router, waitHellos, cst, reg, cv, rt)
 	retryFailedShapes(cfg, send, router, waitHellos, cst, reg, cv, rt)
 }
