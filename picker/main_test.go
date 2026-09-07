@@ -142,9 +142,8 @@ func TestSessionsBridgeProcOverride(t *testing.T) {
 }
 
 // sortSessionsForDisplay orders by activity desc, then name asc, and nothing
-// else — the current-sinks-below-its-mirror pass (#551) belongs to the
-// filtered list alone, so an empty query leaves positions where the plain
-// sort put them.
+// else: a current session keeps its rank even beside a mirror it collides
+// with (#551).
 func TestSortSessionsForDisplay(t *testing.T) {
 	names := func(sessions []sessionData) []string {
 		out := make([]string, len(sessions))
@@ -203,8 +202,7 @@ func TestSortSessionsForDisplay(t *testing.T) {
 }
 
 // buildSessionItems marks `current` on the row the client is attached to —
-// the flag the filtered list's sink reads. Nothing about it reorders the
-// unfiltered list.
+// the flag sinkCurrentMatchBelowPeer reads once a query is typed.
 func TestBuildSessionItemsMarksCurrent(t *testing.T) {
 	snap := panesSnapshot{
 		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",

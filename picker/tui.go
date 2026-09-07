@@ -1342,18 +1342,14 @@ func matchRank(it listItem) int {
 
 // sinkCurrentMatchBelowPeer moves the currently attached session (at most one
 // ever exists — a client attaches to exactly one session) to immediately after
-// the LAST matched row it display-collides with on another host. It runs only
-// on a non-empty query: with no filter the full list is on screen with its
-// Host column, so the unfiltered order stays the plain activity/name sort a
-// user reads positions off. If the current session's peer never matched the
-// query (so it isn't present in this slice), this is a no-op — there's nothing
-// to sink below in the visible list.
+// the LAST matched row it display-collides with on another host. A peer that
+// never matched the query isn't in this slice, so there's nothing to sink
+// below and this is a no-op.
 //
-// This must be a stable post-pass rather than a rule folded into the scored
-// sort's comparator: a pairwise "current loses" rule inside the comparator is
-// not transitive (three rows whose scores interleave across the collision
-// produce a comparator cycle), and sort.SliceStable's behavior on a
-// non-transitive comparator is unspecified.
+// It must be a post-pass rather than a rule folded into the scored sort's
+// comparator: a pairwise "current loses" rule is not transitive (three rows
+// whose scores interleave across the collision produce a comparator cycle),
+// and sort.SliceStable is unspecified on a non-transitive comparator.
 func sinkCurrentMatchBelowPeer(matches []scored) {
 	i := -1
 	for idx, s := range matches {
@@ -1739,9 +1735,11 @@ func sameDisplayDifferentHost(nameA, hostA, nameB, hostB string) bool {
 	return hostA != hostB && sessionDisplayName(nameA, hostA) == sessionDisplayName(nameB, hostB)
 }
 
-// sortSessionsForDisplay orders sessions by activity desc, then name asc. A
-// current session that display-collides with a mirror on another host is sunk
-// below it only in the filtered list (sinkCurrentMatchBelowPeer) — see there.
+// sortSessionsForDisplay orders sessions by activity desc, then name asc, and
+// nothing more. Sinking the current session below a same-display-name mirror
+// (#551) is sinkCurrentMatchBelowPeer's job and the filtered list's alone: an
+// unfiltered list shows every row with its Host column, and reordering it
+// would move rows a user navigates by position.
 func sortSessionsForDisplay(sessions []sessionData) {
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].activity != sessions[j].activity {

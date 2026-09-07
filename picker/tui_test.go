@@ -143,13 +143,12 @@ func TestWithFilterRemoteTree(t *testing.T) {
 }
 
 // Documents WHY the filtered list needs a current-sinks-below-peer post-pass
-// at all: fuzzy score has no notion of
-// "current", and a bare session name always outscores its host-prefixed
-// mirror for a query matching both — the mirror's first matched character
-// starts just past the "-" (a non-word boundary, not a delimiter), losing
-// the boundary bonus the bare name's first character gets. This alone would
-// pass before the fix too; it's a mechanism-documentation test, not
-// acceptance evidence for the fix.
+// at all: fuzzy score has no notion of "current", and a bare session name
+// always outscores its host-prefixed mirror for a query matching both — the
+// mirror's first matched character starts just past the "-" (a non-word
+// boundary, not a delimiter), losing the boundary bonus the bare name's first
+// character gets. This alone would pass before the fix too; it's a
+// mechanism-documentation test, not acceptance evidence for the fix.
 func TestFuzzyScoreBareNameBeatsHostPrefixedMirror(t *testing.T) {
 	local := fuzzyScore("lazytmux", "lazytmux")
 	mirror := fuzzyScore("g6-lazytmux", "lazytmux")
@@ -236,9 +235,8 @@ func TestWithFilterSinksCurrentBelowPeer(t *testing.T) {
 	}
 }
 
-// The sink is the filtered list's alone: an empty query is the plain
-// activity-ordered list, and a user reads positions off it, so the collision
-// that only fuzzy ranking gets wrong must not move rows here.
+// An empty query renders the plain activity-ordered list: the sink belongs to
+// the fuzzy ranking it corrects, and must not move rows here.
 func TestWithFilterEmptyQueryKeepsOrder(t *testing.T) {
 	items := []listItem{
 		{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
