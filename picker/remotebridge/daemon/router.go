@@ -253,6 +253,27 @@ func (r *Router) dirtyPanes() []string {
 	return ids
 }
 
+// reshapedPanes returns, sorted, the panes whose confirmation re-seed has come
+// due, advancing every other mark one step as it goes. A pane marked on this
+// pass is therefore never returned by it — which is the deferral markReshaped
+// exists for, expressed as the shape of the walk rather than a timer.
+func (r *Router) reshapedPanes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []string
+	for id, w := range r.sinks {
+		s, ok := w.(*outputSink)
+		if !ok {
+			continue
+		}
+		if s.takeReshaped() {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (r *Router) sink(paneID string) *outputSink {
 	r.mu.Lock()
 	defer r.mu.Unlock()
