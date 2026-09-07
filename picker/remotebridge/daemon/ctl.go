@@ -378,17 +378,24 @@ func carouselResolveScript(pane string) string {
 	return fmt.Sprintf(
 		"src=$(tmux show-options -pqv -t %s @claude_img_src); "+
 			"case \"$src\" in %%[0-9]*) case \"${src#%%}\" in *[!0-9]*) src=%s;; esac;; *) src=%s;; esac; "+
-			"if command -v tmux-claude-images >/dev/null 2>&1; then "+
+			// @carousel_bin repoints on a config reload; PATH is frozen at
+			// server start, so a bare name would keep resolving to the old
+			// generation's script after a nix switch (#554). The -x guard
+			// drops a stamp whose store path was garbage-collected.
+			"bin=$(tmux show-options -gqv @carousel_bin); "+
+			"if [ -n \"$bin\" ] && [ ! -x \"$bin\" ]; then bin=; fi; "+
+			"if [ -z \"$bin\" ]; then bin=$(command -v tmux-claude-images 2>/dev/null); fi; "+
+			"if [ -n \"$bin\" ]; then "+
 			"tab=$(printf \"\\t\"); "+
-			"res=$(env TMUX_PANE=\"$src\" tmux-claude-images --resolve 2>/dev/null); "+
+			"res=$(env TMUX_PANE=\"$src\" \"$bin\" --resolve 2>/dev/null); "+
 			"manifest=${res####*$tab}; "+
 			"if [ -n \"$manifest\" ] && [ -s \"$manifest\" ]; then "+
-			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 tmux-claude-images; "+
+			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 \"$bin\"; "+
 			"fi; "+
 			`tmux new-pane -t "$src" %s "echo lazytmux: no images yet for this pane; sleep 5"; `+
 			"exit 0; "+
 			"fi; "+
-			`tmux new-pane -t "$src" %s "echo lazytmux: tmux-claude-images is not on PATH on this host; sleep 5"`,
+			`tmux new-pane -t "$src" %s "echo lazytmux: tmux-claude-images not found on this host; sleep 5"`,
 		pane, pane, pane, remoteFloatFull, remoteFloatFull,
 	)
 }

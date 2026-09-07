@@ -534,6 +534,106 @@ echo launched >>"`+launchLog+`"
 	}
 }
 
+// TestCarouselResolveScriptPrefersCarouselBin pins the #554 fix: the verb
+// resolves the toggle through @carousel_bin (repointed by every config
+// reload) rather than the server environment's frozen PATH, and falls back
+// to PATH when the option is unset (older remote) or its store path is gone
+// (garbage-collected generation).
+func TestCarouselResolveScriptPrefersCarouselBin(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not on PATH")
+	}
+	tests := []struct {
+		name      string
+		optionVal string // "set" = live stub path, "gc" = nonexistent path, "" = unset
+		wantLog   string
+	}{
+		{"option wins over PATH", "set", "option"},
+		{"GC'd option path falls back to PATH", "gc", "path"},
+		{"unset option falls back to PATH", "", "path"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			manifest := filepath.Join(dir, "manifest.jsonl")
+			if err := os.WriteFile(manifest, []byte("{}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			stubBody := func(log string) string {
+				return `#!/bin/sh
+if [ "$1" = --resolve ]; then
+	printf 'tmux\tkey\t` + manifest + `\n'
+	exit 0
+fi
+echo launched >>"` + log + `"
+`
+			}
+			pathLog := filepath.Join(dir, "path.log")
+			optLog := filepath.Join(dir, "opt.log")
+			pathDir := filepath.Join(dir, "pathbin")
+			optDir := filepath.Join(dir, "optbin")
+			for _, d := range []string{pathDir, optDir} {
+				if err := os.Mkdir(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeStub(t, filepath.Join(pathDir, "tmux-claude-images"), stubBody(pathLog))
+			optStub := filepath.Join(optDir, "tmux-claude-images")
+			writeStub(t, optStub, stubBody(optLog))
+
+			tmux := startIsolatedTmux(t, "PATH="+pathDir+":"+os.Getenv("PATH"))
+			switch tc.optionVal {
+			case "set":
+				if out, err := tmux("set-option", "-g", "@carousel_bin", optStub).CombinedOutput(); err != nil {
+					t.Fatalf("set-option: %v\n%s", err, out)
+				}
+			case "gc":
+				if out, err := tmux("set-option", "-g", "@carousel_bin", filepath.Join(dir, "gone")).CombinedOutput(); err != nil {
+					t.Fatalf("set-option: %v\n%s", err, out)
+				}
+			}
+
+			paneOut, err := tmux("display-message", "-p", "-t", "w", "#{pane_id}").Output()
+			if err != nil {
+				t.Fatalf("display-message: %v", err)
+			}
+			pane := strings.TrimSpace(string(paneOut))
+			cmds, err := verbs["carousel"].build(pane, "@0", "w", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conf := filepath.Join(dir, "cmd.conf")
+			if err := os.WriteFile(conf, []byte(cmds[0]+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := tmux("source-file", conf).CombinedOutput(); err != nil {
+				t.Fatalf("source-file: %v\n%s", err, out)
+			}
+
+			// run-shell -b is asynchronous; poll for the winning stub's
+			// launch marker.
+			logs := map[string]string{"option": optLog, "path": pathLog}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if b, _ := os.ReadFile(logs[tc.wantLog]); len(b) > 0 {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			for name, log := range logs {
+				b, _ := os.ReadFile(log)
+				launched := len(b) > 0
+				if name == tc.wantLog && !launched {
+					t.Fatalf("%s stub was never exec'd", name)
+				}
+				if name != tc.wantLog && launched {
+					t.Fatalf("%s stub was exec'd, want only %s", name, tc.wantLog)
+				}
+			}
+		})
+	}
+}
+
 func writeStub(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
