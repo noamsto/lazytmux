@@ -41,24 +41,74 @@ func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
 	}
 }
 
-// The caller's context has to reach Run unchanged: NewSSHFetcher's production
-// Run wraps exec.CommandContext, and only the exec itself dying on cancel (not
-// a goroutine-plus-select wrapper around it) keeps a timed-out ssh from
-// running forever in the background (spec D4).
-func TestFetcherThreadsTheCallersContextToRun(t *testing.T) {
+// Run's context is the fetch's kill switch: NewSSHFetcher's production Run
+// wraps exec.CommandContext, and only the exec itself dying on cancel (not a
+// goroutine-plus-select wrapper around it) keeps a hung ssh from running
+// forever (spec D4). Since #558 that context is the fetch's own detached,
+// bounded one — not the caller's, whose deadline must not kill a transfer
+// that is warming the cache for the next repaint.
+func TestFetcherThreadsABoundedContextToRun(t *testing.T) {
 	dir := t.TempDir()
-	type key struct{}
-	ctx := context.WithValue(context.Background(), key{}, "marker")
 	var gotCtx context.Context
 	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
 		gotCtx = ctx
 		return []byte("1700000000 5\nHELLO"), nil
 	}}
-	if _, err := f.Localize(ctx, "/tmp/a.png"); err != nil {
+	if _, err := f.Localize(context.Background(), "/tmp/a.png"); err != nil {
 		t.Fatal(err)
 	}
-	if gotCtx.Value(key{}) != "marker" {
-		t.Fatal("Localize did not pass the caller's context through to Run")
+	deadline, ok := gotCtx.Deadline()
+	if !ok {
+		t.Fatal("Run's context has no deadline — a hung ssh would run forever")
+	}
+	if d := time.Until(deadline); d <= 0 || d > bgFetchTimeout {
+		t.Fatalf("Run's deadline is %v out, want within bgFetchTimeout", d)
+	}
+}
+
+// A fetch that outlives the caller's deadline completes in the background and
+// warms the cache: the next call (the sender's self-heal repaint) gets the
+// header-only hit instead of paying a second full transfer that would time
+// out again (#558).
+func TestFetcherTimedOutFetchWarmsTheCache(t *testing.T) {
+	dir := t.TempDir()
+	release := make(chan struct{})
+	var runs atomic.Int32
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
+		runs.Add(1)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []byte("1700000000 5\nHELLO"), nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := f.Localize(ctx, "/tmp/a.png"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first call err = %v, want the caller's deadline", err)
+	}
+	// The caller gave up; the fetch is still parked in Run. Let it finish.
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		done := len(f.inflight) == 0
+		f.mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	local, err := f.Localize(context.Background(), "/tmp/a.png")
+	if err != nil {
+		t.Fatalf("second call after background completion: %v", err)
+	}
+	if b, _ := os.ReadFile(local); string(b) != "HELLO" {
+		t.Fatalf("cached content = %q", b)
+	}
+	if n := runs.Load(); n != 2 {
+		t.Fatalf("Run calls = %d, want 2 (transfer, then header-only validation)", n)
 	}
 }
 

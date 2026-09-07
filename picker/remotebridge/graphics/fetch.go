@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // remoteFetch runs on the remote host. It prints "<mtime> <size>" first, then
@@ -83,27 +84,49 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 	}
 	if c, ok := f.inflight[remote]; ok {
 		f.mu.Unlock()
-		select {
-		case <-c.done:
-			return c.local, c.err
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
+		return waitFetch(ctx, c)
 	}
 	c := &fetchCall{done: make(chan struct{})}
 	f.inflight[remote] = c
 	key := f.keys[remote]
 	f.mu.Unlock()
 
-	local, err := f.fetch(ctx, remote, key)
-
-	f.mu.Lock()
-	delete(f.inflight, remote)
-	c.local, c.err = local, err
-	close(c.done)
-	f.mu.Unlock()
-	return local, err
+	// The fetch outlives the caller's deadline on purpose (#558): a store
+	// dropped to a timed-out fetch self-heals on the sender's next repaint,
+	// and that repaint hits a warm cache only if this transfer ran to
+	// completion — otherwise every retry on a slow link pays the full stream
+	// timeout and the image never resolves. The detached context is still
+	// bounded, so a dead link's ssh cannot live forever.
+	go func() {
+		fetchCtx, cancel := context.WithTimeout(context.Background(), bgFetchTimeout)
+		defer cancel()
+		local, err := f.fetch(fetchCtx, remote, key)
+		f.mu.Lock()
+		delete(f.inflight, remote)
+		c.local, c.err = local, err
+		close(c.done)
+		f.mu.Unlock()
+	}()
+	return waitFetch(ctx, c)
 }
+
+// waitFetch parks the caller on the in-flight fetch until it completes or the
+// caller's own deadline passes — in which case the fetch runs on in the
+// background and only the caller gives up.
+func waitFetch(ctx context.Context, c *fetchCall) (string, error) {
+	select {
+	case <-c.done:
+		return c.local, c.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// bgFetchTimeout bounds a fetch that outlived its caller's deadline. D4's
+// budget governs how long the pane's stream may be held; once the caller has
+// given up, the transfer's only remaining job is warming the cache, and the
+// bound exists so a hung ssh still dies.
+const bgFetchTimeout = 60 * time.Second
 
 // maxConcurrentFetches bounds one batch's parallel ssh channels over the
 // ControlMaster — enough to collapse a carousel's re-transmit storm into one
