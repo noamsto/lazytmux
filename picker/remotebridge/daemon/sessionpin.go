@@ -123,10 +123,16 @@ type sessionPin struct {
 	// the gesture that switched us does what the user meant instead of nothing.
 	// nil disables it.
 	handOff func(session string)
+	// activeWin reports the mirror session's locally-current window, for
+	// active-first reseed ordering (#557).
+	activeWin func() string
 }
 
 func newSessionPin(cfg Config, rt roundTrip) *sessionPin {
-	p := &sessionPin{handOff: cfg.HandOff}
+	p := &sessionPin{
+		handOff:   cfg.HandOff,
+		activeWin: func() string { return localActiveWindow(cfg) },
+	}
 	id, err := readIdentity(rt, cfg.RemoteSession)
 	if err != nil {
 		// The first attach records; it never tears down — there is nothing yet
@@ -163,7 +169,11 @@ func (p *sessionPin) apply(l controlmode.Line, reg *registry, router *Router, rt
 
 // reseed repaints every mirrored pane after the switch back.
 func (p *sessionPin) reseed(reg *registry, router *Router, rt roundTrip) {
-	reseedPanes(reg, router, rt, "after session change")
+	active := ""
+	if p.activeWin != nil {
+		active = p.activeWin()
+	}
+	reseedPanes(reg, router, rt, active, "after session change")
 }
 
 // reseedPanes repaints every mirrored pane from the remote's own screens.
@@ -175,8 +185,20 @@ func (p *sessionPin) reseed(reg *registry, router *Router, rt roundTrip) {
 //
 // One reseed path for both callers, deliberately: reusing PaneSeeds is what
 // keeps the seed-before-output ordering (#233/#412/#417/#430) true.
-func reseedPanes(reg *registry, router *Router, rt roundTrip, reason string) {
+//
+// activeWin orders the batch so the locally-current window's seeds are written
+// (and their replies read) first (#557) — one PaneSeeds call is a single
+// round-trip, but the replies stream back in issue order, so the visible
+// window's repaint lands ahead of the background ones on a slow link.
+func reseedPanes(reg *registry, router *Router, rt roundTrip, activeWin, reason string) {
 	wins := reg.all()
+	// Order windows active-first before flattening their panes.
+	for i, mw := range wins {
+		if mw.localWin == activeWin && i > 0 {
+			wins = append(append([]*mirrorWindow{mw}, wins[:i]...), wins[i+1:]...)
+			break
+		}
+	}
 	n := 0
 	for _, mw := range wins {
 		n += len(mw.remotePanes) + len(mw.localFloats)

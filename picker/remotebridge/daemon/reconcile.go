@@ -185,9 +185,21 @@ passes:
 			// After the reshape, never before (#233): a seed sized for the new
 			// geometry painted into a pane still at the old size leaves the mirror
 			// blank.
+			//
+			// The one exemption is a zoomed window's hidden panes (#557): tmux
+			// keeps their cells, so their dims never moved and nothing they show
+			// is visible — seeding them is pure transfer on a slow link. The
+			// unzoom reconcile (the zoom flag flips, so localIsZoomed reads false
+			// here) reseeds them before they show. No skip when remoteActive is a
+			// float: which tiled pane holds the zoom is then unknowable, the same
+			// guess-forbid as the -Z toggle above.
+			zoomHides := localIsZoomed && indexOf(newRemote, remoteActive) >= 0
 			reseedIDs := make([]string, 0, len(newRemote))
 			sinks := make([]*outputSink, 0, len(newRemote))
 			for _, id := range newRemote {
+				if zoomHides && id != remoteActive {
+					continue
+				}
 				if s := router.sink(id); s != nil {
 					reseedIDs = append(reseedIDs, id)
 					sinks = append(sinks, s)

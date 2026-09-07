@@ -536,7 +536,7 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	send := func(s string) bool { sent = append(sent, s); return true }
 
 	done := make(chan struct{})
-	go func() { watchResize(area, nudged, reg, cv, send, stop, tick); close(done) }()
+	go func() { watchResize(area, nudged, func() string { return "" }, reg, cv, send, stop, tick); close(done) }()
 
 	t1 := time.Now()
 	t2 := t1.Add(time.Second)
@@ -582,6 +582,48 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	}
 }
 
+// TestWatchResizeConvergesActiveWindowFirst pins the #557 ordering: the window
+// the local client is looking at is converged ahead of the background ones, so
+// its %layout-change (and the reconcile it queues) lands first on a slow link.
+func TestWatchResizeConvergesActiveWindowFirst(t *testing.T) {
+	tick := make(chan time.Time)
+	stop := make(chan struct{})
+	nudgeCh := make(chan nudgeResult)
+	sizeCh := make(chan [2]int)
+	nudged := func() (time.Time, bool) { n := <-nudgeCh; return n.t, n.ok }
+	area := func() (int, int) { s := <-sizeCh; return s[0], s[1] }
+
+	reg := newRegistry()
+	reg.add("@1", "@101")
+	reg.add("@2", "@102")
+	cv := newConverger()
+
+	var sent []string
+	send := func(s string) bool { sent = append(sent, s); return true }
+
+	done := make(chan struct{})
+	go func() {
+		watchResize(area, nudged, func() string { return "@102" }, reg, cv, send, stop, tick)
+		close(done)
+	}()
+
+	tick <- time.Now()
+	nudgeCh <- nudgeResult{t: time.Now(), ok: true}
+	sizeCh <- [2]int{120, 40}
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchResize did not return after stop was closed")
+	}
+
+	want := []string{ClientSizeCmd(120, 40), ConvergeCmd("@2", 120, 40), ConvergeCmd("@1", 120, 40)}
+	if !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %v, want %v (active window @2 first)", sent, want)
+	}
+}
+
 // TestWatchResizeDoesNotRecordAWriteThatDidNotHappen pins the converger
 // invariant: its recorded size is never ahead of what the remote was actually
 // told. need() records at the moment it returns true, before the write — so a
@@ -603,7 +645,7 @@ func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	send := func(s string) bool { sent = append(sent, s); return false }
 
 	done := make(chan struct{})
-	go func() { watchResize(area, nudged, reg, cv, send, stop, tick); close(done) }()
+	go func() { watchResize(area, nudged, func() string { return "" }, reg, cv, send, stop, tick); close(done) }()
 
 	// One tick with a fresh touch and a new size: both the client size and the
 	// window's cap are attempted, and both writes report failure.

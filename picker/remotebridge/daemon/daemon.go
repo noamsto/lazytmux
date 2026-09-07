@@ -276,7 +276,7 @@ const resizeFallbackInterval = 30 * time.Second
 // acks are consumed harmlessly by the main loop's own nextLine read) — but it
 // reports whether the line was written, so a send onto a dead stream undoes
 // the converger's record rather than latching a size the remote never got.
-func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
+func watchResize(area func() (int, int), nudged func() (time.Time, bool), activeWin func() string, reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
 	var lastNudge time.Time
 	lastCheck := time.Now()
 	for {
@@ -303,7 +303,10 @@ func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *r
 			if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !send(ClientSizeCmd(w, h)) {
 				cv.unrecord(clientSizeKey, w, h)
 			}
-			for _, remoteID := range reg.remoteIDs() {
+			// Active window first: each converge resizes the remote window,
+			// whose %layout-change queues a reconcile — so this order is the
+			// order the main loop works through them in (#557).
+			for _, remoteID := range activeFirst(reg, activeWin(), reg.remoteIDs()) {
 				if cv.need(remoteID, w, h) && !send(ConvergeCmd(remoteID, w, h)) {
 					cv.unrecord(remoteID, w, h)
 				}
@@ -318,6 +321,45 @@ func watchResize(area func() (int, int), nudged func() (time.Time, bool), reg *r
 // detached session (window-size is "latest", so the mirror stays detached
 // between launcher switches — #433's own reproduction resizes it that way).
 var resizeHookEvents = [...]string{"client-resized", "window-resized"}
+
+// localActiveWindow reports the mirror session's current window — the one the
+// local client is looking at — or "" when it can't be learned (detached
+// session, query failure). One local tmux fork, never an ssh round-trip.
+func localActiveWindow(cfg Config) string {
+	if cfg.LocalSess == "" {
+		return ""
+	}
+	out, err := cfg.LocalTmuxOut("display-message", "-p", "-t", cfg.LocalSess, "#{window_id}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// activeFirst returns ids with the window whose local id is activeLocalWin
+// moved to the front. Every multi-window pass is serialized round-trips on
+// the main loop, so on a slow link the ordering IS the perceived re-attach
+// latency: the window under the user's eyes reconciles and reseeds first, the
+// rest follow while already-correct content is on screen (#557). "" or an
+// unknown window leaves the order untouched.
+func activeFirst(reg *registry, activeLocalWin string, ids []string) []string {
+	if activeLocalWin == "" {
+		return ids
+	}
+	for i, id := range ids {
+		if w, ok := reg.byRemoteID(id); ok && w.localWin == activeLocalWin {
+			if i == 0 {
+				return ids
+			}
+			out := make([]string, 0, len(ids))
+			out = append(out, id)
+			out = append(out, ids[:i]...)
+			out = append(out, ids[i+1:]...)
+			return out
+		}
+	}
+	return ids
+}
 
 // registerResizeHook wires session-scoped hooks that touch nudgePath — no
 // fork on the daemon's side, just a stat once a tick sees the touch.
@@ -733,7 +775,7 @@ func Run(cfg Config) error {
 	ticker := time.NewTicker(resizePollInterval)
 	go func() {
 		defer ticker.Stop()
-		watchResize(cfg.LocalArea, nudged, reg, cv, sendCtl, stopWatch, ticker.C)
+		watchResize(cfg.LocalArea, nudged, func() string { return localActiveWindow(cfg) }, reg, cv, sendCtl, stopWatch, ticker.C)
 	}()
 
 	// Ship the remote's agent state into the local claude-status tree, and its
@@ -917,6 +959,9 @@ func Run(cfg Config) error {
 		// remote was never told — carried across, it is not merely stale but
 		// actively wrong, and every symptom is a silently 80-column mirror.
 		cv.reset()
+		// Every step below is serialized ssh round-trips on this goroutine, so
+		// the window the user is looking at goes first in each of them (#557).
+		activeWin := localActiveWindow(cfg)
 		w, h := cfg.LocalArea()
 		if w > 0 && h > 0 && cv.need(clientSizeKey, w, h) && !sendCtl(ClientSizeCmd(w, h)) {
 			cv.unrecord(clientSizeKey, w, h)
@@ -926,7 +971,7 @@ func Run(cfg Config) error {
 		// they are fire-and-forget sends, and claimSeq claims End *or* Error
 		// carrying ClientCommandFlag, so the ordinals stay exact. Do not route
 		// them through a round-trip that treats Kind == Error as fatal.
-		for _, remoteID := range reg.remoteIDs() {
+		for _, remoteID := range activeFirst(reg, activeWin, reg.remoteIDs()) {
 			if cv.need(remoteID, w, h) && !sendCtl(ConvergeCmd(remoteID, w, h)) {
 				cv.unrecord(remoteID, w, h)
 			}
@@ -956,7 +1001,7 @@ func Run(cfg Config) error {
 		// Iterated by id rather than over reg.all(): retireMirror reconciles the
 		// whole registry, so a *mirrorWindow taken before it ran may no longer
 		// be the entry for that remote window.
-		for _, remoteID := range reg.remoteIDs() {
+		for _, remoteID := range activeFirst(reg, activeWin, reg.remoteIDs()) {
 			mw, ok := reg.byRemoteID(remoteID)
 			if !ok {
 				continue
@@ -972,7 +1017,7 @@ func Run(cfg Config) error {
 		// reconcileLayout early-returns on an unchanged layout, so it cannot be
 		// relied on for the repaint; and output produced while disconnected was
 		// dropped by the remote, not buffered.
-		reseedPanes(reg, router, rt, "after reattach")
+		reseedPanes(reg, router, rt, activeWin, "after reattach")
 		agents.reskew(remoteClockSkew(rt))
 		return true
 	}
