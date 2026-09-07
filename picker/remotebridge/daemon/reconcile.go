@@ -205,11 +205,17 @@ passes:
 					sinks = append(sinks, s)
 				}
 			}
+			// Marked before the seed goes out, not after: this capture was taken
+			// the instant the geometry moved, so the remote app's repaint for the
+			// new size is still to come and the screen being shipped is tmux's
+			// rewrap of the old one. markReshaped owes the pane a second capture
+			// a main-loop pass later, by which time that repaint has landed.
 			PaneSeeds(rt, reseedIDs, func(i int, seed []byte, err error) {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "daemon: layout-change reseed for %s: %v\n", reseedIDs[i], err)
 					return
 				}
+				sinks[i].markReshaped()
 				enqueueSeedWithReplay(sinks[i], seed)
 			})
 		}

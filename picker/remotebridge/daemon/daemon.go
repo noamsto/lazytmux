@@ -906,6 +906,7 @@ func Run(cfg Config) error {
 			labels.poll(cfg, reg, rt)
 			sweeper.sweep(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 			reseedDropped(router, rt)
+			reseedReshaped(router, rt)
 			// Enable pause-after only now that every window is set up. Setup does
 			// drain the stream (its round-trips route, and so does the hello wait),
 			// but only dispatch runs handlePause — so a %pause arriving mid-setup is
@@ -1462,6 +1463,33 @@ func reseedDropped(router *Router, rt roundTrip) {
 	})
 }
 
+// reseedReshaped repaints every pane whose confirmation re-seed has come due —
+// the second half of markReshaped's story, and the half that actually shows the
+// user the application's repaint rather than tmux's rewrap of it.
+//
+// Called from the main loop beside reseedDropped, which is the only place a
+// round-trip may run, and reached without a timer for the same reason: the
+// repaint that makes the second capture worth taking is itself output, and
+// output wakes the loop.
+func reseedReshaped(router *Router, rt roundTrip) {
+	due := router.reshapedPanes()
+	ids := make([]string, 0, len(due))
+	sinks := make([]*outputSink, 0, len(due))
+	for _, paneID := range due {
+		if s := router.sink(paneID); s != nil {
+			ids = append(ids, paneID)
+			sinks = append(sinks, s)
+		}
+	}
+	PaneSeeds(rt, ids, func(i int, seed []byte, err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: re-seed after reshape for %s: %v\n", ids[i], err)
+			return
+		}
+		enqueueSeedWithReplay(sinks[i], seed)
+	})
+}
+
 // remoteWinTarget builds the tmux target for a remote window by its id (@N),
 // quoting the session name so a name with spaces (e.g. "my proj") stays one
 // token. The id is used verbatim — never TrimPrefix'd to a bare N, which tmux
@@ -1700,6 +1728,9 @@ type outputSink struct {
 	// positional, so the bytes that would have repaired those cells are the
 	// ones that went missing.
 	dropped int
+	// reshaped tracks the confirmation re-seed a pane is owed after its
+	// geometry moved; see markReshaped.
+	reshaped reshapeState
 	// done closes when the pump goroutine returns. Close only signals the
 	// pump to stop; the pump may still be mid-flush (draining kn/gfx state on
 	// teardown) after Close returns. Wait is how a caller that needs to
@@ -1879,6 +1910,61 @@ func enqueueSeedWithReplay(s *outputSink, seed []byte) {
 		return
 	}
 	s.enqueue(wire.FrameSeed, seed)
+}
+
+// reshapeState is the two-step life of a pane's confirmation re-seed: marked on
+// the pass that reshaped it, due on the next one. The step is what makes the
+// second capture later than the first — see markReshaped.
+type reshapeState uint8
+
+const (
+	reshapeNone reshapeState = iota
+	reshapeMarked
+	reshapeDue
+)
+
+// markReshaped records that this pane's geometry just moved and its screen was
+// repainted from a capture taken at that instant.
+//
+// That capture is too early to be the last word. tmux rewraps a pane's grid the
+// moment it resizes, while the application's own repaint waits on SIGWINCH and
+// lands whenever it lands — measured on a live remote, capture-pane immediately
+// after an unzoom returns a screen the app replaces ~150ms later. The mirror
+// paints what it is given, so the user watches the rewrap until something
+// overwrites it.
+//
+// The repair is one more capture, taken late enough to catch the repaint. Which
+// is what the step exists for: takeReshaped only comes due on a LATER main-loop
+// pass, and the app's own repaint output is what wakes that pass — so the timing
+// needs no timer, exactly as reseedDropped needs none.
+func (s *outputSink) markReshaped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.reshaped = reshapeMarked
+}
+
+// takeReshaped reports whether this pane is due its confirmation re-seed,
+// advancing the mark one step when it is not.
+//
+// The gates are takeDirty's, for takeDirty's reasons: a paused pane is already
+// owed a seed by its %continue, and re-seeding a pane that has not drained is a
+// whole extra screen on a queue already behind. Neither spends the mark — it
+// waits and comes due on a later pass.
+func (s *outputSink) takeReshaped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reshaped == reshapeNone || s.closed || s.paused || len(s.ch) > 0 {
+		return false
+	}
+	if s.reshaped == reshapeMarked {
+		s.reshaped = reshapeDue
+		return false
+	}
+	s.reshaped = reshapeNone
+	return true
 }
 
 // takeDirty reports how many frames this sink dropped, and clears the count, but
