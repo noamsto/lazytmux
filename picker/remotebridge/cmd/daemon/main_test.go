@@ -357,7 +357,7 @@ case "$1" in
 list-clients)
 	case "$*" in
 	*"-t mirror"*) exit 0 ;;
-	*) echo "200 60 off" ;;
+	*) echo "200 60 off 100" ;;
 	esac
 	;;
 display-message) echo "138 40" ;;
@@ -382,5 +382,64 @@ esac
 	w, h := localArea([]string{tmux}, "mirror")
 	if w != 138 || h != 40 {
 		t.Errorf("localArea = %dx%d, want 138x40 — the pin, not the 80x24 default", w, h)
+	}
+}
+
+// The whole-server fallback measures clients attached to sessions this mirror
+// has nothing to do with, so the smallest of them is the wrong answer: a second
+// terminal left open at 63 columns capped a mirror the user was about to open
+// at 197, and every window of the remote session with it. The client that last
+// saw activity is the terminal the user is actually sitting at.
+func TestLocalAreaPicksTheMostRecentlyActiveClientNotTheSmallest(t *testing.T) {
+	tmux := fakeTmuxScript(t, `
+case "$1" in
+list-clients)
+	case "$*" in
+	*"-t mirror"*) exit 0 ;;
+	*) printf '63 65 2 100\n197 65 2 200\n' ;;
+	esac
+	;;
+display-message) echo "138 40" ;;
+esac
+`)
+	w, h := localArea([]string{tmux}, "mirror")
+	if w != 197 || h != 63 {
+		t.Errorf("localArea = %dx%d, want 197x63 — the client last active, not the narrow one", w, h)
+	}
+}
+
+// client_activity has one-second resolution, so two clients tie routinely. The
+// larger wins that tie: the whole point of the fallback is not to let an idle
+// narrow terminal decide, and taking the smaller would reinstate it.
+func TestLocalAreaBreaksAnActivityTieTowardTheLargerClient(t *testing.T) {
+	tmux := fakeTmuxScript(t, `
+case "$1" in
+list-clients)
+	case "$*" in
+	*"-t mirror"*) exit 0 ;;
+	*) printf '63 65 2 200\n197 65 2 200\n' ;;
+	esac
+	;;
+display-message) echo "138 40" ;;
+esac
+`)
+	w, h := localArea([]string{tmux}, "mirror")
+	if w != 197 || h != 63 {
+		t.Errorf("localArea = %dx%d, want 197x63 — the larger client on an activity tie", w, h)
+	}
+}
+
+// The session's OWN clients keep the opposite rule: every one of them is
+// displaying this mirror, so its windows have to fit the smallest.
+func TestLocalAreaTakesTheSmallestOfTheSessionsOwnClients(t *testing.T) {
+	tmux := fakeTmuxScript(t, `
+case "$1" in
+list-clients) printf '197 65 2 300\n63 65 2 100\n' ;;
+display-message) echo "138 40" ;;
+esac
+`)
+	w, h := localArea([]string{tmux}, "mirror")
+	if w != 63 || h != 63 {
+		t.Errorf("localArea = %dx%d, want 63x63 — the smallest client showing this session", w, h)
 	}
 }
