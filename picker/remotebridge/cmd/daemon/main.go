@@ -366,12 +366,19 @@ func localArea(localTmuxArgv []string, localSess string) (int, int) {
 	// terminal the user is actually sitting at is the size this mirror will be
 	// shown at the moment they switch to it.
 	//
+	// The most recently active client, not the smallest: these are clients on
+	// other sessions entirely, and none of them will ever display this mirror.
+	// Minimising over them let a second terminal left open at 63 columns cap
+	// the remote session's windows — and FitWindowCmd then pinned the mirror to
+	// that, so a 197-column terminal drew a 63-column window and padded the
+	// rest. Only clientArea's own -t reading has a session's windows to fit.
+	//
 	// Not sessionWinSize here: FitWindowCmd pins the mirror window to the
 	// remote's size (window-size manual), so its dims are this daemon's own last
 	// assertion. Reading them back makes every resize look like "no change" to
 	// the converger, and the mirror then keeps the stale size until watchResize's
 	// 30s fallback poll happens to run with a client attached (#532).
-	if w, h := clientArea(localTmuxArgv, ""); w > 0 && h > 0 {
+	if w, h := latestClientArea(localTmuxArgv); w > 0 && h > 0 {
 		return w, h
 	}
 	// Nothing attached anywhere. The pin is now the best answer available, and
@@ -410,22 +417,65 @@ func localPaneMap(localTmuxArgv []string, localSess string) map[string]string {
 // manual), so a mirror window's own dims no longer track the terminal it is
 // shown in. Returns 0,0 when no client is attached.
 //
-// An empty localSess drops the -t and measures every client on the local
-// server — see localArea for why that is the right second question to ask.
+// Minimised because every client it reads is displaying localSess, so the
+// session's windows have to fit all of them. An empty localSess is a different
+// question with a different answer — see latestClientArea.
 func clientArea(localTmuxArgv []string, localSess string) (int, int) {
-	args := []string{"list-clients", "-F", "#{client_width} #{client_height} #{status}"}
+	w, h := 0, 0
+	for _, c := range readClients(localTmuxArgv, localSess) {
+		if w == 0 || c.w < w {
+			w = c.w
+		}
+		if h == 0 || c.h < h {
+			h = c.h
+		}
+	}
+	return w, h
+}
+
+// latestClientArea is the content area of the whole server's most recently
+// active client — localArea's fallback when the mirror session has no client
+// of its own. Returns 0,0 when nothing is attached anywhere.
+//
+// An activity tie goes to the larger client. client_activity has one-second
+// resolution, so ties are ordinary rather than exotic, and resolving one toward
+// the smaller would reinstate exactly the cap this function exists to avoid.
+func latestClientArea(localTmuxArgv []string) (int, int) {
+	var best clientDims
+	for _, c := range readClients(localTmuxArgv, "") {
+		switch {
+		case c.activity > best.activity:
+			best = c
+		case c.activity == best.activity && c.w*c.h > best.w*best.h:
+			best = c
+		}
+	}
+	return best.w, best.h
+}
+
+// clientDims is one attached client's content area and last-activity stamp.
+type clientDims struct {
+	w, h     int
+	activity int64
+}
+
+// readClients returns every attached client's content area — its size minus
+// its status lines — paired with the stamp of its last activity. An empty
+// localSess drops the -t and reads every client on the local server.
+func readClients(localTmuxArgv []string, localSess string) []clientDims {
+	args := []string{"list-clients", "-F", "#{client_width} #{client_height} #{status} #{client_activity}"}
 	if localSess != "" {
 		args = append(args, "-t", localSess)
 	}
 	out, err := exec.Command(localTmuxArgv[0],
 		append(append([]string{}, localTmuxArgv[1:]...), args...)...).Output()
 	if err != nil {
-		return 0, 0
+		return nil
 	}
-	w, h := 0, 0
+	var clients []clientDims
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) != 3 {
+		if len(fields) != 4 {
 			continue
 		}
 		cw, errW := strconv.Atoi(fields[0])
@@ -437,14 +487,10 @@ func clientArea(localTmuxArgv []string, localSess string) (int, int) {
 		if cw < 1 || ch < 1 {
 			continue
 		}
-		if w == 0 || cw < w {
-			w = cw
-		}
-		if h == 0 || ch < h {
-			h = ch
-		}
+		activity, _ := strconv.ParseInt(fields[3], 10, 64)
+		clients = append(clients, clientDims{w: cw, h: ch, activity: activity})
 	}
-	return w, h
+	return clients
 }
 
 // sessionWinSize is the detached fallback: the local session's active-window
