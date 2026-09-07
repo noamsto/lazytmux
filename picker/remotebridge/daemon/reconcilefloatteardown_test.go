@@ -148,7 +148,7 @@ func TestReseedPanesRepaintsMirroredFloats(t *testing.T) {
 		"%begin 1 4 1", "FLOAT", "%end 1 4 1", // %9 capture
 	}, "\n")+"\n", &issued)
 
-	reseedPanes(reg, router, rt, "after session change")
+	reseedPanes(reg, router, rt, "", "after session change")
 
 	var captured []string
 	for _, cmd := range issued {

@@ -1,6 +1,9 @@
 package daemon
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestRegistryLookup(t *testing.T) {
 	r := newRegistry()
@@ -182,5 +185,28 @@ func TestDecodeWindowName(t *testing.T) {
 		if got := decodeWindowName(tc.in); got != tc.want {
 			t.Errorf("decodeWindowName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestActiveFirst(t *testing.T) {
+	reg := newRegistry()
+	reg.add("@1", "@101")
+	reg.add("@2", "@102")
+	reg.add("@3", "@103")
+	ids := []string{"@1", "@2", "@3"}
+
+	got := activeFirst(reg, "@102", ids)
+	if !reflect.DeepEqual(got, []string{"@2", "@1", "@3"}) {
+		t.Fatalf("activeFirst = %v, want @2 first, rest in order", got)
+	}
+	// Already-first, unknown window, and "" all leave the slice untouched.
+	if got := activeFirst(reg, "@101", ids); !reflect.DeepEqual(got, ids) {
+		t.Fatalf("activeFirst(active already first) = %v, want %v", got, ids)
+	}
+	if got := activeFirst(reg, "@999", ids); !reflect.DeepEqual(got, ids) {
+		t.Fatalf("activeFirst(unknown) = %v, want %v", got, ids)
+	}
+	if got := activeFirst(reg, "", ids); !reflect.DeepEqual(got, ids) {
+		t.Fatalf("activeFirst(\"\") = %v, want %v", got, ids)
 	}
 }

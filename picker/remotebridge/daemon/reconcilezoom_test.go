@@ -15,6 +15,10 @@ import (
 // is told the layout root rather than the cell #{window_layout} still reports
 // for it (see reconcile.go's comment there). Asserted on the FrameResize a
 // renderer actually receives, so the fixture's root and cell must disagree.
+//
+// The hidden pane gets its FrameResize (its cell is unchanged, the frame is a
+// local no-op reassert) but NO seed: invisible while zoomed, and the unzoom
+// reconcile repaints it before it shows (#557).
 func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 	localA, peerA := net.Pipe()
 	defer localA.Close()
@@ -40,9 +44,8 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 		"%begin 1 1 1", layout + " %0 1", "%end 1 1 1", // readLayout: remote zoomed, pane 0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
 		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
-		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
-		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
-		"%begin 1 6 1", layout + " %0 1", "%end 1 6 1", // trailing re-read: unchanged, stop
+		// No PaneSeed(%1): the zoom hides it (#557).
+		"%begin 1 4 1", layout + " %0 1", "%end 1 4 1", // trailing re-read: unchanged, stop
 	}, "\n") + "\n"
 
 	rt := scriptedRTRouter(script, router)
@@ -90,6 +93,68 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 	}
 	if wB != 94 || hB != 45 {
 		t.Errorf("pane 1 (unzoomed) dims = %dx%d, want 94x45 (its own cell)", wB, hB)
+	}
+
+	// The zoom-hidden pane's stream ends at its resize: a seed frame here
+	// means the skip regressed.
+	peerB.SetDeadline(time.Now().Add(200 * time.Millisecond))
+	if f, err := wire.ReadFrame(peerB); err == nil {
+		t.Errorf("pane 1 (zoom-hidden) got an unexpected second frame: %v", f.Type)
+	}
+}
+
+// TestReconcileUnzoomReseedsEveryPane is the #557 skip's other half: the
+// unzoom reconcile (remote flag 0, local zoomed -> toggle off) must reseed
+// the panes the zoom hid, or they would show their pre-zoom screens.
+func TestReconcileUnzoomReseedsEveryPane(t *testing.T) {
+	localA, peerA := net.Pipe()
+	defer localA.Close()
+	defer peerA.Close()
+	localB, peerB := net.Pipe()
+	defer localB.Close()
+	defer peerB.Close()
+
+	router := NewRouter()
+	router.Register("%0", newOutputSink(localA, nil))
+	router.Register("%1", newOutputSink(localB, nil))
+
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+	}
+
+	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
+	script := strings.Join([]string{
+		"%begin 1 1 1", layout + " %0 0", "%end 1 1 1", // readLayout: remote NOT zoomed, pane 0 active
+		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
+		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
+		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
+		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
+		"%begin 1 6 1", layout + " %0 0", "%end 1 6 1", // trailing re-read: unchanged, stop
+	}, "\n") + "\n"
+
+	rt := scriptedRTRouter(script, router)
+
+	cfg := Config{
+		LocalTmux:    func(...string) error { return nil },
+		LocalTmuxOut: func(...string) (string, error) { return "1\n", nil }, // local zoomed -> unzoom toggle fires
+	}
+
+	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	peerA.SetDeadline(time.Now().Add(5 * time.Second))
+	peerB.SetDeadline(time.Now().Add(5 * time.Second))
+	for name, peer := range map[string]net.Conn{"%0": peerA, "%1": peerB} {
+		if _, err := wire.ReadFrame(peer); err != nil {
+			t.Fatalf("read %s resize: %v", name, err)
+		}
+		f, err := wire.ReadFrame(peer)
+		if err != nil {
+			t.Fatalf("%s got no seed on unzoom: %v", name, err)
+		}
+		if f.Type != wire.FrameSeed {
+			t.Fatalf("%s second frame = %v, want a seed", name, f.Type)
+		}
 	}
 }
 
@@ -349,9 +414,8 @@ func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
 		"%begin 1 1 1", tiledFloatLayout + " %0 1", "%end 1 1 1", // readLayout: zoomed, tiled %0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
 		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
-		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
-		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
-		"%begin 1 6 1", tiledFloatLayout + " %0 1", "%end 1 6 1", // trailing re-read: unchanged, stop
+		// No PaneSeed(%1): the zoom hides it (#557).
+		"%begin 1 4 1", tiledFloatLayout + " %0 1", "%end 1 4 1", // trailing re-read: unchanged, stop
 	}, "\n") + "\n"
 
 	rt := scriptedRTRouter(script, router)
