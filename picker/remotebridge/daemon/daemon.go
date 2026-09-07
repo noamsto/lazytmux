@@ -1688,12 +1688,14 @@ func (s *outputSink) start(conn net.Conn) {
 	go func() {
 		defer close(s.done)
 		gfx := s.gfx
-		// kn strips modifyOtherKeys negotiation sequences a remote pane's
-		// occupant wrote for itself before they reach the local mirror
-		// pane's pty, where local tmux would otherwise treat them as a
-		// request from the renderer and re-encode future keystrokes —
-		// including Ctrl+R — accordingly (#338). Unconditional: unlike gfx,
-		// this runs regardless of whether graphics localisation is wired in.
+		// kn strips the terminal queries a remote pane's occupant asked ITS
+		// terminal — key negotiation (#338), cursor position, colours, window
+		// size (#544) — before they reach the local mirror pane's pty, where
+		// local tmux would otherwise answer them a second time as if the
+		// renderer had asked. Unconditional: unlike gfx, this runs regardless
+		// of whether graphics localisation is wired in. FrameSeed bypasses it
+		// entirely (see the FrameOutput guard below), which is correct: a seed
+		// is capture-pane's rendered cells, never a query.
 		kn := keyneg.NewFilter()
 		var pending *sinkFrame
 		for {
