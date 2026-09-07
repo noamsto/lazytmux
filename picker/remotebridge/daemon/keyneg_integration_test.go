@@ -50,6 +50,44 @@ func TestKeyNegSplitAcrossWritesEndToEnd(t *testing.T) {
 	}
 }
 
+// TestQueriesStrippedEndToEndThroughASink: a terminal query must never reach a
+// mirror pane's pty, or the local tmux answers it a second time and that reply
+// lands on the remote occupant as unsolicited input, doubling every answer
+// (#544).
+func TestQueriesStrippedEndToEndThroughASink(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	s := newOutputSink(remote, nil)
+	defer s.Close()
+
+	s.Write([]byte("a\x1b[6nb\x1b[?2004$pc\x1b[16td"))
+
+	got := readAllFrames(t, local, 500*time.Millisecond)
+	if want := "abcd"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestPassthroughWrappedQuerySurvivesTheSink: the remote tmux does not answer a
+// query wrapped for passthrough, so the local answer is the only one it gets —
+// stripping it would be a regression, not a fix.
+func TestPassthroughWrappedQuerySurvivesTheSink(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	s := newOutputSink(remote, nil)
+	defer s.Close()
+
+	in := "\x1bPtmux;\x1b\x1b[6n\x1b\\"
+	s.Write([]byte(in))
+
+	got := readAllFrames(t, local, 500*time.Millisecond)
+	if got != in {
+		t.Fatalf("got %q, want unchanged %q", got, in)
+	}
+}
+
 // TestKeyNegAndGraphicsFlushOrderOnClose: kn only ever holds back the
 // newest unprocessed tail of the stream, so on close its leftover must be
 // threaded through gfx before gfx's own held bytes are flushed, preserving
@@ -60,9 +98,11 @@ func TestKeyNegAndGraphicsFlushOrderOnClose(t *testing.T) {
 	defer remote.Close()
 	s := newOutputSink(remote, graphics.New(nil, nil))
 
-	// An incomplete kitty APC (held by gfx), then — in a separate write, so
-	// it lands in a later pump iteration — an incomplete modifyOtherKeys
-	// sequence (held by kn) that never reaches gfx during normal operation.
+	// An incomplete kitty APC (held by gfx), then — in a separate write, so it
+	// lands in a later pump iteration — more bytes behind it. kn forwards the
+	// trailing "\x1b[>4;" rather than holding it: the unterminated APC is an
+	// open region, and a region's bytes go through verbatim. gfx is what holds
+	// the whole tail here, so this pins the close path's ordering.
 	s.Write([]byte("AAA\x1b_Ga=t,f=100;"))
 	time.Sleep(20 * time.Millisecond)
 	s.Write([]byte("BBB\x1b[>4;"))

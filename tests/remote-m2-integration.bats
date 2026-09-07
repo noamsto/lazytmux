@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2030,SC2031 # bats @test blocks run in subshells; export is intentional
+bats_require_minimum_version 1.5.0 # run !
 # Offline M2.1 daemon integration: mirror a local "remote" tmux window into a
 # local "host" tmux window via the daemon's --test-local seam (two separate
 # tmux -L servers, no ssh). DAEMON / RENDERER are prebuilt absolute store
@@ -908,6 +909,48 @@ wait_bridge_disconnected() {
 	[ "$src_map" = "$dst_map" ]
 	# ...and the content rode along with its pane.
 	[[ $moved == *SWAPMARK_7K2* ]]
+}
+
+# #544: the remote tmux answers a terminal QUERY the occupant asked (here CSI
+# 6n, cursor position) straight into the remote pane's input — but the query
+# bytes are also pane OUTPUT, so without keyneg's strip they'd cross the bridge
+# and land in the LOCAL mirror pane's pty too, where the local tmux parses them
+# as a second question and answers AGAIN, desyncing the remote occupant's
+# escape parser (#338/#544). A query paints no cells, so capture-pane is green
+# whether or not the byte crossed — pipe-pane on the mirror pane is the only
+# instrument that actually sees it.
+@test "keyneg strips a terminal query before it reaches the local mirror pane" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	bridge_up 1 kn1
+
+	# Expanded HERE, at send time: the DST server's own environment has no $f,
+	# so this has to be a double-quoted expansion, not single-quoted.
+	f="$BATS_TEST_TMPDIR/kn1.pipe"
+	$DST pipe-pane -o -t host-sess:1.0 "cat >> $f"
+
+	$SRC send-keys -t rem "printf '\\033[6n%s\\n' MARKER" Enter
+
+	# pipe-pane writes asynchronously; poll for MARKER before asserting the
+	# query's absence, or an empty/not-yet-written file makes that check
+	# meaningless.
+	seen=no
+	for _ in $(seq 1 60); do
+		grep -q MARKER "$f" 2>/dev/null && {
+			seen=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$seen" = yes ]
+	# The query byte itself never reached the local pty: only the remote
+	# answered it, so the local tmux never had cause to reply a second time.
+	run ! grep -F -- $'\033[6n' "$f"
 }
 
 # === M2.3: structural input (ctl -> daemon -> remote -> mirror) ===
