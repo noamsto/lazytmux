@@ -41,7 +41,7 @@ const (
 // sshControlArgs builds the argv for the control-mode ssh. Extracted so the
 // options below are assertable — every one of them is load-bearing and none of
 // them is visible in a passing test otherwise.
-func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []string) []string {
+func sshControlArgs(ctlSock, host, tmpdir, term, colorterm, termProgram, session string, tmuxArgv []string) []string {
 	args := []string{"-T", "-e", "none",
 		// ControlMaster on the control connection makes every image fetch a
 		// multiplexed exec on this same TCP connection: no second handshake,
@@ -65,6 +65,21 @@ func sshControlArgs(ctlSock, host, tmpdir, term, session string, tmuxArgv []stri
 	// to ride in this env prefix like TMUX_TMPDIR does.
 	if term != "" {
 		args = append(args, "TERM="+shellQuote(term))
+	}
+	// COLORTERM/TERM_PROGRAM are in lazytmux's update-environment
+	// (config/tmux.conf.nix) alongside TERM, so a bridged attach that carries
+	// none of them into the remote tmux gets both marked "explicitly removed"
+	// (#543) — every later program in that session loses truecolor detection.
+	//
+	// TERMINFO/TERMINFO_DIRS are local filesystem paths and stay out of this
+	// list: forwarding them would point the remote at a directory that
+	// doesn't exist there. They (and KITTY_LISTEN_ON) stay marked "removed"
+	// on a bridged remote.
+	if colorterm != "" {
+		args = append(args, "COLORTERM="+shellQuote(colorterm))
+	}
+	if termProgram != "" {
+		args = append(args, "TERM_PROGRAM="+shellQuote(termProgram))
 	}
 	args = append(args, tmuxArgv...)
 	// ssh space-joins the post-host argv into one string run by the remote
@@ -128,6 +143,11 @@ func main() {
 	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
 	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
 	term := flag.String("term", os.Getenv("LZTMUX_BRIDGE_TERM"), "termname to advertise to the remote (steers the remote viewer's graphics backend)")
+	// A genuinely empty value must stay empty (and be omitted by
+	// sshControlArgs' if-non-empty guard) rather than default to "truecolor",
+	// since that would be indistinguishable from a real client that has none.
+	colorterm := flag.String("colorterm", os.Getenv("LZTMUX_BRIDGE_COLORTERM"), "COLORTERM to advertise to the remote (#543)")
+	termProgram := flag.String("term-program", os.Getenv("LZTMUX_BRIDGE_TERM_PROGRAM"), "TERM_PROGRAM to advertise to the remote (#543)")
 	cacheDir := flag.String("gfx-cache", envDefault("LZTMUX_BRIDGE_GFX_CACHE", filepath.Join(os.TempDir(), "lztmux-gfx")), "local cache dir for images fetched from the remote")
 	gfxMax := flag.Int64("gfx-max-bytes", 8<<20, "largest single image fetched from the remote; bigger stores are dropped")
 	localTmux := flag.String("local-tmux", envDefault("LZTMUX_DAEMON_LOCAL_TMUX", "tmux"), "local tmux binary (may carry args, e.g. \"tmux -L sock\")")
@@ -182,7 +202,7 @@ func main() {
 			// reconnect.
 			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
 			newCtlCmd = func() *exec.Cmd {
-				return exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *session, tmuxArgv)...)
+				return exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *colorterm, *termProgram, *session, tmuxArgv)...)
 			}
 		}
 		localTmuxArgv = strings.Fields(*localTmux)

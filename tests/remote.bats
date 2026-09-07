@@ -65,3 +65,53 @@ setup() {
 	run grep -n 'show-options -t "=' "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-open.sh"
 	[ "$status" -ne 0 ]
 }
+
+# read_session_env (#543): a fake `tmux show-environment` driven by
+# $FAKE_ENV_OUT/$FAKE_ENV_STATUS, matching splash.bats' stub-on-PATH pattern —
+# the three outcomes tmux itself produces (value set, removed marker "-NAME",
+# unknown variable) are indistinguishable from a real tmux server's, so a real
+# one buys nothing here.
+setup_fake_tmux() {
+	STUBDIR="$(mktemp -d)"
+	cat >"$STUBDIR/tmux" <<-'EOF'
+		#!/bin/sh
+		case "$1" in
+		show-environment)
+			[ "${FAKE_ENV_STATUS:-0}" = 0 ] && printf '%s\n' "$FAKE_ENV_OUT"
+			exit "${FAKE_ENV_STATUS:-0}"
+			;;
+		esac
+	EOF
+	chmod +x "$STUBDIR/tmux"
+	PATH="$STUBDIR:$PATH"
+}
+
+@test "read_session_env: value set returns it in REPLY" {
+	setup_fake_tmux
+	FAKE_ENV_OUT="COLORTERM=truecolor" FAKE_ENV_STATUS=0 \
+		run bash -c 'source "$1"; read_session_env sess COLORTERM && echo "REPLY=$REPLY"' _ "${BATS_TEST_DIRNAME}/../scripts/lib-remote.sh"
+	[ "$status" -eq 0 ]
+	[ "$output" = "REPLY=truecolor" ]
+}
+
+@test "read_session_env: removed marker (-NAME) fails, never returned as a value" {
+	setup_fake_tmux
+	FAKE_ENV_OUT="-COLORTERM" FAKE_ENV_STATUS=0 \
+		run bash -c 'source "$1"; read_session_env sess COLORTERM; echo "status=$? REPLY=${REPLY:-unset}"' _ "${BATS_TEST_DIRNAME}/../scripts/lib-remote.sh"
+	[ "$status" -eq 0 ]
+	[ "$output" = "status=1 REPLY=unset" ]
+}
+
+@test "read_session_env: unknown variable (show-environment exits non-zero) fails" {
+	setup_fake_tmux
+	FAKE_ENV_STATUS=1 \
+		run bash -c 'source "$1"; read_session_env sess COLORTERM; echo "status=$?"' _ "${BATS_TEST_DIRNAME}/../scripts/lib-remote.sh"
+	[ "$status" -eq 0 ]
+	[ "$output" = "status=1" ]
+}
+
+@test "read_session_env: empty session name fails without invoking tmux" {
+	run bash -c 'source "$1"; read_session_env "" COLORTERM; echo "status=$?"' _ "${BATS_TEST_DIRNAME}/../scripts/lib-remote.sh"
+	[ "$status" -eq 0 ]
+	[ "$output" = "status=1" ]
+}

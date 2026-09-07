@@ -46,3 +46,22 @@ valid_remote_path() { [[ $1 =~ ^/[A-Za-z0-9._/@+:-]*$ ]]; }
 # value at the boundary instead of trying to quote it. Screen $sess and
 # LZTMUX_REMOTE_NEW_DIR through this before either ever reaches shell_quote.
 shell_quotable() { [[ $1 != *\\* ]]; }
+
+# read_session_env <session> <name>: set REPLY to NAME's value from session
+# $1's environment. Returns 1 (REPLY unset/stale) for a totally-unset name, an
+# update-environment "removed" marker (-NAME, tmux's own leading-dash escape
+# for a name it explicitly unset), or no session at all — never blindly trusts
+# show-environment's raw output, which for a removed name IS the literal
+# string "-NAME".
+read_session_env() {
+	local sess="$1" name="$2" v
+	[[ -n $sess ]] || return 1
+	v="$(tmux show-environment -t "$sess" "$name" 2>/dev/null)" || return 1
+	case "$v" in
+	"$name="*)
+		REPLY="${v#"$name"=}"
+		return 0
+		;;
+	*) return 1 ;;
+	esac
+}

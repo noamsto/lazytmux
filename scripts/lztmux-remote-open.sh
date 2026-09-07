@@ -465,6 +465,31 @@ export LZTMUX_DAEMON_REMOTE_OPEN="${BASH_SOURCE[0]}"
 term="$(tmux display-message -p '#{client_termname}')"
 export LZTMUX_BRIDGE_TERM="$term"
 
+# COLORTERM/TERM_PROGRAM (#543) ride into the INVOKING client's session via
+# update-environment on attach (config/tmux.conf.nix), the same channel
+# #{client_termname} reflects the outer terminal through above. Read them off
+# that session, not $local_sess — the mirror session just created a few lines
+# up has no attaching client yet, so it never receives an update-environment
+# pass and its table is just a copy of the server's own environment.
+#
+# A bare `display-message` with no -t falls back to the server's
+# most-recently-used session, not necessarily this process's own pane — wrong
+# on any server with more than one attached client. Target $TMUX_PANE
+# explicitly, like initial_mirror_area() above already does.
+cur_target=()
+[[ -n ${TMUX_PANE:-} ]] && cur_target=(-t "$TMUX_PANE")
+cur_sess="$(tmux display-message -p "${cur_target[@]}" '#{session_name}' 2>/dev/null || true)"
+
+# read_session_env is defined in lib-remote.sh (sourced above), REPLY-based.
+# `|| true` guards each call under set -e: a miss (no session, unset name, or
+# the update-environment removed marker) is an expected outcome here, not a
+# script-ending error.
+colorterm="" term_program=""
+read_session_env "$cur_sess" COLORTERM && colorterm="$REPLY" || true
+read_session_env "$cur_sess" TERM_PROGRAM && term_program="$REPLY" || true
+export LZTMUX_BRIDGE_COLORTERM="$colorterm"
+export LZTMUX_BRIDGE_TERM_PROGRAM="$term_program"
+
 # Launch the daemon DETACHED, outside the panes it manages (I4): it is not the
 # window's command — it respawns the local panes into renderers. setsid is
 # Linux-only (not on macOS base), so fall back to plain backgrounding + disown
