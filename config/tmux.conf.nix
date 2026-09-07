@@ -1017,6 +1017,13 @@
     # @crew_* on a window has to kick a reflow for the badge to render, and
     # reflow is never on PATH. The option is the only handle it can reach.
     set -g @reflow_bin "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+    ${lib.optionalString (carousel-toggle != null) ''
+      # Same frozen-PATH reasoning, for the bridge's carousel ctl verb: it
+      # resolves the toggle on the remote via `command -v`, which reads the
+      # server environment frozen at its start — a nix switch + reload leaves
+      # it launching the old generation's script until a restart (#554).
+      set -g @carousel_bin "${carousel-toggle}/bin/tmux-claude-images"
+    ''}
 
     # Line 0: Session / Branch / Dir / Claude status (left) | usage + pane (right)
     # PR badge lives on the window list only — not duplicated here.
