@@ -56,6 +56,7 @@ type sessionData struct {
 	procs      []string // unique process names
 	panePIDs   []int    // shell PIDs for resource collection
 	bridgeHost string   // @bridge_host — ssh host this session mirrors, "" when local
+	current    bool     // this is the session the invoking tmux client is attached to
 	agent      agentCounts
 	cpuPct     float64 // total CPU% across all descendant processes
 	memMB      float64 // total RSS in MiB across all descendant processes

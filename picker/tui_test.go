@@ -142,6 +142,198 @@ func TestWithFilterRemoteTree(t *testing.T) {
 	}
 }
 
+// Documents WHY withFilter needs its own current-sinks-below-peer fix,
+// independent of sortSessionsForDisplay: fuzzy score has no notion of
+// "current", and a bare session name always outscores its host-prefixed
+// mirror for a query matching both — the mirror's first matched character
+// starts just past the "-" (a non-word boundary, not a delimiter), losing
+// the boundary bonus the bare name's first character gets. This alone would
+// pass before the fix too; it's a mechanism-documentation test, not
+// acceptance evidence for the fix.
+func TestFuzzyScoreBareNameBeatsHostPrefixedMirror(t *testing.T) {
+	local := fuzzyScore("lazytmux", "lazytmux")
+	mirror := fuzzyScore("g6-lazytmux", "lazytmux")
+	if local <= mirror {
+		t.Fatalf("fuzzyScore(lazytmux, lazytmux)=%d, fuzzyScore(g6-lazytmux, lazytmux)=%d — want local > mirror", local, mirror)
+	}
+}
+
+// withFilter's scored sort ranks the bare local name above its host-prefixed
+// mirror regardless of which one is current (see
+// TestFuzzyScoreBareNameBeatsHostPrefixedMirror), so the post-pass has real
+// work to do only when the LOCAL session is current; when the mirror is
+// current it already sorts below its peer by score alone (#551).
+func TestWithFilterSinksCurrentBelowPeer(t *testing.T) {
+	cases := []struct {
+		name    string
+		items   []listItem
+		query   string
+		wantIdx map[string]int // session name -> expected index in m.visible
+	}{
+		{
+			name: "unique names, none current: unaffected",
+			items: []listItem{
+				{target: "alpha", session: "alpha", searchText: "alpha"},
+				{target: "beta", session: "beta", bridgeHost: "g6", searchText: "beta"},
+			},
+			query:   "alpha",
+			wantIdx: map[string]int{"alpha": 0},
+		},
+		{
+			name: "same-host pair, one current: no collision, unaffected",
+			items: []listItem{
+				{target: "dup1", session: "dup", searchText: "dup", current: true},
+				{target: "dup2", session: "dup", searchText: "dup"},
+			},
+			query:   "dup",
+			wantIdx: map[string]int{"dup1": 0, "dup2": 1},
+		},
+		{
+			name: "local is current: sinks below the mirror",
+			items: []listItem{
+				{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
+				{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux"},
+			},
+			query:   "lazytmux",
+			wantIdx: map[string]int{"mirror": 0, "local": 1},
+		},
+		{
+			name: "mirror is current: already sorts below local by score, unaffected",
+			items: []listItem{
+				{target: "local", session: "lazytmux", searchText: "lazytmux"},
+				{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux", current: true},
+			},
+			query:   "lazytmux",
+			wantIdx: map[string]int{"local": 0, "mirror": 1},
+		},
+		{
+			name: "query matches only the current session: peer never enters matches, no-op",
+			items: []listItem{
+				{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
+				{target: "mirror", session: "g6-other", bridgeHost: "g6", searchText: "totallydifferent"},
+			},
+			query:   "lazytmux",
+			wantIdx: map[string]int{"local": 0},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := tuiModel{allItems: c.items, query: c.query}
+			out := m.withFilter().visible
+			byTarget := make(map[string]int, len(out))
+			for i, it := range out {
+				byTarget[it.target] = i
+			}
+			for target, wantIdx := range c.wantIdx {
+				if got, ok := byTarget[target]; !ok || got != wantIdx {
+					t.Errorf("%s at index %d, want %d (visible: %+v)", target, got, wantIdx, out)
+				}
+			}
+			if len(out) != len(c.wantIdx) {
+				t.Errorf("got %d visible items, want %d: %+v", len(out), len(c.wantIdx), out)
+			}
+		})
+	}
+}
+
+// A host row pulled in only as tree context for a matching child (its own
+// searchText didn't match) must not be selectable, and firstSelectable must
+// skip past it to the child that actually matched.
+func TestWithFilterContextOnlyHostRowNotSelectable(t *testing.T) {
+	m := tuiModel{allItems: remoteFixture(), query: "other"}
+	m = m.withFilter()
+	out := m.visible
+
+	hostRow := out[1]
+	if hostRow.remoteHost != "lab" || hostRow.remoteSess != "" {
+		t.Fatalf("expected host row at index 1, got %+v", hostRow)
+	}
+	if !hostRow.remoteContextOnly {
+		t.Errorf("host row pulled in for a child match should be remoteContextOnly, got %+v", hostRow)
+	}
+	if m.isSelectable(hostRow) {
+		t.Errorf("context-only host row must not be selectable: %+v", hostRow)
+	}
+	if got := m.firstSelectable(0); out[got].remoteSess != "other" {
+		t.Errorf("firstSelectable(0) = %d (%+v), want the matching child row", got, out[got])
+	}
+}
+
+// When a host row's own searchText matches the query, it is a real match —
+// not context — and stays selectable, holding the cursor as any other row
+// would.
+func TestWithFilterHostRowOwnMatchStaysSelectable(t *testing.T) {
+	m := tuiModel{allItems: remoteFixture(), query: "lab"}
+	m = m.withFilter()
+	out := m.visible
+
+	hostRow := out[1]
+	if hostRow.remoteHost != "lab" || hostRow.remoteSess != "" {
+		t.Fatalf("expected host row at index 1, got %+v", hostRow)
+	}
+	if hostRow.remoteContextOnly {
+		t.Errorf("host row's own match must not be marked remoteContextOnly: %+v", hostRow)
+	}
+	if !m.isSelectable(hostRow) {
+		t.Errorf("host row's own match should stay selectable: %+v", hostRow)
+	}
+	if got := m.firstSelectable(0); got != 1 {
+		t.Errorf("firstSelectable(0) = %d, want 1 (the host row)", got)
+	}
+}
+
+// A query matching the host name AND every child session must still let the
+// host's own match win: it appears once, unmarked, ahead of its children —
+// collectRemoteItems' host-before-children ordering guarantee holds even when
+// every row in the section matches.
+func TestWithFilterHostMatchPrecedesAllMatchingChildren(t *testing.T) {
+	m := tuiModel{allItems: remoteFixture(), query: "lab"}
+	out := m.withFilter().visible
+
+	var hostSeen int
+	var sawMonoAfterHost, sawOtherAfterHost bool
+	for _, it := range out {
+		if it.remoteHost == "lab" && it.remoteSess == "" {
+			hostSeen++
+			if it.remoteContextOnly {
+				t.Errorf("host row must not be context-only when it matched on its own: %+v", it)
+			}
+			continue
+		}
+		if hostSeen > 0 && it.remoteSess == "mono" {
+			sawMonoAfterHost = true
+		}
+		if hostSeen > 0 && it.remoteSess == "other" {
+			sawOtherAfterHost = true
+		}
+	}
+	if hostSeen != 1 {
+		t.Fatalf("host row appeared %d times, want exactly 1 (no double-insertion): %+v", hostSeen, out)
+	}
+	if !sawMonoAfterHost || !sawOtherAfterHost {
+		t.Errorf("both children must follow the host row: %+v", out)
+	}
+}
+
+// Empty query never runs the hostRows/seenHost pull-in mechanism — host rows
+// keep whatever selectability they had before filtering, and remoteContextOnly
+// is never set.
+func TestWithFilterEmptyQueryHostRowUnchanged(t *testing.T) {
+	m := tuiModel{allItems: remoteFixture(), query: ""}
+	out := m.withFilter().visible
+
+	for _, it := range out {
+		if it.remoteHost != "" && it.remoteSess == "" {
+			if it.remoteContextOnly {
+				t.Errorf("empty query must never set remoteContextOnly: %+v", it)
+			}
+			if !m.isSelectable(it) {
+				t.Errorf("host row must stay selectable on an empty query: %+v", it)
+			}
+		}
+	}
+}
+
 func TestWithFilterStateGroupedKeepsGrouping(t *testing.T) {
 	allItems := []listItem{
 		{display: "Waiting", isHeader: true, groupKey: "waiting", searchText: "waiting"},
@@ -679,6 +871,44 @@ func TestRemoteMsgPreservesCursor(t *testing.T) {
 	got := nm.visible[nm.cursor]
 	if got.remoteHost != "dead" || got.remoteSess != "" {
 		t.Fatalf("cursor moved off the dead host row: %+v", got)
+	}
+}
+
+// A refreshMsg rebuild can leave the cursor in bounds but pointing at a row
+// that just became unselectable (e.g. a context-only host row a departing
+// session's match used to pull in). The hardened guard must catch that case,
+// not just an out-of-bounds index.
+func TestRefreshMsgMovesCursorOffNewlyUnselectableRow(t *testing.T) {
+	remote := remoteFixture()[1:] // header, host(lab), mono, other, dead — no local session row
+	m := tuiModel{
+		sessionItems: []listItem{
+			{target: "s1", searchText: "s1 mono"},
+			{target: "s2", searchText: "s2 mono"},
+		},
+		remoteItems: remote,
+		query:       "mono",
+	}
+	m = m.recombine().withFilter()
+	m.cursor = 1
+	if !m.isSelectable(m.visible[m.cursor]) || m.visible[m.cursor].target != "s2" {
+		t.Fatalf("setup: expected cursor on selectable s2, got %+v", m.visible[m.cursor])
+	}
+
+	// s2 drops out of the session list; the row that lands at index 1 in the
+	// rebuild is the "lab" host row, pulled in only as context for "mono" —
+	// unselectable, but still in bounds.
+	next, _ := m.Update(refreshMsg{items: []listItem{
+		{target: "s1", searchText: "s1 mono"},
+	}})
+	nm, ok := next.(tuiModel)
+	if !ok {
+		t.Fatalf("Update did not return a tuiModel")
+	}
+	if !nm.isSelectable(nm.visible[nm.cursor]) {
+		t.Fatalf("cursor left on an unselectable row: %+v", nm.visible[nm.cursor])
+	}
+	if want := nm.firstSelectable(0); nm.cursor != want {
+		t.Errorf("cursor = %d, want firstSelectable(0) = %d", nm.cursor, want)
 	}
 }
 

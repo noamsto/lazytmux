@@ -35,6 +35,7 @@ type listItem struct {
 	groupKey    string // window-mode header key this row re-attaches to
 	// when filtering: session name, or agent state
 	bridgeHost           string // @bridge_host — set when this session mirrors a remote host
+	current              bool   // this is the session the invoking tmux client is attached to
 	bridgePane           string // window row: @bridge_pane — the remote pane whose window this mirrors
 	bridgeSock           string // window row: @bridge_sock — ctl socket of the daemon mirroring it
 	hasActiveAgent       bool   // used for --agent filter
@@ -44,6 +45,7 @@ type listItem struct {
 	isRemoteRow          bool   // belongs to the Remote section (set even when unselectable)
 	remoteHost           string // remote bridge row: ssh host for lztmux-remote-open
 	remoteSess           string // remote bridge row: optional remote session name
+	remoteContextOnly    bool   // host row: pulled in only as tree context for a matching child, not its own match — unselectable
 	displayEnd           string // remote session row: display with the closing tree glyph
 	plainEnd             string // remote session row: plain with the closing tree glyph
 	remoteRestore        bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
@@ -125,6 +127,10 @@ type tuiModel struct {
 	// "no suggestions" and "the probe hasn't answered", which recombine's
 	// both-empty guard has to tell apart.
 	zoxideReady bool
+	// currentSession is the raw name of the session the invoking tmux client
+	// is attached to (LZTMUX_PICKER_CURRENT_SESSION), used to sink it below a
+	// same-display-name peer on another host.
+	currentSession string
 }
 
 // --- Catppuccin palette (dark/light) ---
@@ -259,15 +265,17 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 	opts := readTmuxOpts()
 	snap := collectPanesSnapshot()
 	panes := collectAgentPanes(snap)
+	currentSession := os.Getenv("LZTMUX_PICKER_CURRENT_SESSION")
 
 	var items []listItem
 	if windowMode {
 		items = buildWindowItems(opts, panes, theme, 0, false)
 	} else {
-		items = buildSessionItems(opts, snap, panes, theme, false)
+		items = buildSessionItems(opts, snap, panes, theme, false, currentSession)
 	}
 
 	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items, emitPath)
+	m.currentSession = currentSession
 	if emitPath != "" {
 		m.emitHost = os.Getenv("LZTMUX_PICKER_HOST")
 	}
@@ -357,7 +365,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keep := m.currentTarget()
 		m.sessionItems = msg.items
 		m = m.recombine().withFilter()
-		if m.cursor >= len(m.visible) {
+		if m.cursor >= len(m.visible) || !m.isSelectable(m.visible[m.cursor]) {
 			m.cursor = m.firstSelectable(0)
 		}
 		if m.mode == modeWall {
@@ -376,7 +384,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.zoxideItems = msg.items
 		m.zoxideReady = true
 		m = m.recombine().withFilter()
-		if m.cursor >= len(m.visible) {
+		if m.cursor >= len(m.visible) || !m.isSelectable(m.visible[m.cursor]) {
 			m.cursor = m.firstSelectable(0)
 		}
 		if m.mode == modeWall {
@@ -1130,6 +1138,11 @@ func (m tuiModel) isSelectable(item listItem) bool {
 	if item.target == "" && item.remoteHost == "" {
 		return false
 	}
+	// A host row pulled in only as tree context for a matching child is not
+	// itself a match, so it can't hold the cursor.
+	if item.remoteHost != "" && item.remoteSess == "" && item.remoteContextOnly {
+		return false
+	}
 	// In window mode, session headers are not selectable
 	return !item.isHeader || !m.windowMode
 }
@@ -1298,6 +1311,66 @@ func (m tuiModel) itemVisible(item listItem) bool {
 	return true
 }
 
+// scored pairs a listItem with its fuzzy-match score against the current
+// query. File-scope (not local to withFilter) so sinkCurrentMatchBelowPeer
+// can operate on it too.
+type scored struct {
+	item  listItem
+	score int
+}
+
+// Match ranks: sessions always above remote + zoxide suggestions.
+const (
+	rankSession = iota
+	rankRemote
+	rankZoxide
+)
+
+// matchRank classifies a listItem into one of the three match ranks above.
+// Hoisted out of withFilter's sort comparator so the post-pass that follows
+// it can reuse the same classification.
+func matchRank(it listItem) int {
+	switch {
+	case it.createPath != "":
+		return rankZoxide
+	case it.isRemoteRow:
+		return rankRemote
+	default:
+		return rankSession
+	}
+}
+
+// sinkCurrentMatchBelowPeer mirrors sinkCurrentBelowPeers (see its comment
+// for why this must be a post-pass, not a comparator rule), operating on
+// scored listItems from the filtered/fuzzy-matched list instead of raw
+// sessionData. If the current session's peer never matched the query (so it
+// isn't present in this slice), this is a no-op — there's nothing to sink
+// below in the visible list.
+func sinkCurrentMatchBelowPeer(matches []scored) {
+	i := -1
+	for idx, s := range matches {
+		if s.item.current {
+			i = idx
+			break
+		}
+	}
+	if i < 0 {
+		return
+	}
+	cur := matches[i]
+	lastPeer := -1
+	for j, p := range matches {
+		if j != i && sameDisplayDifferentHost(cur.item.session, cur.item.bridgeHost, p.item.session, p.item.bridgeHost) {
+			lastPeer = j
+		}
+	}
+	if lastPeer <= i {
+		return
+	}
+	copy(matches[i:lastPeer], matches[i+1:lastPeer+1])
+	matches[lastPeer] = cur
+}
+
 func (m tuiModel) withFilter() tuiModel {
 	q := strings.ToLower(m.query)
 
@@ -1319,10 +1392,6 @@ func (m tuiModel) withFilter() tuiModel {
 	}
 
 	// Score and filter matchable items
-	type scored struct {
-		item  listItem
-		score int
-	}
 	var matches []scored
 	for _, item := range m.allItems {
 		if item.isHeader {
@@ -1339,23 +1408,8 @@ func (m tuiModel) withFilter() tuiModel {
 
 	// Sort by score descending; sessions always rank above remote + zoxide
 	// suggestions. Stable preserves original order for ties.
-	const (
-		rankSession = iota
-		rankRemote
-		rankZoxide
-	)
 	sort.SliceStable(matches, func(i, j int) bool {
-		rank := func(it listItem) int {
-			switch {
-			case it.createPath != "":
-				return rankZoxide
-			case it.isRemoteRow:
-				return rankRemote
-			default:
-				return rankSession
-			}
-		}
-		ri, rj := rank(matches[i].item), rank(matches[j].item)
+		ri, rj := matchRank(matches[i].item), matchRank(matches[j].item)
 		if ri != rj {
 			return ri < rj
 		}
@@ -1366,6 +1420,14 @@ func (m tuiModel) withFilter() tuiModel {
 		}
 		return matches[i].score > matches[j].score
 	})
+
+	if !m.windowMode {
+		sessionEnd := 0
+		for sessionEnd < len(matches) && matchRank(matches[sessionEnd].item) == rankSession {
+			sessionEnd++
+		}
+		sinkCurrentMatchBelowPeer(matches[:sessionEnd])
+	}
 
 	if m.windowMode {
 		// Re-group under headers, ordered by best child score. groupKey is
@@ -1417,6 +1479,7 @@ func (m tuiModel) withFilter() tuiModel {
 			if h := match.item.remoteHost; h != "" && !seenHost[h] {
 				seenHost[h] = true
 				if row, ok := hostRows[h]; ok && match.item.remoteSess != "" {
+					row.remoteContextOnly = true
 					out = append(out, row)
 				}
 			}
@@ -1536,6 +1599,7 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 	sg := m.stateGrouped
 	opts := m.tmuxOpts
 	theme := m.theme
+	cur := m.currentSession
 	lw := m.listWidth() // capture the value; the closure runs off-thread
 	return func() tea.Msg {
 		snap := collectPanesSnapshot()
@@ -1544,7 +1608,7 @@ func (m tuiModel) refreshDataCmd() tea.Cmd {
 		if wm {
 			items = buildWindowItems(opts, panes, theme, lw, sg)
 		} else {
-			items = buildSessionItems(opts, snap, panes, theme, true)
+			items = buildSessionItems(opts, snap, panes, theme, true, cur)
 		}
 		// Always send — spinners need to animate even without structural changes.
 		return refreshMsg{items: items}
@@ -1659,6 +1723,70 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 	}
 }
 
+// sameDisplayDifferentHost reports whether two sessions display under the
+// same name but live on different hosts (bridgeHost=="" counts as local) —
+// the collision that makes "current" ambiguous with a session the user is
+// actually trying to reach.
+func sameDisplayDifferentHost(nameA, hostA, nameB, hostB string) bool {
+	return hostA != hostB && sessionDisplayName(nameA, hostA) == sessionDisplayName(nameB, hostB)
+}
+
+// sortSessionsForDisplay orders sessions by activity desc, then name asc,
+// then sinks the currently attached session below any peer it collides
+// with on a different host.
+func sortSessionsForDisplay(sessions []sessionData) {
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].activity != sessions[j].activity {
+			return sessions[i].activity > sessions[j].activity
+		}
+		return sessions[i].name < sessions[j].name
+	})
+	sinkCurrentBelowPeers(sessions)
+}
+
+// sinkCurrentBelowPeers runs after the ordinary activity/name sort. It moves
+// the currently attached session (at most one ever exists — a client
+// attaches to exactly one session) to immediately after the LAST session it
+// display-collides with on another host. Every other session keeps its
+// relative order to every other one — but a session that sat between the
+// current one and its peer is, unavoidably, no longer between them: the
+// requirement is "current sorts below its peer", which forces that
+// collateral shift.
+//
+// This must be a stable post-pass rather than a rule folded into
+// sort.Slice's comparator: a pairwise "current loses" rule inside the
+// comparator is not transitive (three sessions whose activity interleaves
+// across the collision produce a comparator cycle — e.g. current A(100) <
+// unrelated C(75) by activity, C(75) < mirror B(50) by activity, but B < A
+// by the pairwise override: A<C<B<A, a 3-cycle), and sort.Slice's behavior
+// on a non-transitive comparator is unspecified — it would make this fix
+// pass or silently no-op depending on map-iteration order (sessions come
+// from a map in panesSnapshot.sessions()).
+func sinkCurrentBelowPeers(sessions []sessionData) {
+	i := -1
+	for idx, s := range sessions {
+		if s.current {
+			i = idx
+			break
+		}
+	}
+	if i < 0 {
+		return
+	}
+	cur := sessions[i]
+	lastPeer := -1
+	for j, p := range sessions {
+		if j != i && sameDisplayDifferentHost(cur.name, cur.bridgeHost, p.name, p.bridgeHost) {
+			lastPeer = j
+		}
+	}
+	if lastPeer <= i {
+		return // already below every peer, or no peer present
+	}
+	copy(sessions[i:lastPeer], sessions[i+1:lastPeer+1])
+	sessions[lastPeer] = cur
+}
+
 // --- Item builders ---
 
 // resourcePlaceholder fills the CPU/Mem columns on the first paint, before the
@@ -1666,10 +1794,14 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 // padding stays aligned (multibyte glyphs measure wide in bytes, narrow in cells).
 const resourcePlaceholder = "-"
 
-func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPanes []agentPaneInfo, theme string, withResources bool) []listItem {
+func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPanes []agentPaneInfo, theme string, withResources bool, currentSession string) []listItem {
 	sessions := snap.sessions()
 	agentMap := aggregateAgentBySession(agentPanes)
 	mergeAgent(sessions, agentMap)
+
+	for i := range sessions {
+		sessions[i].current = sessions[i].name == currentSession
+	}
 
 	// Resource collection forks `ps -A`, so it stays off the first-paint path:
 	// the initial render passes withResources=false and an immediate async
@@ -1709,12 +1841,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 	reset := "\033[0m"
 	dim := "\033[2m"
 
-	sort.Slice(sessions, func(i, j int) bool {
-		if sessions[i].activity != sessions[j].activity {
-			return sessions[i].activity > sessions[j].activity
-		}
-		return sessions[i].name < sessions[j].name
-	})
+	sortSessionsForDisplay(sessions)
 
 	type row struct {
 		sess   *sessionData
@@ -1866,6 +1993,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 			searchText:     r.sess.name,
 			session:        r.sess.name,
 			bridgeHost:     r.sess.bridgeHost,
+			current:        r.sess.current,
 			hasActiveAgent: isActiveState(agentPriority(r.sess.agent)),
 			isScratch:      strings.HasPrefix(r.sess.name, "scratch-"),
 		})
