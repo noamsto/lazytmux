@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
@@ -125,6 +129,89 @@ func TestFetcherRejectsOversizeAndBadReplies(t *testing.T) {
 	}}
 	if _, err := bad.Localize(context.Background(), "/tmp/a.png"); err == nil {
 		t.Fatal("unparsable reply must error")
+	}
+}
+
+// The #556 regression net: Localize must not hold the fetcher lock across Run,
+// or LocalizeBatch's goroutines would serialize behind the slowest fetch and
+// the batch would cost N round-trips again.
+func TestFetcherLocalizeRunsConcurrently(t *testing.T) {
+	dir := t.TempDir()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
+		// The remote path is the third-to-last argument (then key, max-bytes).
+		started <- args[len(args)-3]
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []byte("1700000000 5\nHELLO"), nil
+	}}
+	var wg sync.WaitGroup
+	locals := make([]string, 2)
+	errs := make([]error, 2)
+	for i, p := range []string{"/tmp/a.png", "/tmp/b.png"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			locals[i], errs[i] = f.Localize(context.Background(), p)
+		}()
+	}
+	// Both fetches must be in flight before either completes.
+	seen := map[string]bool{<-started: true, <-started: true}
+	close(release)
+	wg.Wait()
+	if !seen["'/tmp/a.png'"] || !seen["'/tmp/b.png'"] {
+		t.Fatalf("fetches serialized or lost: %v", seen)
+	}
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+	}
+	if locals[0] == locals[1] {
+		t.Fatalf("distinct paths cached to the same file: %s", locals[0])
+	}
+}
+
+// Two concurrent fetches of the SAME path share one ssh round-trip: the
+// second waits on the first's outcome rather than double-transferring.
+func TestFetcherDedupsConcurrentFetchesOfOnePath(t *testing.T) {
+	dir := t.TempDir()
+	var runs atomic.Int32
+	release := make(chan struct{})
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
+		runs.Add(1)
+		<-release
+		return []byte("1700000000 5\nHELLO"), nil
+	}}
+	var wg sync.WaitGroup
+	locals := make([]string, 2)
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			locals[i], errs[i] = f.Localize(context.Background(), "/tmp/a.png")
+		}()
+	}
+	// Let the first fetch reach Run and the second park on the inflight call.
+	for runs.Load() == 0 {
+		runtime.Gosched()
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("Run called %d times for one path, want 1", n)
+	}
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("errs = %v", errs)
+	}
+	if locals[0] != locals[1] {
+		t.Fatalf("waiters got different results: %q vs %q", locals[0], locals[1])
 	}
 }
 
