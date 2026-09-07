@@ -1340,12 +1340,20 @@ func matchRank(it listItem) int {
 	}
 }
 
-// sinkCurrentMatchBelowPeer mirrors sinkCurrentBelowPeers (see its comment
-// for why this must be a post-pass, not a comparator rule), operating on
-// scored listItems from the filtered/fuzzy-matched list instead of raw
-// sessionData. If the current session's peer never matched the query (so it
-// isn't present in this slice), this is a no-op — there's nothing to sink
-// below in the visible list.
+// sinkCurrentMatchBelowPeer moves the currently attached session (at most one
+// ever exists — a client attaches to exactly one session) to immediately after
+// the LAST matched row it display-collides with on another host. It runs only
+// on a non-empty query: with no filter the full list is on screen with its
+// Host column, so the unfiltered order stays the plain activity/name sort a
+// user reads positions off. If the current session's peer never matched the
+// query (so it isn't present in this slice), this is a no-op — there's nothing
+// to sink below in the visible list.
+//
+// This must be a stable post-pass rather than a rule folded into the scored
+// sort's comparator: a pairwise "current loses" rule inside the comparator is
+// not transitive (three rows whose scores interleave across the collision
+// produce a comparator cycle), and sort.SliceStable's behavior on a
+// non-transitive comparator is unspecified.
 func sinkCurrentMatchBelowPeer(matches []scored) {
 	i := -1
 	for idx, s := range matches {
@@ -1731,9 +1739,9 @@ func sameDisplayDifferentHost(nameA, hostA, nameB, hostB string) bool {
 	return hostA != hostB && sessionDisplayName(nameA, hostA) == sessionDisplayName(nameB, hostB)
 }
 
-// sortSessionsForDisplay orders sessions by activity desc, then name asc,
-// then sinks the currently attached session below any peer it collides
-// with on a different host.
+// sortSessionsForDisplay orders sessions by activity desc, then name asc. A
+// current session that display-collides with a mirror on another host is sunk
+// below it only in the filtered list (sinkCurrentMatchBelowPeer) — see there.
 func sortSessionsForDisplay(sessions []sessionData) {
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].activity != sessions[j].activity {
@@ -1741,50 +1749,6 @@ func sortSessionsForDisplay(sessions []sessionData) {
 		}
 		return sessions[i].name < sessions[j].name
 	})
-	sinkCurrentBelowPeers(sessions)
-}
-
-// sinkCurrentBelowPeers runs after the ordinary activity/name sort. It moves
-// the currently attached session (at most one ever exists — a client
-// attaches to exactly one session) to immediately after the LAST session it
-// display-collides with on another host. Every other session keeps its
-// relative order to every other one — but a session that sat between the
-// current one and its peer is, unavoidably, no longer between them: the
-// requirement is "current sorts below its peer", which forces that
-// collateral shift.
-//
-// This must be a stable post-pass rather than a rule folded into
-// sort.Slice's comparator: a pairwise "current loses" rule inside the
-// comparator is not transitive (three sessions whose activity interleaves
-// across the collision produce a comparator cycle — e.g. current A(100) <
-// unrelated C(75) by activity, C(75) < mirror B(50) by activity, but B < A
-// by the pairwise override: A<C<B<A, a 3-cycle), and sort.Slice's behavior
-// on a non-transitive comparator is unspecified — it would make this fix
-// pass or silently no-op depending on map-iteration order (sessions come
-// from a map in panesSnapshot.sessions()).
-func sinkCurrentBelowPeers(sessions []sessionData) {
-	i := -1
-	for idx, s := range sessions {
-		if s.current {
-			i = idx
-			break
-		}
-	}
-	if i < 0 {
-		return
-	}
-	cur := sessions[i]
-	lastPeer := -1
-	for j, p := range sessions {
-		if j != i && sameDisplayDifferentHost(cur.name, cur.bridgeHost, p.name, p.bridgeHost) {
-			lastPeer = j
-		}
-	}
-	if lastPeer <= i {
-		return // already below every peer, or no peer present
-	}
-	copy(sessions[i:lastPeer], sessions[i+1:lastPeer+1])
-	sessions[lastPeer] = cur
 }
 
 // --- Item builders ---

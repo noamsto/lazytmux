@@ -142,8 +142,8 @@ func TestWithFilterRemoteTree(t *testing.T) {
 	}
 }
 
-// Documents WHY withFilter needs its own current-sinks-below-peer fix,
-// independent of sortSessionsForDisplay: fuzzy score has no notion of
+// Documents WHY the filtered list needs a current-sinks-below-peer post-pass
+// at all: fuzzy score has no notion of
 // "current", and a bare session name always outscores its host-prefixed
 // mirror for a query matching both — the mirror's first matched character
 // starts just past the "-" (a non-word boundary, not a delimiter), losing
@@ -233,6 +233,20 @@ func TestWithFilterSinksCurrentBelowPeer(t *testing.T) {
 				t.Errorf("got %d visible items, want %d: %+v", len(out), len(c.wantIdx), out)
 			}
 		})
+	}
+}
+
+// The sink is the filtered list's alone: an empty query is the plain
+// activity-ordered list, and a user reads positions off it, so the collision
+// that only fuzzy ranking gets wrong must not move rows here.
+func TestWithFilterEmptyQueryKeepsOrder(t *testing.T) {
+	items := []listItem{
+		{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
+		{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux"},
+	}
+	out := tuiModel{allItems: items, query: ""}.withFilter().visible
+	if len(out) != 2 || out[0].target != "local" || out[1].target != "mirror" {
+		t.Errorf("visible = %+v, want [local mirror] unchanged", out)
 	}
 }
 
