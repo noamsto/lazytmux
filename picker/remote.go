@@ -810,9 +810,11 @@ func sessionDisplayName(name, bridgeHost string) string {
 
 // remoteHostRowItem renders one host's row with the given trailing note —
 // either a resolved annotation ("(no server — Enter starts one)", …) or
-// remotePendingNote before the probe has run. The host row is always
-// selectable: it opens the remote's most-recent session and keeps the
-// section alive once every session is bridged.
+// remotePendingNote before the probe has run. The row opens the remote's
+// most-recent session and keeps the section alive once every session is
+// bridged — but it's only selectable while it matched the filter query on
+// its own text; a copy pulled in purely as tree context for a matching child
+// session (marked remoteContextOnly by withFilter in tui.go) is not.
 func remoteHostRowItem(tmuxOpts map[string]string, host, note string) listItem {
 	cHost := hostColorFunc(tmuxOpts)(host)
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))

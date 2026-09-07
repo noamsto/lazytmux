@@ -3,10 +3,22 @@
 set -euo pipefail
 
 CLIENT=""
-if [[ ${1:-} == --client ]]; then
-	CLIENT=${2:-}
-	shift 2 || shift
-fi
+CURRENT=""
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--client)
+		CLIENT=${2:-}
+		shift 2 || shift
+		;;
+	--current)
+		CURRENT=${2:-}
+		shift 2 || shift
+		;;
+	*)
+		break
+		;;
+	esac
+done
 
 # Both options in one round-trip: the popup's open latency is dominated by
 # forks queued behind the (single-threaded) tmux server, and these run before
@@ -24,5 +36,7 @@ HEIGHT=85%
 # reported upstream as tmux/tmux#5551 — drop the pin once that ships).
 POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
-tmux display-popup "${POPUP_CLIENT[@]}" -E -w 90% -h "$HEIGHT" -b rounded -T " Sessions " \
+POPUP_ENV=()
+[[ -n $CURRENT ]] && POPUP_ENV=(-e "LZTMUX_PICKER_CURRENT_SESSION=$CURRENT")
+tmux display-popup "${POPUP_CLIENT[@]}" "${POPUP_ENV[@]}" -E -w 90% -h "$HEIGHT" -b rounded -T " Sessions " \
 	-S "fg=$BORDER_FG" "@picker_generate@ --tui"

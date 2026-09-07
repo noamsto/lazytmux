@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -71,7 +72,7 @@ func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",
 		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1|",
 	}
-	items := buildSessionItems(nil, snap, nil, "dark", false)
+	items := buildSessionItems(nil, snap, nil, "dark", false, "")
 	hdr := items[0]
 	if !hdr.isColumnHeader {
 		t.Fatal("items[0] must be flagged as the column header for the sticky pin")
@@ -137,6 +138,104 @@ func TestSessionsBridgeProcOverride(t *testing.T) {
 	}
 	if len(local.procs) != 1 || local.procs[0] != "bash" {
 		t.Errorf("local-sess procs = %v, want [bash] (empty bridge_proc must fall through to pane_current_command)", local.procs)
+	}
+}
+
+// sortSessionsForDisplay orders by activity desc, then name asc, then sinks
+// the current session below any peer it display-collides with on another
+// host (#551).
+func TestSortSessionsForDisplay(t *testing.T) {
+	names := func(sessions []sessionData) []string {
+		out := make([]string, len(sessions))
+		for i, s := range sessions {
+			out[i] = s.name
+		}
+		return out
+	}
+
+	cases := []struct {
+		name     string
+		sessions []sessionData
+		want     []string
+	}{
+		{
+			name: "unique display names: unaffected",
+			sessions: []sessionData{
+				{name: "b", activity: 100},
+				{name: "a", activity: 200},
+			},
+			want: []string{"a", "b"},
+		},
+		{
+			name: "same-name same-host pair: unaffected",
+			sessions: []sessionData{
+				{name: "dup", activity: 100},
+				{name: "dup", activity: 200},
+			},
+			want: []string{"dup", "dup"},
+		},
+		{
+			name: "same-name different-host, local is current: local sinks below the mirror",
+			sessions: []sessionData{
+				{name: "lazytmux", bridgeHost: "", activity: 100, current: true},
+				{name: "g6-lazytmux", bridgeHost: "g6", activity: 50},
+			},
+			want: []string{"g6-lazytmux", "lazytmux"},
+		},
+		{
+			name: "same-name different-host, mirror is current: mirror sinks below local",
+			sessions: []sessionData{
+				{name: "g6-lazytmux", bridgeHost: "g6", activity: 100, current: true},
+				{name: "lazytmux", bridgeHost: "", activity: 50},
+			},
+			want: []string{"lazytmux", "g6-lazytmux"},
+		},
+		{
+			// The transitivity case a pairwise comparator override cannot
+			// handle: current local A collides with mirror B, and unrelated
+			// C's activity sits strictly between them. A plain sort gives
+			// [A(100), C(60), B(20)]; the post-pass must move A to right
+			// after its last (only) peer B, giving [C, B, A] — not just "A
+			// sorts below B" as a pairwise relation, but this exact full order.
+			name: "three-session interleaved activity pins transitivity",
+			sessions: []sessionData{
+				{name: "lazytmux", bridgeHost: "", activity: 100, current: true},
+				{name: "g6-lazytmux", bridgeHost: "g6", activity: 20},
+				{name: "other", bridgeHost: "", activity: 60},
+			},
+			want: []string{"other", "g6-lazytmux", "lazytmux"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sortSessionsForDisplay(c.sessions)
+			if got := names(c.sessions); !slices.Equal(got, c.want) {
+				t.Errorf("order = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// buildSessionItems must mark `current` BEFORE the sort that sinks it below a
+// same-display-name peer on another host — the marking loop and the sort are
+// two separate steps, and this is the one test that fails if `current` lands
+// on the wrong side of sortSessionsForDisplay (a bug the sortSessionsForDisplay
+// table above, which marks sessions by hand, cannot catch).
+func TestBuildSessionItemsSinksCurrentBelowMirror(t *testing.T) {
+	snap := panesSnapshot{
+		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",
+		"%2|g6-lazytmux|0|/home/noams/src|1900000100|g6|fish|2|",
+	}
+	items := buildSessionItems(nil, snap, nil, "dark", false, "lazytmux")
+	// items[0] is the column-header row.
+	if len(items) != 3 {
+		t.Fatalf("got %d items, want 3 (header + 2 sessions)", len(items))
+	}
+	if items[1].target != "g6-lazytmux" {
+		t.Errorf("items[1].target = %q, want g6-lazytmux (mirror must sort above the current local session)", items[1].target)
+	}
+	if items[2].target != "lazytmux" {
+		t.Errorf("items[2].target = %q, want lazytmux (current session must sink below its mirror)", items[2].target)
 	}
 }
 

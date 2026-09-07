@@ -862,13 +862,13 @@
 
     # Session/window pickers (wrappers pre-compute agent status), plus the
     # tiled wall (W) — the same window list rendered as live preview tiles.
-    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},}'
+    bind s run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},} --current #{qs:session_name}'
     bind w run-shell '${script.tmux-window-picker}/bin/tmux-window-picker #{?client_name,--client #{q:client_name},}'
     bind a run-shell '${script.tmux-window-picker}/bin/tmux-window-picker #{?client_name,--client #{q:client_name},} --agent'
     bind W run-shell '${script.tmux-window-wall}/bin/tmux-window-wall #{?client_name,--client #{q:client_name},}'
     # Click session name in status bar (the #[range=left] marker in the Go
     # statusline) to open the session picker.
-    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},}'
+    bind -T root MouseDown1StatusLeft run-shell '${script.tmux-session-picker}/bin/tmux-session-picker #{?client_name,--client #{q:client_name},} --current #{qs:session_name}'
 
     ${lib.optionalString splashEnable ''
       # Summon the welcome splash on demand (bypasses the once-per-session gate;
