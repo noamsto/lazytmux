@@ -474,6 +474,44 @@
               touch $out
             '';
 
+          # nix build .#default cannot verify this: it imports tmux.conf.nix
+          # with no terminal options at all, so terminalConfig is already
+          # empty there and a default-build grep would be green whether or
+          # not the sixel line is ever emitted. Import with sixelTerminals
+          # set instead, the way float-conf-assertions imports tmux.conf.nix
+          # above.
+          sixel-conf-assertions = let
+            mkSixelConf = args:
+              (import ./config/tmux.conf.nix ({
+                  inherit pkgs lib;
+                  tmuxPkg = mkTmux pkgs;
+                  carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+                  prdash = inputs.prdash.packages.${pkgs.system}.prdash;
+                }
+                // args))
+              .tmuxConf;
+          in
+            pkgs.runCommand "sixel-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+              # No preset active, so terminalTerm is null. This is the case the
+              # option exists for -- kitty and ghostty are the only presets and
+              # neither speaks sixel -- so it must emit on its own.
+              ALONE = mkSixelConf {sixelTerminals = ["foot"];};
+              # Two entries beside a preset: pins the per-entry expansion (a
+              # regression that only shows at N>1) and the join with the
+              # RGB:extkeys line the preset emits.
+              BOTH = mkSixelConf {
+                terminalTerm = "xterm-ghostty";
+                sixelTerminals = ["foot" "wezterm"];
+              };
+            } ''
+              grep -F "set -as terminal-features 'foot*:sixel'" "$ALONE"
+              grep -F "set -as terminal-features 'xterm-ghostty*:RGB:extkeys'" "$BOTH"
+              grep -F "set -as terminal-features 'foot*:sixel'" "$BOTH"
+              grep -F "set -as terminal-features 'wezterm*:sixel'" "$BOTH"
+              touch $out
+            '';
+
           default-size-conf-assertions =
             pkgs.runCommand "default-size-conf-assertions" {
               nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];

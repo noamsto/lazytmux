@@ -143,6 +143,7 @@ func main() {
 	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
 	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
 	term := flag.String("term", os.Getenv("LZTMUX_BRIDGE_TERM"), "termname to advertise to the remote (steers the remote viewer's graphics backend)")
+	termfeatures := flag.String("termfeatures", os.Getenv("LZTMUX_BRIDGE_TERMFEATURES"), "raw #{client_termfeatures} of the client that will paint (gates the sixel relay)")
 	// A genuinely empty value must stay empty (and be omitted by
 	// sshControlArgs' if-non-empty guard) rather than default to "truecolor",
 	// since that would be indistinguishable from a real client that has none.
@@ -150,6 +151,7 @@ func main() {
 	termProgram := flag.String("term-program", os.Getenv("LZTMUX_BRIDGE_TERM_PROGRAM"), "TERM_PROGRAM to advertise to the remote (#543)")
 	cacheDir := flag.String("gfx-cache", envDefault("LZTMUX_BRIDGE_GFX_CACHE", filepath.Join(os.TempDir(), "lztmux-gfx")), "local cache dir for images fetched from the remote")
 	gfxMax := flag.Int64("gfx-max-bytes", 8<<20, "largest single image fetched from the remote; bigger stores are dropped")
+	gfxRelayMaxBytes := flag.Int64("gfx-relay-max-bytes", graphics.DefaultRasterHold, "byte budget for holding a partial sixel meant for relay; bigger holds are dropped")
 	localTmux := flag.String("local-tmux", envDefault("LZTMUX_DAEMON_LOCAL_TMUX", "tmux"), "local tmux binary (may carry args, e.g. \"tmux -L sock\")")
 	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
 	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
@@ -318,6 +320,11 @@ func main() {
 		}
 	}
 
+	// Computed once (R6): this is the single value that both gates the local
+	// relay drop policy (via NewGraphics, below) and is published to the
+	// remote session (daemon.Run), so the two can never disagree.
+	relay := graphics.RelayFromTermFeatures(*termfeatures)
+
 	cfg := daemon.Config{
 		Dial:           dial,
 		Shutdown:       stop,
@@ -335,21 +342,34 @@ func main() {
 		LocalPanes:     panes,
 		HandOff:        handOff,
 		PasteUpload:    pasteUpload,
-		NewGraphics: func(string) *graphics.Proxy {
-			if ctlSock == "" {
-				return nil // --test-local / local-tmux transport: no remote filesystem
-			}
-			return graphics.New(
-				graphics.NewSSHFetcher(*host, ctlSock, *cacheDir, *gfxMax),
-				func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) },
-			)
-		},
+		Relay:          relay,
+		NewGraphics:    newGraphics(ctlSock, *host, *cacheDir, *gfxMax, relay, *gfxRelayMaxBytes),
 	}
 
 	err := daemon.Run(cfg)
 	cleanup()
 	if err != nil {
 		fatal(err)
+	}
+}
+
+// newGraphics builds the Config.NewGraphics closure. A proxy is placed on
+// EVERY transport (R8): ctlSock is the only thing that distinguishes the two
+// branches — an ssh control socket means a real remote filesystem exists to
+// fetch kitty images from, so that branch gets the full localising proxy;
+// --test-local / -ssh "" has no remote filesystem, so loc stays nil and the
+// proxy runs relay-only (R7) — raster policy only, kitty forwarded
+// byte-identically. rel and hold are the same values on both branches: the
+// relay value must never be what tells the branches apart, or sixel relay
+// would work only under --test-local and be dead on every real transport.
+func newGraphics(ctlSock, host, cacheDir string, gfxMax int64, rel graphics.Relay, hold int64) func(string) *graphics.Proxy {
+	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
+	return func(string) *graphics.Proxy {
+		var loc graphics.Localizer
+		if ctlSock != "" {
+			loc = graphics.NewSSHFetcher(host, ctlSock, cacheDir, gfxMax)
+		}
+		return graphics.NewRelay(loc, logf, rel, hold)
 	}
 }
 

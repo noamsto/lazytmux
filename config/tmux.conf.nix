@@ -11,6 +11,9 @@
   # When set, adds a terminal-features line for RGB true-color + extended keys.
   # Null when no emulator preset is active (manual terminal config).
   terminalTerm ? null,
+  # TERM strings of terminals that can paint sixel (e.g. "foot", "wezterm").
+  # Each entry emits a terminal-features line enabling sixel for that TERM.
+  sixelTerminals ? [],
   # Additional tmux config text appended verbatim at the end of the generated
   # tmux.conf. Used by the home-manager module to inject opt-in features
   # (e.g. tmux-remux hooks/keybindings) without polluting the base config.
@@ -588,7 +591,10 @@
   # Pattern uses a wildcard suffix to match version variants (e.g. "xterm-ghostty*").
   terminalConfig =
     lib.optionalString (terminalTerm != null)
-    "set -as terminal-features '${terminalTerm}*:RGB:extkeys'\n    ";
+    "set -as terminal-features '${terminalTerm}*:RGB:extkeys'\n    "
+    + lib.concatMapStrings
+    (term: "set -as terminal-features '${term}*:sixel'\n    ")
+    sixelTerminals;
 
   # default-shell line, emitted only when a shell path is configured.
   defaultShellConfig =

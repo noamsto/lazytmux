@@ -55,3 +55,26 @@ func countSub(s, sub string) int {
 	}
 	return n
 }
+
+// Chunk.Raw is the verbatim input, which is what a consumer forwarding a
+// sequence unchanged must use. Re-encoding is not equivalent: Encode renders
+// the canonical bare form and EncodeWrapped always adds a wrapper, so a bare
+// input round-tripped through either comes out different bytes.
+func TestChunkRawIsTheVerbatimInput(t *testing.T) {
+	for _, in := range []string{bareSeq, wrappedSeq} {
+		c := NewScanner().Feed([]byte("lead" + in + "trail"))[1]
+		if c.Seq == nil {
+			t.Fatalf("input %q did not decode", in)
+		}
+		if got := string(c.Raw); got != in {
+			t.Fatalf("Raw = %q, want byte-identical %q", got, in)
+		}
+	}
+	// The wrapped case is the one that matters: its Raw and its canonical
+	// encoding genuinely differ, so a test that only checked the bare form
+	// would pass against a Raw built by re-encoding.
+	c := NewScanner().Feed([]byte(wrappedSeq))[0]
+	if string(c.Raw) == string(c.Seq.Encode()) {
+		t.Fatal("wrapped Raw equals the canonical bare encoding — Raw is not verbatim")
+	}
+}

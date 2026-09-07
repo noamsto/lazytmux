@@ -416,13 +416,64 @@ option.
   The remote half is `-w`, not `-p`: pane options inherit from the window's, so
   one command covers panes the remote splits later — which the carousel always
   is.
-- **The proxy** scans kitty APCs out of the stream (bare and `\ePtmux;`-wrapped),
-  rewrites `t=f`/`t=t` payloads to a locally-fetched copy, drops `t=s` and any
-  fetch it cannot satisfy (a stale path renders the *wrong* image; a blank one
-  self-heals), and re-wraps exactly once for the local tmux. `t=t` ("transmit,
-  then delete") is downgraded to `t=f` on localisation — the payload now names
-  our local cache copy, and honouring the sender's delete-after-read would
-  have the local terminal unlink what the fetcher just wrote.
+- **The proxy's kitty path** scans kitty APCs out of the stream (bare and
+  `\ePtmux;`-wrapped), rewrites `t=f`/`t=t` payloads to a locally-fetched copy,
+  drops `t=s` and any fetch it cannot satisfy (a stale path renders the
+  *wrong* image; a blank one self-heals), and re-wraps exactly once for the
+  local tmux. `t=t` ("transmit, then delete") is downgraded to `t=f` on
+  localisation — the payload now names our local cache copy, and honouring
+  the sender's delete-after-read would have the local terminal unlink what
+  the fetcher just wrote.
+- **A complete bare sixel is relayed byte-for-byte, never re-wrapped in a
+  passthrough.** tmux itself parses sixel — `tty_cmd_sixelimage` clamps it to
+  the pane and positions it at the pane's cursor — while the passthrough sink
+  `tty_cmd_rawstring` does neither, so a wrapped sixel would land wherever
+  tmux last left the real cursor, unclipped, and be destroyed by the next
+  redraw. Relaying means forwarding unchanged; a `\ePtmux;`-wrapped sixel
+  keeps today's drop for exactly that reason.
+- **The gate is the local client's own `sixel` terminal-feature**
+  (`client_termfeatures`, read from the invoking client, never a bare
+  `display-message`) — deliberately tmux's own render condition, so lazytmux
+  and tmux can never disagree about which images paint. Anything narrower
+  relays images tmux only draws as a `SIXEL IMAGE (WxH)` placeholder (#319's
+  symptom). tmux enables `sixel` for no terminal by default, so
+  `programs.lazytmux.sixelTerminals` (a list of TERM strings, each getting a
+  `*` suffix) is what emits `set -as terminal-features '<term>*:sixel'`.
+- **The capability is published to the remote** as `LZTMUX_RELAY_GRAPHICS`
+  (`sixel` or empty) in the bridged remote **session**'s environment via
+  control-mode `set-environment` — the same value that gates the local drop,
+  computed once, so the remote can never emit what we'd drop nor withhold
+  what we'd relay. Unset on teardown, but the dominant teardown path is
+  SIGTERM, where the transport is already gone and the unset does not land —
+  a stale value is then corrected only by the next bridge's unconditional
+  write, and a direct attach to that remote session in the gap can read it.
+- **OSC 1337's inline-image verb (`\x1b]1337;File=`) is recognised and
+  dropped, whole or partial — never relayed.** Structurally impossible: tmux
+  has no inline-image handling, so the only route out is a passthrough, and
+  `tty_cmd_rawstring` positions and clips nothing, the same failure mode as a
+  wrapped sixel. No capability is lost — foot, WezTerm and iTerm2 all speak
+  sixel, so the sixel path already covers the named set. Only the
+  inline-image verb is scoped in: the rest of the OSC 1337 namespace
+  (`CurrentDir=`, `SetUserVar=`, `RemoteHost=`), which a remote shell emits
+  routinely, still forwards verbatim.
+- **A truncated sequence is dropped unconditionally, regardless of relay
+  policy** — policy governs complete sequences only, the #319 invariant.
+  Overflow now enters a discard-to-next-ESC state rather than emitting the
+  tail as text: a sixel body contains no ESC, so the discard ends exactly at
+  the corrupt image and cannot latch onto later output.
+- **A sixel does not survive a bridge reseed.** `capture-pane` returns text,
+  so a reseed loses the image as it loses any non-text cell content; the
+  kitty path's `retain`/`Replay` doesn't apply here — a kitty placement is
+  position-independent, while a sixel is painted at the cursor the sender
+  left, so replaying one after a reseed would paint it in the wrong place.
+  The image returns on the viewer's next repaint.
+- **Sixel over the bridge is megabytes per repaint**, not the short path
+  kitty's `t=f` sends — a real cost, not parity with kitty. A sink frame
+  dropped under that burst truncates the sequence, which the
+  discard-to-next-ESC and `reseedDropped` paths repair.
+- The once-per-pane "client has no sixel terminal-feature" diagnostic lands
+  on `${sock}.log`, the daemon's stderr file the launcher redirects to — named
+  here because a user cannot be expected to know it exists.
 - **Fetches** ride the daemon's own ssh `ControlMaster` socket, so they never
   share the control stream with live terminal output. Cache key is
   `(path, mtime, size)` — mtime matters, since viewers rewrite scratch frames

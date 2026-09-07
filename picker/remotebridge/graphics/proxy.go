@@ -40,6 +40,22 @@ type Proxy struct {
 	// after a mirror re-seed restores placeholders without the store APC.
 	retain map[string][]byte
 	order  []string // oldest-to-newest ids; drives Replay order and LRU eviction
+
+	rel Relay
+	// relayOnly is set only by NewRelay when it is handed no Localizer (R7).
+	// A full proxy placed on a same-machine transport would change four
+	// kitty behaviours no identity Localizer neutralises: t=s would start
+	// being dropped though shared memory is genuinely reachable there; t=t
+	// would be rewritten to t=f, leaking the sender's own temp file; a bare
+	// APC would gain a \ePtmux; wrapper it never had; and Coalesce would
+	// discard stores that reach the terminal today. relayOnly mode instead
+	// applies the raster policy (below) and nothing else: kitty sequences
+	// forward byte-identically from Chunk.Raw and Coalesce does not run.
+	relayOnly bool
+	// loggedRelayOff latches the "no sixel capability" drop log to once per
+	// pane — a viewer repaints at frame rate, so a per-sequence line at
+	// multi-MB rates is spam.
+	loggedRelayOff bool
 }
 
 func New(loc Localizer, logf func(format string, args ...any)) *Proxy {
@@ -56,29 +72,85 @@ func New(loc Localizer, logf func(format string, args ...any)) *Proxy {
 	}
 }
 
+// NewRelay creates a Proxy with the raster relay policy enabled: rel gates a
+// complete bare sixel (R1) and hold is the byte budget for holding one meant
+// for relay (R4), handed to the scanner via SetRasterHold. With relay off
+// (rel.Sixel() false) the scanner keeps its 64 KiB non-relay default — the
+// budget is spent only on a sequence this proxy intends to relay.
+//
+// loc == nil means relay-only mode (R7); see the relayOnly field doc.
+func NewRelay(loc Localizer, logf func(format string, args ...any), rel Relay, hold int64) *Proxy {
+	p := New(loc, logf)
+	p.rel = rel
+	p.relayOnly = loc == nil
+	if rel.Sixel() {
+		p.sc.SetRasterHold(int(hold))
+	}
+	return p
+}
+
 // Filter returns the bytes to forward to the renderer. An incomplete trailing
 // sequence is held until the next call.
 func (p *Proxy) Filter(data []byte) []byte {
-	before := p.sc.Malformed
-	chunks := Coalesce(p.sc.Feed(data))
-	if n := p.sc.Malformed - before; n > 0 {
+	beforeMalformed := p.sc.Malformed
+	beforeInline := p.sc.InlineImage
+	chunks := p.sc.Feed(data)
+	if !p.relayOnly {
+		// Relay-only mode never coalesces (R7): a same-machine transport
+		// reaches the terminal directly, so dropping a frame Coalesce judges
+		// superseded would discard a store that arrives today.
+		chunks = Coalesce(chunks)
+	}
+	if n := p.sc.Malformed - beforeMalformed; n > 0 {
 		// Never reaches the per-sequence log below, because a scanner drop
 		// yields no chunk at all: this is the scanner refusing to forward a
 		// kitty sequence it could not decode whole. No legitimate sender emits
 		// one, so it is worth a line.
 		p.logf("graphics: dropped %d undecodable kitty sequence(s)", n)
 	}
-	// One deadline for the whole batch's fetches. D4's guarantee is unchanged
-	// — a store still never trails the placements referencing it — but the
-	// batch as a whole is what the timeout bounds, and the fetches run
-	// concurrently when the localizer supports it.
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
-	defer cancel()
-	outcomes := p.fetchBatch(ctx, chunks)
+	if n := p.sc.InlineImage - beforeInline; n > 0 {
+		// Same reasoning as Malformed above: an OSC 1337 File= drop (R3)
+		// yields no chunk either, so this is the only place it can be seen.
+		p.logf("graphics: dropped %d inline image sequence(s) (OSC 1337 File=)", n)
+	}
+
+	var outcomes map[string]fetchOutcome
+	if !p.relayOnly {
+		// One deadline for the whole batch's fetches. D4's guarantee is
+		// unchanged — a store still never trails the placements referencing
+		// it — but the batch as a whole is what the timeout bounds, and the
+		// fetches run concurrently when the localizer supports it.
+		ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+		outcomes = p.fetchBatch(ctx, chunks)
+		cancel()
+	}
 	var out []byte
 	for _, c := range chunks {
-		if c.Seq == nil {
+		switch {
+		case c.Raster != nil:
+			// A sixel is cursor-positioned, so it is forwarded bare or
+			// dropped — never EncodeWrapped, never retained for Replay: a
+			// replay after a reseed would paint it at the wrong place.
+			if p.rel.Sixel() {
+				out = append(out, c.Raster...)
+			} else if !p.loggedRelayOff {
+				p.loggedRelayOff = true
+				p.logf("graphics: dropping sixel(s) — client_termfeatures=%q has no sixel terminal-feature", p.rel.raw)
+			}
+			continue
+		case c.Seq == nil:
 			out = append(out, c.Literal...)
+			continue
+		case p.relayOnly:
+			// Relay-only (R7): forward a kitty sequence byte-identically
+			// from its verbatim input bytes — bare or \ePtmux;-wrapped, as
+			// received. No Rewrite/EncodeWrapped/retain, so t=s and t=t
+			// cross unchanged instead of being dropped or rewritten. The one
+			// exception to "byte-identical": an APC the scanner classified
+			// dropMalformed is consumed upstream and never reaches here as a
+			// chunk at all, so relay-only mode does not forward it either —
+			// that is the #319-class protection, not a gap in this guarantee.
+			out = append(out, c.Raw...)
 			continue
 		}
 		q, drop, err := rewrite(c.Seq, func(remote string) (string, error) {

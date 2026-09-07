@@ -458,12 +458,25 @@ export LZTMUX_DAEMON_REFLOW="$reflow"
 # whatever a later home-manager switch left on PATH (#336).
 export LZTMUX_DAEMON_REMOTE_OPEN="${BASH_SOURCE[0]}"
 
-# The remote viewer picks its graphics backend from #{client_termname}, which is
-# whatever the daemon's ssh advertises — so hand it the termname of the terminal
-# that will actually paint the pixels. Empty (no client) is fine: the remote then
-# falls back to block art, which renders anywhere.
-term="$(tmux display-message -p '#{client_termname}')"
+# The remote viewer picks its graphics backend from #{client_termname} and
+# #{client_termfeatures}, which are whatever the daemon's ssh advertises — so
+# hand it the identity of the terminal that will actually paint the pixels.
+# Empty (no client, or a control-mode client — client_termfeatures is always
+# empty for one) is fine: the remote then falls back to block art, which
+# renders anywhere. A bare `display-message` with no -t falls back to the
+# server's most-recently-used session, not necessarily this process's own
+# pane — wrong on any server with more than one attached client — so target
+# $TMUX_PANE explicitly, like initial_mirror_area() above already does.
+term_target=()
+[[ -n ${TMUX_PANE:-} ]] && term_target=(-t "$TMUX_PANE")
+# Guarded like the cur_sess read below: now that this targets a specific pane
+# it can fail on a stale $TMUX_PANE, and an empty identity is a valid answer
+# (block art everywhere) rather than a reason to abort the launch.
+term_raw="$(tmux display-message -p "${term_target[@]}" '#{client_termname}|#{client_termfeatures}' 2>/dev/null || true)"
+term="${term_raw%%|*}"
+termfeatures="${term_raw#*|}"
 export LZTMUX_BRIDGE_TERM="$term"
+export LZTMUX_BRIDGE_TERMFEATURES="$termfeatures"
 
 # COLORTERM/TERM_PROGRAM (#543) ride into the INVOKING client's session via
 # update-environment on attach (config/tmux.conf.nix), the same channel

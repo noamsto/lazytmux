@@ -13,15 +13,18 @@ type Seq struct {
 	Wrapped bool
 }
 
-// dropReason says why decodeSeq consumed bytes without yielding a sequence.
-// Two very different things used to share one bool, which is the conflation
-// that let a partly-decoded store be forwarded as though it were none of ours.
+// dropReason says how decodeSeq disposed of the bytes it consumed without
+// yielding a Seq. Two very different things used to share one bool, which is
+// the conflation that let a partly-decoded store be forwarded as though it were
+// none of ours.
 type dropReason int
 
 const (
-	dropNone      dropReason = iota // not a drop
-	dropSixel                       // sixel over the bridge is a non-goal
-	dropMalformed                   // ours, but we could not decode it whole
+	dropNone        dropReason = iota // not a drop
+	dropSixel                         // a passthrough-wrapped sixel: not relayable
+	dropMalformed                     // ours, but we could not decode it whole
+	keepRaster                        // a complete BARE sixel: report b[:n] verbatim
+	dropInlineImage                   // an OSC 1337 File= sequence (R3): never relayable
 )
 
 // decodeSeq decodes the sequence at the head of b:
@@ -30,8 +33,10 @@ const (
 //	seq == nil, n > 0, dropNone      — a COMPLETE sequence that isn't ours (a
 //	                                   passthrough carrying something else, e.g.
 //	                                   OSC 52); forward b[:n] verbatim
-//	seq == nil, n > 0, dropSixel     — a complete sixel DCS (bare or wrapped);
+//	seq == nil, n > 0, dropSixel     — a complete passthrough-WRAPPED sixel;
 //	                                   consume n and emit nothing
+//	seq == nil, n > 0, keepRaster    — a complete BARE sixel; consume n and
+//	                                   report b[:n] verbatim as Chunk.Raster
 //	seq == nil, n > 0, dropMalformed — a kitty APC we could not decode whole;
 //	                                   consume n and emit nothing (see the
 //	                                   wrapped branch for why forwarding is
@@ -42,7 +47,14 @@ const (
 // bool. "Not complete yet" and "complete, but not mine" both mean "no sequence
 // here", but conflating them stalls the pane: a clipboard escape would hold
 // every later byte behind it until the partial cap or Flush.
-func decodeSeq(b []byte) (*Seq, int, dropReason) {
+//
+// resume is the ST-search offset carried over from a previous Feed of the same
+// held sequence (rasterResumeFor). Only the bare-sixel branch honours it, and
+// only that branch ever sets it; 0 means search from the head.
+func decodeSeq(b []byte, resume int) (*Seq, int, dropReason) {
+	if bytes.HasPrefix(b, []byte(oscIntro)) {
+		return decodeOSC1337(b)
+	}
 	if bytes.HasPrefix(b, []byte(passStart)) {
 		inner, n, ok := unwrapPassthrough(b)
 		if !ok {
@@ -88,11 +100,11 @@ func decodeSeq(b []byte) (*Seq, int, dropReason) {
 		return q, n, dropNone
 	}
 	if isSixelPrefix(b) {
-		n, complete := consumeBareSixel(b)
+		n, complete := consumeBareSixel(b, resume)
 		if !complete {
 			return nil, 0, dropNone
 		}
-		return nil, n, dropSixel
+		return nil, n, keepRaster
 	}
 	// Feed only calls this at an indexSeqStart hit, so a head that isn't a
 	// passthrough or sixel is an apcStart. decodeBare can fail for want of
@@ -219,7 +231,12 @@ func isSixelPrefix(b []byte) bool {
 
 // consumeBareSixel returns the length of a complete bare sixel DCS at the head
 // of b. complete is false when the ST has not arrived yet (caller holds).
-func consumeBareSixel(b []byte) (n int, complete bool) {
+//
+// resume skips the body a previous Feed of this same hold already searched (see
+// rasterResumeFor); it is a floor on the search start, never a substitute for
+// the header walk, since a resume smaller than the header must not read the
+// introducer's own bytes as body.
+func consumeBareSixel(b []byte, resume int) (n int, complete bool) {
 	if !isConfirmedSixelHead(b) {
 		// Incomplete header (`\eP` / `\eP0;1`) — still a sixel prefix, hold.
 		return 0, false
@@ -229,24 +246,57 @@ func consumeBareSixel(b []byte) (n int, complete bool) {
 		j++
 	}
 	// j points at 'q'.
-	end := bytes.Index(b[j+1:], []byte(st))
+	from := j + 1
+	if resume > from {
+		from = resume
+	}
+	end := bytes.Index(b[from:], []byte(st))
 	if end < 0 {
 		return 0, false
 	}
-	return j + 1 + end + len(st), true
+	return from + end + len(st), true
+}
+
+// rasterResumeFor is how far into a held bare partial sixel the ST search has
+// already reached: everything but the trailing len(st)-1 bytes, which a
+// terminator straddling the Feed boundary needs re-examined.
+//
+// Only this hold gets a resume. It is the only one whose budget is measured in
+// megabytes (Scanner.holdLimit), and a %output line arriving every few
+// kilobytes made re-scanning it from byte 0 quadratic in the raster's size — on
+// the pane's own pump goroutine, so the pane froze and the sink dropped the
+// frames carrying the rest of the very image being assembled. Every other hold
+// is bounded by maxPartial and is re-scanned whole.
+func rasterResumeFor(b []byte) int {
+	if !isConfirmedSixelHead(b) {
+		return 0
+	}
+	if n := len(b) - (len(st) - 1); n > 0 {
+		return n
+	}
+	return 0
 }
 
 // isPartialSixel reports whether held/overflow bytes are a sixel in progress
 // (bare, or a passthrough whose undoubled payload so far is sixel-headed).
-// Those must be dropped on Flush / maxPartial rather than forwarded.
-func isPartialSixel(b []byte) bool {
+// Those must be dropped on Flush / hold-budget overflow rather than forwarded.
+func isPartialSixel(b []byte) bool { return partialSixelDiscard(b) != discardOff }
+
+// partialSixelDiscard classifies a partial sixel by the discard mode its tail
+// needs. The two forms differ only in their terminator: a bare sixel ends at a
+// lone ST, while a wrapped one doubles its payload's ESCs and ends at the
+// wrapper's own lone ST.
+func partialSixelDiscard(b []byte) discardMode {
+	if bytes.HasPrefix(b, []byte(passStart)) {
+		if isSixelPrefix(peekPassthroughInner(b)) {
+			return discardWrapped
+		}
+		return discardOff
+	}
 	if isSixelPrefix(b) {
-		return true
+		return discardBare
 	}
-	if !bytes.HasPrefix(b, []byte(passStart)) {
-		return false
-	}
-	return isSixelPrefix(peekPassthroughInner(b))
+	return discardOff
 }
 
 // peekPassthroughInner undoubles ESC pairs inside a `\ePtmux;…` wrapper, like
@@ -331,3 +381,83 @@ func isStore(q *Seq) bool {
 
 // isDelete reports whether q deletes an image by id.
 func isDelete(q *Seq) bool { return q.Get("a") == "d" && q.Get("i") != "" }
+
+// decodeOSC1337 decodes the OSC introducer at the head of b (\x1b]), which
+// indexOSC1337Start has already confirmed is either a still-resolving or a
+// confirmed \x1b]1337;File= (R3) — every other OSC 1337 verb, and every other
+// OSC, is ruled out before this is ever called and flows through the ordinary
+// literal scan instead.
+//
+// Bare form only. Unlike sixel, a \ePtmux;-wrapped File= needs nothing: a
+// truncated payload inside a passthrough is swallowed whole by tmux's DCS
+// parser rather than painted, so there is no text-leak path to close here.
+func decodeOSC1337(b []byte) (*Seq, int, dropReason) {
+	if !oscFileConfirmed(b) {
+		// Still short of the 12-byte discriminator; indexOSC1337Start only
+		// stops here when every byte seen so far still matches.
+		return nil, 0, dropNone
+	}
+	body := b[len(osc1337FilePrefix):]
+	n, kind := scanOSCExit(body)
+	if kind == oscNotFound || kind == oscPending {
+		return nil, 0, dropNone
+	}
+	return nil, len(osc1337FilePrefix) + n, dropInlineImage
+}
+
+// oscFileViable reports whether b, read from an "\x1b]" start, could still
+// become — or already is — \x1b]1337;File=: every byte available so far
+// matches the discriminator. Used both to decide whether indexOSC1337Start
+// should stop at a candidate, and whether a held or overflowed span is this
+// sequence rather than ordinary OSC text.
+func oscFileViable(b []byte) bool {
+	n := len(osc1337FilePrefix)
+	if len(b) < n {
+		n = len(b)
+	}
+	return bytes.Equal(b[:n], []byte(osc1337FilePrefix)[:n])
+}
+
+// oscFileConfirmed reports whether b begins with the full 12-byte
+// \x1b]1337;File= discriminator.
+func oscFileConfirmed(b []byte) bool {
+	return len(b) >= len(osc1337FilePrefix) && bytes.HasPrefix(b, []byte(osc1337FilePrefix))
+}
+
+// oscExit classifies how scanOSCExit ended.
+type oscExit int
+
+const (
+	oscNotFound   oscExit = iota // no exit byte found in the scanned span
+	oscPending                   // a trailing ESC with nothing after it yet
+	oscTerminator                // ST or BEL: consumed with the sequence
+	oscAbort                     // CAN/SUB: consumed with the sequence
+	oscIntroducer                // a bare ESC: not consumed, introduces what follows
+)
+
+// scanOSCExit finds the first OSC exit in b, per keyneg's regionOSC
+// classification (strip.go): ST (\x1b\\), BEL, CAN, or SUB terminate or abort
+// the region and are consumed; any other ESC introduces whatever follows and
+// is left for the caller, never consumed. n is the number of bytes the exit
+// accounts for — through the exit byte(s) when consumed, or up to (not
+// including) a bare ESC.
+func scanOSCExit(b []byte) (n int, kind oscExit) {
+	i := bytes.IndexAny(b, "\x07\x18\x1a\x1b")
+	if i < 0 {
+		return len(b), oscNotFound
+	}
+	switch b[i] {
+	case bel:
+		return i + 1, oscTerminator
+	case can, sub:
+		return i + 1, oscAbort
+	default: // esc
+		if i+1 >= len(b) {
+			return i, oscPending
+		}
+		if b[i+1] == '\\' {
+			return i + 2, oscTerminator
+		}
+		return i, oscIntroducer
+	}
+}

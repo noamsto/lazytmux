@@ -139,6 +139,7 @@
       if emulatorCfg != null
       then emulatorCfg.term
       else null;
+    inherit (cfg) sixelTerminals;
     extraConfText = tmuxStateConf + cfg.extraConfig;
     enrichEnable = cfg.enrich.enable;
     enrichProviders = cfg.enrich.providers;
@@ -259,6 +260,20 @@ in {
       default = {};
       example = lib.literalExpression ''{ "my-app" = "⚡"; }'';
       description = "Extra process name → icon mappings. Overrides built-in defaults on collision.";
+    };
+
+    sixelTerminals = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      example = ["foot" "wezterm"];
+      description = ''
+        TERM strings of outer terminal emulators that can paint sixel (e.g.
+        foot, WezTerm, iTerm2). Each entry gets a `*` suffix appended and emits
+        a terminal-features line enabling sixel for that TERM — write
+        `[ "foot" ]`, not `[ "foot*" ]`, or the pattern doubles to `foot**`.
+        An entry containing a single quote breaks the generated line, the same
+        exposure `extraConfig` already has.
+      '';
     };
 
     extraConfig = lib.mkOption {

@@ -76,6 +76,35 @@ func WriteFrame(w io.Writer, t FrameType, payload []byte) error {
 // seed/output frame.
 const maxFrameSize = 16 << 20 // 16 MiB
 
+// WriteStream emits payload as one or more frames, splitting only when it
+// exceeds maxFrameSize (each resulting frame then strictly below it), in
+// order. The renderer writes FrameSeed/FrameOutput payloads verbatim and in
+// order (render/renderer.go), so splitting a byte-stream payload across
+// frames and concatenating them back at the reader is byte-identical at the
+// pty. Only FrameOutput and FrameSeed carry a plain byte stream that
+// tolerates this: FrameCtl packs NUL-separated argv and FrameResize/
+// FrameHello carry structured payloads, and cutting either of those
+// mid-payload corrupts it, so any other type is rejected outright.
+func WriteStream(w io.Writer, t FrameType, payload []byte) error {
+	if t != FrameOutput && t != FrameSeed {
+		return fmt.Errorf("wire: WriteStream: frame type %d cannot be split", t)
+	}
+	if len(payload) <= maxFrameSize {
+		return WriteFrame(w, t, payload)
+	}
+	for len(payload) > 0 {
+		n := len(payload)
+		if n >= maxFrameSize {
+			n = maxFrameSize - 1
+		}
+		if err := WriteFrame(w, t, payload[:n]); err != nil {
+			return err
+		}
+		payload = payload[n:]
+	}
+	return nil
+}
+
 func ReadFrame(r io.Reader) (Frame, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {

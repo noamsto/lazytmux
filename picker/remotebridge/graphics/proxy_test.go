@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"path"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/noamsto/lazytmux/picker/remotebridge/keyneg"
 )
 
 func TestProxyRewritesAndWrapsInOnePass(t *testing.T) {
@@ -338,5 +341,97 @@ func TestProxyRetentionCapEvictsOldestID(t *testing.T) {
 	}
 	if countSub(replay, passStart) != 2 {
 		t.Fatalf("Replay() = %q, want two retained stores", replay)
+	}
+}
+
+// The gate on and off against the same input (R1/R6): a complete bare sixel
+// forwarded when the local client carries the sixel terminal-feature, dropped
+// otherwise.
+func TestProxyRelayGateForwardsOrDropsSixel(t *testing.T) {
+	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+	t.Run("gate on forwards it bare", func(t *testing.T) {
+		p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("bpaste,sixel"), DefaultRasterHold)
+		if got := string(p.Filter([]byte("x" + sixel + "y"))); got != "x"+sixel+"y" {
+			t.Fatalf("out = %q, want the sixel forwarded bare", got)
+		}
+	})
+	t.Run("gate off drops it", func(t *testing.T) {
+		p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("bpaste"), DefaultRasterHold)
+		if got := string(p.Filter([]byte("x" + sixel + "y"))); got != "xy" {
+			t.Fatalf("out = %q, want the sixel dropped", got)
+		}
+	})
+}
+
+// A raster chunk must never end up in Replay() output (spec non-goal): it is
+// cursor-positioned, and replaying one after a reseed would paint it wrong.
+func TestProxyRasterNeverRetainedForReplay(t *testing.T) {
+	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+	p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("sixel"), DefaultRasterHold)
+	if got := string(p.Filter([]byte(sixel))); got != sixel {
+		t.Fatalf("out = %q, want the sixel forwarded", got)
+	}
+	if got := p.Replay(); len(got) != 0 {
+		t.Fatalf("Replay() = %q, want a raster never retained", got)
+	}
+}
+
+// The relay-off drop log fires once per pane, not once per sequence — a
+// viewer repaints at frame rate, so a per-sequence line at multi-MB rates is
+// spam.
+func TestProxyRelayOffLogsSixelDropOncePerPane(t *testing.T) {
+	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+	var logged int
+	p := NewRelay(&fakeLocalizer{}, func(string, ...any) { logged++ }, Relay{}, 0)
+	p.Filter([]byte(sixel + sixel + sixel))
+	if logged != 1 {
+		t.Fatalf("logged = %d after one batch of 3 sixels, want 1", logged)
+	}
+	p.Filter([]byte(sixel))
+	if logged != 1 {
+		t.Fatalf("logged = %d after a second batch, want still 1 (once per pane)", logged)
+	}
+}
+
+// Relay-only mode (R7) forwards a well-formed kitty APC byte-identically,
+// bare and \ePtmux;-wrapped, and leaves t=s/t=t untouched — no Rewrite, no
+// EncodeWrapped, no Coalesce, no retain. A dropMalformed APC is the one
+// exception, and is covered separately (it never reaches Filter as a chunk at
+// all, in any mode).
+func TestRelayOnlyForwardsKittyByteIdentically(t *testing.T) {
+	p := NewRelay(nil, nil, Relay{}, 0)
+
+	for _, in := range []string{bareSeq, wrappedSeq} {
+		if got := string(p.Filter([]byte(in))); got != in {
+			t.Fatalf("relay-only mangled a kitty sequence: got %q, want %q", got, in)
+		}
+	}
+
+	tShare := "\x1b_Gi=9,a=T,t=s;AAAA\x1b\\"
+	if got := string(p.Filter([]byte(tShare))); got != tShare {
+		t.Fatalf("t=s mangled in relay-only: got %q, want %q (t=s must not be dropped)", got, tShare)
+	}
+
+	tTransmit := "\x1b_Gi=9,a=T,t=t,f=100;L3RtcC94LnBuZw==\x1b\\"
+	if got := string(p.Filter([]byte(tTransmit))); got != tTransmit {
+		t.Fatalf("t=t rewritten in relay-only: got %q, want %q (must not be rewritten to t=f)", got, tTransmit)
+	}
+}
+
+// R10/R4: a >64 KiB sixel must survive keyneg.Filter.Feed and then
+// graphics.Proxy.Filter byte-identically. keyneg.maxRegion is also 64 KiB, so
+// walkRegion leaves the DCS region mid-body and rescans the remainder as
+// literal — benign, because a sixel body holds no ESC, but the relay path
+// depends on it and nothing pinned it before this test.
+func TestLargeSixelSurvivesKeynegThenProxyFilterByteIdentically(t *testing.T) {
+	body := bytes.Repeat([]byte("~"), 70<<10) // > keyneg.maxRegion and the non-relay 64 KiB bound
+	sixel := "\x1bPq" + string(body) + st
+
+	kf := keyneg.NewFilter()
+	stripped := append(kf.Feed([]byte(sixel)), kf.Flush()...)
+
+	p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("sixel"), DefaultRasterHold)
+	if got := string(p.Filter(stripped)); got != sixel {
+		t.Fatalf("byte mismatch after keyneg+Filter: got %d bytes, want %d bytes", len(got), len(sixel))
 	}
 }
