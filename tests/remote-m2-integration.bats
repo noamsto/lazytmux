@@ -2349,3 +2349,68 @@ transport_child() {
 	[ "$src_dims" = "$dst_dims" ]
 	[ "$dst_screen" = "$src_screen" ]
 }
+
+# #547: tmux's own default binds carry a Respawn item — prefix + < and >, plus
+# both right-click pane menus — and it runs respawn-pane -k. respawn-pane
+# re-runs the pane's COMMAND without the -e environment spawnRenderer wired it
+# with, so the renderer dies at dial ("dial : missing address"), and with the
+# host's remain-on-exit off the pane then closed, taking the window and, for a
+# single-pane mirror, the whole mirror session with it. Two halves: the exit
+# must not be structural, and the corpse it leaves must be repaired — nothing
+# else can find one, since a dead pane is still a pane to list-panes.
+@test "a respawned mirror pane leaves the session standing and the mirror recovers" {
+	# The real host's value, not this suite's: DST_CONF turns remain-on-exit ON
+	# globally so panes outlive daemon exit for the other cases' assertions,
+	# which is exactly what would mask the window stamp under test here.
+	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit off\nset -g renumber-windows on\n' >"$DST_CONF"
+
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 respawn
+
+	# The stamp, against a global that says otherwise — asserting the option
+	# rather than only its effect, since the effect below is also what a lucky
+	# race would produce.
+	[ "$($DST show-options -gv remain-on-exit)" = off ]
+	win="$($DST list-windows -t host-sess -F '#{window_id}' | head -1)"
+	[ "$($DST show-options -wv -t "$win" remain-on-exit)" = on ]
+
+	$DST respawn-pane -k -t host-sess:1.0
+
+	# The regression, checked before the sweep can repair anything: the gesture
+	# used to take the server with it, so this ran against nothing at all.
+	$DST has-session -t '=host-sess'
+	[ "$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)" -eq 1 ]
+
+	# Recovery: a live renderer again, painting live remote output. The window
+	# is a rebuild, so its id is a new one — count the @bridge_win stamp rather
+	# than look for $win.
+	marker="RESPAWNHEAL_$$"
+	healed=no
+	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		$SRC send-keys -t rem "printf '$marker\\n'" Enter
+		for _ in $(seq 1 10); do
+			if mirror_contains 1 "$marker"; then
+				healed=yes
+				break 2
+			fi
+			sleep 0.1
+		done
+	done
+	if [ "$healed" != yes ]; then
+		printf -- '--- DST panes ---\n%s\n--- daemon log ---\n' \
+			"$($DST list-panes -s -t host-sess -F '#{window_id}|#{pane_id}|#{pane_dead}|#{@bridge_pane}' 2>&1)" >&3
+		tail -60 "$BATS_TEST_TMPDIR/respawn.log" >&3 2>/dev/null || true
+	fi
+
+	stamped="$($DST list-windows -t host-sess -F '#{@bridge_win}' | grep -c '^1$')" || stamped=0
+	corpses="$($DST list-panes -s -t host-sess -F '#{pane_dead}' | grep -c '^1$')" || corpses=0
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$healed" = yes ]
+	[ "$stamped" -eq 1 ]
+	[ "$corpses" -eq 0 ]
+}

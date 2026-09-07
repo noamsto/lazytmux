@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// countingCfg answers every listing with wins and counts the local tmux forks.
-func countingCfg(wins string, n *int) Config {
+// countingCfg answers every listing with rows — mirrorPaneListFormat lines,
+// which is what the sweep reads — and counts the local tmux forks.
+func countingCfg(rows string, n *int) Config {
 	var mu sync.Mutex
 	return Config{
 		LocalSess: "host-sess",
@@ -16,7 +17,7 @@ func countingCfg(wins string, n *int) Config {
 			mu.Lock()
 			defer mu.Unlock()
 			*n++
-			return wins, nil
+			return rows, nil
 		},
 	}
 }
@@ -25,7 +26,7 @@ func countingCfg(wins string, n *int) Config {
 // a local tmux client for every line a redrawing pane emits.
 func TestWindowSweeperFloorsRepeatedPasses(t *testing.T) {
 	forks := 0
-	cfg := countingCfg("@0\n@143\n", &forks)
+	cfg := countingCfg("@0|%0|0|%0\n@143|%1|0|%1\n", &forks)
 	reg := newRegistry()
 	reg.add("@1", "@143")
 
@@ -43,19 +44,21 @@ func TestWindowSweeperFloorsRepeatedPasses(t *testing.T) {
 	}
 }
 
-// One listing answers for the whole registry: a fork per entry made the sweep
-// scale with window count.
-func TestHealLostWindowsListsOnceForEveryMirror(t *testing.T) {
+// One listing answers for the whole registry AND for both passes: a fork per
+// entry made the sweep scale with window count, and a fork per pass doubled it
+// (#547). mirrorPaneRows is why both are one read.
+func TestSweepListsOnceForEveryMirrorAndBothPasses(t *testing.T) {
 	forks := 0
-	cfg := countingCfg("@0\n@1\n@2\n@3\n", &forks)
+	cfg := countingCfg("@1|%0|0|%0\n@2|%1|0|%1\n@3|%2|0|%2\n", &forks)
 	reg := newRegistry()
 	reg.add("@10", "@1")
 	reg.add("@11", "@2")
 	reg.add("@12", "@3")
 
-	healLostWindows(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
+	var s windowSweeper
+	s.sweep(cfg, func(string) {}, NewRouter(), noHellos, newCtlState(), reg, newConverger(), emptyRemote())
 
 	if forks != 1 {
-		t.Errorf("local tmux forks = %d for 3 mirror windows, want 1", forks)
+		t.Errorf("local tmux forks = %d for 3 mirror windows over both heal passes, want 1", forks)
 	}
 }
