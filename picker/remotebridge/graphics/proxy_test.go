@@ -2,7 +2,11 @@ package graphics
 
 import (
 	"context"
+	"encoding/base64"
+	"path"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -228,6 +232,83 @@ func (s *seqLocalizer) Localize(context.Context, string) (string, error) {
 	}
 	s.n++
 	return s.locals[i], nil
+}
+
+// batchLocalizer records each LocalizeBatch call's paths and answers
+// local="/local/<basename>".
+type batchLocalizer struct {
+	mu    sync.Mutex
+	calls [][]string
+	err   error
+}
+
+func (b *batchLocalizer) Localize(ctx context.Context, remote string) (string, error) {
+	locals, errs := b.LocalizeBatch(ctx, []string{remote})
+	return locals[0], errs[0]
+}
+
+func (b *batchLocalizer) LocalizeBatch(_ context.Context, remotes []string) ([]string, []error) {
+	b.mu.Lock()
+	b.calls = append(b.calls, append([]string(nil), remotes...))
+	b.mu.Unlock()
+	locals := make([]string, len(remotes))
+	errs := make([]error, len(remotes))
+	for i, r := range remotes {
+		if b.err != nil {
+			errs[i] = b.err
+			continue
+		}
+		locals[i] = "/local/" + path.Base(r)
+	}
+	return locals, errs
+}
+
+func storeSeq(id, remotePath string) string {
+	return "\x1b_Gi=" + id + ",a=T,t=f;" + base64.StdEncoding.EncodeToString([]byte(remotePath)) + "\x1b\\"
+}
+
+// The #556 shape: one batch carrying a preview store plus filmstrip
+// thumbnails must reach the localizer as ONE batch call holding every
+// distinct path, not as N serialized Localize calls.
+func TestProxyFetchesABatchInOneCall(t *testing.T) {
+	loc := &batchLocalizer{}
+	p := New(loc, nil)
+	in := "pre " + storeSeq("1", "/tmp/preview.png") + storeSeq("2", "/tmp/thumb1.png") +
+		storeSeq("3", "/tmp/thumb2.png") + storeSeq("4", "/tmp/thumb1.png") + " post"
+	out := string(p.Filter([]byte(in)))
+	if len(loc.calls) != 1 {
+		t.Fatalf("LocalizeBatch calls = %d, want 1", len(loc.calls))
+	}
+	got := loc.calls[0]
+	want := []string{"/tmp/preview.png", "/tmp/thumb1.png", "/tmp/thumb2.png"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("batch paths = %v, want %v (deduped, in order)", got, want)
+	}
+	if !strings.HasPrefix(out, "pre ") || !strings.HasSuffix(out, " post") {
+		t.Fatalf("literals lost: %q", out)
+	}
+	if countSub(out, passStart) != 4 {
+		t.Fatalf("want all four stores forwarded (the dup re-localised): %q", out)
+	}
+	if !strings.Contains(out, base64.StdEncoding.EncodeToString([]byte("/local/thumb1.png"))) {
+		t.Fatalf("payloads not localised: %q", out)
+	}
+}
+
+// A batch-capable localizer that hangs must still cost the pane only ONE
+// timeout for the whole batch, not one per store.
+func TestProxyBatchSharesOneDeadline(t *testing.T) {
+	loc := &batchLocalizer{err: context.DeadlineExceeded}
+	p := New(loc, nil)
+	p.timeout = 20 * time.Millisecond
+	in := storeSeq("1", "/tmp/a.png") + storeSeq("2", "/tmp/b.png") + storeSeq("3", "/tmp/c.png")
+	start := time.Now()
+	if out := string(p.Filter([]byte(in))); out != "" {
+		t.Fatalf("out = %q, want every store dropped", out)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("Filter held the stream %v for one batch, want ~20ms", d)
+	}
 }
 
 func TestProxyRetentionIsPerInstance(t *testing.T) {

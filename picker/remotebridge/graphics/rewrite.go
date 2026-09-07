@@ -15,6 +15,16 @@ type Localizer interface {
 	Localize(ctx context.Context, remotePath string) (localPath string, err error)
 }
 
+// BatchLocalizer is the Localizer's optional batch form, used by Filter when
+// the localizer provides it: every distinct path one output batch needs,
+// fetched concurrently under the batch's single deadline. A carousel
+// re-transmit stores the preview plus every filmstrip thumbnail in one batch,
+// and fetching those serialized held the pane's stream for N round-trips
+// (#556). locals and errs are indexed parallel to remotes.
+type BatchLocalizer interface {
+	LocalizeBatch(ctx context.Context, remotes []string) (locals []string, errs []error)
+}
+
 // Rewrite applies the localisation policy to one sequence. The returned *Seq
 // is the input pointer in the pass-through case and a fresh copy in the
 // localising case — callers must treat it as read-only either way.
@@ -28,13 +38,20 @@ type Localizer interface {
 // image, where a missing one renders blank and self-heals on the sender's next
 // repaint. A fetch that outruns ctx is just another such failure.
 func Rewrite(ctx context.Context, q *Seq, l Localizer) (out *Seq, drop bool, err error) {
+	return rewrite(q, func(remote string) (string, error) { return l.Localize(ctx, remote) })
+}
+
+// rewrite is the single home of the localisation policy: Rewrite fetches live,
+// the proxy's batch path answers from its prefetch map. The postcondition and
+// the D7 drop rule above govern both.
+func rewrite(q *Seq, localize func(remote string) (string, error)) (out *Seq, drop bool, err error) {
 	switch q.Get("t") {
 	case "f", "t":
 		remote, derr := base64.StdEncoding.DecodeString(string(q.Payload))
 		if derr != nil {
 			return nil, true, fmt.Errorf("payload is not base64: %w", derr)
 		}
-		local, ferr := l.Localize(ctx, string(remote))
+		local, ferr := localize(string(remote))
 		if ferr != nil {
 			return nil, true, fmt.Errorf("localise %s: %w", remote, ferr)
 		}

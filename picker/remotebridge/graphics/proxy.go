@@ -2,13 +2,18 @@ package graphics
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"time"
 )
 
-// fetchTimeout bounds how long one sequence may hold its pane's byte stream.
-// A frozen pane is worse than a missing image (spec D4), so a timeout drops
-// the store down the same path as any other unlocalisable one and the stream
-// resumes.
+// fetchTimeout bounds how long one output batch may hold its pane's byte
+// stream. A frozen pane is worse than a missing image (spec D4), so a timeout
+// drops the batch's unlocalised stores down the same path as any other
+// unlocalisable one and the stream resumes. The budget is per BATCH, not per
+// sequence: a carousel re-transmit stores the preview plus every filmstrip
+// thumbnail in one batch, and a serialized per-sequence budget held the pane
+// for N×timeout on a slow link (#556).
 const fetchTimeout = 2 * time.Second
 
 // retainMaxIDs caps how many distinct kitty image ids one pane's proxy keeps
@@ -63,18 +68,29 @@ func (p *Proxy) Filter(data []byte) []byte {
 		// one, so it is worth a line.
 		p.logf("graphics: dropped %d undecodable kitty sequence(s)", n)
 	}
+	// One deadline for the whole batch's fetches. D4's guarantee is unchanged
+	// — a store still never trails the placements referencing it — but the
+	// batch as a whole is what the timeout bounds, and the fetches run
+	// concurrently when the localizer supports it.
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	outcomes := p.fetchBatch(ctx, chunks)
 	var out []byte
 	for _, c := range chunks {
 		if c.Seq == nil {
 			out = append(out, c.Literal...)
 			continue
 		}
-		// Cancelled per sequence rather than deferred: this loop can run many
-		// sequences in one batch, and a deferred cancel would hold every one of
-		// them until Filter returns.
-		ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
-		q, drop, err := Rewrite(ctx, c.Seq, p.loc)
-		cancel()
+		q, drop, err := rewrite(c.Seq, func(remote string) (string, error) {
+			oc, ok := outcomes[remote]
+			if !ok {
+				// By construction unreachable: fetchBatch covers every
+				// decodable t=f/t=t path in the batch, and rewrite only calls
+				// this for those.
+				return "", fmt.Errorf("graphics: no batch outcome for %s", remote)
+			}
+			return oc.local, oc.err
+		})
 		if drop {
 			if err != nil {
 				p.logf("graphics: dropped i=%s: %v", c.Seq.Get("i"), err)
@@ -103,6 +119,60 @@ func (p *Proxy) Filter(data []byte) []byte {
 		out = append(out, wrapped...)
 	}
 	return out
+}
+
+// fetchOutcome is one path's result in a batch fetch.
+type fetchOutcome struct {
+	local string
+	err   error
+}
+
+// fetchBatch localises every distinct t=f/t=t payload path in the batch in one
+// go — concurrently when the localizer implements BatchLocalizer (the
+// production SSHFetcher does), sequentially under the same shared deadline
+// otherwise. Sequences whose payload is not base64 are skipped here; rewrite's
+// own policy drops them below, which is also what keeps the outcome map
+// complete for every path the rewrite loop can ask about.
+func (p *Proxy) fetchBatch(ctx context.Context, chunks []Chunk) map[string]fetchOutcome {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, c := range chunks {
+		q := c.Seq
+		if q == nil {
+			continue
+		}
+		if t := q.Get("t"); t != "f" && t != "t" {
+			continue
+		}
+		remote, err := base64.StdEncoding.DecodeString(string(q.Payload))
+		if err != nil {
+			continue
+		}
+		if _, dup := seen[string(remote)]; !dup {
+			seen[string(remote)] = struct{}{}
+			paths = append(paths, string(remote))
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	outcomes := make(map[string]fetchOutcome, len(paths))
+	if bl, ok := p.loc.(BatchLocalizer); ok {
+		locals, errs := bl.LocalizeBatch(ctx, paths)
+		for i, path := range paths {
+			outcomes[path] = fetchOutcome{locals[i], errs[i]}
+		}
+		return outcomes
+	}
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			outcomes[path] = fetchOutcome{err: err}
+			continue
+		}
+		local, err := p.loc.Localize(ctx, path)
+		outcomes[path] = fetchOutcome{local, err}
+	}
+	return outcomes
 }
 
 // Replay returns the retained localised stores in oldest-to-newest id order,

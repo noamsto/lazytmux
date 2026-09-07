@@ -48,10 +48,21 @@ type SSHFetcher struct {
 	// kill the ssh process, not merely stop waiting on it.
 	Run func(ctx context.Context, args ...string) ([]byte, error)
 
-	mu      sync.Mutex
-	keys    map[string]string // remote path -> last seen "<mtime> <size>"
-	locals  map[string]string // "<path>\x00<key>" -> local file
-	fetches int
+	// mu guards the maps and the counter — never held across Run, or one slow
+	// fetch would serialize every concurrent one behind it (#556).
+	mu       sync.Mutex
+	keys     map[string]string // remote path -> last seen "<mtime> <size>"
+	locals   map[string]string // "<path>\x00<key>" -> local file
+	inflight map[string]*fetchCall
+	fetches  int
+}
+
+// fetchCall dedups concurrent fetches of the same remote path: the first
+// caller runs the ssh round-trip, the rest wait on done for its outcome.
+type fetchCall struct {
+	done  chan struct{}
+	local string
+	err   error
 }
 
 // NewSSHFetcher builds the production fetcher.
@@ -67,10 +78,67 @@ func NewSSHFetcher(host, ctlSock, cacheDir string, maxBytes int64) *SSHFetcher {
 
 func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.keys == nil {
-		f.keys, f.locals = map[string]string{}, map[string]string{}
+		f.keys, f.locals, f.inflight = map[string]string{}, map[string]string{}, map[string]*fetchCall{}
 	}
+	if c, ok := f.inflight[remote]; ok {
+		f.mu.Unlock()
+		select {
+		case <-c.done:
+			return c.local, c.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	c := &fetchCall{done: make(chan struct{})}
+	f.inflight[remote] = c
+	key := f.keys[remote]
+	f.mu.Unlock()
+
+	local, err := f.fetch(ctx, remote, key)
+
+	f.mu.Lock()
+	delete(f.inflight, remote)
+	c.local, c.err = local, err
+	close(c.done)
+	f.mu.Unlock()
+	return local, err
+}
+
+// maxConcurrentFetches bounds one batch's parallel ssh channels over the
+// ControlMaster — enough to collapse a carousel's re-transmit storm into one
+// round-trip's latency, not so many that the remote forks a shell storm.
+const maxConcurrentFetches = 8
+
+// LocalizeBatch fetches every path concurrently under the batch's shared
+// deadline. locals and errs are indexed parallel to remotes.
+func (f *SSHFetcher) LocalizeBatch(ctx context.Context, remotes []string) ([]string, []error) {
+	locals := make([]string, len(remotes))
+	errs := make([]error, len(remotes))
+	sem := make(chan struct{}, maxConcurrentFetches)
+	var wg sync.WaitGroup
+	for i, remote := range remotes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			locals[i], errs[i] = f.Localize(ctx, remote)
+		}()
+	}
+	wg.Wait()
+	return locals, errs
+}
+
+// fetch runs one ssh round-trip for remote, never holding f.mu. key is the
+// caller's cached "<mtime> <size>" (empty when never fetched); the maps are
+// re-locked for the bookkeeping after the transfer.
+func (f *SSHFetcher) fetch(ctx context.Context, remote, key string) (string, error) {
 	if err := os.MkdirAll(f.CacheDir, 0o700); err != nil {
 		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}
@@ -80,7 +148,7 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 		args = append(args, "-S", f.CtlSock)
 	}
 	args = append(args, "-T", f.Host, "--", "sh", "-c", shQuote(remoteFetch), "_",
-		shQuote(remote), shQuote(f.keys[remote]), strconv.FormatInt(f.MaxBytes, 10))
+		shQuote(remote), shQuote(key), strconv.FormatInt(f.MaxBytes, 10))
 
 	out, err := f.Run(ctx, args...)
 	if err != nil {
@@ -90,18 +158,20 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 	if nl < 0 {
 		return "", fmt.Errorf("fetch %s: no header in reply", remote)
 	}
-	key := strings.TrimSpace(string(out[:nl]))
-	if len(strings.Fields(key)) != 2 {
-		return "", fmt.Errorf("fetch %s: bad header %q", remote, key)
+	hdr := strings.TrimSpace(string(out[:nl]))
+	if len(strings.Fields(hdr)) != 2 {
+		return "", fmt.Errorf("fetch %s: bad header %q", remote, hdr)
 	}
 	body := out[nl+1:]
 
-	ck := remote + "\x00" + key
+	ck := remote + "\x00" + hdr
 	if len(body) == 0 {
 		// The remote skipped the transfer because our cached key matched.
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		if local, ok := f.locals[ck]; ok {
 			if _, statErr := os.Stat(local); statErr == nil {
-				f.keys[remote] = key
+				f.keys[remote] = hdr
 				return local, nil
 			}
 		}
@@ -111,15 +181,19 @@ func (f *SSHFetcher) Localize(ctx context.Context, remote string) (string, error
 		delete(f.keys, remote)
 		return "", fmt.Errorf("fetch %s: cached copy is gone, refetching next time", remote)
 	}
-	f.keys[remote] = key
 
 	sum := sha256.Sum256([]byte(ck))
 	local := filepath.Join(f.CacheDir, hex.EncodeToString(sum[:])[:32]+".bin")
 	if err := os.WriteFile(local, body, 0o600); err != nil {
 		return "", fmt.Errorf("fetch %s: %w", remote, err)
 	}
+	f.mu.Lock()
+	f.keys[remote] = hdr
 	f.locals[ck] = local
-	if f.fetches++; f.fetches%pruneInterval == 0 {
+	f.fetches++
+	prune := f.fetches%pruneInterval == 0
+	f.mu.Unlock()
+	if prune {
 		f.prune()
 	}
 	return local, nil
