@@ -538,6 +538,13 @@ func Run(cfg Config) error {
 		return fmt.Errorf("daemon: remote session %s has no windows", cfg.RemoteSession)
 	}
 
+	// One-shot, here rather than in repair: Run() runs exactly once per bridge,
+	// so this is what makes the report "once per bridge connect" (#545) with no
+	// state of its own to track.
+	if available, checked := themeToggleAvailable(rt, cfg.RemoteSession); checked && !available {
+		notifyThemeMissing(cfg)
+	}
+
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
 	if err != nil {

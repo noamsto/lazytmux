@@ -284,7 +284,10 @@ var verbs = map[string]verb{
 	//
 	// run-shell, not a split: nothing should appear on screen. A remote without
 	// theme-toggle (any headless host — it ships from the desktop profile) is
-	// silent for the same reason.
+	// silent per call — Run()'s one-shot themeToggleAvailable probe (daemon.go)
+	// is what reports the absence, once per bridge connect rather than once per
+	// toggle, since this fire-and-forget verb never learns its own exit status
+	// (#545).
 	"theme": {args: 1, build: func(pane, _, _ string, a []string) ([]string, error) {
 		if !remoteThemes[a[0]] {
 			return nil, fmt.Errorf("theme: unknown theme %q", a[0])
@@ -300,6 +303,24 @@ var verbs = map[string]verb{
 // only wraps. theme is a remoteThemes key, so it needs no quoting of its own.
 func themeApplyScript(theme string) string {
 	return fmt.Sprintf("command -v theme-toggle >/dev/null 2>&1 && exec theme-toggle apply %s", theme)
+}
+
+// themeProbeCmd is the display-message line Run() sends once per bridge
+// connect to tell "no theme-toggle here" apart from "applied" (#545).
+//
+// Deliberately not a run-shell, unlike every other capability probe in this
+// file: run-shell without -b shows its output ON the target pane (a view-mode
+// overlay), and that pane is the one this daemon is about to mirror — the
+// overlay wedges it, so %pause/%continue never fires again and live output
+// stops forever. display-message -p -t sess "#(...)" runs the same POSIX body
+// as a tmux job and returns its stdout in the command's own reply without
+// touching any pane. Tradeoff: a #() job populates asynchronously, so the
+// first read of a fresh job string can come back empty before it has run once
+// — themeToggleAvailable (themeprobe.go) retries for exactly that.
+func themeProbeCmd(sess string) string {
+	script := "command -v theme-toggle >/dev/null 2>&1 && echo yes || echo no"
+	job := "#(/bin/sh -c " + tmuxQuote(script) + ")"
+	return fmt.Sprintf("display-message -p -t %s %s", tmuxQuote(sess), tmuxQuote(job))
 }
 
 // toolResolveScript is the POSIX body run under exec /bin/sh -c: split-window
