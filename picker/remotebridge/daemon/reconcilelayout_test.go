@@ -247,6 +247,7 @@ func TestApplyLayoutShortCircuitsWhenTheFitAlreadyMatched(t *testing.T) {
 func TestApplyLayoutDropsFloatsWhenTheCellsDisagree(t *testing.T) {
 	f := &layoutTmux{windowLayout: localShortLayout}
 	w := mirrorWithFloat()
+	w.appliedZoom = true
 	L := mustLayout(t, tiledFloatLayout)
 
 	if !applyLayout(f.config(), w, L, NewRouter()) {
@@ -265,6 +266,9 @@ func TestApplyLayoutDropsFloatsWhenTheCellsDisagree(t *testing.T) {
 	}
 	if !w.floatsDropped {
 		t.Error("floatsDropped = false; a second applyLayout in the same pass would respawn the renderers again")
+	}
+	if w.appliedZoom {
+		t.Error("appliedZoom still true after select-layout, want false")
 	}
 }
 

@@ -11,6 +11,21 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
 )
 
+// parseZoomAssertTarget extracts the resize-pane -Z -t target from an if -F
+// zoom assert argv (the -Z lives inside a then/else branch string, not args[0]).
+func parseZoomAssertTarget(args []string) (target string, ok bool) {
+	if len(args) < 7 || args[0] != "if" || args[1] != "-F" {
+		return "", false
+	}
+	const prefix = "resize-pane -Z -t "
+	for _, branch := range []string{args[5], args[6]} {
+		if strings.HasPrefix(branch, prefix) {
+			return strings.TrimPrefix(branch, prefix), true
+		}
+	}
+	return "", false
+}
+
 // TestReconcileGivesZoomedPaneTheWindowDims is #511's other half: a zoomed pane
 // is told the layout root rather than the cell #{window_layout} still reports
 // for it (see reconcile.go's comment there). Asserted on the FrameResize a
@@ -31,15 +46,15 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 	router.Register("%0", newOutputSink(localA, nil))
 	router.Register("%1", newOutputSink(localB, nil))
 
-	w := &mirrorWindow{
-		remoteID: "@1", localWin: "@101",
-		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
-	}
-
 	// The layout root is 190x45 while pane 0's own cell is 95x45 — a fixture
 	// where the two disagree, so a resize frame that carried the pane's own
 	// cell instead of the root couldn't pass unnoticed as coincidence.
 	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
+	w := &mirrorWindow{
+		remoteID: "@1", localWin: "@101",
+		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+		layout: layout,
+	}
 	script := strings.Join([]string{
 		"%begin 1 1 1", layout + " %0 1", "%end 1 1 1", // readLayout: remote zoomed, pane 0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
@@ -50,18 +65,25 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 
 	rt := scriptedRTRouter(script, router)
 
+	var zoomCmd []string
 	cfg := Config{
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> toggle fires
+		LocalTmux: func(args ...string) error {
+			if len(args) > 0 && args[0] == "if" {
+				zoomCmd = append([]string(nil), args...)
+			}
+			return nil
+		},
 	}
 
-	// Run to completion first, then read: enqueue is a non-blocking select over
-	// a 4096-deep channel, so nothing here waits on a reader. Only the sinks'
-	// own pumps park in wire.WriteFrame, which is what the reads below release.
 	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
-	// Without a deadline, a regression here hangs to the package timeout
-	// instead of failing.
+	if target, ok := parseZoomAssertTarget(zoomCmd); !ok || target != "%l0" {
+		t.Errorf("zoom assert = %v, want if -F zoom-on targeting %%l0", zoomCmd)
+	}
+	if !w.appliedZoom {
+		t.Error("appliedZoom = false after successful zoom assert, want true")
+	}
+
 	peerA.SetDeadline(time.Now().Add(5 * time.Second))
 	peerB.SetDeadline(time.Now().Add(5 * time.Second))
 
@@ -95,8 +117,6 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 		t.Errorf("pane 1 (unzoomed) dims = %dx%d, want 94x45 (its own cell)", wB, hB)
 	}
 
-	// The zoom-hidden pane's stream ends at its resize: a seed frame here
-	// means the skip regressed.
 	peerB.SetDeadline(time.Now().Add(200 * time.Millisecond))
 	if f, err := wire.ReadFrame(peerB); err == nil {
 		t.Errorf("pane 1 (zoom-hidden) got an unexpected second frame: %v", f.Type)
@@ -104,8 +124,8 @@ func TestReconcileGivesZoomedPaneTheWindowDims(t *testing.T) {
 }
 
 // TestReconcileUnzoomReseedsEveryPane is the #557 skip's other half: the
-// unzoom reconcile (remote flag 0, local zoomed -> toggle off) must reseed
-// the panes the zoom hid, or they would show their pre-zoom screens.
+// unzoom reconcile (remote flag 0, appliedZoom true) must reseed the panes the
+// zoom hid, or they would show their pre-zoom screens.
 func TestReconcileUnzoomReseedsEveryPane(t *testing.T) {
 	localA, peerA := net.Pipe()
 	defer localA.Close()
@@ -118,12 +138,13 @@ func TestReconcileUnzoomReseedsEveryPane(t *testing.T) {
 	router.Register("%0", newOutputSink(localA, nil))
 	router.Register("%1", newOutputSink(localB, nil))
 
+	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+		layout: layout, appliedZoom: true, // was zoomed; remote now unzoomed -> fall through dedup
 	}
 
-	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	script := strings.Join([]string{
 		"%begin 1 1 1", layout + " %0 0", "%end 1 1 1", // readLayout: remote NOT zoomed, pane 0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
@@ -136,11 +157,14 @@ func TestReconcileUnzoomReseedsEveryPane(t *testing.T) {
 	rt := scriptedRTRouter(script, router)
 
 	cfg := Config{
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "1\n", nil }, // local zoomed -> unzoom toggle fires
+		LocalTmux: func(...string) error { return nil },
 	}
 
 	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	if w.appliedZoom {
+		t.Error("appliedZoom still true after unzoom assert, want false")
+	}
 
 	peerA.SetDeadline(time.Now().Add(5 * time.Second))
 	peerB.SetDeadline(time.Now().Add(5 * time.Second))
@@ -158,13 +182,10 @@ func TestReconcileUnzoomReseedsEveryPane(t *testing.T) {
 	}
 }
 
-// TestReconcileKeepsPaneCellDimsOnUnknownZoomState pins the first failure leg
-// of #511's gating fix: when localZoomed can't be established (ok=false), the
-// toggle block never fires — there is nothing to compare against — and the
-// dims loop must key on localIsZoomed (still false, its last-known value), not
-// on the remote's zoomed flag. A pass must never skip its reseed over this: it
-// falls through to the same FrameResize + reseed as any other pass.
-func TestReconcileKeepsPaneCellDimsOnUnknownZoomState(t *testing.T) {
+// TestReconcileKeepsPaneCellDimsOnZoomAssertFailure: when the if -F assert
+// errors, localIsZoomed stays false — the daemon never imposed the zoom — so
+// the active pane gets its own cell, not the root, and every pane is reseeded.
+func TestReconcileKeepsPaneCellDimsOnZoomAssertFailure(t *testing.T) {
 	localA, peerA := net.Pipe()
 	defer localA.Close()
 	defer peerA.Close()
@@ -176,90 +197,13 @@ func TestReconcileKeepsPaneCellDimsOnUnknownZoomState(t *testing.T) {
 	router.Register("%0", newOutputSink(localA, nil))
 	router.Register("%1", newOutputSink(localB, nil))
 
+	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
+		layout: layout,
 	}
 
-	// Same fixture as TestReconcileGivesZoomedPaneTheWindowDims: root 190x45,
-	// pane 0's own cell 95x45 — root and cell disagree, so the assertion can't
-	// pass by coincidence.
-	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
-	script := strings.Join([]string{
-		"%begin 1 1 1", layout + " %0 1", "%end 1 1 1", // readLayout: remote zoomed, pane 0 active
-		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
-		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
-		"%begin 1 4 1", "0 0 0 0", "%end 1 4 1", // PaneSeed(%1): cursor
-		"%begin 1 5 1", "SEED-1", "%end 1 5 1", // PaneSeed(%1): capture
-		"%begin 1 6 1", layout + " %0 1", "%end 1 6 1", // trailing re-read: unchanged, stop
-	}, "\n") + "\n"
-
-	rt := scriptedRTRouter(script, router)
-
-	cfg := Config{
-		LocalTmux: func(...string) error { return nil },
-		// localZoomed's read seam errors -> ok=false, no toggle attempted.
-		LocalTmuxOut: func(...string) (string, error) { return "", errors.New("display-message: no such window") },
-	}
-
-	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
-
-	peerA.SetDeadline(time.Now().Add(5 * time.Second))
-	peerB.SetDeadline(time.Now().Add(5 * time.Second))
-
-	fA, err := wire.ReadFrame(peerA)
-	if err != nil {
-		t.Fatalf("read pane 0's first frame: %v", err)
-	}
-	if fA.Type != wire.FrameResize {
-		t.Fatalf("pane 0's first frame = %v, want a resize", fA.Type)
-	}
-	wA, hA, err := wire.DecodeResize(fA.Payload)
-	if err != nil {
-		t.Fatalf("decode pane 0's resize payload: %v", err)
-	}
-	if wA != 95 || hA != 45 {
-		t.Errorf("pane 0 (unknown local zoom state, active) dims = %dx%d, want 95x45 (its own cell, not the root)", wA, hA)
-	}
-
-	fB, err := wire.ReadFrame(peerB)
-	if err != nil {
-		t.Fatalf("read pane 1's first frame: %v", err)
-	}
-	wB, hB, err := wire.DecodeResize(fB.Payload)
-	if err != nil {
-		t.Fatalf("decode pane 1's resize payload: %v", err)
-	}
-	if wB != 94 || hB != 45 {
-		t.Errorf("pane 1 dims = %dx%d, want 94x45 (its own cell)", wB, hB)
-	}
-}
-
-// TestReconcileKeepsPaneCellDimsOnZoomToggleFailure pins the second failure
-// leg: local zoom state IS known (unzoomed) and disagrees with the remote, so
-// the toggle is attempted, but the resize-pane call itself errors. localIsZoomed
-// must stay false — the daemon never actually imposed the zoom — so the active
-// pane still gets its own cell, not the root. LocalTmux fails only for
-// resize-pane so the rest of the pass (resize-window, select-layout) is
-// unaffected.
-func TestReconcileKeepsPaneCellDimsOnZoomToggleFailure(t *testing.T) {
-	localA, peerA := net.Pipe()
-	defer localA.Close()
-	defer peerA.Close()
-	localB, peerB := net.Pipe()
-	defer localB.Close()
-	defer peerB.Close()
-
-	router := NewRouter()
-	router.Register("%0", newOutputSink(localA, nil))
-	router.Register("%1", newOutputSink(localB, nil))
-
-	w := &mirrorWindow{
-		remoteID: "@1", localWin: "@101",
-		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
-	}
-
-	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	script := strings.Join([]string{
 		"%begin 1 1 1", layout + " %0 1", "%end 1 1 1", // readLayout: remote zoomed, pane 0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
@@ -273,15 +217,18 @@ func TestReconcileKeepsPaneCellDimsOnZoomToggleFailure(t *testing.T) {
 
 	cfg := Config{
 		LocalTmux: func(args ...string) error {
-			if len(args) > 0 && args[0] == "resize-pane" {
-				return errors.New("resize-pane: pane not found")
+			if len(args) > 0 && args[0] == "if" {
+				return errors.New("if: command failed")
 			}
 			return nil
 		},
-		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> toggle attempted
 	}
 
 	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
+
+	if w.appliedZoom {
+		t.Error("appliedZoom set despite assert failure, want false")
+	}
 
 	peerA.SetDeadline(time.Now().Add(5 * time.Second))
 	peerB.SetDeadline(time.Now().Add(5 * time.Second))
@@ -298,7 +245,7 @@ func TestReconcileKeepsPaneCellDimsOnZoomToggleFailure(t *testing.T) {
 		t.Fatalf("decode pane 0's resize payload: %v", err)
 	}
 	if wA != 95 || hA != 45 {
-		t.Errorf("pane 0 (zoom toggle failed, active) dims = %dx%d, want 95x45 (its own cell, not the root)", wA, hA)
+		t.Errorf("pane 0 (zoom assert failed, active) dims = %dx%d, want 95x45 (its own cell, not the root)", wA, hA)
 	}
 
 	fB, err := wire.ReadFrame(peerB)
@@ -314,13 +261,10 @@ func TestReconcileKeepsPaneCellDimsOnZoomToggleFailure(t *testing.T) {
 	}
 }
 
-// TestReconcileZoomToggleNeverTargetsAFloat pins the #409/#517 merge bug: a
-// float can be remoteActive while the window is zoomed, and localPaneFor would
-// hand that float to resize-pane -Z. Zoom-on against a float converts it into a
-// zoomed tiled pane (measured on next-3.8). When remoteActive is a float, skip
-// the toggle entirely rather than guessing a tiled pane — pane 0 would zoom the
-// wrong cell if the remote had zoomed a different one before focusing the float.
-func TestReconcileZoomToggleNeverTargetsAFloat(t *testing.T) {
+// TestReconcileZoomAssertNeverTargetsAFloat pins the #409/#517 merge bug: a
+// float can be remoteActive while the window is zoomed. When remoteActive is a
+// float, skip zoom-on entirely rather than guessing a tiled pane.
+func TestReconcileZoomAssertNeverTargetsAFloat(t *testing.T) {
 	localA, peerA := net.Pipe()
 	defer localA.Close()
 	defer peerA.Close()
@@ -332,9 +276,6 @@ func TestReconcileZoomToggleNeverTargetsAFloat(t *testing.T) {
 	router.Register("%0", newOutputSink(localA, nil))
 	router.Register("%1", newOutputSink(localB, nil))
 
-	// w.layout == ParseLayout(tiledFloatLayout).Raw so applyLayout short-circuits
-	// without dropping the mirrored float — the bug is only reachable while the
-	// float is still in localFloats when the zoom toggle fires.
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
@@ -357,26 +298,24 @@ func TestReconcileZoomToggleNeverTargetsAFloat(t *testing.T) {
 	var zoomTargets []string
 	cfg := Config{
 		LocalTmux: func(args ...string) error {
-			if len(args) >= 4 && args[0] == "resize-pane" && args[1] == "-Z" && args[2] == "-t" {
-				zoomTargets = append(zoomTargets, args[3])
+			if target, ok := parseZoomAssertTarget(args); ok {
+				zoomTargets = append(zoomTargets, target)
 			}
 			return nil
 		},
-		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> mismatch
 	}
 
 	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
 	if len(zoomTargets) != 0 {
-		t.Errorf("resize-pane -Z issued %v; want none when remoteActive is a float", zoomTargets)
+		t.Errorf("zoom if -F issued targets %v; want none when remoteActive is a float", zoomTargets)
 	}
 	for _, target := range zoomTargets {
 		if target == "%l9" {
-			t.Errorf("resize-pane -Z targeted float local id %q", target)
+			t.Errorf("zoom assert targeted float local id %q", target)
 		}
 	}
 
-	// Drain so a hung sink pump can't outlive the test.
 	peerA.SetDeadline(time.Now().Add(5 * time.Second))
 	peerB.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := wire.ReadFrame(peerA); err != nil {
@@ -387,10 +326,10 @@ func TestReconcileZoomToggleNeverTargetsAFloat(t *testing.T) {
 	}
 }
 
-// TestReconcileZoomToggleTargetsTiledPaneBesideFloat is the happy-path twin:
-// remoteActive is a tiled pane while a float exists — the toggle must still
+// TestReconcileZoomAssertTargetsTiledPaneBesideFloat is the happy-path twin:
+// remoteActive is a tiled pane while a float exists — the assert must still
 // land on that tiled local, not skip or hit the float.
-func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
+func TestReconcileZoomAssertTargetsTiledPaneBesideFloat(t *testing.T) {
 	localA, peerA := net.Pipe()
 	defer localA.Close()
 	defer peerA.Close()
@@ -414,7 +353,6 @@ func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
 		"%begin 1 1 1", tiledFloatLayout + " %0 1", "%end 1 1 1", // readLayout: zoomed, tiled %0 active
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
 		"%begin 1 3 1", "SEED-0", "%end 1 3 1", // PaneSeed(%0): capture
-		// No PaneSeed(%1): the zoom hides it (#557).
 		"%begin 1 4 1", tiledFloatLayout + " %0 1", "%end 1 4 1", // trailing re-read: unchanged, stop
 	}, "\n") + "\n"
 
@@ -423,22 +361,21 @@ func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
 	var zoomTargets []string
 	cfg := Config{
 		LocalTmux: func(args ...string) error {
-			if len(args) >= 4 && args[0] == "resize-pane" && args[1] == "-Z" && args[2] == "-t" {
-				zoomTargets = append(zoomTargets, args[3])
+			if target, ok := parseZoomAssertTarget(args); ok {
+				zoomTargets = append(zoomTargets, target)
 			}
 			return nil
 		},
-		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // local not zoomed -> toggle fires
 	}
 
 	reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
 	if len(zoomTargets) != 1 || zoomTargets[0] != "%l0" {
-		t.Errorf("resize-pane -Z targets = %v, want [%%l0]", zoomTargets)
+		t.Errorf("zoom assert targets = %v, want [%%l0]", zoomTargets)
 	}
 	for _, target := range zoomTargets {
 		if target == "%l9" {
-			t.Errorf("resize-pane -Z targeted float local id %q", target)
+			t.Errorf("zoom assert targeted float local id %q", target)
 		}
 	}
 
@@ -447,7 +384,32 @@ func TestReconcileZoomToggleTargetsTiledPaneBesideFloat(t *testing.T) {
 	if _, err := wire.ReadFrame(peerA); err != nil {
 		t.Fatalf("read pane 0 frame: %v", err)
 	}
-	if _, err := wire.ReadFrame(peerB); err != nil {
-		t.Fatalf("read pane 1 frame: %v", err)
+}
+
+// TestReconcileSecondZoomedReconcileDoesNotInvert: after a successful zoom
+// assert, a second reconcile with the same layout and remote still zoomed must
+// dedup and issue no LocalTmux (parity-safe because if -F is idempotent anyway).
+func TestReconcileSecondZoomedReconcileDoesNotInvert(t *testing.T) {
+	const layout = "bd67,190x45,0,0,3"
+	w := &mirrorWindow{
+		remoteID:    "@1",
+		localWin:    "@101",
+		remotePanes: []string{"%3"},
+		localPanes:  []string{"%l3"},
+		layout:      layout,
+		appliedZoom: true,
 	}
+
+	rt, _ := scriptedRT(strings.Join([]string{
+		"%begin 1 1 1", layout + " %3 1", "%end 1 1 1", // readLayout
+	}, "\n") + "\n")
+
+	cfg := Config{
+		LocalTmux: func(...string) error {
+			t.Fatal("unexpected LocalTmux on second still-zoomed dedup")
+			return nil
+		},
+	}
+
+	reconcileLayout(cfg, w, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
 }

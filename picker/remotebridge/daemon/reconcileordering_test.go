@@ -81,12 +81,12 @@ func TestReconcileZoomsBeforeReseeding(t *testing.T) {
 	const layout = "bd67,190x45,0,0,3"
 
 	cases := []struct {
-		name         string
-		remoteZoom   string // #{window_zoomed_flag} readLayout reports for the remote
-		localZoomOut string // LocalTmuxOut's reply for the local window's own zoom flag
+		name        string
+		remoteZoom  string // #{window_zoomed_flag} readLayout reports for the remote
+		appliedZoom bool   // mirrorWindow.appliedZoom before reconcile
 	}{
-		{name: "zoom", remoteZoom: "1", localZoomOut: "0\n"},
-		{name: "unzoom", remoteZoom: "0", localZoomOut: "1\n"},
+		{name: "zoom", remoteZoom: "1", appliedZoom: false},
+		{name: "unzoom", remoteZoom: "0", appliedZoom: true},
 	}
 
 	for _, tc := range cases {
@@ -104,7 +104,7 @@ func TestReconcileZoomsBeforeReseeding(t *testing.T) {
 			w := &mirrorWindow{
 				remoteID: "@1", localWin: "@101",
 				remotePanes: []string{"%3"}, localPanes: []string{"%l3"},
-				layout: layout,
+				layout: layout, appliedZoom: tc.appliedZoom,
 			}
 
 			// A zoom-only pass: same shape as
@@ -127,7 +127,6 @@ func TestReconcileZoomsBeforeReseeding(t *testing.T) {
 					log.append(strings.Join(args, " "))
 					return nil
 				},
-				LocalTmuxOut: func(...string) (string, error) { return tc.localZoomOut, nil },
 			}
 
 			// Synchronous, not backgrounded: the only thing under test is the
@@ -137,13 +136,16 @@ func TestReconcileZoomsBeforeReseeding(t *testing.T) {
 			// rather than hanging once the script runs out.
 			reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 
-			zoomIdx := log.indexContainingAll("resize-pane", "-Z")
+			zoomIdx := log.indexContainingAll("if", "-F")
+			if zoomIdx == -1 {
+				zoomIdx = log.indexContainingAll("resize-pane", "-Z")
+			}
 			captureIdx := log.indexContainingAll("capture-pane")
 
 			// Fail explicitly rather than let a missing entry sit at -1 and
 			// pass a `zoomIdx < captureIdx` comparison vacuously.
 			if zoomIdx == -1 {
-				t.Fatalf("no resize-pane -Z entry in log: %v", log.entries)
+				t.Fatalf("no if -F zoom assert entry in log: %v", log.entries)
 			}
 			if captureIdx == -1 {
 				t.Fatalf("no capture-pane entry in log: %v", log.entries)
@@ -189,14 +191,16 @@ func TestReconcileSeedsPaneBeforeItsLaterOutputArrives(t *testing.T) {
 	router.Register("%0", newOutputSink(localA, nil))
 	router.Register("%1", newOutputSink(localB, nil))
 
+	// A two-pane layout, unchanged across the reconcile pass: the point is the
+	// re-seed loop's ordering, not any pane add/remove/swap. w.layout stays empty
+	// so the dedup early-out does not skip the pass; LocalTmuxOut satisfies
+	// applyLayout's localCellsMatch short-circuit instead.
+	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	w := &mirrorWindow{
 		remoteID: "@1", localWin: "@101",
 		remotePanes: []string{"%0", "%1"}, localPanes: []string{"%l0", "%l1"},
 	}
 
-	// A two-pane layout, unchanged across the reconcile pass: the point is the
-	// re-seed loop's ordering, not any pane add/remove/swap.
-	const layout = "4ed4,190x45,0,0{95x45,0,0,0,94x45,96,0,1}"
 	script := strings.Join([]string{
 		"%begin 1 1 1", layout + " %0 0", "%end 1 1 1", // readLayout
 		"%begin 1 2 1", "0 0 0 0", "%end 1 2 1", // PaneSeed(%0): cursor
@@ -210,8 +214,13 @@ func TestReconcileSeedsPaneBeforeItsLaterOutputArrives(t *testing.T) {
 	rt := scriptedRTRouter(script, router)
 
 	cfg := Config{
-		LocalTmux:    func(...string) error { return nil },
-		LocalTmuxOut: func(...string) (string, error) { return "0\n", nil }, // localZoomed: not zoomed
+		LocalTmux: func(...string) error { return nil },
+		LocalTmuxOut: func(args ...string) (string, error) {
+			if len(args) >= 5 && args[4] == "#{window_layout}" {
+				return layout + "\n", nil
+			}
+			return "", nil
+		},
 	}
 	go reconcileLayout(cfg, w, func(string) {}, router, noHellos, newCtlState(), newConverger(), rt)
 

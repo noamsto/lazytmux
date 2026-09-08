@@ -188,3 +188,21 @@ func TestResetWindowLeavesAFloatAlone(t *testing.T) {
 		t.Errorf("killed %v, want %v (never the float %%9, never pane 0)", killed, want)
 	}
 }
+
+// dropMirroredPanes runs at the start of resetWindow; select-layout in the
+// following setupWindow unzooms, so a stale appliedZoom would make the next
+// same-layout reconcile dedup and skip assertMirrorZoom forever.
+func TestDropMirroredPanesClearsAppliedZoom(t *testing.T) {
+	cfg := Config{LocalTmux: func(...string) error { return nil }}
+	w := &mirrorWindow{
+		localWin:    "mirror:1",
+		layout:      "bd67,190x45,0,0,3",
+		appliedZoom: true,
+		remotePanes: []string{"%r1"},
+		localPanes:  []string{"%1"},
+	}
+	dropMirroredPanes(cfg, w)
+	if w.appliedZoom {
+		t.Error("appliedZoom still true after dropMirroredPanes, want false")
+	}
+}
