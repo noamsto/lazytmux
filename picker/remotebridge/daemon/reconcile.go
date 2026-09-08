@@ -45,10 +45,12 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 // acting on a stale one risks spawning or killing a renderer for a pane the
 // remote has already left; a real zoom or unzoom needs the read's single
 // consistent post-command snapshot rather than window_push_zoom/pop_zoom's
-// transient unzoomed middle line. A layout that genuinely changed also reads
-// here for now — the gate that applies a geometry-only reshape straight from
-// the notification lands in a later commit. See the design spec's gate list
-// for the full reasoning; the checks below are the what, not the why.
+// transient unzoomed middle line. A layout that genuinely changed also enters
+// the pass loop straight from the notification — but only when it is a
+// geometry-only reshape: no zoom on either side and no mirrored float, since
+// both still need the active pane the notification doesn't carry. See the
+// design spec's gate list for the full reasoning; the checks below are the
+// what, not the why.
 func reconcileLayoutFrom(cfg Config, w *mirrorWindow, l controlmode.Line, send func(string), router *Router,
 	waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
 	n, ok := parseLayoutNotice(l)
@@ -82,9 +84,43 @@ func reconcileLayoutFrom(cfg Config, w *mirrorWindow, l controlmode.Line, send f
 		// tells them apart.
 		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
 	}
-	// The layout changed. Nothing here yet applies a reshape straight from
-	// the notification, so this always reads.
-	return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	// The layout changed.
+	if n.zoomed || len(w.localFloats) > 0 {
+		// Gate 4: a zoom with a reshape needs the active pane for the -Z
+		// toggle and the zoomed pane's dims. Gate 5: applyLayout can drop a
+		// mirrored float and reconcileFloats re-add it inside the pass, and
+		// the re-add's focus-follow needs the active pane too. Neither is on
+		// the wire here.
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	// Gate 6: a geometry-only reshape — same pane set/order, same floats, no
+	// local floats, flag off — enters the pass loop from the notification's
+	// own layout, with no active pane id. Nothing in the loop needs one on
+	// this path: focus-follow is gated on structural, false by construction
+	// since gate 1 already agreed on the pane order; the -Z toggle and the
+	// zoomed-pane dims are gated on a zoom neither side reports, and with
+	// remoteActive == "" indexOf misses so localPaneAt misses too — the
+	// toggle simply cannot fire, which is correct since nothing here claims a
+	// zoom; and the post-loop float focus has nothing to add, since gates 2
+	// and 5 already established the floats are unchanged and none are local.
+	// A stale line is bounded by the trailing re-read, unchanged below: the
+	// next pass runs on its own ground-truth triple, same as any other
+	// reconcile.
+	//
+	// The one case this reasoning doesn't cover on its own: a mirror that is
+	// still zoomed when this fires. select-layout normally unzooms it
+	// (measured, see the pass loop's own comment below), after which the
+	// loop's own localZoomed agrees with the flag — but the localCellsMatch
+	// short-circuit skips select-layout entirely when local cells already
+	// match, and with no toggle to fire either, the mirror would stay zoomed
+	// against a flag-off line. Unreached in this tmux: a zoomed mirror's own
+	// #{window_layout} is the saved unzoomed tree it last applied (w.layout),
+	// which this branch's changed notification layout can never equal unless
+	// the window fit alone happened to reproduce the new cells, and no
+	// emitter produces a flag-off geometry line under a zoom anyway —
+	// window_unzoom's and resize-pane's unzoom lines carry the layout
+	// unchanged and land on gate 3 instead.
+	return reconcileSnapshot(cfg, w, L, "", false, send, router, waitHellos, cst, cv, rt)
 }
 
 // reconcileSnapshot applies the general pane diff (planPaneOps) for window w
