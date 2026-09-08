@@ -7,9 +7,8 @@ import (
 )
 
 // layoutFlagAlphabet is window_printable_flags' output alphabet
-// (window.c:1288-1313, pinned tree): activity, bell, silence, current, last,
-// marked, modal, zoomed. Confirmed against the pinned tmux source, not copied
-// from the spec.
+// (window_printable_flags, window.c:1289-1317, pinned tree): activity, bell,
+// silence, current, last, marked, modal, zoomed.
 const layoutFlagAlphabet = "#!~*-MOZ"
 
 // layoutNotice is what a %layout-change line carries that readLayout would

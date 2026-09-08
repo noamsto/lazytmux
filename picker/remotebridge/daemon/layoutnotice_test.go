@@ -34,10 +34,10 @@ func TestParseLayoutNotice(t *testing.T) {
 			wantZoomed: false,
 		},
 		{
-			// A 3.1-spelling of the activity flag (doubled '#' from
-			// window_printable_flags' escape=1 form). The pinned tree can't
-			// confirm this shape was ever emitted; the test only pins that
-			// the alphabet accepts it alongside Z.
+			// The doubled '#' is window_flags' escaped spelling of the
+			// activity flag (window_printable_flags' escape=1 form); the
+			// alphabet admits either spelling, so this pins that it parses
+			// alongside Z.
 			name:       "4 fields, doubled activity flag plus zoomed",
 			raw:        "%layout-change @0 " + layout + " " + visible + " ##Z",
 			wantOK:     true,
@@ -70,6 +70,15 @@ func TestParseLayoutNotice(t *testing.T) {
 		{
 			name:   "4 fields, flags outside the alphabet",
 			raw:    "%layout-change @0 " + layout + " " + visible + " bogus",
+			wantOK: false,
+		},
+		{
+			// Pins that a remote-controlled layout string can never reach
+			// the local select-layout argv starting with '-': a layout field
+			// beginning with a non-hex byte is rejected here, before it ever
+			// becomes a command-line argument.
+			name:   "4 fields, layout begins with a non-hex byte",
+			raw:    "%layout-change @0 -000,80x24,0,0,1 -000,80x24,0,0,1 *",
 			wantOK: false,
 		},
 	}

@@ -201,7 +201,6 @@ func TestNoticeUnzoomTransientReads(t *testing.T) {
 	}
 	script := strings.Join([]string{
 		"%begin 1 1 1", noticeUnchangedLayout + " %3 1", "%end 1 1 1", // readLayout: still zoomed
-		"%begin 1 2 1", noticeUnchangedLayout + " %3 1", "%end 1 2 1", // trailing re-read: converged
 	}, "\n") + "\n"
 	rt, sent := scriptedRT(script)
 	// No sent guard: gate 3's own fork is the one that finds the mismatch and
@@ -213,6 +212,13 @@ func TestNoticeUnzoomTransientReads(t *testing.T) {
 
 	if !strings.Contains(sent.String(), "window_zoomed_flag") {
 		t.Errorf("sent %q, want a readLayout display-message (gate 3: flag mismatch)", sent.String())
+	}
+	// reconcileSnapshot's own dedup returns right after this read — the layout
+	// is unchanged and the read's zoom agrees with the mirror's — so a second
+	// round-trip here would mean the dedup missed and fell through to the pass
+	// loop's own trailing re-read.
+	if n := strings.Count(sent.String(), readLayoutFmt); n != 1 {
+		t.Errorf("readLayout format appears %d times, want exactly 1: reconcileSnapshot's dedup must not fall through", n)
 	}
 	for _, c := range fake.localTmux {
 		if strings.Contains(c, "resize-pane -Z") {

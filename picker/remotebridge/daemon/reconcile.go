@@ -47,15 +47,19 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 // consistent post-command snapshot rather than window_push_zoom/pop_zoom's
 // transient unzoomed middle line. A layout that genuinely changed also enters
 // the pass loop straight from the notification — but only when it is a
-// geometry-only reshape: no zoom on either side and no mirrored float, since
-// both still need the active pane the notification doesn't carry. See the
+// geometry-only reshape: the notification reports no zoom and no mirrored
+// float, since both still need the active pane the notification doesn't
+// carry. See the
 // design spec's gate list for the full reasoning; the checks below are the
 // what, not the why.
 func reconcileLayoutFrom(cfg Config, w *mirrorWindow, l controlmode.Line, send func(string), router *Router,
 	waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
 	n, ok := parseLayoutNotice(l)
+	if !ok {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
 	L, err := controlmode.ParseLayout(n.layout)
-	if !ok || err != nil {
+	if err != nil {
 		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
 	}
 	if !slices.Equal(RemotePaneOrder(L), w.remotePanes) {
@@ -362,8 +366,9 @@ passes:
 }
 
 // noFloatWork reports that w's mirrored floats already match L's — the float
-// half of reconcileLayout's "nothing to do" test, expressed as the same pure
-// diff the reconcile itself drives so the two can never disagree.
+// half of reconcileSnapshot's "nothing to do" test and gate 2 of
+// reconcileLayoutFrom, expressed as the same pure diff the reconcile itself
+// drives so the two can never disagree.
 func noFloatWork(w *mirrorWindow, L controlmode.Layout) bool {
 	ops := planFloatOps(w.floatGeom, mirrorableFloats(L))
 	return len(ops.Remove) == 0 && len(ops.Add) == 0 && len(ops.Move) == 0
