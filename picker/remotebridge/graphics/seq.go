@@ -95,8 +95,11 @@ func decodeSeq(b []byte) (*Seq, int, dropReason) {
 		return nil, n, dropSixel
 	}
 	// Feed only calls this at an indexSeqStart hit, so a head that isn't a
-	// passthrough or sixel is an apcStart: decodeBare can only fail for want
-	// of the ST.
+	// passthrough or sixel is an apcStart. decodeBare can fail for want of
+	// the ST (a complete apcStart with no terminator yet), or — since
+	// indexSeqStart now holds a buffer ending partway through apcStart
+	// itself — for want of the introducer's own remaining bytes. Both are
+	// "incomplete, hold for more" (n == 0), so the branch below is unchanged.
 	q, n, ok := decodeBare(b)
 	if !ok {
 		return nil, 0, dropNone

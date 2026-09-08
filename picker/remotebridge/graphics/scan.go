@@ -130,7 +130,7 @@ func appendLiteral(out []Chunk, b []byte) []Chunk {
 func indexSeqStart(b []byte) int {
 	best := -1
 	for _, pat := range []string{apcStart, passStart} {
-		if i := bytes.Index(b, []byte(pat)); i >= 0 && (best < 0 || i < best) {
+		if i := indexFixedStart(b, pat); i >= 0 && (best < 0 || i < best) {
 			best = i
 		}
 	}
@@ -138,6 +138,27 @@ func indexSeqStart(b []byte) int {
 		best = i
 	}
 	return best
+}
+
+// indexFixedStart returns the offset of pat's next occurrence in b: a
+// complete match, or — mirroring indexSixelStart's tolerance for the sixel
+// introducer — a trailing run at the end of b that is still a viable prefix
+// of pat and must be held rather than mistaken for literal text, since a Feed
+// boundary can split pat anywhere. Only the trailing suffix of b needs
+// checking for the partial case: a partial match anywhere else in b is
+// already resolved by the following byte, either completing into a full
+// match (already caught by bytes.Index) or diverging (not a match at all).
+func indexFixedStart(b []byte, pat string) int {
+	if i := bytes.Index(b, []byte(pat)); i >= 0 {
+		return i
+	}
+	max := min(len(pat)-1, len(b))
+	for l := max; l > 0; l-- {
+		if bytes.Equal(b[len(b)-l:], []byte(pat[:l])) {
+			return len(b) - l
+		}
+	}
+	return -1
 }
 
 // indexSixelStart finds a bare sixel DCS introducer `\eP[0-9;]*q`, or an
@@ -157,7 +178,9 @@ func indexSixelStart(b []byte) int {
 			return i
 		}
 	}
-	// A trailing ESC with no following byte can't be `\eP` yet.
+	// A trailing ESC with no following byte can't be `\eP` yet. indexFixedStart
+	// (used for apcStart/passStart above) makes the opposite choice: a lone
+	// trailing ESC there IS held, since it's a genuine 1-byte prefix of both.
 	return -1
 }
 

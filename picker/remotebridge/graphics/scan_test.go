@@ -183,6 +183,137 @@ func TestScanOversizedPartialFlushesAsLiteral(t *testing.T) {
 	}
 }
 
+// TestScanPartialIntroducerAcrossFeeds proves indexSeqStart holds a buffer
+// that ends partway through the apcStart or passStart introducer, the way its
+// sibling indexSixelStart already holds a partial sixel prefix. A cut that
+// lands inside the introducer (with no preceding literal, to isolate this
+// from the ordinary split-sequence case already covered above) must emit
+// nothing on the first Feed and reassemble into exactly one Seq chunk once
+// the rest arrives — matching an unsplit baseline Feed of the same bytes.
+func TestScanPartialIntroducerAcrossFeeds(t *testing.T) {
+	tests := []struct {
+		name    string
+		full    string
+		cut     int
+		wrapped bool
+	}{
+		{name: "apc cut=1", full: bareSeq, cut: 1},
+		{name: "apc cut=2", full: bareSeq, cut: 2},
+		{name: "passthrough cut=1", full: tmuxPassthrough(bareSeq), cut: 1, wrapped: true},
+		{name: "passthrough cut=2", full: tmuxPassthrough(bareSeq), cut: 2, wrapped: true},
+		{name: "passthrough cut=3", full: tmuxPassthrough(bareSeq), cut: 3, wrapped: true},
+		{name: "passthrough cut=4", full: tmuxPassthrough(bareSeq), cut: 4, wrapped: true},
+		{name: "passthrough cut=5", full: tmuxPassthrough(bareSeq), cut: 5, wrapped: true},
+		{name: "passthrough cut=6", full: tmuxPassthrough(bareSeq), cut: 6, wrapped: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseline := NewScanner().Feed([]byte(tt.full))
+			if chunkKinds(baseline) != "S" {
+				t.Fatalf("baseline kinds = %q, want S", chunkKinds(baseline))
+			}
+
+			s := NewScanner()
+			buf := []byte(tt.full)
+			if cs := s.Feed(buf[:tt.cut]); chunkKinds(cs) != "" {
+				t.Fatalf("partial introducer emitted early: %q", chunkKinds(cs))
+			}
+			cs := s.Feed(buf[tt.cut:])
+			if chunkKinds(cs) != "S" {
+				t.Fatalf("kinds = %q, want S (introducer split at %d not reassembled)", chunkKinds(cs), tt.cut)
+			}
+			if cs[0].Seq.Wrapped != tt.wrapped {
+				t.Fatalf("Wrapped = %v, want %v", cs[0].Seq.Wrapped, tt.wrapped)
+			}
+			if string(cs[0].Seq.Keys) != string(baseline[0].Seq.Keys) {
+				t.Fatalf("Keys = %q, want %q", cs[0].Seq.Keys, baseline[0].Seq.Keys)
+			}
+			if string(cs[0].Seq.Payload) != string(baseline[0].Seq.Payload) {
+				t.Fatalf("Payload = %q, want %q", cs[0].Seq.Payload, baseline[0].Seq.Payload)
+			}
+		})
+	}
+}
+
+// TestScanLiteralNotHeldOnDivergence guards against the introducer-hold fix
+// over-holding: bytes speculatively held as a possible apcStart/passStart
+// introducer, but which turn out not to continue into one, must eventually
+// surface as Literal rather than being silently dropped or held forever.
+func TestScanLiteralNotHeldOnDivergence(t *testing.T) {
+	const in = "\x1b[31mX"
+	s := NewScanner()
+	// "\x1b[" matches no prefix of apcStart ("\x1b_G") or passStart
+	// ("\x1bPtmux;") past the first byte, so nothing should need holding here
+	// even before the fix — this is the control case for the property.
+	first := s.Feed([]byte(in[:2]))
+	rest := s.Feed([]byte(in[2:]))
+	got := concatLiterals(first) + concatLiterals(rest)
+	if got != in {
+		t.Fatalf("literals = %q, want byte-identical %q (held bytes lost or stuck)", got, in)
+	}
+	for _, c := range append(first, rest...) {
+		if c.Seq != nil {
+			t.Fatalf("unrelated CSI decoded as a graphics Seq: %+v", c)
+		}
+	}
+}
+
+// TestScanPartialIntroducerFlush pins Flush() behavior for every partial
+// introducer sub-case in TestScanPartialIntroducerAcrossFeeds, held via Feed
+// but never completed. In every case but one, Flush must return the held
+// bytes byte-identical as a single Literal chunk — the same "never silently
+// swallowed" contract TestFlushEmitsHeldPartialThenNothing pins for an
+// ordinary partial APC. The one exception is passthrough cut=2, whose held
+// bytes are exactly "\x1bP": isPartialSixel treats that as a possible partial
+// sixel DCS (indistinguishable at 2 bytes from the start of a bare sixel
+// introducer), and Flush's existing, deliberate sixel policy drops it. That
+// is not something this fix changes or should change — it is pinned here
+// explicitly so a future change to indexFixedStart doesn't accidentally
+// alter it.
+func TestScanPartialIntroducerFlush(t *testing.T) {
+	tests := []struct {
+		name string
+		full string
+		cut  int
+	}{
+		{name: "apc cut=1", full: bareSeq, cut: 1},
+		{name: "apc cut=2", full: bareSeq, cut: 2},
+		{name: "passthrough cut=1", full: tmuxPassthrough(bareSeq), cut: 1},
+		{name: "passthrough cut=2", full: tmuxPassthrough(bareSeq), cut: 2},
+		{name: "passthrough cut=3", full: tmuxPassthrough(bareSeq), cut: 3},
+		{name: "passthrough cut=4", full: tmuxPassthrough(bareSeq), cut: 4},
+		{name: "passthrough cut=5", full: tmuxPassthrough(bareSeq), cut: 5},
+		{name: "passthrough cut=6", full: tmuxPassthrough(bareSeq), cut: 6},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewScanner()
+			held := []byte(tt.full)[:tt.cut]
+			if cs := s.Feed(append([]byte(nil), held...)); chunkKinds(cs) != "" {
+				t.Fatalf("partial introducer emitted early: %q", chunkKinds(cs))
+			}
+
+			cs := s.Flush()
+			if tt.name == "passthrough cut=2" {
+				// held == "\x1bP" exactly: isPartialSixel's sixel-ambiguity
+				// policy drops it, same as an ordinary partial sixel.
+				if cs != nil {
+					t.Fatalf("Flush = %+v, want nil (sixel-ambiguous \\x1bP is dropped)", cs)
+				}
+				return
+			}
+			if chunkKinds(cs) != "L" {
+				t.Fatalf("kinds = %q, want L", chunkKinds(cs))
+			}
+			if string(cs[0].Literal) != string(held) {
+				t.Fatalf("literal = %q, want byte-identical %q", cs[0].Literal, held)
+			}
+		})
+	}
+}
+
 // tmuxPassthrough wraps inner the way EncodeWrapped / tmux's passthrough does:
 // every ESC doubled, then a final ST.
 func tmuxPassthrough(inner string) string {
