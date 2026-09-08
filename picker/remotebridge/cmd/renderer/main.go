@@ -8,9 +8,19 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/render"
 )
 
+func sockAndPane(args []string) (sock, pane string, ok bool) {
+	if len(args) != 3 {
+		return "", "", false
+	}
+	return args[1], args[2], true
+}
+
 func main() {
-	sock := os.Getenv("LZTMUX_RENDER_SOCK")
-	pane := os.Getenv("LZTMUX_RENDER_PANE")
+	sock, pane, ok := sockAndPane(os.Args)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "usage: %s <sock> <remote-pane>\n", os.Args[0])
+		os.Exit(1)
+	}
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "renderer: dial %s: %v\r\n", sock, err)

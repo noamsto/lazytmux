@@ -51,7 +51,7 @@ func twoPaneAppendHarness(t *testing.T, send func(string)) (cfg Config, w *mirro
 	router = NewRouter()
 
 	newConn, newPeer = net.Pipe()
-	waiter := func(int) (map[string]net.Conn, error) {
+	waiter := func([]string) (map[string]net.Conn, error) {
 		return map[string]net.Conn{"%2": newConn}, nil
 	}
 
@@ -237,9 +237,9 @@ func TestResetWindowClosesKeptPaneConnAfterSuccessfulReshape(t *testing.T) {
 
 	connCh := make(chan helloConn, 1)
 	connCh <- helloConn{paneID: "%0", conn: newConn}
-	waiter := func(n int) (map[string]net.Conn, error) {
+	waiter := func(want []string) (map[string]net.Conn, error) {
 		out := map[string]net.Conn{}
-		for i := 0; i < n; i++ {
+		for range want {
 			hc := <-connCh
 			out[hc.paneID] = hc.conn
 		}
@@ -292,9 +292,9 @@ func TestSetupWindowSolePaneSeedFailureCleansUp(t *testing.T) {
 
 	connCh := make(chan helloConn, 1)
 	connCh <- helloConn{paneID: "%0", conn: conn}
-	waiter := func(n int) (map[string]net.Conn, error) {
+	waiter := func(want []string) (map[string]net.Conn, error) {
 		out := map[string]net.Conn{}
-		for i := 0; i < n; i++ {
+		for range want {
 			hc := <-connCh
 			out[hc.paneID] = hc.conn
 		}
@@ -346,7 +346,7 @@ func TestResetWindowClosesKeptPaneConnOnSpawnedSetupFailure(t *testing.T) {
 		"%begin 1 2 1", "b2c3,80x24,0,0,0 %0 0", "%end 1 2 1", // readLayout
 	}, "\n") + "\n"
 
-	waiter := func(int) (map[string]net.Conn, error) {
+	waiter := func([]string) (map[string]net.Conn, error) {
 		return nil, io.EOF
 	}
 

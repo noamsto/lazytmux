@@ -67,9 +67,9 @@ func TestApplyPaneOpsShapesBeforeHelloWait(t *testing.T) {
 	}()
 	// Blocks on connCh exactly as the real waiter does — the ordering this test
 	// pins only exists because the wait is what applyPaneOps stops on.
-	waiter := func(n int) (map[string]net.Conn, error) {
+	waiter := func(want []string) (map[string]net.Conn, error) {
 		out := map[string]net.Conn{}
-		for i := 0; i < n; i++ {
+		for range want {
 			hc := <-connCh
 			out[hc.paneID] = hc.conn
 		}

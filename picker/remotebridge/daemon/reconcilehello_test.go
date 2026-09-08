@@ -109,8 +109,8 @@ func TestApplyPaneOpsRoutesSiblingOutputDuringHelloWait(t *testing.T) {
 	}()
 
 	// The real waiter, wired exactly as Run wires it.
-	waiter := func(n int) (map[string]net.Conn, error) {
-		return waitHellos(pump.lines, router, &asyncQueue{}, testStream(), connCh, n, 2*time.Second)
+	waiter := func(want []string) (map[string]net.Conn, error) {
+		return waitHellos(pump.lines, router, &asyncQueue{}, testStream(), connCh, want, 2*time.Second, nil)
 	}
 
 	w := &mirrorWindow{
@@ -182,7 +182,7 @@ func TestWaitHellosKeepsReplyOrdinalsInIssueOrder(t *testing.T) {
 		}
 	}()
 
-	added, err := waitHellos(lines, router, &asyncQueue{}, st, connCh, 1, 2*time.Second)
+	added, err := waitHellos(lines, router, &asyncQueue{}, st, connCh, []string{"%9"}, 2*time.Second, nil)
 	if err != nil {
 		t.Fatalf("waitHellos: %v", err)
 	}
@@ -193,5 +193,95 @@ func TestWaitHellosKeepsReplyOrdinalsInIssueOrder(t *testing.T) {
 	// has not been consumed yet.
 	if got := st.claim(); got != seq2 {
 		t.Errorf("next claim = %d, want %d: the wait must advance seen by exactly one per client-flagged block", got, seq2)
+	}
+}
+
+// TestWaitHellosUnexpectedHelloIsNotCounted: a reconnect hello for a pane we
+// are not waiting on must not fill the want set. Counting it would return with
+// the wrong pane wired and the spawned one never collected.
+func TestWaitHellosUnexpectedHelloIsNotCounted(t *testing.T) {
+	lines := make(chan controlmode.Line)
+	connCh := make(chan helloConn, 2)
+
+	one, onePeer := net.Pipe()
+	defer one.Close()
+	defer onePeer.Close()
+	two, twoPeer := net.Pipe()
+	defer two.Close()
+	defer twoPeer.Close()
+
+	connCh <- helloConn{paneID: "%1", conn: one}
+	connCh <- helloConn{paneID: "%2", conn: two}
+
+	var unexpectedIDs []string
+	out, err := waitHellos(lines, NewRouter(), &asyncQueue{}, testStream(), connCh, []string{"%2"}, 2*time.Second, func(hc helloConn) {
+		unexpectedIDs = append(unexpectedIDs, hc.paneID)
+	})
+	if err != nil {
+		t.Fatalf("waitHellos: %v", err)
+	}
+	if len(unexpectedIDs) != 1 || unexpectedIDs[0] != "%1" {
+		t.Errorf("unexpected = %v, want [%%1]", unexpectedIDs)
+	}
+	if len(out) != 1 || out["%2"] != two {
+		t.Errorf("out = %v, want only %%2", out)
+	}
+}
+
+// TestWaitHellosDuplicateDoesNotCompleteWait: two hellos for the same wanted
+// pane replace rather than count as two slots, so waiting for %2 and %3 does
+// not return on a pair of %2s.
+func TestWaitHellosDuplicateDoesNotCompleteWait(t *testing.T) {
+	lines := make(chan controlmode.Line)
+	connCh := make(chan helloConn)
+
+	first, firstPeer := net.Pipe()
+	defer firstPeer.Close()
+	second, secondPeer := net.Pipe()
+	defer second.Close()
+	defer secondPeer.Close()
+	third, thirdPeer := net.Pipe()
+	defer third.Close()
+	defer thirdPeer.Close()
+
+	firstClosed := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, firstPeer)
+		close(firstClosed)
+	}()
+
+	done := make(chan struct{})
+	var out map[string]net.Conn
+	var err error
+	go func() {
+		defer close(done)
+		out, err = waitHellos(lines, NewRouter(), &asyncQueue{}, testStream(), connCh, []string{"%2", "%3"}, 2*time.Second, nil)
+	}()
+
+	connCh <- helloConn{paneID: "%2", conn: first}
+	connCh <- helloConn{paneID: "%2", conn: second}
+
+	select {
+	case <-firstClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("overwritten %%2 conn was not closed")
+	}
+	select {
+	case <-done:
+		t.Fatal("waitHellos returned before %%3 arrived")
+	default:
+	}
+
+	connCh <- helloConn{paneID: "%3", conn: third}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitHellos did not return after %%3")
+	}
+	if err != nil {
+		t.Fatalf("waitHellos: %v", err)
+	}
+	if out["%2"] != second || out["%3"] != third {
+		t.Errorf("out = %v, want %%2=replacement and %%3", out)
 	}
 }
