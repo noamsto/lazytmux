@@ -84,6 +84,11 @@ func (w *mirrorWindow) allRemotePanes() []string {
 type registry struct {
 	mu       sync.Mutex
 	byRemote map[string]*mirrorWindow
+	// generation counts changes to the mirror SET, so a reader can tell that the
+	// rows it holds may no longer describe it. add counts too, and counts a
+	// rebuild under an existing remote id: retireMirror re-adds the same id
+	// against a fresh local window, which is a change no remote value reports.
+	generation uint64
 }
 
 func newRegistry() *registry {
@@ -101,6 +106,7 @@ func (r *registry) add(remoteID, localWin string) *mirrorWindow {
 		floatGeom:   map[string]controlmode.PaneCell{},
 	}
 	r.byRemote[remoteID] = w
+	r.generation++
 	return w
 }
 
@@ -117,8 +123,17 @@ func (r *registry) remove(remoteID string) (*mirrorWindow, bool) {
 	w, ok := r.byRemote[remoteID]
 	if ok {
 		delete(r.byRemote, remoteID)
+		r.generation++
 	}
 	return w, ok
+}
+
+// gen snapshots the generation. Read on the main loop, bumped there too, but
+// takes mu like every other accessor: the resize watcher shares this lock.
+func (r *registry) gen() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generation
 }
 
 func (r *registry) empty() bool {

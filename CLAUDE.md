@@ -190,17 +190,19 @@ bridged window as agent-free. The bridge ships the remote's state instead:
   pollers never run for a session whose only client is the bridge. The state
   therefore has to be pushed at write time — `claude-status-update`'s
   `bridge_stamp` — not derived by a reader on the remote.
-- The daemon polls `list-panes` for those options through `rt` (the
-  ordinal-matched round-tripper from #283), so it runs **on the main loop** and
-  nowhere else — `rt` reads the stream, which has one consumer. That leaves the
-  stream as the wake-up instead of a timer, which suffices: an agent that
-  changes state redraws its pane first, so the output ending a turn is what
-  brings the loop back around.
+- **The daemon subscribes rather than polls** (#566): `refresh-client -B
+  '<name>:%*:<format>'` makes tmux report the format's value for each pane on
+  `%subscription-changed` whenever it moves, so a stamp arrives as a stream line
+  and the shipper applies the row it was handed without reading the remote at
+  all. Available since tmux **3.2**, unused here until #566. Its own `list-panes`
+  read survives as a coarse backstop through `rt` (the ordinal-matched
+  round-tripper from #283), so that read still runs **on the main loop** and
+  nowhere else — `rt` reads the stream, which has one consumer.
 - It writes the files under **local** pane ids (`@bridge_pane` holds the
   reverse mapping), and stamps `timestamp` through a clock skew measured once at
   startup: ages drive the fade and the "last active" readout, and two hosts'
   clocks never agree.
-- The same poll carries each remote pane's `pane_current_command` into
+- The same format carries each remote pane's `pane_current_command` into
   `@bridge_proc` on the mirror pane, which `tmux-update-icons` prefers over the
   local one — that runs the renderer, so a mirrored window would otherwise draw
   the fallback glyph. Panes with **no** agent stay in the reply for exactly this
@@ -232,13 +234,32 @@ ships the remote window's own label state across instead.
   The colour/state values (`@bridge_crew_color`, `@bridge_pr_*`) are read *live*
   at render time through a `#{?#{@bridge_win},…}` conditional, so they are never
   in reflow's `read -r` list.
-- **Polled on the main loop only**, like `agentstatus.go` — `rt` reads the
-  stream, which has one consumer. But a window *option* change emits no
-  control-stream traffic at all, so unlike an agent state (whose pane redraws
-  first) nothing wakes the loop for it: `mainLoopTickInterval` is a coarse 5s
-  ticker added for exactly this, and the loop's stream read became a `select`
-  over the two. Every line taken off that channel must still `claimSeq`, or the
-  ordinal count falls behind and no later round-trip recognises its own reply.
+- **Subscribed, not polled**, like `agentstatus.go` — a window *option* change
+  emits no control-stream traffic **of its own**, which is why this shipper and
+  its neighbour both used to poll and why `mainLoopTickInterval` was cut to a
+  coarse 5s. `refresh-client -B '<name>:@*:<format>'` is the push channel
+  (#566), and its `%subscription-changed` lines are ordinary stream traffic: the
+  loop still `select`s over the tick, and every line taken off that channel must
+  still `claimSeq`, or the ordinal count falls behind and no later round-trip
+  recognises its own reply. The remaining `list-windows` read is a backstop,
+  reached on its own long floor or the moment the registry generation moves.
+- **What a subscription cannot report is a change in the mirror SET.** A window
+  created after its value was last reported, and a `retireMirror` rebuild under
+  the same remote id, both leave a mirror whose stamp is missing while the remote
+  value is unchanged — so nothing fires. `registry.generation` counts both, and a
+  shipper whose recorded generation is stale re-reads at once instead of waiting
+  out its backstop. Dropping the poll without this is the one way to get a
+  permanently bare mirror.
+- **Queued rows are applied by the loop, not by the dispatch that received
+  them.** Re-subscribing under an existing name re-reports *every* object — which
+  is how a reattach gets back to ground truth in one command — and the loop runs
+  a pass per line, so applying eagerly would cost one local fork per shipper, and
+  one forced reflow, per window and per pane of that snapshot. The shippers hold
+  their rows while more lines are already buffered on the pump (`queuedApplyDue`),
+  bounded so a stream that never goes quiet cannot hold them.
+- **A notification is edge-detected at 1 Hz**, so two changes inside a second
+  collapse to the last sampled value. No worse than the 1s pollers it replaces,
+  but it is not an event log.
 - **An unchanged row is not rewritten** (the neighbour's rule), but the cache is
   keyed on remote window id *and* the local window it landed on: `retireMirror`
   rebuilds a dead mirror under the same remote id against a fresh local window,
@@ -544,7 +565,10 @@ path, which every caller already handles.
   window's cap → `resume()` every sink (a pane `%pause`d under the old client
   never gets its `%continue`, and a paused sink drops every frame forever, out
   of `reseedDropped`'s reach) → `reconcileWindows` → retire-or-`reconcileLayout`
-  per survivor → one full reseed through the shared `reseedPanes`. `pause-after`
+  per survivor → one full reseed through the shared `reseedPanes` → re-subscribe
+  both shippers (#566: subscriptions are per control client, so the fresh one
+  carries none — and re-subscribing re-reports every window and pane, which is
+  the label/agent-state half of the repair for free). `pause-after`
   deliberately stays where it is, re-armed by the main loop after the first
   `settle()`: a reattach *is* a setup pass, and arming it earlier re-opens the
   very window that leaves a pane paused with no `%continue`.
@@ -558,15 +582,14 @@ path, which every caller already handles.
   that already failed: an outage is the one stretch in which a local window can
   die with no `%layout-change` to discover it on, and a remote that never touches
   that window again would strand the entry for the life of the daemon.
-- **The coarse main-loop tick is session-lifetime, not per attach.** The label
-  shipper is the one poller with no stream wake-up of its own — a remote window
-  option changes nothing the control stream reports — so `runConn` selects on
-  `loopTick` alongside the pump. Built once, before the attach loop: a ticker
-  built per attach would leak one per reconnect, and teardown can only stop the
-  handle it can see. `labelShipper` itself needs nothing from repair — it holds
-  no connection-scoped state, its `written` rows key on the local window id so a
-  retire-and-rebuild re-stamps on its own, and its 1s floor means the first
-  post-repair pass polls immediately.
+- **The coarse main-loop tick is session-lifetime, not per attach.** It was cut
+  for the label shipper, the one poller with no stream wake-up of its own; since
+  #566 that shipper is subscribed and the tick clocks the maintenance sweep,
+  `reseedDropped`/`reseedReshaped` and `retryFailedShapes` instead — so `runConn`
+  still selects on `loopTick` alongside the pump. Built once, before the attach
+  loop: a ticker built per attach would leak one per reconnect, and teardown can
+  only stop the handle it can see. The shippers' own rows survive a reattach
+  untouched; what does not is the subscription, which is why repair re-sends it.
 - **`@bridge_state`** is a session option the daemon alone writes:
   `disconnected` while a re-dial is pending, unset otherwise. Stamped before the
   first dial so the badge appears within a status tick, cleared only after the

@@ -1571,6 +1571,76 @@ $pane 1" ]; then
 	[ -z "$bare_labels" ]
 }
 
+# The two cases that can tell a subscription from a backstop read: after the
+# mirror has settled, neither creates a window or a pane — so the registry
+# generation is unchanged — and the next backstop read is 30s away, well outside
+# the budget below. Nothing but a %subscription-changed can carry the second
+# value.
+@test "a remote label change reaches the mirror on a subscription, not a poll" {
+	$SRC new-session -d -s rem -x 120 -y 34
+	$DST new-session -d -s host-sess -x 120 -y 34
+	$SRC set -w -t rem:1 @crew_name nova
+
+	bridge_up 1 subl
+
+	# Settle first: the shipper's opening read is due at daemon start, so this
+	# value proves nothing on its own.
+	for _ in $(seq 1 40); do
+		crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+		[ "$crew" = "nova" ] && break
+		sleep 0.2
+	done
+	[ "$crew" = "nova" ]
+
+	# The discriminator. Deliberately no send-keys: the notification is itself
+	# the stream traffic that wakes the loop, so this asserts the push, not a
+	# poll riding somebody else's output.
+	$SRC set -w -t rem:1 @crew_name orbit
+	for _ in $(seq 1 40); do
+		crew="$($DST show-options -w -t host-sess:1 -qv @bridge_crew_name 2>/dev/null || true)"
+		[ "$crew" = "orbit" ] && break
+		sleep 0.2
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$crew" = "orbit" ]
+}
+
+@test "a remote agent stamp reaches the local state tree on a subscription" {
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
+
+	$SRC new-session -d -s rem -x 120 -y 34
+	$DST new-session -d -s host-sess -x 120 -y 34
+	remote_pane="$($SRC list-panes -t rem -F '#{pane_id}')"
+	$SRC set -p -t "$remote_pane" @claude_status "waiting $(date +%s) 1"
+
+	bridge_up 1 suba
+
+	local_pane="$($DST list-panes -t host-sess:1 -F '#{pane_id}')"
+	pane_file="$CLAUDE_STATUS_DIR/panes/${local_pane#%}"
+	for _ in $(seq 1 40); do
+		[ -f "$pane_file" ] && break
+		sleep 0.2
+	done
+	[ -f "$pane_file" ]
+
+	# Pane scope (%*) rather than the window scope above, and a second
+	# subscription: worth proving on the wire separately.
+	$SRC set -p -t "$remote_pane" @claude_status "error $(date +%s) 1"
+	for _ in $(seq 1 40); do
+		body="$(cat "$pane_file" 2>/dev/null || true)"
+		[[ $body == *"state=error"* ]] && break
+		sleep 0.2
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[[ $body == *"state=error"* ]]
+}
+
 # run_detach runs lztmux-remote-detach against $1 under a `tmux` that is pinned
 # to the DST server: the script calls a bare `tmux` (correct in production), and
 # the absolute path inside the stub keeps it from re-entering itself. DETACH is

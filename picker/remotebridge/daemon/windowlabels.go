@@ -9,9 +9,14 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
 
-// windowLabelPollInterval is the floor between two polls. Main loop only: rt
+// windowLabelPollInterval is the floor between two polls while this shipper is
+// unsubscribed, and so the whole mechanism's latency then. Main loop only: rt
 // reads the stream, which has one consumer.
 const windowLabelPollInterval = time.Second
+
+// windowLabelBackstopInterval is that floor once %subscription-changed carries
+// the labels: the poll is then a reconciler, not the mechanism. See pollFloor.
+const windowLabelBackstopInterval = 30 * time.Second
 
 // mainLoopTickInterval is the main loop's coarse wake-up, and so the ceiling on
 // both this poll and the agent-status one. A remote window-option change emits
@@ -28,7 +33,9 @@ const mainLoopTickInterval = 5 * time.Second
 // the one genuinely free-form field — a branch remainder or an issue title may
 // hold a '|' — so it goes last, where a '|' lands inside it instead of shifting
 // the row; sanitization runs after the split and cannot repair a shift.
-const windowLabelFormat = "'#{window_id}|#{@crew_name}|#{@crew_color}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@window_pr_plain}|#{@window_label_id}|#{@window_label_rest_long}'"
+// Unquoted: it is both a -F argument and a subscription format, and only the
+// call site knows which quoting each needs.
+const windowLabelFormat = "#{window_id}|#{@crew_name}|#{@crew_color}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@window_pr_plain}|#{@window_label_id}|#{@window_label_rest_long}"
 
 // labelRow is one remote window's carried label state, already sanitized and
 // validated. Comparable, so the unchanged-row check is a struct compare.
@@ -156,8 +163,18 @@ func matching(v string, re *regexp.Regexp) string {
 // under @bridge_* names, the way agentShipper does the remote's pane state —
 // one level up, window options rather than pane options.
 type labelShipper struct {
-	written  map[string]writtenLabels // remote window id -> what was last written for it
-	lastPoll time.Time
+	written   map[string]writtenLabels // remote window id -> what was last written for it
+	lastPoll  time.Time
+	lastApply time.Time // last time queued rows were applied; bounds the burst wait
+	lastGen   uint64    // registry generation the last backstop read was made against
+
+	// subscribed is set per connection by Run once the remote has accepted the
+	// subscription; false leaves this shipper polling.
+	subscribed bool
+	// pending holds the rows notifications carried, keyed by remote window id so
+	// a burst collapses to one row per window, and applied by flush rather than
+	// by the dispatch that queued them.
+	pending map[string]labelRow
 }
 
 // writtenLabels is one remote window's last stamp, and the local window it
@@ -173,24 +190,46 @@ type writtenLabels struct {
 }
 
 func newLabelShipper() *labelShipper {
-	return &labelShipper{written: map[string]writtenLabels{}}
+	return &labelShipper{
+		written: map[string]writtenLabels{},
+		pending: map[string]labelRow{},
+	}
 }
 
-// poll re-reads the remote's window options and applies them, throttled to
-// windowLabelPollInterval. Main loop only: rt is not safe to share.
-func (s *labelShipper) poll(cfg Config, reg *registry, rt roundTrip) {
-	if time.Since(s.lastPoll) < windowLabelPollInterval {
-		return
+// queue records the row a %subscription-changed line carried. Pure: it is
+// called from dispatch, which may itself be running inside a reply reader's
+// drain, so it must not read the remote or fork tmux.
+func (s *labelShipper) queue(value string) {
+	for _, r := range parseWindowLabels(value) {
+		s.pending[r.id] = r
 	}
-	s.lastPoll = time.Now()
-	l, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), windowLabelFormat))
-	if !ok || l.Kind == controlmode.Error {
-		return
+}
+
+// flush applies whatever the notifications queued, then re-reads the remote if a
+// backstop read is due. Main loop only: rt is not safe to share.
+//
+// Both halves feed the same apply, and the reflow is decided once for the pass
+// so a snapshot that moves twenty windows still costs one — a label change
+// alters no window count, so reflow's count:width:height cache would skip it
+// (the @window_bridge_name precedent), but it is one forced reflow either way.
+func (s *labelShipper) flush(cfg Config, reg *registry, rt roundTrip, gen uint64, drained bool) {
+	changed := false
+	if queuedApplyDue(len(s.pending), drained, s.lastApply) {
+		rows := make([]labelRow, 0, len(s.pending))
+		for _, r := range s.pending {
+			rows = append(rows, r)
+		}
+		clear(s.pending)
+		s.lastApply = time.Now()
+		changed = s.apply(cfg, reg, rows)
 	}
-	if s.apply(cfg, reg, parseWindowLabels(string(l.Data))) {
-		// A label change alters no window count, so reflow's count:width:height
-		// cache would skip it — the @window_bridge_name precedent. Exactly once
-		// per pass, after every option write of that pass.
+	if due(s.lastPoll, pollFloor(s.subscribed, windowLabelPollInterval, windowLabelBackstopInterval), gen, s.lastGen) {
+		s.lastPoll, s.lastGen = time.Now(), gen
+		if l, ok := one(rt, fmt.Sprintf("list-windows -t %s -F %s", tmuxQuote(cfg.RemoteSession), tmuxQuote(windowLabelFormat))); ok && l.Kind != controlmode.Error {
+			changed = s.apply(cfg, reg, parseWindowLabels(string(l.Data))) || changed
+		}
+	}
+	if changed {
 		cfg.reflow()
 	}
 }

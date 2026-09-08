@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseAgentStatus(t *testing.T) {
@@ -187,5 +188,55 @@ func TestAgentShipperNoLocalPanes(t *testing.T) {
 	a.apply(Config{}, []paneStatus{{pane: "%1", state: "done", ts: 1}})
 	if len(a.written) != 0 {
 		t.Errorf("no LocalPanes seam should write nothing, got %v", a.written)
+	}
+}
+
+// The hazard the split between stamp and apply exists for: a
+// %subscription-changed carries ONE pane, and reaping against it would read
+// every other pane as "stopped reporting" and delete its files — an agent's
+// state vanishing from the status bar because a different pane changed.
+func TestAgentShipperQueuedFlushDoesNotReapOtherPanes(t *testing.T) {
+	dir := t.TempDir()
+	a := newAgentShipper("lab-mono", 0)
+	a.dir = dir
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+
+	// Both panes reporting, established by a full read.
+	a.apply(cfg, []paneStatus{
+		{pane: "%1", proc: "claude", state: "waiting", ts: 1700000000},
+		{pane: "%2", proc: "claude", state: "processing", ts: 1700000000},
+	})
+	for _, id := range []string{"7", "8"} {
+		if _, err := os.Stat(filepath.Join(dir, "panes", id)); err != nil {
+			t.Fatalf("panes/%s not written: %v", id, err)
+		}
+	}
+
+	// One pane's stamp moves. Subscribed and freshly polled, so flush does no
+	// read of its own and applies the queued row alone.
+	a.subscribed = true
+	a.lastPoll, a.lastGen = time.Now(), uint64(0)
+	a.queue("%2|claude|done 1700000100 |")
+
+	var issued []string
+	a.flush(cfg, replyRT(&issued, body("")), 0, true)
+
+	if len(issued) != 0 {
+		t.Errorf("issued %v, want no round-trip on the notification path", issued)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "panes", "7")); err != nil {
+		t.Errorf("the pane nobody reported on lost its state: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "panes", "8"))
+	if err != nil || !strings.Contains(string(got), "state=done") {
+		t.Errorf("panes/8 = %q (%v), want the queued state", got, err)
+	}
+
+	// The backstop read is the only caller holding the whole set, so it is the
+	// one that may decide a pane has stopped reporting.
+	a.apply(cfg, []paneStatus{{pane: "%2", proc: "claude", state: "done", ts: 1700000100}})
+	if _, err := os.Stat(filepath.Join(dir, "panes", "7")); !os.IsNotExist(err) {
+		t.Error("a full read that omits a pane must reap it")
 	}
 }
