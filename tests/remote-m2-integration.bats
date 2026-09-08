@@ -953,6 +953,160 @@ wait_bridge_disconnected() {
 	run ! grep -F -- $'\033[6n' "$f"
 }
 
+# === Bridge sixel relay (R8): the raster policy gate ===
+#
+# A sixel crossing the bridge is either dropped (no client sixel capability to
+# paint it, the default) or relayed bare, gated by Relay.Sixel() — a value
+# computed once from the daemon's own --termfeatures flag (R6) and published
+# to the remote SESSION as LZTMUX_RELAY_GRAPHICS (R5), so a program there can
+# tell whether handing the terminal a sixel directly will actually reach it.
+#
+# capture-pane cannot see any of this: tmux's own DCS parser eats a sixel, so
+# it reads as green whether or not the bytes crossed. pipe-pane on the mirror
+# pane — the instrument the keyneg query test above already uses — is what
+# actually sees the raw bytes.
+#
+# Size alone does not reach C1's overflow/discard arm: drainOutput
+# concatenates every queued FrameOutput before one Scanner.Feed call, so a
+# burst delivered whole decodes as one complete raster and the overflow arm is
+# never entered. What reaches it is the SPLIT: the introducer plus >64 KiB of
+# body must land in one Feed call and the closing tail plus ST in a later,
+# separate one — so the first sees an incomplete, over-budget sequence
+# (forcing the discard-to-terminator path) and the second sees only the
+# terminator. The scanner unit tests (picker/remotebridge/graphics/
+# scan_test.go) are the primary proof of that overflow/discard behaviour;
+# this bats test is only the integration witness, since its timing is not
+# fully under the test's control.
+#
+# The split is forced with a `sleep` INSIDE one remote command line, not two
+# separate send-keys calls: bash prints a fresh PS1 prompt (and, before
+# `stty -echo` even matters, toggles bracketed-paste with `\e[?2004h`/`l`)
+# between any two top-level commands, and either one landing on the pty
+# between the tildes and the ST would corrupt assertion (b)'s byte-identical
+# check — measured, not hypothesised: an earlier two-send-keys draft of this
+# helper leaked exactly the next PS1 prompt into that gap. A single command
+# has no such gap: `stty -echo` only needs to suppress this one line's own
+# keystroke echo, and the mid-command `sleep` still gives the daemon's pump
+# goroutine a real, separately-drained batch to react to before the tail is
+# even produced.
+#
+# The marker is the pane shell's own $$ (its PID), substituted only when the
+# line actually RUNS — never a literal value typed anywhere. The shell echoes
+# a typed line before running it (echo is only silenced starting mid-line, by
+# that same line's own `stty -echo`), so a literal marker, or one assigned by
+# an earlier `export` line, would satisfy the caller's poll the instant it was
+# typed — a whole second before the command reaches its `sleep 1` and
+# produces anything, let alone the tail — and the caller would then kill the
+# daemon out from under a sixel that was never actually written. Measured,
+# not hypothesised: two earlier drafts (a literal string, then an `export`ed
+# one) both did exactly this. "$$" sidesteps it: the echoed line shows the
+# literal two characters "$$", and only the command's actual output — after
+# the sleep, after the tail — shows the expanded PID, so the caller (which
+# reads the same PID off tmux's own #{pane_pid}, never off the pty) cannot
+# match early.
+send_straddled_sixel() {
+	$SRC send-keys -t rem "stty -echo; printf '\\033Pq'; head -c 70000 /dev/zero | tr '\\0' '~'; sleep 1; printf '~~~\\033\\\\'; printf 'SIXELDONE_%s\\n' \"\$\$\"" Enter
+}
+
+# expected_sixel_bytes writes the exact bytes send_straddled_sixel produces to
+# $1 — the echoed command line itself is excluded, since `stty -echo` (the
+# first thing that command runs) suppresses every byte after it.
+expected_sixel_bytes() {
+	printf '\033Pq' >"$1"
+	head -c 70000 /dev/zero | tr '\0' '~' >>"$1"
+	printf '~~~\033\134' >>"$1"
+}
+
+# (a) — relay off, the RED-first assertion (spec R8): an oversized sixel must
+# not reach the mirror pane's pty at all, not the introducer and not any of
+# the body. This is a teeth-check, not just a positive case: swapping this
+# test's --termfeatures for "sixel" (assertion (b)'s value below) makes it
+# fail, which is how it is known the absence check below is not vacuously
+# green against an empty or not-yet-written pipe file.
+@test "sixel relay off: an oversized sixel never reaches the mirror pane's pty" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	bridge_up 1 gxoff --termfeatures ''
+
+	f="$BATS_TEST_TMPDIR/gxoff.pipe"
+	$DST pipe-pane -o -t host-sess:1.0 "cat >> $f"
+
+	# The remote pane's own PID, read via tmux rather than the pty, is what
+	# send_straddled_sixel's command will print as "$$" once it actually runs.
+	marker="SIXELDONE_$($SRC display-message -p -t rem -F '#{pane_pid}')"
+	send_straddled_sixel
+
+	# pipe-pane writes asynchronously; poll for the marker before asserting
+	# the sixel's absence, or an empty/not-yet-written file makes that check
+	# meaningless (same reasoning as the keyneg test above).
+	seen=no
+	for _ in $(seq 1 60); do
+		grep -q "$marker" "$f" 2>/dev/null && {
+			seen=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	# (c): the daemon's publish is unconditional, empty value included (see
+	# daemon.go's comment on the send(RelayEnvCmd(...)) call) — so the remote
+	# session's copy is SET, not unset, and reads back empty rather than
+	# absent.
+	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$seen" = yes ]
+	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
+	# Not the DCS introducer...
+	run ! grep -F -- $'\033Pq' "$f"
+	# ...and not a run of its body either (a lone '~' is just the typed
+	# command line's own literal quote-tilde-quote, harmless).
+	run ! grep -E -- '~{50,}' "$f"
+}
+
+# (b) — relay on: the same bytes appear, byte-identical. This half is
+# meaningful only as (a)'s paired opposite on the same harness with the gate
+# flipped: with nothing to filter it, a bare sixel already reaches the mirror
+# pty today, so on its own this assertion is vacuously green and proves
+# nothing about the gate.
+@test "sixel relay on: the same oversized sixel reaches the mirror pane's pty byte-identical" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	bridge_up 1 gxon --termfeatures sixel
+
+	f="$BATS_TEST_TMPDIR/gxon.pipe"
+	$DST pipe-pane -o -t host-sess:1.0 "cat >> $f"
+
+	marker="SIXELDONE_$($SRC display-message -p -t rem -F '#{pane_pid}')"
+	send_straddled_sixel
+
+	seen=no
+	for _ in $(seq 1 60); do
+		grep -q "$marker" "$f" 2>/dev/null && {
+			seen=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+
+	exp="$BATS_TEST_TMPDIR/gxon.expected"
+	expected_sixel_bytes "$exp"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$seen" = yes ]
+	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ]
+	expected="$(cat "$exp")"
+	grep -qF -- "$expected" "$f"
+}
+
 # === M2.3: structural input (ctl -> daemon -> remote -> mirror) ===
 #
 # These drive the ctl binary directly against the daemon's socket, which is the

@@ -3,3 +3,5 @@
 thm = "thm"
 # tmux layout-string checksums quoted verbatim in the bridge design docs
 ba = "ba"
+# tmux's sixel terminfo capability (TTYC_SXL), quoted from tty-features.c
+sxl = "sxl"

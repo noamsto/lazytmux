@@ -76,6 +76,10 @@ type Config struct {
 	// IdentityTimeout bounds one attach's identity read; 0 takes
 	// defaultIdentityTimeout. See armIdentityDeadline.
 	IdentityTimeout time.Duration
+	// Relay is the local terminal's relayable-graphics capability (R5/R6):
+	// zero value means no relayable capability. Published to the remote
+	// session via relayenv.go and read by the graphics proxy's drop policy.
+	Relay graphics.Relay
 }
 
 // defaultIdentityTimeout bounds the identity read that leads every re-attach.
@@ -587,6 +591,16 @@ func Run(cfg Config) error {
 		notifyThemeMissing(cfg)
 	}
 
+	// Published once per Run() rather than repeated per attach: a reconnect is
+	// identity-verified against the same server (newSessionPin above), whose
+	// session environment table survives the outage, so the value written here
+	// is still there on repair. Sent unconditionally, empty value included — a
+	// prior bridge from a sixel-capable terminal can have left "sixel" in this
+	// same session's table, and skipping the write when this one has nothing to
+	// say would leave that stale value standing and make the remote emit
+	// graphics this proxy only drops.
+	send(RelayEnvCmd(cfg.RemoteSession, cfg.Relay.String()))
+
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
 	if err != nil {
@@ -701,6 +715,20 @@ func Run(cfg Config) error {
 				c.Close()
 			}
 		}
+		// Unset before hold.close(): the variable describes the *local*
+		// terminal of a bridge that, after this closure returns, no longer
+		// exists. A stale "sixel" read by someone who later attaches to this
+		// remote session directly, from a terminal with no sixel, reproduces
+		// the #319 garbage-on-screen symptom on a screen the bridge was never
+		// part of. This is best-effort, not a guarantee: the dominant teardown
+		// path is SIGTERM, whose signal handler kills the transport before Run
+		// ever reaches this closure, so send here already fails closed and the
+		// unset does not land — it only lands on Run's own early-return
+		// teardowns, where the connection is still alive. A residue left by a
+		// SIGKILL or a lost race is corrected by the next bridge's
+		// unconditional RelayEnvCmd write above; a direct attach in that gap
+		// can still read the stale value.
+		send(RelayEnvUnsetCmd(cfg.RemoteSession))
 		// Whichever connection is current, which after a reconnect is no longer
 		// the one cfg.Ctl named.
 		hold.close()
@@ -1824,7 +1852,7 @@ func (s *outputSink) start(conn net.Conn) {
 						tail = append(gfx.Filter(tail), gfx.Close()...)
 					}
 					if len(tail) > 0 {
-						wire.WriteFrame(conn, wire.FrameOutput, tail)
+						wire.WriteStream(conn, wire.FrameOutput, tail)
 					}
 					return
 				}
@@ -1846,12 +1874,16 @@ func (s *outputSink) start(conn net.Conn) {
 					continue
 				}
 			}
-			if err := wire.WriteFrame(conn, f.typ, f.payload); err != nil {
+			write := wire.WriteFrame
+			if f.typ == wire.FrameOutput || f.typ == wire.FrameSeed {
+				write = wire.WriteStream
+			}
+			if err := write(conn, f.typ, f.payload); err != nil {
 				return
 			}
 			if f.typ == wire.FrameSeed && gfx != nil {
 				if replay := gfx.Replay(); len(replay) > 0 {
-					if err := wire.WriteFrame(conn, wire.FrameOutput, replay); err != nil {
+					if err := wire.WriteStream(conn, wire.FrameOutput, replay); err != nil {
 						return
 					}
 				}

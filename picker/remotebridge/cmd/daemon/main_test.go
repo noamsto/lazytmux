@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 )
 
 // TestReflowRunShellArgsSurvivesFormatInjection exercises a #(...)-bearing
@@ -166,6 +168,42 @@ func TestSSHControlArgsOmitsEmptyColortermAndTermProgram(t *testing.T) {
 		if strings.Contains(joined, unwanted) {
 			t.Errorf("unexpected %q in %q", unwanted, joined)
 		}
+	}
+}
+
+// TestNewGraphicsGatesOnRelayOnBothTransportBranches is C7's only guard
+// against the trap the plan calls out by name: NewGraphics must build the
+// proxy with graphics.NewRelay — never fall back to the relay-off
+// graphics.New — on BOTH the ssh branch (ctlSock != "") and the
+// --test-local/-ssh "" branch (ctlSock == ""), gated by the same Relay value
+// on each. Leaving the ssh branch on plain graphics.New would ship sixel
+// relay working only under --test-local, i.e. dead on the only transport a
+// real user has, and the bats proof (which runs --test-local exclusively)
+// would not catch it. Asserted through Filter's forwarding behaviour, never
+// by reaching into the proxy's unexported fields.
+func TestNewGraphicsGatesOnRelayOnBothTransportBranches(t *testing.T) {
+	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+	sixelOn := graphics.RelayFromTermFeatures("bpaste,sixel")
+	sixelOff := graphics.RelayFromTermFeatures("bpaste")
+
+	for _, tc := range []struct {
+		name    string
+		ctlSock string // "" is the --test-local/-ssh "" branch; non-empty is the ssh branch
+	}{
+		{"test-local transport (no ctl socket)", ""},
+		{"ssh transport (ctl socket set)", "/tmp/does-not-need-to-exist.sock"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newProxy := newGraphics(tc.ctlSock, "host", t.TempDir(), 1<<20, sixelOn, graphics.DefaultRasterHold)
+			if got := string(newProxy("").Filter([]byte(sixel))); got != sixel {
+				t.Errorf("gate on: Filter(sixel) = %q, want the sixel forwarded", got)
+			}
+
+			newProxyOff := newGraphics(tc.ctlSock, "host", t.TempDir(), 1<<20, sixelOff, graphics.DefaultRasterHold)
+			if got := string(newProxyOff("").Filter([]byte(sixel))); got != "" {
+				t.Errorf("gate off: Filter(sixel) = %q, want it dropped", got)
+			}
+		})
 	}
 }
 
