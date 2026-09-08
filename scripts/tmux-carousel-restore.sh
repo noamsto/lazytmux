@@ -125,8 +125,13 @@ key="$srv-${HOST#%}"
 # that would also mean honouring AEYE_SPLIT/CELL_ASPECT, a duplication this
 # design doesn't budget for. It's aeye's own documented default for absent
 # dims, so a wrong guess costs one `prefix + I` toggle, not correctness.
-tmux set-option -p -t "$TMUX_PANE" @claude_img_src "$key"
-tmux set-option -p -t "$TMUX_PANE" @claude_img_axis side
+# One invocation, not two: as separate commands a failure of the second (the
+# pane can close in the gap — `set-option -p` on a missing pane exits 1) would
+# abort under set -e with @claude_img_src already written, leaving exactly the
+# half-stamped pane the resolution ordering above exists to prevent. Batched,
+# tmux parses both before running either, so they stand or fall together.
+tmux set-option -p -t "$TMUX_PANE" @claude_img_src "$key" \; \
+	set-option -p -t "$TMUX_PANE" @claude_img_axis side
 
 # AEYE_HOST_PANE gives the viewer's own `s` axis toggle a target
 # (gallery_split.go's hostPane), same as the launcher's env_args.

@@ -311,7 +311,12 @@ run_update_icons_with_carousel() {
 
 	# The arg omitted entirely, as the run-shell hook invocation
 	# (config/tmux.conf.nix) does — run_update_icons never passes a 4th argv.
-	run_update_icons
+	# CAROUSEL_RESTORE_BIN is supplied anyway: left unset it defaults to the
+	# literal "@carousel_restore@", which trips the independent placeholder
+	# guard on its own, so this case would pass even with the $RESUME_CAROUSEL
+	# check deleted. Passing a real path isolates the missing-$4 default as the
+	# only thing that can keep the stamp away.
+	CAROUSEL_RESTORE_BIN="$bin" run_update_icons
 	assert_relaunch "<unset>"
 }
 

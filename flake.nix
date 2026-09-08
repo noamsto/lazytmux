@@ -728,13 +728,35 @@
           # here and still fail once aeye's side actually drifts, which is
           # exactly the silent-breakage mode this check exists to catch (the
           # carousel opens, finds nothing, and reads as an unrelated bug).
+          # tmux-carousel-restore recomputes aeye's manifest key itself, so a
+          # change to aeye's formula would break the carousel silently — it
+          # opens, finds nothing, and reads as an unrelated bug. This pins the
+          # duplication BEHAVIOURALLY rather than by substring: it asks aeye's
+          # own shipped launcher what key it derives (`--resolve` is that
+          # script's documented test seam, and needs no tmux server — it parses
+          # $TMUX as a string) and compares against the shape this repo's script
+          # hardcodes. A substring grep for `="$srv-` would stay green through a
+          # key EXTENSION (e.g. `$srv-$pane-$winid`), which is exactly the drift
+          # that matters; comparing the derived key catches it.
           carousel-key-formula-pin =
             pkgs.runCommand "carousel-key-formula-pin" {
-              nativeBuildInputs = [pkgs.gnugrep];
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils inputs.aeye.packages.${pkgs.system}.toggle];
             } ''
-              grep -q 'Manifest key: <tmux server pid>-<pane>' ${inputs.aeye}/main.go
-              grep -q '="$srv-' ${inputs.aeye}/scripts/tmux-claude-images.sh
-              grep -q '="$srv-' ${./scripts/tmux-carousel-restore.sh}
+              # Two distinct pairs, so a reordering ("<pane>-<srv>") cannot pass
+              # by coincidence on a single sample.
+              for pair in "12345 %7 12345-7" "999 %0 999-0"; do
+                set -- $pair
+                got="$(TMUX="/tmp/sock,$1,0" TMUX_PANE="$2" tmux-claude-images --resolve | cut -f2)"
+                if [ "$got" != "$3" ]; then
+                  echo "aeye's manifest key formula changed: TMUX_PANE=$2 srv=$1 now derives '$got', expected '$3'." >&2
+                  echo "scripts/tmux-carousel-restore.sh computes <srv>-<pane sans %> and must be updated to match." >&2
+                  exit 1
+                fi
+              done
+
+              # And pin our side, so a change here without one there is equally
+              # loud. Anchored on the assignment, not a bare substring.
+              grep -qF 'key="$srv-''${HOST#%}"' ${./scripts/tmux-carousel-restore.sh}
               touch $out
             '';
 

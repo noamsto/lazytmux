@@ -212,8 +212,10 @@ main() {
 	# stamped as a command (same rule as @assume_dead_after@ in lib-claude.sh):
 	# stamping "@carousel_restore@" would relaunch a nonexistent command AND
 	# leave the pane marked as a restorable viewer, which is worse than not
-	# stamping. Nix already gates @resume_carousel on carousel-aeye != null, so
-	# this is belt-and-braces, not the primary guard.
+	# stamping. resumeCarouselEnable (modules/home-manager.nix) also gates
+	# @resume_carousel on carousel-aeye != null, so this is the second of two
+	# guards — kept because this script is also run directly by tests and hooks,
+	# where that nix-side gate isn't in play.
 	if [[ $RESUME_CAROUSEL == on && $CAROUSEL_RESTORE_BIN != @* ]]; then
 		for pane_file in "${!pane_img_src[@]}"; do
 			[[ -n ${pane_img_src[$pane_file]} ]] || continue

@@ -176,7 +176,11 @@
 
   # Only stamp the carousel pane's @remux_relaunch when tmux-remux is actually
   # installed to read it, mirroring resumeCursorEnable above.
-  resumeCarouselEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCarousel;
+  # carousel-aeye is part of the gate, not just persist: with the viewer package
+  # unwired there is no store path to stamp, so @resume_carousel must stay off
+  # rather than leave tmux-update-icons' own placeholder guard as the only thing
+  # standing between a misconfigured consumer and a broken @remux_relaunch.
+  resumeCarouselEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCarousel && carousel-aeye != null;
 
   # Stable startup script shared by the Linux systemd service and the darwin
   # launchd agent. Resolves tmux from the user profile so the unit/plist never
