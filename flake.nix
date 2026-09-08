@@ -722,22 +722,16 @@
               touch $out
             '';
 
-          # Condition 1 (docs/superpowers/specs/2026-09-08-carousel-remux-resume-design.md):
-          # pin scripts/tmux-carousel-restore.sh's key formula against aeye's
-          # OWN flake input, not a local checkout — a checkout path would pass
-          # here and still fail once aeye's side actually drifts, which is
-          # exactly the silent-breakage mode this check exists to catch (the
-          # carousel opens, finds nothing, and reads as an unrelated bug).
           # tmux-carousel-restore recomputes aeye's manifest key itself, so a
-          # change to aeye's formula would break the carousel silently — it
-          # opens, finds nothing, and reads as an unrelated bug. This pins the
-          # duplication BEHAVIOURALLY rather than by substring: it asks aeye's
-          # own shipped launcher what key it derives (`--resolve` is that
-          # script's documented test seam, and needs no tmux server — it parses
-          # $TMUX as a string) and compares against the shape this repo's script
-          # hardcodes. A substring grep for `="$srv-` would stay green through a
-          # key EXTENSION (e.g. `$srv-$pane-$winid`), which is exactly the drift
-          # that matters; comparing the derived key catches it.
+          # change on aeye's side breaks the carousel silently — it opens, finds
+          # nothing, and reads as an unrelated bug. Pinned BEHAVIOURALLY: ask
+          # aeye's own shipped launcher what key it derives (`--resolve` is that
+          # script's documented seam and needs no tmux server, it parses $TMUX as
+          # a string) and compare against the shape this repo hardcodes. A
+          # substring grep for `="$srv-` stays green through a key EXTENSION
+          # (`$srv-$pane-$winid`), which is the drift that matters. Reads
+          # ${inputs.aeye}, never a local checkout, which would pass here and
+          # still miss the drift.
           carousel-key-formula-pin =
             pkgs.runCommand "carousel-key-formula-pin" {
               nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils inputs.aeye.packages.${pkgs.system}.toggle];

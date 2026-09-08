@@ -206,16 +206,11 @@ main() {
 	# carousel (non-empty @claude_img_src) so tmux-remux relaunches it via
 	# tmux-carousel-restore (not a bare shell) on a future restore. A viewer pane
 	# has no claude-status state file, so it never appears in claude_pane_ids()
-	# below — this is a separate pass over the same batched read. Change-gated
-	# like the Claude stamp, and -q is likewise omitted so a lost write is loud.
-	# An unsubstituted placeholder disables the pass outright rather than being
-	# stamped as a command (same rule as @assume_dead_after@ in lib-claude.sh):
-	# stamping "@carousel_restore@" would relaunch a nonexistent command AND
-	# leave the pane marked as a restorable viewer, which is worse than not
-	# stamping. resumeCarouselEnable (modules/home-manager.nix) also gates
-	# @resume_carousel on carousel-aeye != null, so this is the second of two
-	# guards — kept because this script is also run directly by tests and hooks,
-	# where that nix-side gate isn't in play.
+	# below — hence a separate pass over the same batched read. Change-gated like
+	# the Claude stamp, and -q is likewise omitted so a lost write is loud.
+	# The @* test disables the pass on an unsubstituted placeholder (the
+	# @assume_dead_after@ rule in lib-claude.sh); resumeCarouselEnable gates the
+	# same case in nix, but this script also runs straight from tests and hooks.
 	if [[ $RESUME_CAROUSEL == on && $CAROUSEL_RESTORE_BIN != @* ]]; then
 		for pane_file in "${!pane_img_src[@]}"; do
 			[[ -n ${pane_img_src[$pane_file]} ]] || continue

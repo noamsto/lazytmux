@@ -555,23 +555,13 @@
     then "${script.tmux-carousel-restore}/bin/tmux-carousel-restore"
     else "@carousel_restore@";
 
-  # Built unconditionally, but kept out of iconSubstFrom/iconSubstTo and
-  # scriptsWithIcons: either would let the script substitute its own store path
-  # into itself (infinite recursion at eval, the hazard @reflow@ avoids).
-  # The restored-carousel relaunch. Substitutes the viewer store path and the
-  # agentdetect command list — the latter is what host discovery matches a
-  # sibling pane's command against, so leaving it unsubstituted would not fail
-  # loudly: the script would fall through its bounded retry to the
-  # sole-non-self-pane fallback on every restore, quietly disabling the
-  # lowest-index tie-break. agentCommands is a plain string constant, not a
-  # member of `script`, so it carries none of the self-reference hazard that
-  # keeps this builder separate from mkScriptIcons.
-  # The viewer path is left as its own placeholder when carousel-aeye is unwired
-  # — the script's `[[ -x ]]` resolution treats an unsubstituted placeholder as a
-  # miss and exits without stamping, the same "an unsubstituted placeholder
-  # disables it" rule as @assume_dead_after@ in lib-claude.sh. That keeps
-  # tmux-carousel-restore an unconditional member of `script`, so callers can
-  # reference it without a null guard.
+  # Its own builder, not mkScriptIcons: a script carrying @carousel_restore@
+  # could substitute its own store path into itself (infinite recursion at eval,
+  # the hazard @reflow@ avoids). @AGENT_COMMANDS@ matters as much as the viewer
+  # path — host discovery matches a sibling pane's command against it, and left
+  # unsubstituted it fails silently, degrading every restore to the
+  # sole-non-self-pane fallback. Unwired, the viewer path stays a placeholder,
+  # which the script's own `[[ -x ]]` treats as a miss.
   mkScriptCarouselRestore = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings

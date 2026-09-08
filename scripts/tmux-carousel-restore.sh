@@ -16,19 +16,13 @@ set -euo pipefail
 [[ -n ${TMUX_PANE:-} ]] || exit 0
 command -v tmux >/dev/null 2>&1 || exit 0
 
-# Resolve the viewer BEFORE stamping anything below. Under set -e a failed
-# resolution aborts the script; if that happened after the @claude_img_src
-# stamp, the pane would be left a bare shell MARKED as a viewer, so
-# tmux-update-icons re-stamps this same relaunch every tick and every later
-# restore reproduces the same fake viewer — a self-perpetuating wrong state,
-# strictly worse than today's plain bare shell. @carousel_aeye@ is an absolute
-# store path substituted at Nix build time (config/tmux.conf.nix); an
-# unsubstituted placeholder or a missing binary both just aren't executable,
-# so the -x test alone covers both misses.
-# ${AEYE_BIN:-...} is a test seam (bats can inject a stub path), not a user
-# override — update-environment never carries it, so a restored pane's own
-# shell config can never set it (same phrasing as AGENT_DETECT_BIN in
-# tmux-update-icons.sh / lib-claude.sh).
+# Resolve the viewer BEFORE stamping anything below: under set -e an abort here
+# after the @claude_img_src stamp would leave a bare shell MARKED as a viewer,
+# which tmux-update-icons then re-stamps every tick and every later restore
+# faithfully reproduces. @carousel_aeye@ is an absolute store path substituted
+# at Nix build time, so -x covers both an unsubstituted placeholder and a
+# missing binary. ${AEYE_BIN:-...} is a test seam, not a user override —
+# update-environment never carries it (cf. AGENT_DETECT_BIN in lib-claude.sh).
 viewer="${AEYE_BIN:-@carousel_aeye@}"
 [[ -x $viewer ]] || exit 0
 
