@@ -238,10 +238,12 @@ func (s *windowSweeper) healDeadRenderers(cfg Config, dead map[string]bool, send
 // select-layout to work around it (tmux/tmux#5577: even its own window_layout
 // does not parse back in). The reshape genuinely has to wait.
 //
-// What must not wait is the recovery. reconcileLayout runs on a %layout-change,
-// a coalesced batch of them, or a reattach — all remote events. Closing a local
-// float is none of those, so the mirror kept the stale shape until the remote
-// happened to move that window again, which on an idle one can be a long time.
+// What must not wait is the recovery. reconcileLayout is reached via
+// reconcileLayoutFrom on a %layout-change or a coalesced batch of them — which
+// may answer and return before ever reaching here — or directly on a
+// reattach; all remote events. Closing a local float is none of those, so the
+// mirror kept the stale shape until the remote happened to move that window
+// again, which on an idle one can be a long time.
 // applyLayout already leaves w.layout stale on failure precisely so a later pass
 // retries; this is the pass.
 //

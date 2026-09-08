@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,9 +22,81 @@ const maxReconcilePasses = 5
 // window, never by acting on the broken mapping.
 var errLocalPanesDesynced = errors.New("local panes desynced from the remote order")
 
-// reconcileLayout re-reads window w's remote layout and applies the general
-// pane diff (planPaneOps) so the local mirror renders the remote's panes in the
-// remote's order, then re-fits geometry.
+// reconcileLayout reads ground truth for window w's remote layout and zoom
+// state, then delegates to reconcileSnapshot to apply it.
+func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
+	target := remoteWinTarget(cfg, w.remoteID)
+
+	L, remoteActive, zoomed, err := readLayout(rt, target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
+		return false
+	}
+
+	return reconcileSnapshot(cfg, w, L, remoteActive, zoomed, send, router, waitHellos, cst, cv, rt)
+}
+
+// reconcileLayoutFrom is reconcileLayout for a %layout-change notification,
+// which already carries the unzoomed layout string and the zoom flag. A line
+// that reports nothing the mirror does not already show returns without a
+// round-trip, and a geometry-only reshape enters the pass loop from the line's
+// own layout. Everything else still reads first: a pane-set or float change
+// needs the active pane id for focus-follow, and a zoom transition needs the
+// post-command snapshot — window_push_zoom/window_pop_zoom bracket structural
+// commands, so on a zoomed window tmux emits transient unzoomed lines
+// describing a state it leaves before the command returns.
+func reconcileLayoutFrom(cfg Config, w *mirrorWindow, l controlmode.Line, send func(string), router *Router,
+	waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
+	n, ok := parseLayoutNotice(l)
+	if !ok {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	L, err := controlmode.ParseLayout(n.layout)
+	if err != nil {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	// A stale pane-set line applied here would split or kill a local pane for
+	// a remote pane the command has already moved past.
+	if !slices.Equal(RemotePaneOrder(L), w.remotePanes) {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	if !noFloatWork(w, L) {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	// Only the zoom flag can still disagree. A mismatch is a real zoom or
+	// unzoom, or the unzoomed line that opens a push/pop-zoom bracket;
+	// only the read's post-command snapshot tells them apart.
+	if n.zoomed != w.appliedZoom {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	if L.Raw == w.layout {
+		return false
+	}
+	// A zoomed reshape needs the active pane for the -Z toggle and the zoomed
+	// pane's dims; applyLayout can drop a mirrored float and reconcileFloats
+	// re-add it inside the pass, and that re-add's focus-follow needs it too.
+	if n.zoomed || len(w.localFloats) > 0 {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
+	// Geometry only: same panes, same floats, no zoom reported. No active
+	// pane id is passed because nothing on this path consumes one — focus-
+	// follow is gated on a structural diff, the -Z toggle and zoomed-pane dims
+	// on a zoom, the post-loop float focus on an added float. A line the
+	// remote has already moved past costs one pass: the trailing re-read
+	// below runs the next one on its own ground-truth triple.
+	//
+	// Not covered: a mirror still zoomed when this fires, with local cells
+	// the window fit alone already matches, so localCellsMatch skips the
+	// select-layout that would unzoom it and no toggle can fire. Unreached
+	// here — a zoomed mirror's #{window_layout} is the saved tree it last
+	// applied, and no tmux emitter produces a flag-off geometry line under a
+	// zoom (the unzoom lines carry the layout unchanged and land above).
+	return reconcileSnapshot(cfg, w, L, "", false, send, router, waitHellos, cst, cv, rt)
+}
+
+// reconcileSnapshot applies the general pane diff (planPaneOps) for window w
+// against the already-read remote layout L, so the local mirror renders the
+// remote's panes in the remote's order, then re-fits geometry.
 //
 // The remote window is targeted by its id (@N) directly, never by a bare index.
 //
@@ -38,19 +111,16 @@ var errLocalPanesDesynced = errors.New("local panes desynced from the remote ord
 // nothing this pass aims at it can land. The caller owns that recovery — it
 // holds the registry, and the rebuild goes back through reconcileWindows so the
 // replacement is built by the one path that stamps and names a mirror window.
-func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
+func reconcileSnapshot(cfg Config, w *mirrorWindow, L controlmode.Layout, remoteActive string, zoomed bool, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) (retire bool) {
 	target := remoteWinTarget(cfg, w.remoteID)
-
-	L, remoteActive, zoomed, err := readLayout(rt, target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: layout-change: %v\n", err)
-		return false
-	}
 
 	// Same tiled shape, same zoom state: no tiled pane moved, so the pass loop
 	// below has nothing to do for one. A resize burst or a spurious/duplicate
-	// %layout-change then pays only this one cheap readLayout round-trip
-	// instead of the FitWindowCmd + per-pane resize/reseed. L.Raw alone isn't
+	// %layout-change reaching this entry — the read-first one directly, or
+	// reconcileLayoutFrom after falling through its own gates 1/2 — then pays
+	// only this one cheap readLayout round-trip instead of the FitWindowCmd +
+	// per-pane resize/reseed; a notification that matched reconcileLayoutFrom's
+	// own gate 3 no-op returned before paying even that. L.Raw alone isn't
 	// enough for that: it is deliberately the unzoomed geometry (see
 	// readLayout's doc comment), so the zoom flag has to agree too.
 	if L.Raw == w.layout {
@@ -263,8 +333,9 @@ passes:
 }
 
 // noFloatWork reports that w's mirrored floats already match L's — the float
-// half of reconcileLayout's "nothing to do" test, expressed as the same pure
-// diff the reconcile itself drives so the two can never disagree.
+// half of reconcileSnapshot's "nothing to do" test and gate 2 of
+// reconcileLayoutFrom, expressed as the same pure diff the reconcile itself
+// drives so the two can never disagree.
 func noFloatWork(w *mirrorWindow, L controlmode.Layout) bool {
 	ops := planFloatOps(w.floatGeom, mirrorableFloats(L))
 	return len(ops.Remove) == 0 && len(ops.Add) == 0 && len(ops.Move) == 0
