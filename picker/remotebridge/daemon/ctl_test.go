@@ -933,3 +933,163 @@ func TestCtlResolvesAFloatAddedByTheReconcile(t *testing.T) {
 		t.Errorf("zoom on the freshly mirrored float: %v", err)
 	}
 }
+
+// pressAgain is the exact user-facing nack a carousel press gets while the
+// bridge re-dials, spelled out here rather than built from pressAgainErr: it
+// reaches the user through display-message, so a silent change to it is a
+// change to what the status line says.
+const pressAgain = "re-dialling for foot — press again"
+
+// carouselPress is the argv the prefix + I bind sends for a mirrored pane.
+func carouselPress() []string {
+	return []string{wire.CtlProtocolVersion, "carousel", "%3"}
+}
+
+// handlerFixture is one mirrored window, a seam whose viewer has switched to
+// foot while xterm-kitty is still advertised, and a recorder for whatever the
+// handler submits.
+func handlerFixture(t *testing.T, adv, viewer string) (*ctlState, *viewReplacer, *Viewing, *[]string) {
+	t.Helper()
+	cst := newCtlStateWith("@1", "%3")
+	rep, view, resolved := replacerFixture(adv, true)
+	*resolved = viewer
+	var sent []string
+	return cst, rep, view, &sent
+}
+
+func sender(sent *[]string) func(string) bool {
+	return func(cmd string) bool {
+		*sent = append(*sent, cmd)
+		return true
+	}
+}
+
+// Acceptance 2: the common press — the viewer is the terminal the control
+// client already advertises — must run the carousel and never be nacked.
+func TestHandleCtlSubmitsWhenTheViewerMatches(t *testing.T) {
+	cst, rep, _, sent := handlerFixture(t, "foot", "foot")
+
+	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err != nil {
+		t.Fatalf("handleCtl: %v, want no error", err)
+	}
+	if len(*sent) != 1 {
+		t.Errorf("sent = %q, want the one carousel command", *sent)
+	}
+	if n := wakeUps(rep); n != 0 {
+		t.Errorf("wake-ups = %d, want none", n)
+	}
+}
+
+// A stale viewing identity nacks and raises, and submits nothing: the gesture
+// must not run under a control client advertising a terminal the user is no
+// longer looking through.
+func TestHandleCtlNacksAndRaisesOnAStaleViewer(t *testing.T) {
+	cst, rep, view, sent := handlerFixture(t, "xterm-kitty", "foot")
+
+	err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	if err == nil || err.Error() != pressAgain {
+		t.Fatalf("error = %v, want %q", err, pressAgain)
+	}
+	if len(*sent) != 0 {
+		t.Errorf("sent = %q, want nothing submitted", *sent)
+	}
+	if n := wakeUps(rep); n != 1 {
+		t.Errorf("wake-ups = %d, want exactly 1", n)
+	}
+	// No intent may be registered either, or the next drain reconciles a
+	// window for a command that was never sent.
+	if windows, layouts := cst.takeIntents(); windows || len(layouts) != 0 {
+		t.Errorf("intents = (%v, %v), want none", windows, layouts)
+	}
+	if got := view.Desired(); got != "foot" {
+		t.Errorf("Desired = %q, want foot — the raised dial reads it", got)
+	}
+}
+
+// R8: a second press during the window is the likeliest user behaviour, and it
+// must read as the same instruction, never as "your bridge is broken".
+func TestHandleCtlGivesAnInFlightPressTheSameText(t *testing.T) {
+	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
+
+	first := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	second := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	if first == nil || second == nil {
+		t.Fatalf("errors = (%v, %v), want both nacked", first, second)
+	}
+	if first.Error() != second.Error() {
+		t.Errorf("texts differ:\n first  = %q\n second = %q", first, second)
+	}
+	if n := wakeUps(rep); n != 1 {
+		t.Errorf("wake-ups = %d, want 1 — the second press raises nothing", n)
+	}
+	if len(*sent) != 0 {
+		t.Errorf("sent = %q, want nothing submitted", *sent)
+	}
+}
+
+// The press after a completed replacement is the deterministic one the nack
+// promises: Advertised now names what the new client carries, so it submits.
+func TestHandleCtlSubmitsAfterAReplacementCompleted(t *testing.T) {
+	cst, rep, view, sent := handlerFixture(t, "xterm-kitty", "foot")
+
+	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err == nil {
+		t.Fatal("first press was not nacked")
+	}
+	// What replaceConn does at its publish point, and what the attach loop
+	// does once it returns.
+	view.setAdvertised("foot")
+	rep.done()
+
+	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err != nil {
+		t.Fatalf("second press: %v, want it to submit", err)
+	}
+	if len(*sent) != 1 {
+		t.Errorf("sent = %q, want the one carousel command", *sent)
+	}
+}
+
+// A replacement that never landed leaves Advertised untouched, which is what
+// makes the next press raise again rather than run against the old backend
+// forever (acceptance 7).
+func TestHandleCtlRaisesAgainAfterAFailedReplacement(t *testing.T) {
+	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
+
+	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err == nil {
+		t.Fatal("first press was not nacked")
+	}
+	// replaceConn's notReplaced path: the loop took the wake-up, the dial
+	// published nothing and advertised nothing, and done() re-arms the seam.
+	if n := wakeUps(rep); n != 1 {
+		t.Fatalf("wake-ups = %d, want 1 from the first press", n)
+	}
+	rep.done()
+
+	err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	if err == nil || err.Error() != pressAgain {
+		t.Fatalf("error = %v, want %q again", err, pressAgain)
+	}
+	if n := wakeUps(rep); n != 1 {
+		t.Errorf("wake-ups = %d, want the second press to raise again — a failure must not latch", n)
+	}
+	if len(*sent) != 0 {
+		t.Errorf("sent = %q, want nothing submitted", *sent)
+	}
+}
+
+// Only the verb the table marks needsView consults the viewing identity: a
+// split does not care which terminal the control client advertises, so a stale
+// one must not cost it a nack.
+func TestHandleCtlLeavesOtherVerbsAloneOnAStaleViewer(t *testing.T) {
+	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
+
+	argv := []string{wire.CtlProtocolVersion, "split-h", "%3"}
+	if err := handleCtl(cst, rep, argv, "rem", sender(sent)); err != nil {
+		t.Fatalf("handleCtl: %v, want no error", err)
+	}
+	if len(*sent) != 1 {
+		t.Errorf("sent = %q, want the one split command", *sent)
+	}
+	if n := wakeUps(rep); n != 0 {
+		t.Errorf("wake-ups = %d, want none", n)
+	}
+}

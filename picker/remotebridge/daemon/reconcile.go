@@ -630,9 +630,9 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 // renderer is known.
 //
 // The SHARED converger, like every other setupWindow caller: this reads
-// cfg.LocalArea() independently of watchResize's own read and writes to the
+// cfg.LocalArea() independently of watchLocalClient's own read and writes to the
 // same stream, so a throwaway map lets the two disagree — a stale size written
-// last while the shared record holds the new one, which watchResize then never
+// last while the shared record holds the new one, which watchLocalClient then never
 // re-sends. setupWindow's own cv.forget is what makes the reset re-cap.
 func resetWindow(cfg Config, w *mirrorWindow, send func(string), router *Router, waitHellos helloWaiter, cst *ctlState, cv *converger, rt roundTrip) error {
 	// Captured before dropMirroredPanes empties the map, so the merge below can

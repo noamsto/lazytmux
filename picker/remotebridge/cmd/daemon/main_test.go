@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
 	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
 )
 
@@ -171,6 +172,53 @@ func TestSSHControlArgsOmitsEmptyColortermAndTermProgram(t *testing.T) {
 	}
 }
 
+// TestNewSSHDialCmdReadsDesiredAtDialTime is the regression test for the
+// Asserts on the built *exec.Cmd's argv, never on the cell: reading the cell
+// alone cannot tell "read every time" from "read once and cached", so an
+// assertion there would pass a recipe that captured Desired at build time and
+// then carried one termname for the life of the daemon.
+func TestNewSSHDialCmdReadsDesiredAtDialTime(t *testing.T) {
+	view := &daemon.Viewing{}
+	view.Seed("xterm-kitty")
+
+	cmd := newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-1.sock", "truecolor", "iTerm.app", "lazytmux", []string{"tmux"}, view)
+	want := "TERM=" + shellQuote("xterm-kitty")
+	if slices.Index(cmd.Args, want) < 0 {
+		t.Fatalf("first dial argv %v missing %q", cmd.Args, want)
+	}
+
+	view.SetDesired("foot")
+	cmd = newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-2.sock", "truecolor", "iTerm.app", "lazytmux", []string{"tmux"}, view)
+	want = "TERM=" + shellQuote("foot")
+	if slices.Index(cmd.Args, want) < 0 {
+		t.Fatalf("dial after SetDesired argv %v missing %q — still carrying the old termname", cmd.Args, want)
+	}
+}
+
+// TestLocalCtlCmdEnvCarriesDesiredTermAndInheritsEnvironment covers the
+// --test-local / no-ssh branches' equivalent of the ssh branch's argv: TERM
+// rides cmd.Env instead, and it must be an append to os.Environ(), never a
+// wholesale replacement — a bare assignment would drop PATH/TMUX_TMPDIR/HOME
+// and break the offline bats harness these two branches exist to run under.
+func TestLocalCtlCmdEnvCarriesDesiredTermAndInheritsEnvironment(t *testing.T) {
+	view := &daemon.Viewing{}
+	view.Seed("xterm-kitty")
+
+	env := localCtlCmdEnv(view)
+	if !slices.Contains(env, "TERM=xterm-kitty") {
+		t.Fatalf("env %v missing the seeded TERM", env)
+	}
+	if !slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "PATH=") }) {
+		t.Fatalf("env %v dropped the inherited PATH — cmd.Env must append, not replace", env)
+	}
+
+	view.SetDesired("foot")
+	env = localCtlCmdEnv(view)
+	if !slices.Contains(env, "TERM=foot") {
+		t.Fatalf("env %v did not follow SetDesired", env)
+	}
+}
+
 // TestNewGraphicsGatesOnRelayOnBothTransportBranches is C7's only guard
 // against the trap the plan calls out by name: NewGraphics must build the
 // proxy with graphics.NewRelay — never fall back to the relay-off
@@ -194,12 +242,13 @@ func TestNewGraphicsGatesOnRelayOnBothTransportBranches(t *testing.T) {
 		{"ssh transport (ctl socket set)", "/tmp/does-not-need-to-exist.sock"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			newProxy := newGraphics(tc.ctlSock, "host", t.TempDir(), 1<<20, sixelOn, graphics.DefaultRasterHold)
+			ctlSockFn := func() string { return tc.ctlSock }
+			newProxy := newGraphics(tc.ctlSock, ctlSockFn, "host", t.TempDir(), 1<<20, graphics.NewRelaySource(sixelOn), graphics.DefaultRasterHold)
 			if got := string(newProxy("").Filter([]byte(sixel))); got != sixel {
 				t.Errorf("gate on: Filter(sixel) = %q, want the sixel forwarded", got)
 			}
 
-			newProxyOff := newGraphics(tc.ctlSock, "host", t.TempDir(), 1<<20, sixelOff, graphics.DefaultRasterHold)
+			newProxyOff := newGraphics(tc.ctlSock, ctlSockFn, "host", t.TempDir(), 1<<20, graphics.NewRelaySource(sixelOff), graphics.DefaultRasterHold)
 			if got := string(newProxyOff("").Filter([]byte(sixel))); got != "" {
 				t.Errorf("gate off: Filter(sixel) = %q, want it dropped", got)
 			}
@@ -254,6 +303,106 @@ func TestTransportStopEndsTheCurrentChild(t *testing.T) {
 	c := startChild(t, tr, exec.Command("sleep", "60"))
 	tr.stop()
 	waitEnded(t, c, "stop left the current transport running")
+}
+
+// TestTransportCurrentPathReturnsTheNewestOpenChild is R7's overlap: two
+// masters alive at once, and the accessor every consumer reads through must
+// serve the new, connected one — never the one a replacement is retiring.
+func TestTransportCurrentPathReturnsTheNewestOpenChild(t *testing.T) {
+	requireSleep(t)
+	tr := &transport{}
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.sock")
+	newPath := filepath.Join(dir, "new.sock")
+	startChildAt(t, tr, exec.Command("sleep", "60"), oldPath)
+	startChildAt(t, tr, exec.Command("sleep", "60"), newPath)
+
+	if got := tr.currentPath(); got != newPath {
+		t.Fatalf("currentPath = %q, want the newer child's path %q", got, newPath)
+	}
+}
+
+// TestTransportCurrentPathFallsBackAfterAnAbortedDial is R7's abort case: a
+// replacement whose identity check fails is closed with the old connection
+// never touched. The accessor must fall back to the survivor rather than
+// staying on the dead dial — the bug R9 exists to retire, since a consumer
+// stuck there passes ssh a -S that no longer exists and multiplexing silently
+// stops with no tty to reauthenticate on.
+func TestTransportCurrentPathFallsBackAfterAnAbortedDial(t *testing.T) {
+	requireSleep(t)
+	tr := &transport{}
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.sock")
+	newPath := filepath.Join(dir, "new.sock")
+	startChildAt(t, tr, exec.Command("sleep", "60"), oldPath)
+	aborted := startChildAt(t, tr, exec.Command("sleep", "60"), newPath)
+
+	aborted.Close()
+	waitEnded(t, aborted, "the aborted replacement never ended")
+
+	if got := tr.currentPath(); got != oldPath {
+		t.Fatalf("currentPath after an aborted replacement = %q, want the surviving path %q", got, oldPath)
+	}
+}
+
+// TestTransportStopClosesEveryTrackedChild is #487-shaped: with a single
+// tracked slot, an aborted replacement left the old child untracked and a
+// later SIGTERM signalled only the dead new one, hanging the daemon on
+// detach. stop must reach every child the set is currently holding.
+func TestTransportStopClosesEveryTrackedChild(t *testing.T) {
+	requireSleep(t)
+	tr := &transport{}
+	a := startChild(t, tr, exec.Command("sleep", "60"))
+	b := startChild(t, tr, exec.Command("sleep", "60"))
+
+	tr.stop()
+
+	waitEnded(t, a, "stop left an overlapping child running")
+	waitEnded(t, b, "stop left an overlapping child running")
+}
+
+// TestTransportStopIsANoOpForAnAlreadyClosedChild covers the other half of
+// the set: a child closed individually (the ordinary swap, not a signal) must
+// drop out of tracking on its own, and a later stop() must neither panic nor
+// double-close it — it should simply have nothing left to do for that child.
+func TestTransportStopIsANoOpForAnAlreadyClosedChild(t *testing.T) {
+	requireSleep(t)
+	tr := &transport{}
+	a := startChild(t, tr, exec.Command("sleep", "60"))
+	b := startChild(t, tr, exec.Command("sleep", "60"))
+
+	a.Close()
+	waitEnded(t, a, "the individually closed child never ended")
+
+	tr.mu.Lock()
+	n := len(tr.children)
+	tr.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("tracked children after an individual Close = %d, want 1 (the closed child should have dropped itself)", n)
+	}
+
+	tr.stop() // must not panic on the already-closed a, and must still end b
+	waitEnded(t, b, "stop left the survivor running after an earlier individual close")
+}
+
+// TestChildCloseUnlinksItsSocketPath is R9's other half of R7's cleanup story:
+// ControlPersist=no unlinks a ControlPath only on a clean ssh exit, so
+// something has to collect the socket of a child ended by SIGKILL. Since
+// paths are per-dial now, that collector has to be the child itself, not a
+// shared unlink-before-dial.
+func TestChildCloseUnlinksItsSocketPath(t *testing.T) {
+	requireSleep(t)
+	path := filepath.Join(t.TempDir(), "ctl.sock")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("seed socket file: %v", err)
+	}
+	c := startChildAt(t, &transport{}, exec.Command("sleep", "60"), path)
+
+	c.Close()
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Close left the socket path behind: stat err = %v", err)
+	}
 }
 
 // TestChildCloseUnblocksParkedReader is the regression net for a Close that
@@ -322,7 +471,14 @@ func requireSleep(t *testing.T) {
 
 func startChild(t *testing.T, tr *transport, cmd *exec.Cmd) *child {
 	t.Helper()
-	c, err := newChild(cmd)
+	return startChildAt(t, tr, cmd, "")
+}
+
+// startChildAt is startChild for a test that cares about the child's
+// ControlPath (R9) — the overlap/accessor tests below.
+func startChildAt(t *testing.T, tr *transport, cmd *exec.Cmd, path string) *child {
+	t.Helper()
+	c, err := newChild(cmd, path)
 	if err != nil {
 		t.Fatalf("newChild: %v", err)
 	}
@@ -353,7 +509,7 @@ func waitEnded(t *testing.T, c *child, msg string) {
 // read. The test guards the invariant rather than the code, so it still fails
 // if newChild ever moves onto pipes it owns itself.
 func TestTransportStartFailureReleasesThePipes(t *testing.T) {
-	c, err := newChild(exec.Command(filepath.Join(t.TempDir(), "no-such-binary")))
+	c, err := newChild(exec.Command(filepath.Join(t.TempDir(), "no-such-binary")), "")
 	if err != nil {
 		t.Fatalf("newChild: %v", err)
 	}
@@ -387,7 +543,7 @@ func fakeTmuxScript(t *testing.T, body string) string {
 // FitWindowCmd pins the mirror window to the remote's size (window-size
 // manual), so that value is this daemon's own last assertion. Feeding it back
 // makes the converger read every resize as "no change", and the mirror keeps
-// the stale size until watchResize's 30s fallback poll happens to catch a
+// the stale size until watchLocalClient's 30s fallback poll happens to catch a
 // client attached (#532).
 func TestLocalAreaPrefersAnotherClientOverTheSessionsOwnPin(t *testing.T) {
 	tmux := fakeTmuxScript(t, `
@@ -479,5 +635,44 @@ esac
 	w, h := localArea([]string{tmux}, "mirror")
 	if w != 63 || h != 63 {
 		t.Errorf("localArea = %dx%d, want 63x63 — the smallest client showing this session", w, h)
+	}
+}
+
+// TestSeedViewPrefersTheResolvedIdentityOverTheFlags is acceptance 2's "never
+// nacked" property (R1/R3): when the mirror session already has a resolvable
+// client, its identity wins over the launcher's -term/-termfeatures flags,
+// which sample only the invoking client.
+func TestSeedViewPrefersTheResolvedIdentityOverTheFlags(t *testing.T) {
+	resolve := func() (daemon.ViewIdentity, bool) {
+		return daemon.ViewIdentity{Term: "foot", Relay: graphics.RelayFromTermFeatures("sixel")}, true
+	}
+	view := seedView(resolve, "xterm-256color", "")
+
+	if got := view.Desired(); got != "foot" {
+		t.Errorf("Desired() = %q, want the resolved foot, not the flag seed", got)
+	}
+	if got := view.Advertised(); got != "foot" {
+		t.Errorf("Advertised() = %q, want foot — the very first dial will carry it", got)
+	}
+	if !view.Relay.Load().Sixel() {
+		t.Error("Relay was not seeded from the resolved capability")
+	}
+}
+
+// TestSeedViewFallsBackToFlagsWhenUnresolvable is R3's other half: the
+// startup instant before the launcher has switched a client onto the mirror
+// session yet, where the flags are all there is.
+func TestSeedViewFallsBackToFlagsWhenUnresolvable(t *testing.T) {
+	resolve := func() (daemon.ViewIdentity, bool) { return daemon.ViewIdentity{}, false }
+	view := seedView(resolve, "xterm-256color", "bpaste,sixel")
+
+	if got := view.Desired(); got != "xterm-256color" {
+		t.Errorf("Desired() = %q, want the flag seed xterm-256color", got)
+	}
+	if got := view.Advertised(); got != "xterm-256color" {
+		t.Errorf("Advertised() = %q, want xterm-256color", got)
+	}
+	if !view.Relay.Load().Sixel() {
+		t.Error("Relay was not seeded from the -termfeatures flag")
 	}
 }

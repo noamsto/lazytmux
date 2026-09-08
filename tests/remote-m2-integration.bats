@@ -1107,6 +1107,119 @@ expected_sixel_bytes() {
 	grep -qF -- "$expected" "$f"
 }
 
+# (c) — the DYNAMIC half of R8/#574: the two tests above bake the capability in
+# at daemon startup via --termfeatures. This one proves it instead FOLLOWS
+# whichever client is attached to the LOCAL mirror session (host-sess) right
+# now — attach a non-sixel viewer, confirm the drop; switch to a sixel-capable
+# one, confirm the relay flips on with no re-dial (acceptance 3), and that no
+# control-client replacement happened (the other half of acceptance 4: a
+# capability-only change is Half 1, never Half 2's dial-verify-swap).
+#
+# OBS is the same third-server pty-host pattern the "bigger human client"
+# test above uses, just attaching to DST's mirror session instead of SRC.
+@test "the relay capability follows whichever client is attached to the mirror session" {
+	OBS="tmux -L m2obs"
+	$OBS kill-server 2>/dev/null || true
+
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	bridge_up 1 gxv --termfeatures ''
+
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+
+	# A non-sixel viewer attaches to the MIRROR session (not the remote).
+	$OBS new-session -d -s obsA -x 100 -y 30 "env TERM=xterm-256color $DST attach -t host-sess"
+	for _ in $(seq 1 40); do
+		[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -ge 1 ] && break
+		sleep 0.1
+	done
+	[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -ge 1 ]
+
+	f1="$BATS_TEST_TMPDIR/gxv1.pipe"
+	$DST pipe-pane -o -t host-sess:1.0 "cat >> $f1"
+
+	marker1="SIXELDONE_$($SRC display-message -p -t rem -F '#{pane_pid}')"
+	send_straddled_sixel
+	seen1=no
+	for _ in $(seq 1 60); do
+		grep -q "$marker1" "$f1" 2>/dev/null && {
+			seen1=yes
+			break
+		}
+		sleep 0.15
+	done
+	[ "$seen1" = yes ]
+	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
+	run ! grep -F -- $'\033Pq' "$f1"
+
+	# Switch the viewer to a sixel-capable terminal. Kill the old pty host's
+	# SESSION, not its server, and reuse the same m2obs server for the new
+	# one: killing the server and immediately re-creating it on the same
+	# socket races its teardown, which surfaces as `new-session` failing with
+	# "server exited unexpectedly" (measured — the isolated command works
+	# fine with a wait in between, so the flag order is not the problem).
+	#
+	# The old client must be GONE before the new one's capability can win:
+	# the gate is the AND across every attached client, so an overlap would
+	# hold sixel false for as long as the 256color client stayed.
+	#
+	# Close the old pipe first — pipe-pane -o TOGGLES an already-open pipe off
+	# rather than replacing its target (measured), so re-using -o without
+	# closing would silently keep writing to $f1.
+	$OBS kill-session -t obsA 2>/dev/null || true
+	$DST pipe-pane -t host-sess:1.0
+	f2="$BATS_TEST_TMPDIR/gxv2.pipe"
+	$DST pipe-pane -o -t host-sess:1.0 "cat >> $f2"
+	$OBS new-session -d -s obsB -x 100 -y 30 "env TERM=foot $DST -T sixel attach -t host-sess"
+	# Poll on the identity itself, not the client count: the count is already
+	# satisfied by the client we are replacing.
+	for _ in $(seq 1 40); do
+		[ "$($DST list-clients -t host-sess -F '#{client_termname}' 2>/dev/null | grep -c '^foot$')" -ge 1 ] && break
+		sleep 0.1
+	done
+	[ "$($DST list-clients -t host-sess -F '#{client_termname}' 2>/dev/null | grep -c '^foot$')" -ge 1 ]
+	# ...and that it is the ONLY one, or the AND cannot flip.
+	[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -eq 1 ]
+
+	for _ in $(seq 1 40); do
+		relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+		[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ] && break
+		sleep 0.15
+	done
+
+	marker2="SIXELDONE_$($SRC display-message -p -t rem -F '#{pane_pid}')"
+	send_straddled_sixel
+	seen2=no
+	for _ in $(seq 1 60); do
+		grep -q "$marker2" "$f2" 2>/dev/null && {
+			seen2=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	new_transport="$(transport_child)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	$OBS kill-server 2>/dev/null || true
+
+	# The capability flipped...
+	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ]
+	# ...and the drop policy actually followed it: the sixel bytes now reach
+	# the mirror pane's pty, byte-identical, not just the env var.
+	[ "$seen2" = yes ]
+	exp="$BATS_TEST_TMPDIR/gxv.expected"
+	expected_sixel_bytes "$exp"
+	expected="$(cat "$exp")"
+	grep -qF -- "$expected" "$f2"
+	# No control-client replacement happened: this is Half 1 only (acceptance 4).
+	[ "$new_transport" = "$old_transport" ]
+}
+
 # === M2.3: structural input (ctl -> daemon -> remote -> mirror) ===
 #
 # These drive the ctl binary directly against the daemon's socket, which is the
@@ -2263,11 +2376,16 @@ transport_child() {
 		}
 		sleep 0.15
 	done
+	# R5's second half: repair() re-asserts the capability unconditionally on
+	# every reconnect, since the outage is the one stretch in which a change
+	# had no live connection to publish on.
+	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$painted" = yes ]
+	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
 }
 
 @test "a control-connection drop into a different tmux server tears the mirror down" {
@@ -2735,4 +2853,292 @@ transport_child() {
 
 	[ "$saw_corpse" = yes ]
 	[ "$healed" = yes ]
+}
+
+# === Bridge graphics identity: control-client replacement (#574, H2) ===
+#
+# Half 1 (above) proves the capability follows the viewer with no re-dial.
+# These prove the other half: the daemon's OWN control client to the remote
+# is rebuilt (dial, verify, swap) so the remote genuinely sees a NEW viewer's
+# termname — not just a local env var — and that this only ever happens on
+# the carousel gesture, never on a bare session switch.
+
+# control_termname reads the daemon's own SRC client — the only one with
+# client_control_mode=1 on this session — which is what TERM= on its dial argv
+# (--test-local: localCtlCmdEnv; ssh: sshControlArgs) actually landed on. This
+# is the "the remote genuinely sees the viewer's identity" proof acceptance 1
+# asks for, as opposed to a local-only assertion on LZTMUX_RELAY_GRAPHICS.
+control_termname() {
+	$SRC list-clients -t rem -F '#{client_control_mode}|#{client_termname}' 2>/dev/null |
+		awk -F'|' '$1 == "1" { print $2; exit }'
+}
+
+# attach_pty_client starts (or replaces) the single OBS pty client viewing
+# host-sess, carrying $1 as TERM (and, if given, $2 as -T terminal-features).
+# OBS is killed first: list-clients assertions below need exactly one
+# non-control client on host-sess, and a stale pty from an earlier phase of
+# the same test would make that two.
+attach_pty_client() {
+	local term="$1" feats="${2:-}"
+	tmux -L m2obs kill-server 2>/dev/null || true
+	# kill-server returns before the socket is actually torn down, and starting
+	# a new server on that same socket inside the window fails outright with
+	# "server exited unexpectedly" — measured, and it looks like a bad flag
+	# rather than a race, so wait the old server out rather than sleeping a
+	# guessed interval.
+	for _ in $(seq 1 40); do
+		tmux -L m2obs list-sessions >/dev/null 2>&1 || break
+		sleep 0.1
+	done
+	if [ -n "$feats" ]; then
+		tmux -L m2obs new-session -d -s obs -x 100 -y 30 "env TERM=$term $DST -T $feats attach -t host-sess"
+	else
+		tmux -L m2obs new-session -d -s obs -x 100 -y 30 "env TERM=$term $DST attach -t host-sess"
+	fi
+	# Poll the requested IDENTITY, not the client count: replacing a viewer
+	# leaves the count already satisfied by the client on its way out, so a
+	# count poll returns before the new termname is the one attached — and
+	# every assertion downstream is then racing the handover.
+	for _ in $(seq 1 40); do
+		[ "$($DST list-clients -t host-sess -F '#{client_termname}' 2>/dev/null | grep -c "^$term\$")" -ge 1 ] &&
+			[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -eq 1 ] && return 0
+		sleep 0.1
+	done
+	return 1
+}
+
+# Acceptance 1 end-to-end, plus its latency discriminator. attach_pty_client
+# runs BEFORE bridge_up so seedView (cmd/daemon/main.go) resolves the attached
+# client and the daemon's very first dial already carries that termname — no
+# gesture needed for the FIRST assertion, which is the "remote genuinely sees
+# the viewer's identity" half of acceptance 1.
+#
+# The pair is tmux-256color -> foot, NOT the xterm-kitty -> foot the feature is
+# actually about, and that is deliberate: tmux REFUSES to start a client for a
+# TERM it cannot resolve in terminfo (measured: exit 1, no client attached), and
+# xterm-kitty's entry ships with kitty rather than ncurses, so it is absent in
+# the nix check sandbox — an xterm-kitty viewer fails there while passing in a
+# dev shell. tmux-256color is this config's own default-terminal, so its entry
+# must exist wherever tmux runs at all, and foot's is in ncurses. Nothing here
+# depends on either NAME: the kitty/ghostty prefix test lives in aeye's
+# chooseRelayBackend, out of this repo, while what this test proves is that the
+# advertised termname follows the viewer and reaches the remote.
+@test "the carousel gesture replaces the control client to match a new viewer, within 2s" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	attach_pty_client tmux-256color
+	bridge_up 1 gxr1
+
+	[ "$(control_termname)" = tmux-256color ]
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+
+	# Switch the viewer to a different terminal — the SAME gesture the human
+	# makes by attaching from a different machine/terminal.
+	attach_pty_client foot
+
+	run "$CTL" --sock "$sock" carousel "$pane"
+	[ "$status" -ne 0 ]
+	[[ $output == *"press again"* ]]
+
+	# The timing discriminator (acceptance 1): without viewReplacer's dedicated
+	# wake-up channel (step 8), the replacement raised by the press above would
+	# only be picked up on runConn's next mainLoopTickInterval tick (5s) — so
+	# landing within 2s here is real evidence the channel fired rather than the
+	# loop falling back to its poll. Budget enforced by iteration count
+	# (20 x 0.1s), not wall-clock reads, since $SECONDS is only 1s-granular.
+	replaced=no
+	for _ in $(seq 1 20); do
+		[ "$(control_termname)" = foot ] && {
+			replaced=yes
+			break
+		}
+		sleep 0.1
+	done
+	if [ "$replaced" != yes ]; then
+		tail -60 "$BATS_TEST_TMPDIR/gxr1.log" >&3 2>/dev/null || true
+	fi
+
+	# The replacement has landed, so the same gesture now submits quietly.
+	run "$CTL" --sock "$sock" carousel "$pane"
+	carousel_status="$status"
+
+	# The mirror is still alive on the ORIGINAL pane: the replacement did not
+	# cost the mirror, and the carousel's own new pane (or its no-binary
+	# fallback message pane) is a second pane, not a teardown of the first.
+	marker="GXR1_LIVE_$$"
+	$SRC send-keys -t rem "printf '$marker\\n'" Enter
+	live=no
+	for _ in $(seq 1 60); do
+		$DST capture-pane -p -t host-sess:1.0 2>/dev/null | grep -q "$marker" && {
+			live=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	final_termname="$(control_termname)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	tmux -L m2obs kill-server 2>/dev/null || true
+
+	[ "$replaced" = yes ]
+	[ "$carousel_status" -eq 0 ]
+	[ "$final_termname" = foot ]
+	[ "$live" = yes ]
+}
+
+# Acceptance 6: ordinary session switching on the SAME terminal must never
+# raise a replacement. transport_child's PID is the direct witness — a
+# replacement always spawns a fresh attach-session child before closing the
+# old one, so an unchanged PID across the gesture is proof none was raised,
+# stronger than only checking client_termname (which a same-terminal switch
+# also never changes, but for a less interesting reason).
+@test "an ordinary session switch on the same terminal never replaces the control client" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	$DST new-session -d -s other -x 100 -y 30
+
+	attach_pty_client foot
+	bridge_up 1 gxr6
+
+	[ "$(control_termname)" = foot ]
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+
+	# The ordinary switch: the SAME client (same terminal, same TERM) moves to
+	# a different local session and back. client-session-changed (one of the
+	# hooks step 5 added) fires on this, so it exercises the exact path a
+	# genuine terminal change uses — with no identity change behind it.
+	client_name="$($DST list-clients -t host-sess -F '#{client_name}')"
+	[ -n "$client_name" ]
+	$DST switch-client -c "$client_name" -t other
+	$DST switch-client -c "$client_name" -t host-sess
+
+	# Give the watcher's 1s-ticked resolve a moment to run and settle, same
+	# budget style as the resize-converge tests use.
+	for _ in $(seq 1 20); do
+		sleep 0.1
+	done
+
+	run "$CTL" --sock "$sock" carousel "$pane"
+	carousel_status="$status"
+	carousel_output="$output"
+
+	new_transport="$(transport_child)"
+	termname="$(control_termname)"
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	tmux -L m2obs kill-server 2>/dev/null || true
+
+	# No replacement: same transport child, same termname throughout...
+	[ "$new_transport" = "$old_transport" ]
+	[ "$termname" = foot ]
+	# ...and the gesture was never nacked either (R8's other half).
+	[ "$carousel_status" -eq 0 ]
+	[[ $carousel_output != *"press again"* ]]
+}
+
+# Acceptance 7, offline: a replacement whose DIAL fails must leave the mirror
+# live and the old identity advertised — no teardown, no killed session.
+# Under --test-local the dial is a fixed `tmux -L m2src -C attach-session`, so
+# the way to fail it deterministically is to make that exact command unable to
+# connect while the EXISTING control client — already connected, its fd long
+# past any path lookup — keeps working: rename the m2src socket file away.
+#
+# A plain unlink would also break every OTHER $SRC command bats itself would
+# issue from here on: has-session, display-message and send-keys are all
+# brand-new client connections too, not a persistent one, so there would be
+# nothing left to assert against except $DST. Renaming instead of removing
+# keeps that door open — moved back before the end, the path resolves again
+# and normal $SRC introspection (and teardown's own kill-server) works.
+#
+# Liveness while the socket is unreachable is proved without any $SRC command
+# after the move: a remote command scheduled with a `sleep` BEFORE the move
+# produces its output AFTER it, and that output still crosses the daemon's
+# already-open connection to reach the mirror pane — the same "sleep inside
+# one remote command" trick send_straddled_sixel uses to straddle a Feed
+# boundary, applied here to straddle the socket's unavailability instead.
+@test "a replacement whose dial fails leaves the mirror live and the old identity advertised" {
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+
+	# Attached before the daemon starts, so seedView resolves it and the very
+	# first dial already carries tmux-256color — Advertised starts there.
+	attach_pty_client tmux-256color
+	bridge_up 1 gxr7
+
+	pane="$(remote_pane_of 0)"
+	[ -n "$pane" ]
+	old_transport="$(transport_child)"
+	[ -n "$old_transport" ]
+
+	# Switch the viewer: Desired becomes foot, Advertised stays tmux-256color —
+	# exactly what raises a replacement on the next carousel press.
+	attach_pty_client foot
+
+	SOCK="$TMUX_TMPDIR/tmux-$(id -u)/m2src"
+	[ -S "$SOCK" ]
+
+	# Scheduled while $SRC can still reach the remote by path; its output
+	# lands on the daemon's still-open connection well after the move below.
+	marker="GXR7_LIVE_$$"
+	$SRC send-keys -t rem "sh -c 'sleep 2; printf \"$marker\\n\"'" Enter
+
+	mv "$SOCK" "$SOCK.bak"
+
+	run "$CTL" --sock "$sock" carousel "$pane"
+	press1_status="$status"
+	press1_output="$output"
+
+	sleep 0.3
+	# Repeatable, not a one-shot latch: replacer.done() clears inFlight on
+	# every outcome (replacer.go), so a second press while Advertised is
+	# still stale raises — and fails — again rather than getting stuck
+	# "in flight" forever.
+	run "$CTL" --sock "$sock" carousel "$pane"
+	press2_status="$status"
+	press2_output="$output"
+
+	live=no
+	for _ in $(seq 1 40); do
+		$DST capture-pane -p -t host-sess:1.0 2>/dev/null | grep -q "$marker" && {
+			live=yes
+			break
+		}
+		sleep 0.15
+	done
+
+	new_transport="$(transport_child)"
+
+	# Restored before any further $SRC command — including teardown's own
+	# kill-server — needs the path back.
+	mv "$SOCK.bak" "$SOCK"
+	final_termname="$(control_termname)"
+	dst_alive_status=0
+	$DST has-session -t '=host-sess' || dst_alive_status=$?
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+	tmux -L m2obs kill-server 2>/dev/null || true
+
+	[ "$press1_status" -ne 0 ]
+	[[ $press1_output == *"press again"* ]]
+	[ "$press2_status" -ne 0 ]
+	[[ $press2_output == *"press again"* ]]
+	[ "$live" = yes ]
+	# The daemon's own control client to the remote never died or got
+	# replaced...
+	[ "$new_transport" = "$old_transport" ]
+	# ...and the identity it advertises is still what it always was.
+	[ "$final_termname" = tmux-256color ]
+	# No teardown: the mirror session stood throughout.
+	[ "$dst_alive_status" -eq 0 ]
 }

@@ -59,10 +59,14 @@ func sshControlArgs(ctlSock, host, tmpdir, term, colorterm, termProgram, session
 		"-o", "ServerAliveCountMax=" + strconv.Itoa(serverAliveCountMax),
 		host, "--", "env", "TMUX_TMPDIR=" + tmpdir}
 	// TERM decides the remote viewer's graphics backend: it reads
-	// #{client_termname}, which is whatever this control client advertises. A
-	// non-kitty local terminal therefore degrades the remote carousel to block
-	// art on its own. -T means no pty, so ssh won't send TERM itself — it has
-	// to ride in this env prefix like TMUX_TMPDIR does.
+	// #{client_termname}, which is whatever this control client advertises.
+	// term is newSSHDialCmd's fresh read of Viewing.Desired() (#574) — the
+	// identity of whichever terminal is currently VIEWING the mirror, not the
+	// one that launched it — because tmux exposes no runtime setter for a
+	// live client's termname: the only way to change what the remote sees is
+	// to dial a new control client with a new TERM, which is exactly what
+	// replaceConn and reattach do. -T means no pty, so ssh won't send TERM
+	// itself — it has to ride in this env prefix like TMUX_TMPDIR does.
 	if term != "" {
 		args = append(args, "TERM="+shellQuote(term))
 	}
@@ -86,6 +90,29 @@ func sshControlArgs(ctlSock, host, tmpdir, term, colorterm, termProgram, session
 	// login shell, so shell-quote the session name (may contain spaces) to keep
 	// it a single target token.
 	return append(args, "-C", "attach-session", "-t", shellQuote(session))
+}
+
+// newSSHDialCmd builds one ssh-branch dial's *exec.Cmd. Extracted out of the
+// newCtlCmd closure so the read of view.Desired() happens on every call —
+// through this function's own parameter, evaluated fresh each time it runs —
+// rather than being captured once when newCtlCmd itself was built. That
+// distinction is the whole point of Viewing's two cells: Desired can change
+// between dials (a resolve, a raise), and a version of this that captured it
+// early would dial with the SAME termname forever, no matter how many times
+// SetDesired ran in between.
+func newSSHDialCmd(sshCmd, host, tmpdir, path, colorterm, termProgram, session string, tmuxArgv []string, view *daemon.Viewing) *exec.Cmd {
+	return exec.Command(sshCmd, sshControlArgs(path, host, tmpdir, view.Desired(), colorterm, termProgram, session, tmuxArgv)...)
+}
+
+// localCtlCmdEnv is the --test-local / no-ssh branches' equivalent of
+// sshControlArgs' TERM=... prefix: with no ssh transport there is no argv to
+// carry it in, so it rides cmd.Env instead — read from the same cell so both
+// branches advertise exactly what the ssh branch's argv would. Appending to
+// os.Environ() rather than assigning cmd.Env wholesale: a bare assignment
+// would drop TMUX_TMPDIR/HOME/PATH and break the offline bats harness, which
+// is exactly what these two branches exist to run under.
+func localCtlCmdEnv(view *daemon.Viewing) []string {
+	return append(os.Environ(), "TERM="+view.Desired())
 }
 
 // remoteStoreScript is the paste upload's remote half (#361): it lands the
@@ -176,16 +203,27 @@ func main() {
 		*sock = fmt.Sprintf("%s/lztmux-daemon-%d.sock", os.TempDir(), os.Getpid())
 	}
 
+	// view is the daemon's live view-identity cell (see Viewing),
+	// declared here — before newCtlCmd — because a later step's dial argv
+	// reads Viewing.Desired() straight from it (H2-A): a closure built further
+	// down needs the identifier already in scope. Fully constructed and seeded
+	// below, once LocalTmuxOut exists to resolve against.
+	var view *daemon.Viewing
+
 	// newCtlCmd is the transport as a *recipe* the daemon can re-run on every
 	// reconnect, rather than one already-built command. Every branch gets one,
 	// the offline --test-local seam included — that is the seam the reconnect
-	// integration tests drive.
-	var newCtlCmd func() *exec.Cmd
+	// integration tests drive. It also mints the ControlPath for this
+	// particular dial (R9): "" on the two branches with no ssh control socket,
+	// otherwise a fresh path per call, never a name stable across re-dials.
+	var newCtlCmd func() (*exec.Cmd, string)
 	var ctlSock string
 	var localTmuxArgv []string
 	if *testLocal {
-		newCtlCmd = func() *exec.Cmd {
-			return exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
+		newCtlCmd = func() (*exec.Cmd, string) {
+			cmd := exec.Command("tmux", "-L", *srcSocket, "-C", "attach-session", "-t", *session)
+			cmd.Env = localCtlCmdEnv(view)
+			return cmd, ""
 		}
 		localTmuxArgv = []string{"tmux", "-L", *dstSocket}
 	} else {
@@ -193,48 +231,53 @@ func main() {
 		// tests), so split into argv rather than passing as a single token.
 		tmuxArgv := strings.Fields(*remoteTmux)
 		if *sshCmd == "" {
-			newCtlCmd = func() *exec.Cmd {
-				return exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
+			newCtlCmd = func() (*exec.Cmd, string) {
+				cmd := exec.Command(tmuxArgv[0], append(append([]string{}, tmuxArgv[1:]...),
 					"-C", "attach-session", "-t", *session)...)
+				cmd.Env = localCtlCmdEnv(view)
+				return cmd, ""
 			}
 		} else {
-			// Derived from the pid, so it is stable across re-dials — the
-			// NewGraphics closure below captures it, and a per-dial path would
-			// leave the image fetcher pointing at a dead socket after the first
-			// reconnect.
+			// ctlSock itself stays the fixed, pid-derived name — it is kept only
+			// as the "an ssh control socket exists" sentinel the pasteUpload and
+			// NewGraphics wiring below branch on. The path that actually reaches
+			// -S is minted fresh on every call, below: R7 needs two live masters
+			// open at once during a replacement's overlap, which a name stable
+			// across re-dials cannot give, and a stale ControlPath is what makes
+			// ControlMaster=auto silently stop multiplexing — so both consumers
+			// read the live path through tr.currentPath instead (wired at their
+			// call sites below).
 			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
-			newCtlCmd = func() *exec.Cmd {
-				return exec.Command(*sshCmd, sshControlArgs(ctlSock, *host, *tmpdir, *term, *colorterm, *termProgram, *session, tmuxArgv)...)
+			var dialN int
+			newCtlCmd = func() (*exec.Cmd, string) {
+				dialN++
+				path := fmt.Sprintf("%s/lztmux-bridge-%d-%d.sock", os.TempDir(), os.Getpid(), dialN)
+				return newSSHDialCmd(*sshCmd, *host, *tmpdir, path, *colorterm, *termProgram, *session, tmuxArgv, view), path
 			}
 		}
 		localTmuxArgv = strings.Fields(*localTmux)
 	}
 
-	// ControlPersist=no ties the ControlMaster socket's lifetime to this
-	// process, so nothing but this process will ever unlink it — ssh cleans up
-	// its own ControlPath only when it exits normally or catches a signal, and
-	// a SIGKILL (the fallback below) it cannot catch.
+	tr := &transport{}
+
+	// ControlPersist=no ties each ControlMaster socket's lifetime to its own
+	// ssh process, so nothing but this daemon will ever unlink it — ssh cleans
+	// up its own ControlPath only when it exits normally or catches a signal,
+	// and a SIGKILL (child.end's fallback) it cannot catch. child.Close unlinks
+	// the path of the child it closes; cleanup is the backstop for whatever is
+	// still tracked (open) when the daemon exits without every child having
+	// gone through Close first.
 	// Called explicitly at every exit path rather than deferred: fatal() calls
 	// os.Exit(1), which skips deferred functions.
 	cleanup := func() {
-		if ctlSock != "" {
-			os.Remove(ctlSock)
+		for _, p := range tr.paths() {
+			os.Remove(p)
 		}
 	}
 
-	tr := &transport{}
 	dial := func() (io.ReadWriteCloser, error) {
-		// ControlPersist=no ties the master's lifetime to the ssh process, but a
-		// process killed without catching a signal (the SIGKILL fallback below,
-		// a crash) leaves its ControlPath socket behind — and ControlMaster=auto
-		// meeting a socket it cannot connect to *disables multiplexing* for that
-		// instance rather than replacing it, silently. The reconnect would look
-		// healthy while every image fetch stopped being multiplexed. The path
-		// itself must not move, so unlink it and dial.
-		if ctlSock != "" {
-			os.Remove(ctlSock)
-		}
-		c, err := newChild(newCtlCmd())
+		cmd, path := newCtlCmd()
+		c, err := newChild(cmd, path)
 		if err != nil {
 			return nil, err
 		}
@@ -299,17 +342,19 @@ func main() {
 		}
 	}
 
-	// The paste upload rides the same ControlMaster as the graphics fetcher
-	// and is disabled for the same reason when there is no ssh transport.
-	// The closure captures ctlSock, which is derived from the pid and stable
-	// across re-dials (see the dial closure's comment).
+	// The paste upload rides the same ControlMaster as the graphics fetcher and
+	// is disabled for the same reason when there is no ssh transport at all —
+	// ctlSock (the static, pid-derived sentinel) still gates that decision, but
+	// the path actually handed to -S is read through tr.currentPath() on every
+	// upload, so a paste started after a reconnect never dials through a
+	// ControlPath the daemon has already closed (R9).
 	var pasteUpload func(ctx context.Context, ext string, data []byte) (string, error)
 	if ctlSock != "" {
 		pasteUpload = func(ctx context.Context, ext string, data []byte) (string, error) {
 			if !pasteExtRe.MatchString(ext) {
 				return "", fmt.Errorf("paste: bad extension %q", ext)
 			}
-			args := pasteUploadArgs(*sshCmd, ctlSock, *host, ext)
+			args := pasteUploadArgs(*sshCmd, tr.currentPath(), *host, ext)
 			cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 			cmd.Stdin = bytes.NewReader(data)
 			out, err := cmd.Output()
@@ -320,10 +365,17 @@ func main() {
 		}
 	}
 
-	// Computed once (R6): this is the single value that both gates the local
-	// relay drop policy (via NewGraphics, below) and is published to the
-	// remote session (daemon.Run), so the two can never disagree.
-	relay := graphics.RelayFromTermFeatures(*termfeatures)
+	// Seeded from the mirror session's own resolved clients when one is
+	// attached yet (R1/R3) — the launcher's -term/-termfeatures flags sample
+	// only the INVOKING client (lztmux-remote-open.sh:475), while this
+	// resolves LocalSess's own AND'd capability and lexicographic termname,
+	// which is what makes acceptance 2's "never nacked" a property of the code
+	// rather than a coincidence. The flags remain the fallback for the startup
+	// instant before the launcher has switched a client onto the mirror
+	// session yet.
+	view = seedView(func() (daemon.ViewIdentity, bool) {
+		return daemon.ResolveLocalViewIdentity(runLocalTmuxOut, *localSess)
+	}, *term, *termfeatures)
 
 	cfg := daemon.Config{
 		Dial:           dial,
@@ -342,8 +394,8 @@ func main() {
 		LocalPanes:     panes,
 		HandOff:        handOff,
 		PasteUpload:    pasteUpload,
-		Relay:          relay,
-		NewGraphics:    newGraphics(ctlSock, *host, *cacheDir, *gfxMax, relay, *gfxRelayMaxBytes),
+		View:           view,
+		NewGraphics:    newGraphics(ctlSock, tr.currentPath, *host, *cacheDir, *gfxMax, view.Relay, *gfxRelayMaxBytes),
 	}
 
 	err := daemon.Run(cfg)
@@ -353,23 +405,51 @@ func main() {
 	}
 }
 
+// seedView builds Config.View: the pair every dial and the raise guard will
+// share (see Viewing). resolve is tried first — the mirror
+// session's own resolved clients, when one is attached yet (R1) — and the
+// -term/-termfeatures flags stand only when resolve reports nothing (R3),
+// which is the startup instant before the launcher has switched a client onto
+// the mirror session. Desired and Advertised seed to the SAME value either
+// way: the very first dial this process makes really will carry it, so there
+// is no prior client for the two to disagree about (Viewing.Seed's contract).
+func seedView(resolve func() (daemon.ViewIdentity, bool), term, termfeatures string) *daemon.Viewing {
+	view := &daemon.Viewing{Relay: graphics.NewRelaySource(graphics.RelayFromTermFeatures(termfeatures))}
+	seedTerm := term
+	if id, ok := resolve(); ok {
+		view.Relay.Store(id.Relay)
+		seedTerm = id.Term
+	}
+	view.Seed(seedTerm)
+	return view
+}
+
 // newGraphics builds the Config.NewGraphics closure. A proxy is placed on
-// EVERY transport (R8): ctlSock is the only thing that distinguishes the two
-// branches — an ssh control socket means a real remote filesystem exists to
-// fetch kitty images from, so that branch gets the full localising proxy;
-// --test-local / -ssh "" has no remote filesystem, so loc stays nil and the
-// proxy runs relay-only (R7) — raster policy only, kitty forwarded
-// byte-identically. rel and hold are the same values on both branches: the
-// relay value must never be what tells the branches apart, or sixel relay
-// would work only under --test-local and be dead on every real transport.
-func newGraphics(ctlSock, host, cacheDir string, gfxMax int64, rel graphics.Relay, hold int64) func(string) *graphics.Proxy {
+// EVERY transport (R8): ctlSock (the static, pid-derived sentinel — never the
+// live path) is the only thing that distinguishes the two branches — an ssh
+// control socket means a real remote filesystem exists to fetch kitty images
+// from, so that branch gets the full localising proxy; --test-local / -ssh ""
+// has no remote filesystem, so loc stays nil and the proxy runs relay-only
+// (R7) — raster policy only, kitty forwarded byte-identically. src and hold
+// are the same values on both branches: the relay value must never be what
+// tells the branches apart, or sixel relay would work only under
+// --test-local and be dead on every real transport.
+//
+// ctlSockFn is the accessor a constructed fetcher reads from on every fetch
+// (tr.currentPath in production) — distinct from ctlSock on purpose: the
+// branch decision above is made once, at wiring time, possibly before any
+// dial, while ctlSockFn must track whichever ControlPath is live right now.
+// Conflating the two would put every real ssh bridge on the relay-only branch
+// the instant ctlSock's static sentinel were swapped for a live-but-still-
+// empty read.
+func newGraphics(ctlSock string, ctlSockFn func() string, host, cacheDir string, gfxMax int64, src *graphics.RelaySource, hold int64) func(string) *graphics.Proxy {
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
 	return func(string) *graphics.Proxy {
 		var loc graphics.Localizer
 		if ctlSock != "" {
-			loc = graphics.NewSSHFetcher(host, ctlSock, cacheDir, gfxMax)
+			loc = graphics.NewSSHFetcher(host, ctlSockFn, cacheDir, gfxMax)
 		}
-		return graphics.NewRelay(loc, logf, rel, hold)
+		return graphics.NewRelay(loc, logf, src, hold)
 	}
 }
 
@@ -396,7 +476,7 @@ func localArea(localTmuxArgv []string, localSess string) (int, int) {
 	// Not sessionWinSize here: FitWindowCmd pins the mirror window to the
 	// remote's size (window-size manual), so its dims are this daemon's own last
 	// assertion. Reading them back makes every resize look like "no change" to
-	// the converger, and the mirror then keeps the stale size until watchResize's
+	// the converger, and the mirror then keeps the stale size until watchLocalClient's
 	// 30s fallback poll happens to run with a client attached (#532).
 	if w, h := latestClientArea(localTmuxArgv); w > 0 && h > 0 {
 		return w, h
@@ -550,51 +630,130 @@ func statusLines(v string) int {
 	return n
 }
 
-// transport holds the control-mode child the daemon is currently talking to.
-// The signal handler and the dialer race over it otherwise: the handler is
-// started once and closes over whatever is current, while the dialer replaces
-// the process on every reconnect.
+// transport holds every control-mode child the daemon is currently talking
+// to. Normally that is one, but R7's replacement dials, verifies and converges
+// a new master BEFORE closing the old one, so for the span of that overlap two
+// are alive at once — and a SIGTERM landing in that window must still end
+// both, or the survivor outlives the daemon holding the mirror's
+// ControlMaster open. The signal handler and the dialer race over it
+// otherwise: the handler is started once and closes over whatever is current,
+// while the dialer adds to the set on every dial and reconnect.
 type transport struct {
-	mu       sync.Mutex
-	ch       *child
+	mu sync.Mutex
+	// children holds every live (started, not yet closed) child, oldest
+	// first. A child drops itself the instant Close is called (see
+	// child.Close), never merely when it finishes reaping — so the LAST
+	// entry is always "the most recently started child that is still open",
+	// currentPath's whole contract, with no separate liveness flag to keep
+	// in sync against it.
+	children []*child
 	stopping bool
 }
 
-// start runs c and publishes it as the current transport, atomically against
-// stop. A signal landing between the two would otherwise reach the transport
-// this one replaces — already dead and reaped, so signalling it is a no-op —
-// and the ssh child just started would outlive the daemon, holding the mirror's
-// ControlMaster open. Once stop has run, a start that still wins the lock ends
-// its own child rather than publishing a survivor.
+// start runs c and publishes it into the set, atomically against stop. A
+// signal landing between the two would otherwise reach only the children
+// already published — already dead and reaped, so signalling them is a
+// no-op — and the ssh child just started would outlive the daemon, holding
+// its own ControlMaster open. Once stop has run, a start that still wins the
+// lock never publishes: it ends its own child instead of leaving a survivor
+// stop can no longer see.
+//
+// c.tr is wired here rather than at newChild so a child that never starts
+// (Start failed) never gains a back-reference into a set it was never added
+// to. It is wired unconditionally, publish or not, so the Close call below —
+// on the stopping path, made only after this function has released mu, to
+// avoid child.Close re-entering this mutex through remove — can always drop
+// itself safely, even from a child that was never published.
 func (t *transport) start(c *child) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if err := c.cmd.Start(); err != nil {
+		t.mu.Unlock()
 		// No pipes to release: Start closes the parent's ends of the ones it
 		// opened when it fails. And c.Close is not the tool if that ever
 		// changes — it schedules end(), which signals c.cmd.Process, nil until
 		// Start succeeds.
 		return err
 	}
-	t.ch = c
-	if t.stopping {
+	c.tr = t
+	stopping := t.stopping
+	if !stopping {
+		t.children = append(t.children, c)
+	}
+	t.mu.Unlock()
+	if stopping {
 		c.Close()
 	}
 	return nil
 }
 
-// stop ends the current transport and bars any later one from surviving. Only
-// the signal handler calls it: stopping means "the user asked to detach", which
-// a child ended because it was superseded or timed out is not — reading one as
-// the other would stop the daemon on a reconnect.
+// stop ends every currently tracked child and bars any later start from
+// publishing a survivor. Only the signal handler calls it: stopping means
+// "the user asked to detach", which a child ended because it was superseded
+// or timed out is not — reading one as the other would stop the daemon on a
+// reconnect. The snapshot is taken under the lock and Close is called outside
+// it: child.Close calls back into remove, which takes the same lock, and
+// mu is not reentrant.
 func (t *transport) stop() {
 	t.mu.Lock()
 	t.stopping = true
-	c := t.ch
+	cs := append([]*child(nil), t.children...)
 	t.mu.Unlock()
-	if c != nil {
+	for _, c := range cs {
 		c.Close()
 	}
+}
+
+// remove drops c from the tracked set. Called from child.Close so a child
+// ends its own membership rather than the transport reaching back into it —
+// the shape start's stopping path also depends on (see there). c not being
+// present (already removed, or never published because start saw stopping)
+// is a silent no-op; Close's sync.Once is what keeps this from running twice
+// for the same child regardless.
+func (t *transport) remove(c *child) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i, x := range t.children {
+		if x == c {
+			t.children = append(t.children[:i], t.children[i+1:]...)
+			return
+		}
+	}
+}
+
+// currentPath returns the ControlPath of the most recently started child that
+// is still open — the single accessor every consumer of the control socket
+// reads through (R9). Deliberately NOT "the last dialled path": during a
+// replacement's overlap this is the newer, connected master; once an aborted
+// replacement's new child closes (dropping itself via remove), this falls
+// back to the surviving older path; once a successful swap closes the old
+// child, this reports the newer one. Getting this wrong is not cosmetic — a
+// consumer stuck on a dead child's path passes ssh a -S that no longer
+// exists, and ControlMaster=auto then silently stops multiplexing and
+// re-authenticates per fetch with no tty.
+func (t *transport) currentPath() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.children) == 0 {
+		return ""
+	}
+	return t.children[len(t.children)-1].path
+}
+
+// paths reports the ControlPath of every currently tracked child, for
+// cleanup's use at process exit: a child that never went through Close (the
+// daemon returning before its own teardown reaches every connection) would
+// otherwise leave its socket behind, since ControlPersist=no only unlinks it
+// on a clean ssh exit.
+func (t *transport) paths() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var paths []string
+	for _, c := range t.children {
+		if c.path != "" {
+			paths = append(paths, c.path)
+		}
+	}
+	return paths
 }
 
 // transportKillGrace is how long a control transport gets to exit on its own
@@ -611,9 +770,20 @@ type child struct {
 	once sync.Once
 	// ended is closed once the process has been signalled and reaped.
 	ended chan struct{}
+	// path is this child's own ControlPath (R9); "" for a transport with no
+	// ssh control socket (--test-local, or a bare-tmux remote). Close unlinks
+	// it, which is why the value lives here rather than at the dial call site
+	// — dial mints a fresh one per attempt, so there is no single "the" path
+	// left for a shared unlink-before-dial to collect.
+	path string
+	// tr is the transport this child was (or would have been) published
+	// under, wired by start regardless of whether it actually published —
+	// see start's doc for why. Nil only for a child whose Start failed, which
+	// never reaches Close through any live path.
+	tr *transport
 }
 
-func newChild(cmd *exec.Cmd) (*child, error) {
+func newChild(cmd *exec.Cmd, path string) (*child, error) {
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -622,7 +792,7 @@ func newChild(cmd *exec.Cmd) (*child, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &child{cmd: cmd, out: out, in: in, ended: make(chan struct{})}, nil
+	return &child{cmd: cmd, out: out, in: in, path: path, ended: make(chan struct{})}, nil
 }
 
 func (c *child) Read(p []byte) (int, error)  { return c.out.Read(p) }
@@ -636,6 +806,12 @@ func (c *child) Write(p []byte) (int, error) { return c.in.Write(p) }
 // read end is what unparks the reader, and it does so whether or not the
 // process cooperates.
 //
+// The unlink and the set removal happen here, synchronously, rather than from
+// end()'s goroutine: end() can take up to transportKillGrace to reap a wedged
+// process, but currentPath must stop seeing this child the instant Close is
+// called, not once the process eventually exits (R9's "still open" is a
+// membership question, not a process-liveness one).
+//
 // Never blocks: the grace window and the reap run on their own goroutine, so
 // the deadline timer, a drop and teardown can each call this and get on with
 // it. Idempotent, because the drop path and teardown both do.
@@ -643,6 +819,12 @@ func (c *child) Close() error {
 	c.once.Do(func() {
 		c.in.Close()
 		c.out.Close()
+		if c.path != "" {
+			os.Remove(c.path)
+		}
+		if c.tr != nil {
+			c.tr.remove(c)
+		}
 		go c.end()
 	})
 	return nil

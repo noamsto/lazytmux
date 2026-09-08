@@ -30,6 +30,13 @@ import (
 // Lock order is ctlState.mu -> sendMu, never the reverse: a ctl handler holds mu
 // while it sends so the send and the intent registration are one critical
 // section, and send never takes mu.
+//
+// No ctl handler may block while holding mu either, which a third edge would
+// make it do: the main loop takes this same mutex during a control-client
+// replacement (repair() -> reconcileWindows -> forgetWindow, daemon.go), so a
+// handler waiting on main-loop progress under mu deadlocks. That is why
+// #574's resolve/compare/raise runs before submit and outside mu, and why the
+// press that discovers a stale viewing identity is nacked rather than queued.
 type ctlState struct {
 	mu sync.Mutex
 
@@ -110,6 +117,9 @@ type ctlRequest struct {
 	// A focus request is filtered by the echo guards rather than run outright.
 	focusPane string
 	focusSeq  int64
+	// needsView carries the verb's flag of the same name through to the
+	// handler.
+	needsView bool
 }
 
 // verb is one entry of the fixed translation table. The daemon builds every
@@ -121,7 +131,15 @@ type verb struct {
 	layout  bool
 	// moves is true when the verb implicitly changes the remote's current pane.
 	moves bool
-	build func(pane, win, sess string, args []string) ([]string, error)
+	// needsView marks a verb whose effect on the remote depends on WHICH
+	// terminal this bridge's control client advertises, so it must not run
+	// under a client that advertises a terminal the user is no longer looking
+	// through (#574). A field here rather than a verb-name compare in
+	// daemon.go: the translation table is otherwise the only thing that knows
+	// what a verb means, and the handler asks the parsed request a typed
+	// question instead.
+	needsView bool
+	build     func(pane, win, sess string, args []string) ([]string, error)
 }
 
 // Whitelisted direction flags, so a request cannot smuggle an arbitrary option
@@ -240,7 +258,7 @@ var verbs = map[string]verb{
 	// display-message: the only client attached to this remote is the daemon's
 	// control client, which has no status line for a message to land on, while a
 	// split mirrors back into the window the human is looking at.
-	"carousel": {layout: true, moves: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
+	"carousel": {layout: true, moves: true, needsView: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
 		// show-options (not display-message -F "#{@…}"): run-shell expands #{}
 		// before /bin/sh runs. Case arms omit an '' empty alternative — that
 		// becomes a dense '\'' stack after double tmuxQuote and is not portable.
@@ -451,7 +469,7 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 	if err != nil {
 		return ctlRequest{}, err
 	}
-	req := ctlRequest{cmds: cmds, wantWindows: v.windows}
+	req := ctlRequest{cmds: cmds, wantWindows: v.windows, needsView: v.needsView}
 	if v.layout {
 		req.wantLayout = win
 	}
@@ -503,4 +521,41 @@ func (c *ctlState) submit(req ctlRequest, send func(string) bool) bool {
 		}
 	}
 	return true
+}
+
+// pressAgainErr is the nack a gesture gets while the bridge re-dials for a new
+// viewing identity (#574). User-facing: the ctl client shows a request failure
+// with display-message -d 5000, so this is a short status-line string, not a
+// log line — and deliberately not submit's generic "bridge has no live
+// connection to the remote", which reads as "your bridge is broken" when the
+// truth is "your viewer identity is being updated" (R6).
+func pressAgainErr(term string) error {
+	return fmt.Errorf("re-dialling for %s — press again", term)
+}
+
+// handleCtl is the whole body of Run's acceptConns callback, package-level so
+// a test can drive the ordering below without a live Run: the loops that act
+// on a raise are closures over Run's locals, and Run has exactly one caller.
+//
+// The resolve/compare/raise runs before submit, and therefore outside
+// ctlState.mu, for the deadlock reason ctlState's lock-order note gives. Both
+// raise verdicts that nack come back through one call site, so the discovering
+// press and a press landing mid-flight cannot drift apart (R8), and the nack
+// is returned when the replacement is RAISED, not when it completes: a message
+// arriving after a multi-second dial reads as a timeout rather than an
+// instruction.
+func handleCtl(cst *ctlState, rep *viewReplacer, argv []string, sess string, send func(string) bool) error {
+	req, err := cst.parseCtl(argv, sess)
+	if err != nil {
+		return err
+	}
+	if req.needsView {
+		if v, term := rep.raise(); v != raiseNone {
+			return pressAgainErr(term)
+		}
+	}
+	if !cst.submit(req, send) {
+		return fmt.Errorf("bridge has no live connection to the remote")
+	}
+	return nil
 }

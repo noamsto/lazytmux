@@ -103,7 +103,7 @@ func TestConvergerUnrecordRetriesAfterAFailedWrite(t *testing.T) {
 	}
 }
 
-// setupWindow and watchResize both assert, on different goroutines, so an undo
+// setupWindow and watchLocalClient both assert, on different goroutines, so an undo
 // can arrive after the other one has recorded a different size — which is by
 // then the current truth and must survive.
 func TestConvergerUnrecordKeepsASizeAssertedInBetween(t *testing.T) {

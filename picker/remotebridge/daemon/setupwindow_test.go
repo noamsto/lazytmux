@@ -182,12 +182,12 @@ func TestSetupWindowDoesNotRecordACapItCouldNotIssue(t *testing.T) {
 	}
 }
 
-// TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded closes the ordering race
+// TestSetupWindowCapsAWindowWatchLocalClientAlreadyRecorded closes the ordering race
 // between reg.add and setupWindow: reg.add publishes the window first, so
-// watchResize's goroutine can cap it before the opt-out lands. tmux discards
+// watchLocalClient's goroutine can cap it before the opt-out lands. tmux discards
 // that cap, but cv.need has recorded the size — and without the forget, setup's
 // own cap is then skipped and the window is left opted out but never capped.
-func TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded(t *testing.T) {
+func TestSetupWindowCapsAWindowWatchLocalClientAlreadyRecorded(t *testing.T) {
 	script := strings.Join([]string{
 		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
 		"%begin 1 2 1", "%error 1 2 1", // readLayout, window gone
@@ -199,7 +199,7 @@ func TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded(t *testing.T) {
 	}
 	mw := newRegistry().add("@1", "@101")
 
-	// What watchResize did between reg.add and here: a cap the window could not
+	// What watchLocalClient did between reg.add and here: a cap the window could not
 	// yet accept, recorded as asserted.
 	cv := newConverger()
 	cv.need("@1", 190, 45)
@@ -215,10 +215,10 @@ func TestSetupWindowCapsAWindowWatchResizeAlreadyRecorded(t *testing.T) {
 }
 
 // TestResetWindowRecordsItsCapInTheSharedConverger pins which converger
-// resetWindow threads through. A throwaway map lets its cap and watchResize's
+// resetWindow threads through. A throwaway map lets its cap and watchLocalClient's
 // disagree: both read cfg.LocalArea() independently and both write to the same
 // stream, so a size that changed in the gap can be written stale-last while the
-// shared record holds the new one — and watchResize then never re-sends it.
+// shared record holds the new one — and watchLocalClient then never re-sends it.
 func TestResetWindowRecordsItsCapInTheSharedConverger(t *testing.T) {
 	script := strings.Join([]string{
 		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd

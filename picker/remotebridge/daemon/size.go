@@ -101,7 +101,7 @@ func (c *converger) unrecord(remoteID string, w, h int) {
 // because a fresh control client has been told nothing: not the client size,
 // not one per-window cap. Called on re-attach (#482).
 //
-// It mutates in place rather than being replaced: watchResize is started once,
+// It mutates in place rather than being replaced: watchLocalClient is started once,
 // off the main-loop goroutine, and holds the *converger — a fresh one would
 // leave the watcher writing to an object nothing reads, silently.
 func (c *converger) reset() {

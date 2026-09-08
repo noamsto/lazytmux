@@ -501,20 +501,27 @@ func TestWaitHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	}
 }
 
-// nudgeResult is TestWatchResizeReconvergesOnChange's fake for the resize
-// hook's nudge file: ok mirrors os.Stat failing (no touch yet), t its mtime.
+// nudgeResult is TestWatchLocalClientReconvergesOnChange's fake for the
+// resize hook's nudge file: ok mirrors os.Stat failing (no touch yet), t its
+// mtime.
 type nudgeResult struct {
 	t  time.Time
 	ok bool
 }
 
-// TestWatchResizeReconvergesOnChange drives watchResize deterministically (no
-// time.Sleep): nudged and area read from channels so the test controls
-// exactly what the watcher observes each tick, and each tick sent on `tick`
-// blocks until the watcher is back at its select — so sending the next tick is
-// a barrier that proves the previous iteration (including any nudge/area read
-// and send) has fully completed.
-func TestWatchResizeReconvergesOnChange(t *testing.T) {
+// noResolveView is the fake resolveView for tests that exercise the size half
+// of watchLocalClient only: an always-empty resolution never stores a
+// capability and never sends (R3), which keeps `sent` free of RelayEnvCmd
+// noise so the size assertions below stay exact.
+func noResolveView() (ViewIdentity, bool) { return ViewIdentity{}, false }
+
+// TestWatchLocalClientReconvergesOnChange drives watchLocalClient
+// deterministically (no time.Sleep): nudged and area read from channels so the
+// test controls exactly what the watcher observes each tick, and each tick
+// sent on `tick` blocks until the watcher is back at its select — so sending
+// the next tick is a barrier that proves the previous iteration (including any
+// nudge/area read and send) has fully completed.
+func TestWatchLocalClientReconvergesOnChange(t *testing.T) {
 	tick := make(chan time.Time)
 	stop := make(chan struct{})
 	nudgeCh := make(chan nudgeResult)
@@ -531,12 +538,16 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	cv.need(clientSizeKey, 100, 30)
 	cv.need("@1", 100, 30)
 	cv.need("@2", 100, 30)
+	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
 	send := func(s string) bool { sent = append(sent, s); return true }
 
 	done := make(chan struct{})
-	go func() { watchResize(area, nudged, func() string { return "" }, reg, cv, send, stop, tick); close(done) }()
+	go func() {
+		watchLocalClient(area, nudged, func() string { return "" }, noResolveView, view, "sess", reg, cv, send, stop, tick)
+		close(done)
+	}()
 
 	t1 := time.Now()
 	t2 := t1.Add(time.Second)
@@ -570,7 +581,7 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchResize did not return after stop was closed")
+		t.Fatal("watchLocalClient did not return after stop was closed")
 	}
 
 	// remoteIDs snapshots a map, so the per-window sends land in either order.
@@ -582,10 +593,11 @@ func TestWatchResizeReconvergesOnChange(t *testing.T) {
 	}
 }
 
-// TestWatchResizeConvergesActiveWindowFirst pins the #557 ordering: the window
-// the local client is looking at is converged ahead of the background ones, so
-// its %layout-change (and the reconcile it queues) lands first on a slow link.
-func TestWatchResizeConvergesActiveWindowFirst(t *testing.T) {
+// TestWatchLocalClientConvergesActiveWindowFirst pins the #557 ordering: the
+// window the local client is looking at is converged ahead of the background
+// ones, so its %layout-change (and the reconcile it queues) lands first on a
+// slow link.
+func TestWatchLocalClientConvergesActiveWindowFirst(t *testing.T) {
 	tick := make(chan time.Time)
 	stop := make(chan struct{})
 	nudgeCh := make(chan nudgeResult)
@@ -597,13 +609,14 @@ func TestWatchResizeConvergesActiveWindowFirst(t *testing.T) {
 	reg.add("@1", "@101")
 	reg.add("@2", "@102")
 	cv := newConverger()
+	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
 	send := func(s string) bool { sent = append(sent, s); return true }
 
 	done := make(chan struct{})
 	go func() {
-		watchResize(area, nudged, func() string { return "@102" }, reg, cv, send, stop, tick)
+		watchLocalClient(area, nudged, func() string { return "@102" }, noResolveView, view, "sess", reg, cv, send, stop, tick)
 		close(done)
 	}()
 
@@ -615,7 +628,7 @@ func TestWatchResizeConvergesActiveWindowFirst(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchResize did not return after stop was closed")
+		t.Fatal("watchLocalClient did not return after stop was closed")
 	}
 
 	want := []string{ClientSizeCmd(120, 40), ConvergeCmd("@2", 120, 40), ConvergeCmd("@1", 120, 40)}
@@ -624,12 +637,12 @@ func TestWatchResizeConvergesActiveWindowFirst(t *testing.T) {
 	}
 }
 
-// TestWatchResizeDoesNotRecordAWriteThatDidNotHappen pins the converger
+// TestWatchLocalClientDoesNotRecordAWriteThatDidNotHappen pins the converger
 // invariant: its recorded size is never ahead of what the remote was actually
 // told. need() records at the moment it returns true, before the write — so a
 // send onto a dead stream would otherwise latch that size and the window would
 // never be re-sent it.
-func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
+func TestWatchLocalClientDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	tick := make(chan time.Time)
 	stop := make(chan struct{})
 	nudgeCh := make(chan nudgeResult)
@@ -640,12 +653,16 @@ func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	reg := newRegistry()
 	reg.add("@1", "@101")
 	cv := newConverger()
+	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
 	send := func(s string) bool { sent = append(sent, s); return false }
 
 	done := make(chan struct{})
-	go func() { watchResize(area, nudged, func() string { return "" }, reg, cv, send, stop, tick); close(done) }()
+	go func() {
+		watchLocalClient(area, nudged, func() string { return "" }, noResolveView, view, "sess", reg, cv, send, stop, tick)
+		close(done)
+	}()
 
 	// One tick with a fresh touch and a new size: both the client size and the
 	// window's cap are attempted, and both writes report failure.
@@ -657,7 +674,7 @@ func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("watchResize did not return after stop was closed")
+		t.Fatal("watchLocalClient did not return after stop was closed")
 	}
 
 	want := []string{ClientSizeCmd(120, 40), ConvergeCmd("@1", 120, 40)}
@@ -671,6 +688,109 @@ func TestWatchResizeDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	}
 	if !cv.need(clientSizeKey, 120, 40) {
 		t.Error("the client size was recorded despite a failed write")
+	}
+}
+
+// runWatchLocalClientView drives one due tick of watchLocalClient with a
+// fixed resolve result — id/ok are returned on every call, not just the
+// first — and area/reg/cv arranged so only the view-identity half of the
+// watcher can produce a send: area returns 0,0 (the client-size gate is
+// `w > 0 && h > 0`) and reg is empty (no per-window ConvergeCmd). Returns the
+// commands sent and the view cell the watcher wrote into.
+func runWatchLocalClientView(t *testing.T, seedRelay graphics.Relay, seedTerm string, id ViewIdentity, ok bool) ([]string, *Viewing) {
+	t.Helper()
+	tick := make(chan time.Time)
+	stop := make(chan struct{})
+	nudgeCh := make(chan nudgeResult)
+	nudged := func() (time.Time, bool) { n := <-nudgeCh; return n.t, n.ok }
+	area := func() (int, int) { return 0, 0 }
+	resolveView := func() (ViewIdentity, bool) { return id, ok }
+
+	reg := newRegistry()
+	cv := newConverger()
+	view := &Viewing{Relay: graphics.NewRelaySource(seedRelay)}
+	view.SetDesired(seedTerm)
+
+	var sent []string
+	send := func(s string) bool { sent = append(sent, s); return true }
+
+	done := make(chan struct{})
+	go func() {
+		watchLocalClient(area, nudged, func() string { return "" }, resolveView, view, "sess", reg, cv, send, stop, tick)
+		close(done)
+	}()
+
+	tick <- time.Now()
+	nudgeCh <- nudgeResult{t: time.Now(), ok: true}
+
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchLocalClient did not return after stop was closed")
+	}
+	return sent, view
+}
+
+// TestWatchLocalClientPublishesOnCapabilityChange is R5: a resolve whose
+// capability differs from what is currently stored publishes exactly one
+// RelayEnvCmd carrying the new value, and the new capability is stored.
+func TestWatchLocalClientPublishesOnCapabilityChange(t *testing.T) {
+	sent, view := runWatchLocalClientView(t, graphics.Relay{}, "foot",
+		ViewIdentity{Term: "foot", Relay: graphics.RelayFromTermFeatures("sixel")}, true)
+
+	want := []string{RelayEnvCmd("sess", "sixel")}
+	if !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %v, want %v", sent, want)
+	}
+	if !view.Relay.Load().Sixel() {
+		t.Error("the resolved capability was not stored")
+	}
+}
+
+// TestWatchLocalClientSkipsUnchangedCapability: the same capability resolving
+// again must not re-publish (R5 fires on a CHANGE, not on every tick).
+func TestWatchLocalClientSkipsUnchangedCapability(t *testing.T) {
+	sent, _ := runWatchLocalClientView(t, graphics.RelayFromTermFeatures("sixel"), "xterm-kitty",
+		ViewIdentity{Term: "xterm-kitty", Relay: graphics.RelayFromTermFeatures("sixel")}, true)
+
+	if len(sent) != 0 {
+		t.Fatalf("sent = %v, want none — the capability did not change", sent)
+	}
+}
+
+// TestWatchLocalClientTermOnlyChangeSendsNothing: Desired moves (every dial
+// reads it fresh, so asserting it is free) but nothing is published from this
+// path — RelayEnvCmd carries only the capability, never the termname.
+func TestWatchLocalClientTermOnlyChangeSendsNothing(t *testing.T) {
+	sent, view := runWatchLocalClientView(t, graphics.RelayFromTermFeatures("sixel"), "xterm-kitty",
+		ViewIdentity{Term: "foot", Relay: graphics.RelayFromTermFeatures("sixel")}, true)
+
+	if len(sent) != 0 {
+		t.Fatalf("sent = %v, want none (termname-only change)", sent)
+	}
+	if got := view.Desired(); got != "foot" {
+		t.Errorf("Desired() = %q, want foot", got)
+	}
+}
+
+// TestWatchLocalClientEmptyResolutionPreservesState is R3: nobody attached to
+// the mirror session is not evidence, so an empty resolution must store
+// nothing, send nothing, and leave Desired untouched — this path now fires on
+// every client-session-changed/client-detached tick, so a mirror nobody is
+// looking at must not be degraded by it.
+func TestWatchLocalClientEmptyResolutionPreservesState(t *testing.T) {
+	sent, view := runWatchLocalClientView(t, graphics.RelayFromTermFeatures("sixel"), "xterm-kitty",
+		ViewIdentity{}, false)
+
+	if len(sent) != 0 {
+		t.Fatalf("sent = %v, want none", sent)
+	}
+	if got := view.Desired(); got != "xterm-kitty" {
+		t.Errorf("Desired() = %q, want unchanged xterm-kitty", got)
+	}
+	if !view.Relay.Load().Sixel() {
+		t.Error("the previously stored capability must survive an empty resolution")
 	}
 }
 

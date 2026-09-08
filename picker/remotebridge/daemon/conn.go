@@ -224,6 +224,13 @@ func reattach(cfg Config, router *Router, hold *connHolder, want remoteIdentity,
 		if Wait(d, cfg.Shutdown) {
 			return nil
 		}
+		// Snapshotted per attempt, immediately before the dial whose argv reads
+		// it, so a retry that dials later records what IT dialled. Published
+		// with the connection below, or this path leaves Advertised naming a
+		// term the live client does not carry: a reconnect following a terminal
+		// switch dials the new one, and the next carousel press would then pay a
+		// whole redundant dial and repair() to change nothing.
+		term := cfg.View.Desired()
 		next, err := dialConn(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: re-dial %s: %v\n", cfg.RemoteHost, err)
@@ -276,6 +283,7 @@ func reattach(cfg Config, router *Router, hold *connHolder, want remoteIdentity,
 		}
 		next.bind(router)
 		hold.set(next)
+		cfg.View.setAdvertised(term)
 		if !repair() {
 			return nil
 		}
@@ -284,6 +292,152 @@ func reattach(cfg Config, router *Router, hold *connHolder, want remoteIdentity,
 		// mirror, one they don't is a lie.
 		clearBridgeState(cfg)
 		return next
+	}
+}
+
+// replaceOutcome is how a voluntary replacement ended, and a caller has to act
+// on all three (#574). notReplaced is the zero value on purpose: it is the one
+// outcome under which nothing was closed and the old connection is still the
+// mirror's, so the verdict a caller reads when it reads none is the harmless
+// one.
+type replaceOutcome int
+
+const (
+	// notReplaced — abandoned before anything was closed: a failed dial, a
+	// failed or timed-out identity read, or an identity that does not match.
+	// The old connection is still live and still published, and Advertised is
+	// untouched, so the next raise correctly tries again.
+	notReplaced replaceOutcome = iota
+	// replaced — the swap landed, and the returned connection is the mirror's
+	// now. The caller must adopt it exactly as it adopts reattach's, or runConn
+	// goes on reading the old, closed pump.
+	replaced
+	// mirrorGone — the swap landed but repair() found the registry empty, so
+	// the daemon tears down. Never collapsed into either of the others:
+	// notReplaced would have the caller carry on over a connection this routine
+	// has already closed, read a closed pump, and take the involuntary drop
+	// path — whose first act is hold.close(), killing the working NEW
+	// connection and dialling a third.
+	mirrorGone
+)
+
+// replaceConn swaps the mirror's control client for a freshly dialled one, so
+// that the termname cfg.View now wants is the one the remote sees and the
+// remote's own graphics backend follows the client the user is looking through
+// (#574). It returns the connection the mirror ended up on, if any, and the
+// outcome.
+//
+// reattach's voluntary twin, differing in exactly one structural way: reattach
+// closes the live connection BEFORE it dials, because a drop has already taken
+// it, while this dials, verifies and primes first and abandons the attempt with
+// the old connection untouched if any of that fails. Nothing here may cost a
+// mirror — the gesture is a nicety, so a dial that fails, times out or answers
+// as a different tmux server degrades this one press to the old backend rather
+// than tearing anything down. That is also why a mismatched identity is not the
+// teardown it is in reattach: the verified connection still in hold is the
+// better evidence about which server the mirror is on, and a remote that really
+// has been replaced drops that stream too, where reattach makes the call with
+// the whole retry budget behind it.
+//
+// The old connection's buffered notifications are discarded wholesale with it —
+// including the %client-session-changed the new attach provokes, measured
+// arriving on the OLD stream during the overlap while the main loop is in here
+// — so no ordinal can desync and no parser case is needed for them.
+func replaceConn(cfg Config, router *Router, hold *connHolder, want remoteIdentity, reg *registry, repair func() bool) (*ctlConn, replaceOutcome) {
+	// A detach raised before this gesture reached the main loop must not be
+	// answered with a fresh transport for a daemon that is already shutting
+	// down — reattach consults Shutdown twice for the same reason, and this
+	// path had no check at all. Nothing has been closed yet, so notReplaced
+	// leaves the mirror exactly as teardown expects to find it.
+	if stopped(cfg.Shutdown) {
+		return nil, notReplaced
+	}
+	// Snapshotted before the dial and published verbatim below. cfg.Dial builds
+	// the ssh argv outside this package, so the daemon cannot ask what it
+	// actually read; re-reading Desired() at the publish site instead would
+	// widen the window a viewer switch can land in from one gesture to the whole
+	// dial-plus-identity-read-plus-priming span, and a switch inside that window
+	// makes Advertised a lie the raise guard then reads as equal forever.
+	term := cfg.View.Desired()
+	next, err := dialConn(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: replacement dial for %s: %v; keeping the current connection\n", cfg.RemoteHost, err)
+		return nil, notReplaced
+	}
+	// Unbound (see newCtlConn) for the whole verification and priming span: an
+	// unverified far end must not paint into the panes the registry holds, and
+	// since both connections stream the same remote panes, a verified one must
+	// not route alongside the live one either.
+	disarm := armIdentityDeadline(next, cfg.identityTimeout())
+	id, err := readIdentity(next.rt, cfg.RemoteSession)
+	live := disarm()
+	if err != nil {
+		if live {
+			next.close()
+		}
+		// reattach's retry/teardown split has no analogue here: neither shape of
+		// this failure may touch the mirror, so both end the one attempt.
+		fmt.Fprintf(os.Stderr, "daemon: %v; keeping the current connection\n", err)
+		return nil, notReplaced
+	}
+	if !live {
+		// The deadline closed it out from under the read, which on this path is
+		// simply the end of the attempt.
+		fmt.Fprintf(os.Stderr, "daemon: replacement identity read for %s answered after its deadline; keeping the current connection\n", cfg.RemoteSession)
+		return nil, notReplaced
+	}
+	if !want.matches(id) {
+		next.close()
+		fmt.Fprintf(os.Stderr, "daemon: replacement dial for %s reached pid %d %s, not pid %d %s; keeping the current connection\n",
+			cfg.RemoteSession, id.pid, id.sessionID, want.pid, want.sessionID)
+		return nil, notReplaced
+	}
+	primeClient(cfg, next, reg)
+	// The first and only close, reached only with a verified replacement in
+	// hand. It leads the bind because a window in which both connections are
+	// bound routes duplicate %output into one sink; the gap is the two
+	// statements below, on this one goroutine, and whatever the remote drops
+	// inside it is exactly what repair()'s reseed exists to restore.
+	hold.close()
+	next.bind(router)
+	hold.set(next)
+	cfg.View.setAdvertised(term)
+	if !repair() {
+		return nil, mirrorGone
+	}
+	return next, replaced
+}
+
+// primeClient asserts on c the size state tmux holds per control client, which
+// a brand new one has therefore never been told: this client's own size, and
+// each mirrored window's cap. Sent while c is still unbound and ahead of the
+// old connection's close, because a window the remote CREATES in the gap before
+// repair()'s own sends would be born at tmux's 80x23 control-client default
+// (#449). Not protection against an existing window shrinking as a client goes
+// away — that was measured, and tmux does not do it.
+//
+// One round-trip rather than the fire-and-forget sends repair() uses: nothing
+// drains an unbound connection's pump, and every command written must have its
+// reply claimed, or the claim count falls behind sent and no later round-trip
+// recognises its own reply. A cap for a window that died on the remote answers
+// with %error, which is claimed like any other block and discarded here — the
+// same posture repair() takes for the same sends.
+//
+// Deliberately not recorded in the converger: repair() resets it wholesale and
+// re-sends both anyway, so that stays the single authoritative record and these
+// are idempotent asserts of a size already in force.
+func primeClient(cfg Config, c *ctlConn, reg *registry) {
+	w, h := cfg.LocalArea()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	cmds := []string{ClientSizeCmd(w, h)}
+	for _, remoteID := range reg.remoteIDs() {
+		cmds = append(cmds, ConvergeCmd(remoteID, w, h))
+	}
+	reply := c.rt(cmds...)
+	for range cmds {
+		reply()
 	}
 }
 
@@ -296,6 +450,11 @@ type connVerdict int
 const (
 	connEnd connVerdict = iota
 	connDrop
+	// connReplace is not an ending: the loop is handing its connection back so
+	// a voluntary replacement can run on the main-loop goroutine, the only
+	// place a round-trip may run (#574). The mirror stands throughout, and
+	// which connection it stands on afterwards is replaceOutcome's answer.
+	connReplace
 )
 
 // bridgeStateDisconnected is the @bridge_state value picker/statusline renders
