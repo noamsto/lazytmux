@@ -1283,6 +1283,35 @@ remote_pane_of() {
 	pane="$(remote_pane_of 0)"
 	[ -n "$pane" ]
 
+	# Z-parse, zoom-ON direction: a zoom made directly on the remote — no ctl
+	# request, so nothing schedules a reconcile but the %layout-change tmux
+	# emits for it carries the flag on — from a settled unzoomed mirror. A
+	# flag misread as off would read as == local and swallow the line, and
+	# the mirror would never zoom.
+	$SRC resize-pane -Z -t rem:1.1
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		[ "$src_z" = 1 ] && [ "$dst_z" = 1 ] && [ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 1 ]
+	[ "$dst_z" = 1 ]
+	[ "$src_dims" = "$dst_dims" ]
+
+	# ...and back down, clearing the ON state before exercising the ctl path.
+	$SRC resize-pane -Z -t rem:1.1
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		[ "$src_z" = 0 ] && [ "$dst_z" = 0 ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 0 ]
+	[ "$dst_z" = 0 ]
+
 	run "$CTL" --sock "$sock" zoom "$pane"
 	[ "$status" -eq 0 ]
 
@@ -1304,8 +1333,10 @@ remote_pane_of() {
 	[ "$dst_z" = 1 ]
 	[ "$src_dims" = "$dst_dims" ]
 
-	# A zoom made directly on the remote — no ctl request, so nothing schedules
-	# a reconcile but the %layout-change tmux emits for it — follows too.
+	# Z-parse, zoom-OFF (unzoom) direction: a zoom made directly on the
+	# remote — no ctl request, so nothing schedules a reconcile but the
+	# %layout-change tmux emits for it — follows too, this time against a
+	# ctl-zoomed window (the ON direction above ran before any ctl call).
 	$SRC resize-pane -Z -t rem:1.1
 	for _ in $(seq 1 60); do
 		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
@@ -3141,4 +3172,191 @@ attach_pty_client() {
 	[ "$final_termname" = tmux-256color ]
 	# No teardown: the mirror session stood throughout.
 	[ "$dst_alive_status" -eq 0 ]
+}
+# === #570: layout-change notification carries the answer, not just a poke ===
+
+# Benefit and negative control: on `main`, every dispatched %layout-change
+# line costs one readLayout display-message at SRC — even a no-op one. A
+# select-layout of the window's OWN current layout emits two identical
+# %layout-change lines (layout-custom.c:289, cmd-select-layout.c:142) and
+# should therefore cost the remote nothing once the notification itself
+# carries #{window_layout} and the zoom flag. A 2-pane -h window (a
+# left/right root) so the positive control's -L resize below actually moves
+# a cell — -L on a -v split is a tmux no-op.
+@test "a no-op %layout-change costs the remote nothing" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 noop
+
+	$SRC set -g @dm 0
+	# after-display-message also fires for the daemon's OWN reads (readLayout,
+	# the seeds' cursor probes, the clock-skew/session-pin/theme probes, ...);
+	# those run in the control client's queue as flag-0 %begin/%end blocks,
+	# which claimSeq treats as inert (#276) — not a desync. Their counter
+	# bumps are exactly what this test counts: any display-message at all.
+	$SRC set-hook -g after-display-message "set -gF @dm '#{e|+:#{@dm},1}'"
+
+	# Quiesce: wait until the counter holds still across 10 samples 0.15s
+	# apart, so the seeds' own cursor reads (which tick it too) have drained
+	# before the baseline below is taken.
+	prev="$($SRC show-options -gv @dm)"
+	stable=0
+	for _ in $(seq 1 100); do
+		sleep 0.15
+		cur="$($SRC show-options -gv @dm)"
+		if [ "$cur" = "$prev" ]; then
+			stable=$((stable + 1))
+		else
+			stable=0
+			prev="$cur"
+		fi
+		[ "$stable" -ge 10 ] && break
+	done
+	[ "$stable" -ge 10 ]
+
+	layout="$($SRC list-windows -t rem -F '#{window_layout}')"
+	before="$($SRC show-options -gv @dm)"
+	$SRC select-layout -t rem "$layout"
+
+	# 1.5s: comfortably inside the daemon's 5s maintenance tick, so nothing on
+	# that tick fires here — the sweep and both shipper backstops read
+	# list-windows/list-panes, never a remote display-message, and
+	# reseedDropped/reseedReshaped act only on pending work, which the
+	# quiesce above already drained. A future addition to that tick which DOES
+	# issue a remote display-message fails this assertion outright rather
+	# than flaking it.
+	sleep 1.5
+	after="$($SRC show-options -gv @dm)"
+	src_dims="$(sorted_dims "$SRC" rem)"
+	dst_dims="$(sorted_dims "$DST" host-sess:1)"
+	[ "$after" = "$before" ]
+	[ "$src_dims" = "$dst_dims" ]
+
+	# Positive control, so a dead or stalled daemon cannot pass the assertion
+	# above by doing nothing at all: a real geometry change must still
+	# converge the mirror and still cost at least one display-message — gate
+	# 6 still pays the seeds' cursor reads and the trailing readLayout, on
+	# `main` and here alike.
+	pre_dims="$(sorted_dims "$SRC" rem)"
+	$SRC resize-pane -L -t rem:1.1 3
+	for _ in $(seq 1 60); do
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		dm="$($SRC show-options -gv @dm)"
+		[ "$src_dims" != "$pre_dims" ] && [ "$dst_dims" = "$src_dims" ] && [ "$dm" -gt "$after" ] && break
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_dims" != "$pre_dims" ]
+	[ "$dst_dims" = "$src_dims" ]
+	[ "$dm" -gt "$after" ]
+}
+
+# Geometry-only regression net for gate 6: several remote resizes in
+# immediate succession, no pane-count change and no zoom, must still
+# converge the mirror's dims and repaint its content at the final geometry.
+# This cannot prove gate 6 was taken — the burst's own round-trips drain the
+# tail into the coalesced queue, so which line was stale isn't observable
+# from outside — it nets the case; gate 6 itself is discriminated in the
+# unit layer, where the read count on the stream is exact.
+@test "a burst of remote geometry changes converges the mirror" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 gburst
+
+	# Paint a marker into rem:1.1, as the #231 test does, so a later content
+	# compare against host-sess:1.0 is meaningful.
+	marker="GEOBURST_$$"
+	painted=no
+	for _ in $(seq 1 20); do
+		$SRC send-keys -t rem:1.1 "printf '$marker\\n'" Enter
+		for _ in $(seq 1 10); do
+			out="$($DST capture-pane -p -t host-sess:1.0 2>/dev/null)"
+			[[ $out == *$marker* ]] && {
+				painted=yes
+				break 2
+			}
+			sleep 0.1
+		done
+	done
+	[ "$painted" = yes ]
+
+	for _ in $(seq 1 5); do
+		$SRC resize-pane -L -t rem:1.1 3
+	done
+
+	# Content converges strictly after dims — select-layout precedes the
+	# seeds in the pass — so poll on the content equality itself, with dims
+	# as the pre-gate.
+	for _ in $(seq 1 60); do
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		if [ "$src_dims" = "$dst_dims" ]; then
+			src_screen="$($SRC capture-pane -p -t rem:1.1)"
+			dst_screen="$($DST capture-pane -p -t host-sess:1.0)"
+			[ "$src_screen" = "$dst_screen" ] && break
+		fi
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_dims" = "$dst_dims" ]
+	[ "$src_screen" = "$dst_screen" ]
+}
+
+# Structural-burst regression net: split immediately followed by kill-pane on
+# the remote, once on an unzoomed window and once on a zoomed one. DST's pane
+# dims and zoom flag must converge to SRC's. Convergence-only — a disabled
+# gate 1 would still pass via the trailing re-read or resetWindow — kept as a
+# net, with gate 1 itself netted in the unit layer.
+@test "a split immediately killed converges the mirror, zoomed or not" {
+	$SRC new-session -d -s rem -x 150 -y 40
+	$SRC split-window -h -t rem
+	$DST new-session -d -s host-sess -x 150 -y 40
+	bridge_up 2 splitkill # a 2-pane base: window_zoom refuses a 1-pane window
+
+	new="$($SRC split-window -v -t rem -P -F '#{pane_id}')"
+	$SRC kill-pane -t "$new"
+	for _ in $(seq 1 60); do
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		[ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.15
+	done
+	[ "$src_dims" = "$dst_dims" ]
+
+	run "$CTL" --sock "$sock" zoom "$(remote_pane_of 0)"
+	[ "$status" -eq 0 ]
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		[ "$src_z" = 1 ] && [ "$dst_z" = 1 ] && break
+		sleep 0.15
+	done
+	[ "$src_z" = 1 ]
+	[ "$dst_z" = 1 ]
+
+	new="$($SRC split-window -v -t rem -P -F '#{pane_id}')"
+	$SRC kill-pane -t "$new"
+	for _ in $(seq 1 60); do
+		src_z="$($SRC display-message -p -t rem '#{window_zoomed_flag}')"
+		dst_z="$($DST display-message -p -t host-sess:1 '#{window_zoomed_flag}')"
+		src_dims="$(sorted_dims "$SRC" rem)"
+		dst_dims="$(sorted_dims "$DST" host-sess:1)"
+		[ "$src_z" = "$dst_z" ] && [ "$src_dims" = "$dst_dims" ] && break
+		sleep 0.15
+	done
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$src_z" = "$dst_z" ]
+	[ "$src_dims" = "$dst_dims" ]
 }
