@@ -117,6 +117,23 @@ Read out of `/home/noams/Data/git/noamsto/aeye` at `240e707` and
    `diagrams.sh:122` does), so losing that race leaves the carousel gone until
    the user presses `prefix + I`, which is the bug being fixed.
 
+8b. **A restored agent pane does not show its agent's command straight away, and
+   a pane-0 viewer is briefly alone.** Both matter because host discovery matches
+   on `pane_current_command`:
+
+   - The `scrollback=yes relaunch=yes` startup form is
+     `'<self>' cat-scrollback <sha>; <override>; exec <shell>`
+     (`tmux-remux/internal/restore/startup.go:42-47`). The prefix runs first, so
+     during scrollback replay the host pane's `pane_current_command` reads
+     **`tmux-remux`**, not `claude`. Fact 7 quotes only the shorter form.
+   - `CreateWindow` is built from `firstPane` and the remaining panes arrive as
+     `SplitPane`s (`plan.go:160-199`), so a carousel that was pane 0 is the
+     window's only pane at the first tick.
+
+   Neither is an error state; both are transient. They are why discovery retries
+   on a quantified bound and then falls back to a sole non-self sibling, rather
+   than treating "no agent command visible" as "no host".
+
 9. **remux applies the window layout after every split, while relaunches run
    asynchronously.** `internal/restore/plan.go:190-199` appends every `SplitPane`
    for a window and *then* one `SetLayout`, and a `SplitPane`'s pane "is born

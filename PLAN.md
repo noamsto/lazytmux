@@ -35,10 +35,32 @@ the viewer's new id.
   whose command is in the agent set. Pick the **lowest `pane_index`** among
   matches (spec condition 2 — a stated rule, so it is reproducible; sort on the
   index, do not rely on `list-panes` order).
-- **Bounded retry** around discovery: the agent pane's relaunch runs
-  asynchronously (fact 9). A small fixed number of attempts with a short sleep,
-  no unbounded wait. On exhaustion: exit 0 without stamping, leaving today's
-  bare shell (spec Design step 5) — never a partial stamp.
+- **Bounded retry, and the bound is load-bearing — two mechanisms make a
+  command-name match legitimately miss for a while.** Neither is in the spec's
+  fact base and both must be added there:
+
+  1. **Scrollback replay masks the agent's command.** The
+     `scrollback=yes relaunch=yes` startup form is
+     `'<self>' cat-scrollback <sha>; <override>; exec <shell>`
+     (`tmux-remux/internal/restore/startup.go:42-47`) — the prefix runs *first*,
+     so while the host pane replays its stored scrollback its
+     `pane_current_command` reads **`tmux-remux`**, not `claude`. Fact 7 quotes
+     only the `<override>; exec <shell>` form and misses this.
+  2. **A pane-0 viewer is briefly alone in its window.** `CreateWindow` is built
+     from `firstPane` and the rest arrive as `SplitPane`s
+     (`plan.go:160-199`), so if the carousel was pane 0 the window legitimately
+     holds exactly one pane at the first tick.
+
+  So: retry for an agent-command match on a **quantified** bound — poll every
+  250ms up to ~15s, generous enough to outlast a scrollback replay — rather than
+  "a small fixed number of attempts".
+
+  **On expiry, fall back before giving up.** If exactly **one** non-self pane
+  exists in the window, use it: during a replay or a pane-0 birth that pane *is*
+  the host, and matching "not me" is immune to whatever command it currently
+  shows. Only when the window holds several non-self panes and none matches an
+  agent does the script exit 0 unstamped, leaving today's bare shell. Never a
+  partial stamp, per the resolution-ordering rule above.
 - **Key computation.** `key="<server pid>-<host pane id sans %>"`. Read the
   server pid from `$TMUX` (`<socket>,<pid>,<session>`) exactly as aeye's
   `resolve_target` does — no `tmux` fork needed. **Carry the condition-1 comment
@@ -57,13 +79,25 @@ the viewer's new id.
   `AEYE_BIN` can never reach it. It is worth keeping for bats, and it mirrors
   `tmux-claude-images.sh:548`, but a comment must not promise an override that
   cannot work.
-- **Builder wiring.** This script needs `@carousel_aeye@` substituted but not the
-  icon set, so it does not belong in `scriptsWithIcons`/`mkScriptIcons`. Give it
-  its own branch in the `script` dispatch chain (`config/tmux.conf.nix:560-570`).
-  No cycle is introduced: `tmux-update-icons` → `tmux-carousel-restore` →
-  `carousel-aeye` is acyclic, and unlike the `@reflow@` case flagged in
-  `mkScriptIcons`'s comment, `tmux-carousel-restore` never references its own
-  store path.
+- **Builder wiring — an explicit branch, or the placeholder ships raw.** The
+  dispatch chain ends in `else mkScript name` (`config/tmux.conf.nix:584`), and
+  `mkScript` performs **no substitution**: a script added only to `scriptNames`
+  ships with a literal `@carousel_aeye@` in its body and the pane execs a
+  nonexistent command. So give `tmux-carousel-restore` its own branch in the
+  `:555-584` chain with a minimal builder substituting `@carousel_aeye@` only —
+  `mkScriptWithLibs` / `mkScriptReconcile` / `mkScriptSplash` are the
+  one-script-builder precedents.
+- **Two ways to reintroduce the self-reference hazard, both to be avoided.**
+  No cycle exists in the intended design — `tmux-update-icons` →
+  `script.tmux-carousel-restore` → `carousel-aeye` terminates, because the last
+  hop is an *input*, not a member of the recursive `script` attrset, exactly as
+  `@reflow@` already resolves. But: (1) `@carousel_restore@` must go in
+  `mkScriptIcons`'s **own** extension list (`:401-411`), **not** the shared
+  `iconSubstFrom`/`iconSubstTo` (`:386-387`) which also feed `mkScriptFull`; and
+  (2) `tmux-carousel-restore` must **not** be added to `scriptsWithIcons`
+  (`:384`). Either would let the script substitute its own store path into
+  itself, which is `infinite recursion encountered` at eval — the failure
+  `:393-397` routes reflow around.
 - `shellcheck` clean; `shfmt` with tabs (project default).
 
 ## Step 2: stamp from `scripts/tmux-update-icons.sh`
@@ -184,9 +218,19 @@ Mechanism:
 `tmux-carousel-restore` unit coverage (its own bats file, since it is a separate
 script — follow `tests/enrich.bats`'s pure-logic pattern where the logic can be
 sourced, else drive the script against the private server):
-- **Condition 1**: the computed key matches `<server pid>-<pane>`. Assert the
-  shape, and prefer deriving the expectation from aeye's own
-  `main.go:37` help string or a recorded fixture over a hand-copied literal.
+- **Condition 1 — a cross-repo pin, required, not a preference.** Asserting that
+  *lazytmux's own* formula yields `<pid>-<pane>` is self-referential: it stays
+  green when **aeye** changes its formula, which is exactly the silent breakage
+  condition 1 exists to catch ("the carousel opens, finds nothing, and reads as
+  an unrelated bug"). So the check must read aeye's side: grep
+  `${inputs.aeye}/main.go` for the `main.go:37` contract string, and/or the
+  runtime formula at `aeye/scripts/tmux-claude-images.sh:71-77`
+  (`KEY="$srv-${PANE#%}"`), and fail when it no longer matches what this script
+  computes.
+  **Use `${inputs.aeye}`, never a local checkout path.** The guard derivation
+  copies only `./scripts` and `./tests` (`flake.nix:683-693`), so a test reading
+  `/home/noams/Data/git/noamsto/aeye` passes locally and fails `nix flake check`.
+  `inputs.aeye` is already in scope where the check is defined.
 - **Condition 2**: two agent panes in one window → lowest `pane_index` wins.
 - Self-exclusion: the viewer's own pane is never chosen as host.
 - Non-agent panes ignored; no host → exit 0, nothing stamped.
@@ -203,21 +247,50 @@ restored pane runs the viewer, `@claude_img_src` holds the **new** key, the
 window's pane count is unchanged, and the manifest at the new key carries the
 pre-restore images.
 
-**This is reachable — do not settle for a proxy.** Checked: `tmux-remux` is on
-the user profile PATH, and while the bats check derivations pass explicit
-`nativeBuildInputs` (flake.nix:180, 196, 206, …) so a sandboxed run would *not*
-inherit it, the flake already declares `inputs.tmux-remux` (flake.nix:29-32) and
-resolves it as `tmux-remux-pkg` (flake.nix:987). So the round-trip test gets its
-own check derivation with `inputs.tmux-remux.packages.${pkgs.system}.default`
-added to `nativeBuildInputs`, plus `XDG_DATA_HOME` pointed into the sandbox
-(tmux-remux stores state at `$XDG_DATA_HOME/tmux-remux/state.db`).
+**There is no "if unavailable" fork — the binary is available, so the downgrade
+is not on the table.** An earlier draft of this plan made the round-trip
+conditional on tmux-remux being present in the sandbox; that is a false
+precondition (`inputs.tmux-remux` is declared at `flake.nix:29-32` and `inputs`
+is in scope in `perSystem`, as `flake.nix:82` proves) and it handed the
+implementer a free downgrade. Deleted deliberately. Note also that **no test in
+this repo has ever executed the real `tmux-remux`** — every reference under
+`tests/` is a stub (`tests/remote-cold-start.bats:82-83`), so this is new ground
+and the derivation must be built, not assumed.
 
-The viewer binary is needed too — assert on the restored pane's
-`pane_current_command` and `@claude_img_src`, which does not require the real
-`aeye` to render; if the sandbox cannot supply `aeye`, stub it on PATH rather
-than dropping the assertion. Only if the round-trip proves genuinely
-unreachable does the fallback apply: assert what is reachable and **state the gap
-explicitly in the PR body** — never leave an outcome criterion ticked by nothing.
+Split the coverage by what is actually reachable:
+
+**(a) A real round-trip — outcome criteria 1, 3 and 6.** A new check derivation
+(the existing `update-icons-resume-guard-tests` at `flake.nix:683-693` carries
+only `[bats coreutils gnused git tmux]` and copies just `./scripts` and
+`./tests`, so it cannot host this). Add
+`inputs.tmux-remux.packages.${pkgs.system}.default` and `carousel-aeye` to
+`nativeBuildInputs`, set `HOME` and `XDG_DATA_HOME` into the sandbox
+(`state.db` lives at `$XDG_DATA_HOME/tmux-remux/state.db`), then assert on the
+restored pane: `pane_current_command` is the viewer, `@claude_img_src` holds the
+**new** `<srv>-<host>` key, and the window's pane count is unchanged.
+
+**(b) The manifest half, decoupled — outcome criterion 2.** Invoke
+`session-backfill.sh` directly against a transcript fixture and assert the
+manifest lands at the new key. This *pins* fact 3 rather than trusting it, which
+is worth more than the round-trip would have been. Reach it via
+`${inputs.aeye}/adapters/claude-code/plugin/scripts/`, not a local checkout, for
+the same sandbox reason as condition 1.
+
+**Injecting a stub viewer.** Step 3 threads the absolute path via
+`@carousel_aeye@`, so the script never consults PATH for the viewer and a PATH
+stub would be inert. Inject through `AEYE_BIN` (the documented test seam) or by
+substituting `@carousel_aeye@` with the stub path in the test's own `sed` pass —
+the established pattern at `tests/update-icons-resume-guard.bats:45-52`, which
+already seds `@lib_icons@` / `@lib_claude@` / `@reflow@` / `@MAX_ICONS@`.
+
+**Genuinely unreachable, and to be disclosed rather than faked:** "shows the
+images it had" **as an end-to-end round-trip**. It requires
+`session-backfill.sh` to fire as a Claude Code **SessionStart** hook, and nothing
+in a nix sandbox fires one. So criterion 2 is covered by (b) at the seam, and the
+PR body must say plainly that the full agent-restore-to-images path is verified by
+composition — (a) for the viewer, (b) for the manifest — plus hardware
+verification, not by a single automated test. That is a stated gap, not a ticked
+box.
 
 ## Step 6: `CLAUDE.md` + spec commit
 
