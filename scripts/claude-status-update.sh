@@ -66,6 +66,36 @@ bridge_stamp() {
 	fi
 }
 
+# Reflow seam, pinned to the store path for the reason tmux-update-icons' own
+# @reflow@ is: a bare name resolves against the tmux server's frozen PATH and
+# stays stale until a server restart (#336). Still starting with '@' means the
+# placeholder was never substituted, and disables the forced reflow.
+REFLOW_BIN="@reflow@"
+
+# window_stamp OPTION VALUE
+# Mirrors a self-report into the WINDOW option tmux-update-icons would otherwise
+# write on its 1s tick, then forces the reflow that rebuilds @window_label_*
+# from it. bridge_stamp's problem one level up: a control-mode client renders no
+# status line, so on a host whose only clients are bridges that poller has never
+# run, and it is the sole other writer of @window_ai_name/@window_task (#589).
+#
+# Active pane only, the rule update-icons applies — a background agent in a
+# split must not retitle the window out from under the one on screen.
+window_stamp() {
+	[[ -n ${TMUX:-} && -n ${pane_id:-} ]] || return 0
+	local active win sess cur
+	# session_name last: it may itself contain the '|' delimiter, and as the
+	# final read target it absorbs the rest of the line whole.
+	IFS='|' read -r active win sess < <(tmux display-message -p -t "$pane_id" \
+		'#{?pane_active,1,}|#{window_id}|#{session_name}' 2>/dev/null) || return 0
+	[[ $active == 1 && -n $win ]] || return 0
+	cur=$(tmux show -wqv -t "$win" "$1" 2>/dev/null)
+	[[ $cur == "$2" ]] && return 0
+	tmux set -qw -t "$win" "$1" "$2" 2>/dev/null || true
+	[[ $REFLOW_BIN == @* ]] && return 0
+	"$REFLOW_BIN" "$sess" --force >/dev/null 2>&1 &
+}
+
 # Function to clean up stale pane entries
 # Removes entries only for panes that no longer exist in tmux. A live pane is
 # kept even when its foreground command isn't claude/opencode: Claude shells
@@ -249,6 +279,7 @@ if [[ $state == "task" ]]; then
 	task_now=""
 	[[ -f $tasks_file ]] && IFS= read -r task_now <"$tasks_file" || true
 	bridge_stamp @claude_task "$task_now"
+	window_stamp @window_task "$task_now"
 	exit 0
 fi
 
@@ -309,6 +340,9 @@ if [[ $state == "name" ]]; then
 		rm -f "$names_file"
 		;;
 	esac
+	name_now=""
+	[[ -f $names_file ]] && IFS= read -r name_now <"$names_file" || true
+	window_stamp @window_ai_name "$name_now"
 	if [[ -n ${TMUX:-} ]]; then
 		tmux refresh-client -S 2>/dev/null || true
 	fi

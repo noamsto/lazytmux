@@ -1500,3 +1500,29 @@ func TestCtrlXOnMirrorRowRoutesToBridgeCtl(t *testing.T) {
 		t.Errorf("ctl argv = %q, want %q", strings.TrimSpace(string(argv)), want)
 	}
 }
+
+// The Remote section arrives from an ssh probe seconds after the query was
+// typed, so a query matching only a remote session selects nothing at the time
+// it is typed and leaves the cursor at 0. When the probe's rows land, index 0
+// is the Remote header — restoreCursor must move off it rather than clamping on
+// bounds alone (#588).
+func TestRestoreCursorLeavesHeaderWhenRemoteRowsArriveLate(t *testing.T) {
+	// Before the probe: only the local session exists, and "other" matches none
+	// of it.
+	m := tuiModel{allItems: []listItem{remoteFixture()[0]}, query: "other"}
+	m = m.withFilter()
+	m.cursor = m.firstSelectable(0)
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d before the probe, want 0", m.cursor)
+	}
+
+	m.allItems = remoteFixture()
+	m = m.withFilter().restoreCursor("")
+
+	if !m.isSelectable(m.visible[m.cursor]) {
+		t.Fatalf("cursor %d sits on an unselectable row %+v", m.cursor, m.visible[m.cursor])
+	}
+	if got := m.visible[m.cursor].remoteSess; got != "other" {
+		t.Errorf("cursor landed on %q, want the matching remote row %q", got, "other")
+	}
+}

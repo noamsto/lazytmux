@@ -276,7 +276,11 @@
 
   mkScriptWithLog = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
-    patched = builtins.replaceStrings ["@lib_log@" "@notify@" "@lib_claude@"] ["${lib-log}" notifyBin "${lib-claude}"] raw;
+    patched =
+      builtins.replaceStrings
+      ["@lib_log@" "@notify@" "@lib_claude@" "@reflow@"]
+      ["${lib-log}" notifyBin "${lib-claude}" "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"]
+      raw;
   in
     pkgs.writeShellScriptBin name patched;
 
@@ -620,12 +624,17 @@
   # on window-resized. Both come from one source here so they cannot drift.
   # -A keeps a float visible above a zoomed pane. String-form if-shell defers
   # parsing so an older server never sees the unknown flag at source (#407).
+  #
+  # remain-on-exit is pinned off on the pane because a mirror window sets it on
+  # (#547) and pane options inherit from the window's, so a float inside a
+  # mirror outlived its command as a dead pane nothing reaps — healDeadRenderers
+  # only touches panes carrying @bridge_pane (#587).
   mkFloat = w: h: x: y: let
     base = "-x ${w} -y ${h} -X ${x} -Y ${y} -B heavy";
   in {
     flags = "${base} -A";
     flagsNoA = base;
-    stamp = "set -p @float_geom '${w} ${h} ${x} ${y}'";
+    stamp = "set -p @float_geom '${w} ${h} ${x} ${y}' \\; set -p remain-on-exit off";
   };
   # String-form if-shell — brace blocks parse every branch at source time.
   floatNewPaneGuard = float: prefix: suffix: let

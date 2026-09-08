@@ -46,6 +46,7 @@ var volatileFields = []string{
 	"#{@bridge_win}", "#{@bridge_host}", "#{@bridge_state}",
 	"#{@bridge_crew_name}", "#{@bridge_crew_color}",
 	"#{@bridge_label_id}", "#{@bridge_label_rest_long}",
+	"#{@bridge_proc}",
 }
 
 // fetchVolatile fills the volatile fields via a single display-message
@@ -72,6 +73,7 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 	a.bridgeWin, a.bridgeHost, a.bridgeState = f[13], f[14], f[15]
 	a.bridgeCrewName, a.bridgeCrewColor = f[16], f[17]
 	a.bridgeLabelID, a.bridgeLabelRestLong = f[18], f[19]
+	a.bridgeProc = f[20]
 	return f[0] == "1", true
 }
 
@@ -118,7 +120,7 @@ type args struct {
 	session                                         string
 	issueID, issueBranch, issueProvider, issueTitle string
 	branch, panePath, gitRoot                       string
-	paneIcon, paneCmd, claudeFg                     string
+	paneIcon, paneCmd, claudeFg, bridgeProc         string
 	crewName, crewColor                             string
 	bridgeWin, bridgeHost, bridgeState              string
 	bridgeCrewName, bridgeCrewColor                 string
@@ -252,7 +254,14 @@ const bridgeDisconnectedGlyph = "󰲛" // nerd: nf-md-lan_disconnect
 
 var wrappedRe = regexp.MustCompile(`^\.(.*)-wrapped$`)
 
-func paneCmdDisplay(cmd string) string {
+// paneCmdDisplay names the command beside the pane icon. bridgeProc wins when
+// set: a mirror pane runs the bridge renderer, so pane_current_command names
+// that rather than the remote command on screen — the same preference the icon
+// beside it takes (tmux-update-icons) and the agent scan in usage.go (#590).
+func paneCmdDisplay(cmd, bridgeProc string) string {
+	if bridgeProc != "" {
+		cmd = bridgeProc
+	}
 	if m := wrappedRe.FindStringSubmatch(cmd); m != nil {
 		return m[1]
 	}
@@ -332,7 +341,7 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, u
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
 	b.WriteString(usage)
-	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + paneSlot(a.paneIcon, paneCmdDisplay(a.paneCmd), usage != "") + " ")
+	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + paneSlot(a.paneIcon, paneCmdDisplay(a.paneCmd, a.bridgeProc), usage != "") + " ")
 	return b.String()
 }
 

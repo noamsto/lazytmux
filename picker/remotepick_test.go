@@ -221,6 +221,8 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 		"set", "-p", "@float_geom", "90% 85% 5% 8%",
 		";",
 		"set", "-p", "@pane_keys_raw", "1",
+		";",
+		"set", "-p", "remain-on-exit", "off", // inherited on inside a mirror (#587)
 	}
 	if len(args) != len(want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
