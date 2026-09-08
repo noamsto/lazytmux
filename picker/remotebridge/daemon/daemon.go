@@ -880,7 +880,7 @@ func Run(cfg Config) error {
 		case controlmode.LayoutChange:
 			if len(l.Args) > 0 {
 				if mw, ok := reg.byRemoteID(l.Args[0]); ok {
-					if reconcileLayout(cfg, mw, send, router, waitHellosFn, cst, cv, rt) {
+					if reconcileLayoutFrom(cfg, mw, l, send, router, waitHellosFn, cst, cv, rt) {
 						retireMirror(cfg, send, router, waitHellosFn, cst, reg, cv, rt, l.Args[0])
 					}
 				}
@@ -1420,14 +1420,15 @@ func (q *asyncQueue) take() []controlmode.Line {
 }
 
 // coalesceLayoutChanges collapses a burst of %layout-change notifications for
-// the same window into just the last one. reconcileLayout always re-reads the
-// remote's current layout fresh, so only the last notification for a given
-// window in an already-buffered batch can still matter — a resize drag can
-// otherwise queue many of these while a single reconcileLayout call's own
-// round-trips are in flight, and dispatching each one individually would pay
-// for N-1 redundant readLayout round-trips before the dedup in reconcileLayout
-// even gets a chance to discard them. Every other notification kind, and the
-// relative order of what survives, is left untouched.
+// the same window into just the last one. reconcileLayoutFrom reads the
+// surviving line's own Args, so only the last notification for a given window
+// in an already-buffered batch can still matter — a resize drag can otherwise
+// queue many of these while a single reconcile call's own round-trips are in
+// flight, and dispatching each one individually would pay for N-1 redundant
+// readLayout round-trips before reconcileLayoutFrom's own gates, or
+// reconcileLayout's dedup behind them, even get a chance to discard them.
+// Every other notification kind, and the relative order of what survives, is
+// left untouched.
 func coalesceLayoutChanges(lines []controlmode.Line) []controlmode.Line {
 	last := map[string]int{}
 	for i, l := range lines {

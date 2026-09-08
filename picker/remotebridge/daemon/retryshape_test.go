@@ -55,9 +55,11 @@ func TestRetryFailedShapesSkipsAWindowStillHoldingAFloat(t *testing.T) {
 }
 
 // The case the retry exists for: the user closed the float, and no remote event
-// will follow. reconcileLayout only runs on a %layout-change, a coalesced batch
-// of them, or a reattach — so without this pass the mirror kept the stale shape
-// until the remote happened to move that window again.
+// will follow. reconcileLayout is reached via reconcileLayoutFrom on a
+// %layout-change or a coalesced batch of them — which may answer and return
+// before ever reaching here — or directly on a reattach; nothing else drives
+// it. So without this pass the mirror kept the stale shape until the remote
+// happened to move that window again.
 func TestRetryFailedShapesReconcilesOnceTheFloatIsGone(t *testing.T) {
 	p := &paneLister{body: "%l0 0\n"}
 	reg := newRegistry()
