@@ -29,9 +29,7 @@ const (
 // The 8 payload bytes are masked to printable ASCII, same as maskPrintable:
 // a raw fuzzed uint64 could otherwise spell 0x1b 0x5c (a real ST) or a bare
 // 0x07/0x18/0x1a inside a drop-designated body, letting the canary itself
-// prematurely terminate the sequence it's meant to be trapped inside — which
-// would make the leak assertion a false negative on the exact input class it
-// exists to catch.
+// prematurely terminate the sequence it's meant to be trapped inside.
 func encodeCanary(v uint64) []byte {
 	b := make([]byte, 0, 12)
 	b = append(b, 0xff)
@@ -192,12 +190,7 @@ func decodeScript(script []byte, canaryBytes []byte, allowDrop bool) (stream, cb
 				buf.WriteString("\x1b]1337;CurrentDir=/tmp\x07")
 			}
 
-		case 3: // sixelOverBudget: bare, unterminated, over maxPartial. Only
-			// when last: a segment appended after this one could supply the
-			// missing ST and let the "over-budget" body complete as an
-			// ordinary Raster instead of overflowing — not a leak, but it
-			// would make hasDrop's bookkeeping wrong and silently drop this
-			// case out of the property-1 check entirely.
+		case 3: // sixelOverBudget: bare, unterminated, over maxPartial. Only when last (see decodeScript's doc comment).
 			jitter := 0
 			if len(script) > 0 {
 				jitter = int(script[0]) % 64
@@ -213,7 +206,7 @@ func decodeScript(script []byte, canaryBytes []byte, allowDrop bool) (stream, cb
 			buf.Write(body)
 			hasDrop = true
 
-		case 4: // sixelWrappedOverBudget: same, inside a tmux passthrough. Only when last (see case 3).
+		case 4: // sixelWrappedOverBudget: same, inside a tmux passthrough. Only when last (see decodeScript's doc comment).
 			jitter := 0
 			if len(script) > 0 {
 				jitter = int(script[0]) % 64
@@ -229,7 +222,7 @@ func decodeScript(script []byte, canaryBytes []byte, allowDrop bool) (stream, cb
 			buf.Write(doublePassthroughNoTerm(inner))
 			hasDrop = true
 
-		case 5: // osc1337FileOverBudget: confirmed File=, unterminated, over maxPartial. Only when last (see case 3).
+		case 5: // osc1337FileOverBudget: confirmed File=, unterminated, over maxPartial. Only when last (see decodeScript's doc comment).
 			jitter := 0
 			if len(script) > 0 {
 				jitter = int(script[0]) % 64
@@ -426,16 +419,16 @@ type fuzzSeed struct {
 func fuzzSeeds() []fuzzSeed {
 	filler := bytes.Repeat([]byte{0x41}, 40)
 	seeds := []fuzzSeed{
-		{append([]byte{0, 5}, []byte("hello")...), 0, 1, 0xdeadbeef},                    // tag 0 literal
-		{[]byte{1, 0}, 0, 2, 0xdeadbeef},                                                // tag 1 kittySafe bare
-		{[]byte{1, 1}, 0, 3, 0xdeadbeef},                                                // tag 1 kittySafe wrapped
-		{[]byte{2, 0}, 0, 4, 0xdeadbeef},                                                // tag 2 oscOtherSafe
-		{[]byte{3, 10}, 0, 5, 0xdeadbeef},                                               // tag 3 sixelOverBudget
-		{[]byte{4, 10}, 0, 6, 0xdeadbeef},                                               // tag 4 sixelWrappedOverBudget
-		{[]byte{5, 10}, 0, 7, 0xdeadbeef},                                               // tag 5 osc1337FileOverBudget
-		{append([]byte{6, 20}, filler...), 0, 8, 0xdeadbeef},                            // tag 6 osc1337FileTruncatedAtFlush
-		{append([]byte{7, 20}, filler...), 0, 9, 0xdeadbeef},                            // tag 7 sixelBareTruncatedAtFlush
-		{append(append([]byte{0, 4}, []byte("abcd")...), 1, 0, 2, 1), 0, 10, 0xabc},     // all-safe mixed
+		{append([]byte{0, 5}, []byte("hello")...), 0, 1, 0xdeadbeef},                // tag 0 literal
+		{[]byte{1, 0}, 0, 2, 0xdeadbeef},                                            // tag 1 kittySafe bare
+		{[]byte{1, 1}, 0, 3, 0xdeadbeef},                                            // tag 1 kittySafe wrapped
+		{[]byte{2, 0}, 0, 4, 0xdeadbeef},                                            // tag 2 oscOtherSafe
+		{[]byte{3, 10}, 0, 5, 0xdeadbeef},                                           // tag 3 sixelOverBudget
+		{[]byte{4, 10}, 0, 6, 0xdeadbeef},                                           // tag 4 sixelWrappedOverBudget
+		{[]byte{5, 10}, 0, 7, 0xdeadbeef},                                           // tag 5 osc1337FileOverBudget
+		{append([]byte{6, 20}, filler...), 0, 8, 0xdeadbeef},                        // tag 6 osc1337FileTruncatedAtFlush
+		{append([]byte{7, 20}, filler...), 0, 9, 0xdeadbeef},                        // tag 7 sixelBareTruncatedAtFlush
+		{append(append([]byte{0, 4}, []byte("abcd")...), 1, 0, 2, 1), 0, 10, 0xabc}, // all-safe mixed
 		{nil, 0, 0, 0}, // empty script
 	}
 	for sel := range uint8(6) {
@@ -469,12 +462,9 @@ func FuzzScan(f *testing.F) {
 
 		allEmitted := concatEmitted(chunks)
 		assertSubsequence(t, stream, allEmitted)
-		// A drop-designated segment (tags 3-7) is always the last one in the
-		// script (decodeScript), so nothing can ever complete it — it must
-		// be held/discarded, never surface in ANY chunk. Checking every kind
-		// (via allEmitted), not just Literal, is the #319 property plus
-		// defense-in-depth: a leak via Seq.Raw or Raster would be just as
-		// real a #319-shaped defect as one via Literal.
+		// A drop-designated segment is always the script's last (decodeScript),
+		// so it can never complete — the canary must never surface in any
+		// chunk kind, not just Literal (the #319 property).
 		if hasDrop && bytes.Contains(allEmitted, canaryBytes) {
 			t.Fatalf("#319: canary leaked into scanner output; stream=%q", stream)
 		}
