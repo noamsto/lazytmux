@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -279,7 +280,7 @@ func TestRenderLineBridgeStateDisconnected(t *testing.T) {
 }
 
 func TestPaneSlot(t *testing.T) {
-	got := paneSlot("I", "nvim")
+	got := paneSlot("I", "nvim", false)
 	want := "#{p-17:#{=/16/…:#{l:I nvim}}}"
 	if got != want {
 		t.Fatalf("paneSlot\n got %q\nwant %q", got, want)
@@ -290,7 +291,7 @@ func TestPaneSlot(t *testing.T) {
 // swallows the missing icon's cells, so the slot's shape — modifiers, widths,
 // leading space before cmd — stays the same regardless of icon width.
 func TestPaneSlotEmptyIcon(t *testing.T) {
-	got := paneSlot("", "fish")
+	got := paneSlot("", "fish", false)
 	want := "#{p-17:#{=/16/…:#{l: fish}}}"
 	if got != want {
 		t.Fatalf("paneSlot empty icon\n got %q\nwant %q", got, want)
@@ -304,8 +305,117 @@ func TestPaneSlotStripsFormatChars(t *testing.T) {
 		{"I", "x{y", "#{p-17:#{=/16/…:#{l:I xy}}}"},
 		{"#{", "sh", "#{p-17:#{=/16/…:#{l: sh}}}"},
 	} {
-		if got := paneSlot(tc.icon, tc.cmd); got != tc.want {
+		if got := paneSlot(tc.icon, tc.cmd, false); got != tc.want {
 			t.Errorf("paneSlot(%q, %q)\n got %q\nwant %q", tc.icon, tc.cmd, got, tc.want)
+		}
+	}
+}
+
+// TestPaneSlotAdjacentToUsage covers the #575 fix: adjacentToUsage=true flips
+// the pad modifier to right-pad (no minus), pushing the reserved blank cells
+// after the command instead of before it, mirroring TestPaneSlot/
+// TestPaneSlotEmptyIcon's style for the false case.
+func TestPaneSlotAdjacentToUsage(t *testing.T) {
+	if got, want := paneSlot("I", "nvim", true), "#{p17:#{=/16/…:#{l:I nvim}}}"; got != want {
+		t.Fatalf("paneSlot adjacent\n got %q\nwant %q", got, want)
+	}
+	if got, want := paneSlot("", "bash", true), "#{p17:#{=/16/…:#{l: bash}}}"; got != want {
+		t.Fatalf("paneSlot adjacent empty icon\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestRenderLineUsageAdjacentToPaneSlot is the format-string-level regression
+// guard for #575: with a non-empty usage, renderLine must wire
+// adjacentToUsage=true through to paneSlot, so usage's output is immediately
+// followed by the right-padded (#{p17:...}, no minus) slot with no
+// characters in between.
+func TestRenderLineUsageAdjacentToPaneSlot(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/panes", 0o755)
+
+	a := args{
+		session: "work", branch: "feat/x", panePath: "/repo", gitRoot: "/repo",
+		iconSession: "S", iconBranch: "B", iconDir: "D",
+		thmBg: "#000", thmMauve: "#c6a", thmBlue: "#89b", thmText: "#cdd",
+		thmSubtext0: "#9a8", thmOverlay1: "#777",
+		paneIcon: "I", paneCmd: "bash",
+	}
+	usage := "#[fg=#0f0]42%·5h  "
+
+	got := renderLine(a, dir, "dark", false, 9000, usage)
+	want := "#[align=left,bg=#000]" +
+		"#[fg=#c6a] #[range=left]S work#[norange]  #[fg=#89b,bold]B feat/x" +
+		"  #[fg=#9a8,nobold]D ./" +
+		"  #[fg=#777]" +
+		" #[align=right]" +
+		usage +
+		"#[fg=#9a8]#{p17:#{=/16/…:#{l:I bash}}} "
+	if got != want {
+		t.Fatalf("renderLine usage adjacency\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestPaneSlotPadDirectionLiveTmux confirms the pad-direction fact this whole
+// fix depends on against a real tmux, not just Go string construction: the
+// literal-format tests above would pass identically regardless of which way
+// #{p17:}/#{p-17:} actually pad, since that's tmux's own render-time
+// behaviour. Mirrors remotebridge/cmd/daemon's
+// TestReflowRunShellArgsSurvivesFormatInjection for the tmux-presence check,
+// including its fail-not-skip branch: picker/default.nix's plain `picker`
+// derivation (built by `nix build .#default`, no tmux, no
+// LAZYTMUX_REQUIRE_TMUX) also runs `go test ./statusline`, so a missing tmux
+// under LAZYTMUX_REQUIRE_TMUX (set by pickerChecked's checkPhase in
+// flake.nix, which also adds pkgs.tmux) means that input was pruned, not
+// that this is a dev machine.
+func TestPaneSlotPadDirectionLiveTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		if os.Getenv("LAZYTMUX_REQUIRE_TMUX") != "" {
+			t.Fatal("tmux is required (LAZYTMUX_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
+		}
+		t.Skip("tmux is not available")
+	}
+
+	socket := "statusline-575-test-" + strings.ReplaceAll(t.Name(), "/", "-")
+	if out, err := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t1").CombinedOutput(); err != nil {
+		t.Fatalf("start tmux: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
+
+	// Wraps the rendered format in sentinel brackets and strips only those
+	// plus the trailing newline — a stray strings.TrimSpace would erase the
+	// exact leading/trailing pad cells this test exists to measure.
+	render := func(icon, cmd string, adjacentToUsage bool) string {
+		format := "[" + paneSlot(icon, cmd, adjacentToUsage) + "]"
+		out, err := exec.Command("tmux", "-L", socket, "display-message", "-p", "-t", "t1", "-F", format).Output()
+		if err != nil {
+			t.Fatalf("display-message: %v", err)
+		}
+		s := strings.TrimSuffix(string(out), "\n")
+		s = strings.TrimPrefix(s, "[")
+		s = strings.TrimSuffix(s, "]")
+		return s
+	}
+
+	for _, adjacent := range []bool{false, true} {
+		content := " sh" // empty icon leaves its own leading space before "sh"
+		got := render("", "sh", adjacent)
+		if n := len([]rune(got)); n != paneSlotPad {
+			t.Fatalf("short cmd adjacentToUsage=%v: rendered %d cells, want %d (%q)", adjacent, n, paneSlotPad, got)
+		}
+		fill := strings.Repeat(" ", paneSlotPad-len([]rune(content)))
+		want := fill + content
+		if adjacent {
+			want = content + fill
+		}
+		if got != want {
+			t.Fatalf("short cmd adjacentToUsage=%v\n got %q\nwant %q", adjacent, got, want)
+		}
+	}
+
+	for _, adjacent := range []bool{false, true} {
+		got := render("", "a-very-long-command-name-indeed", adjacent)
+		if n := len([]rune(got)); n != paneSlotPad {
+			t.Fatalf("long cmd adjacentToUsage=%v: rendered %d cells, want %d (already-full box, no room for padding either way) (%q)", adjacent, n, paneSlotPad, got)
 		}
 	}
 }
