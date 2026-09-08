@@ -15,6 +15,11 @@
 > Rev 4 `exec`s the viewer directly, so the pane **becomes** the viewer: no
 > launcher guard, no split, no kill. The spec revision cap was lifted by the
 > dispatcher to reach it, on two conditions recorded in §Conditions.
+>
+> **Rev 4 is not finished.** A real save / kill-server / restore against the real
+> `tmux-remux` binary found that host discovery is gated on a signal that does
+> not exist on a restore (fact 11) — see §"KNOWN DEFECT". The mechanism it gates
+> is verified working; the gate is not. PR #584 is a draft for this reason.
 
 ## Problem
 
@@ -119,7 +124,9 @@ Read out of `/home/noams/Data/git/noamsto/aeye` at `240e707` and
 
 8b. **A restored agent pane does not show its agent's command straight away, and
    a pane-0 viewer is briefly alone.** Both matter because host discovery matches
-   on `pane_current_command`:
+   on `pane_current_command`. Fact 11 later showed this understates the problem:
+   the agent's command does not appear *late*, it never appears at all. Kept
+   because the pane-0 half still holds.
 
    - The `scrollback=yes relaunch=yes` startup form is
      `'<self>' cat-scrollback <sha>; <override>; exec <shell>`
@@ -177,6 +184,64 @@ Read out of `/home/noams/Data/git/noamsto/aeye` at `240e707` and
     `os.Stdin`/`os.Stdout` are the pane's own tty — identical to today's
     `split-window "$cmd"`. remux's `cat-scrollback` runs before it and only
     writes stdout, so it does not consume the viewer's stdin.
+
+11. **A pane restored by tmux-remux reports the SHELL as its
+    `pane_current_command`, never the relaunched program.** Fact 7's startup
+    shape is `<cmd>; exec <shell>`, so the relaunch runs as a child sharing the
+    shell's process group and tmux names the group leader. Measured on one
+    scratch server, two panes:
+
+    ```
+    "sleep 300; exec bash"   ->  pane_current_command = bash    # remux's shape
+    "sleep 300"              ->  pane_current_command = sleep   # control
+    ```
+
+    This is not specific to the carousel: it holds for every remux relaunch,
+    including the Claude/Codex/Cursor ones. It was found by driving a real
+    save / kill-server / restore against the real `tmux-remux` binary — no
+    sandbox test in this repo exercises the restore path end to end, which is
+    exactly why it survived the gate.
+
+## KNOWN DEFECT — host discovery is gated on a signal that is absent on restore
+
+**Status: not fixed. The PR is a draft for this reason.** The mechanism below is
+correct and verified; the gate in front of it is not.
+
+`tmux-carousel-restore` finds its host by matching a sibling's
+`pane_current_command` against the agentdetect set. Per fact 11 the restored
+agent pane reports `bash`, so **that match never succeeds on a restore** — the
+one path the feature exists for. What follows:
+
+- Every restore burns the full ~15s retry, then survives only via the
+  sole-non-self-sibling fallback.
+- A two-pane window (agent + carousel) works, but slowly and incidentally.
+- A window with three or more panes fails outright: `OTHER_COUNT > 1`, the
+  fallback declines, and no carousel is restored.
+- The pane-index hint is dead code on the restore path, because it only breaks
+  ties *between agent matches* and there are never any.
+
+Verified working in the same run, so the defect is confined to discovery: across
+a real restore (server pid 528168 → 528696, host pane `%0` → `%1`) the script
+recomputed and stamped `@claude_img_src=528696-1`, stamped
+`@claude_img_axis=side`, exported `AEYE_HOST_PANE=%1`, and left the viewer
+process alive. The key logic, the stamping and the exec are all sound.
+
+### The fix, for whoever picks this up
+
+Invert the priority. The index hint is the only signal that survives a restore,
+so it must be primary rather than a tie-break:
+
+1. sibling at the hinted index → use it
+2. else exactly one agent-command sibling → use it
+3. else exactly one non-self sibling → use it
+4. else exit without stamping
+
+The hinted pane exists immediately, so most of the 15s retry disappears with it.
+Keep the retry for the no-hint case (a carousel opened but never re-stamped
+before the save). Two harness notes for re-running the end-to-end check: a
+session that was never *attached* is skipped by remux's smart filter as `stale`
+(`internal/filter/filter.go:42-47`, `LastAttached`), and nothing should be
+judged before ~20s or the retry is still running.
 
 ## Rejected designs
 
@@ -362,9 +427,12 @@ in that harness.
 
 - [ ] **Running viewer, not a bare shell.** A window holding an agent pane and a
       carousel pane, snapshotted and restored, ends with a pane running the
-      viewer — asserted on the restored pane's `pane_current_command` and on
-      `@claude_img_src` being set to the **new** key
-      (`<new srv pid>-<new host pane>`), not the old one.
+      viewer — asserted on `@claude_img_src` being set to the **new** key
+      (`<new srv pid>-<new host pane>`), not the old one, and on the viewer
+      process being alive under the pane.
+      **Not** on `pane_current_command`: fact 11 shows a remux-restored pane
+      reports its shell, so that assertion would be false against a working
+      implementation. An earlier revision of this criterion said otherwise.
 - [ ] **Shows the images it had.** After the restore the manifest at the new key
       is non-empty and its entries match the pre-restore image set. Driven
       through the transcript, since fact 3 makes the transcript authoritative and
