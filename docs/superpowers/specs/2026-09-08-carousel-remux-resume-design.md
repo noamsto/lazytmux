@@ -135,6 +135,32 @@ Read out of `/home/noams/Data/git/noamsto/aeye` at `240e707` and
     (`:766-769`), so absent → written is picked up on the next tick. This is what
     makes bypassing the launcher (fact 8) both possible and safe.
 
+    Independently confirmed: `runGallery` has exactly one `return` — `Run()`'s
+    error at `:1198-1204` — with no early exit, `os.Exit`, or error propagation
+    between model construction and the loop. Every call in that stretch swallows
+    its failure (`tty, _` at `:1130` with both use sites nil-guarded;
+    `loadManifest` returning `nil`; `probeSixel` bounded by a 150ms
+    `time.After`; `thmColor` falling back to literals), and `ensureDecoded`
+    opens with an explicit zero-image guard (`gallery_zoom.go:153-158`) — the one
+    place a nil-index panic could have lived. `Init()` returns `galleryTickCmd()`
+    with no image dependency (`:226-236`), so the reload poll is armed on an
+    empty gallery, and `renderView` opens with
+    `if len(m.images) == 0 { return m.emptyState() }` (`:973-975`).
+
+    One precision: `View()` returns `"Loading..."` while `!m.ready`, which is
+    latched only in the size handler (`:547`, `:931-934`). So the viewer reaches
+    the loop unconditionally but paints `emptyState` only once it has a usable
+    size. On this path that resolves itself and in our favour — per fact 9 remux
+    applies `SetLayout` *after* the splits, so a `WindowSizeMsg` arrives shortly
+    after the viewer starts, `m.ready` latches, and `emptyState` re-centres via
+    `lipgloss.Place` (`:969`). The visible consequence is a brief `Loading...`
+    on the first restored frame, not a stuck pane.
+
+    Because `exec` replaces the script in place, bubbletea's default
+    `os.Stdin`/`os.Stdout` are the pane's own tty — identical to today's
+    `split-window "$cmd"`. remux's `cat-scrollback` runs before it and only
+    writes stdout, so it does not consume the viewer's stdin.
+
 ## Rejected designs
 
 ### Rejected: carry the old key (rev 1)
@@ -367,4 +393,5 @@ in that harness.
 | lazytmux's copy of the key formula drifts from aeye's | Condition 1: comment naming the contract source plus a test, so drift is red, not an empty viewer |
 | A user-set `AEYE_DIR`/`CLAUDE_STATUS_DIR` is not seen by the restored viewer | Real. `config/tmux.conf.nix:741-754` adds only `TERM*`, `COLORTERM`, `TERMINFO*`, `KITTY_LISTEN_ON`, `AEYE_HOST` to `update-environment` — a non-default state dir is out of scope and documented |
 | The viewer starts before the backfill writes | Not a race: fact 10 — `emptyState` with `mtime = 0`, reloaded on the next tick |
+| First restored frame paints `Loading...` | Cosmetic, self-resolving: `m.ready` latches on the `WindowSizeMsg` that fact 9's `SetLayout` produces (fact 10) |
 | The restored viewer's `s` axis toggle has no host | Handled — the script exports `AEYE_HOST_PANE` and stamps `@claude_img_axis` itself, which is part of the accepted duplication cost |
