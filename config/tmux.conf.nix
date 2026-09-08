@@ -51,6 +51,12 @@
   copyModeLineNumbers ? "off",
   # agent-carousel toggle package (threaded from the flake input; used by the prefix+I keybind).
   carousel-toggle ? null,
+  # agent-carousel viewer package itself (threaded from the flake input; the
+  # toggle above deliberately does not re-export it, only tmux-claude-images —
+  # see docs/superpowers/specs/2026-09-08-carousel-remux-resume-design.md fact
+  # on why a store-path @carousel_aeye@ substitution is used instead of a bare
+  # `aeye` on PATH). Used only by tmux-carousel-restore.
+  carousel-aeye ? null,
   # prdash PR dashboard package (threaded from the flake input; used by the prefix+p popup).
   prdash ? null,
   # Welcome-buffer splash (threaded from the home-manager module).
@@ -73,6 +79,12 @@
   # so restore relaunches `claude --resume <uuid>` instead of a bare shell.
   # Exposed as the @resume_claude global, read by update-icons each tick.
   resumeClaudeEnable ? true,
+  # Resume the agent-carousel image viewer on tmux-remux restore (threaded
+  # from the module). When on, tmux-update-icons stamps the carousel pane's
+  # @remux_relaunch override so restore relaunches tmux-carousel-restore
+  # instead of a bare shell. Exposed as the @resume_carousel global, read by
+  # update-icons each tick.
+  resumeCarouselEnable ? false,
   # Coding-agent usage-limit stats on line 0 (threaded from the module).
   # Polled by tmux-agent-usage into /tmp/lazytmux-agent-usage/<agent>.json with
   # each CLI's own stored token; rendered by tmux-statusline while any agent
@@ -134,6 +146,11 @@
 
   resumeClaudeFlag =
     if resumeClaudeEnable
+    then "on"
+    else "off";
+
+  resumeCarouselFlag =
+    if resumeCarouselEnable
     then "on"
     else "off";
 
@@ -378,6 +395,7 @@
     "tmux-agent-usage-claude"
     "tmux-agent-usage-codex"
     "tmux-agent-usage-cursor"
+    "tmux-carousel-restore"
   ];
 
   # Scripts that need icon map + library + claude-status path substitution
@@ -398,7 +416,7 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@AGENT_COMMANDS@" "@issue_stamp@"])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@AGENT_COMMANDS@" "@issue_stamp@" "@carousel_restore@"])
       (iconSubstTo
         ++ [
           "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
@@ -409,6 +427,7 @@
             then "${script.tmux-issue-stamp}/bin/tmux-issue-stamp"
             else ""
           )
+          carouselRestoreBin
         ])
       (builtins.readFile ../scripts/${name}.sh));
 
@@ -527,6 +546,47 @@
     then "${script.lztmux-notify}/bin/lztmux-notify"
     else "@notify@";
 
+  # tmux-update-icons's store path for the carousel-restore stamp. Same
+  # leading-'@' idiom as notifyBin: with no viewer package wired in, the
+  # placeholder is left untouched and tmux-update-icons' own guard skips the
+  # stamp rather than pointing @remux_relaunch at a nonexistent command.
+  carouselRestoreBin =
+    if carousel-aeye != null
+    then "${script.tmux-carousel-restore}/bin/tmux-carousel-restore"
+    else "@carousel_restore@";
+
+  # Built unconditionally, but kept out of iconSubstFrom/iconSubstTo and
+  # scriptsWithIcons: either would let the script substitute its own store path
+  # into itself (infinite recursion at eval, the hazard @reflow@ avoids).
+  # The restored-carousel relaunch. Substitutes the viewer store path and the
+  # agentdetect command list — the latter is what host discovery matches a
+  # sibling pane's command against, so leaving it unsubstituted would not fail
+  # loudly: the script would fall through its bounded retry to the
+  # sole-non-self-pane fallback on every restore, quietly disabling the
+  # lowest-index tie-break. agentCommands is a plain string constant, not a
+  # member of `script`, so it carries none of the self-reference hazard that
+  # keeps this builder separate from mkScriptIcons.
+  # The viewer path is left as its own placeholder when carousel-aeye is unwired
+  # — the script's `[[ -x ]]` resolution treats an unsubstituted placeholder as a
+  # miss and exits without stamping, the same "an unsubstituted placeholder
+  # disables it" rule as @assume_dead_after@ in lib-claude.sh. That keeps
+  # tmux-carousel-restore an unconditional member of `script`, so callers can
+  # reference it without a null guard.
+  mkScriptCarouselRestore = name:
+    pkgs.writeShellScriptBin name (
+      builtins.replaceStrings
+      ["@carousel_aeye@" "@AGENT_COMMANDS@"]
+      [
+        (
+          if carousel-aeye != null
+          then "${carousel-aeye}/bin/aeye"
+          else "@carousel_aeye@"
+        )
+        agentCommands
+      ]
+      (builtins.readFile ../scripts/${name}.sh)
+    );
+
   # The cwd-derived window reconciler. Always built (tagging drives navigation
   # even with enrich off); the @issue_stamp@ kick is empty when enrich is off.
   mkScriptReconcile = name: let
@@ -573,6 +633,8 @@
     then mkScriptSplash name
     else if name == "tmux-reconcile-window"
     then mkScriptReconcile name
+    else if name == "tmux-carousel-restore"
+    then mkScriptCarouselRestore name
     else if builtins.elem name scriptsWithLog
     then mkScriptWithLog name
     else if builtins.elem name scriptsWithRemote
@@ -991,6 +1053,7 @@
     # nudge (programs.lazytmux.aiNaming.enable).
     set -g @ai_naming "${aiNamingFlag}"
     set -g @resume_claude "${resumeClaudeFlag}"
+    set -g @resume_carousel "${resumeCarouselFlag}"
 
     # Icon variables
     set -g @icon_session "${icons.session}"
@@ -1050,7 +1113,7 @@
     # passing.
     # ticker per client attach — whenever that first tick exceeds 1s, i.e. under
     # CPU load.
-    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons #{qs:session_name} '#{@resume_claude}' '#{start_time}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session #{qs:session_name} --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
+    set -g status-format[0] "#(echo; ${script.tmux-update-icons}/bin/tmux-update-icons #{qs:session_name} '#{@resume_claude}' '#{start_time}' '#{@resume_carousel}')${lib.optionalString enrichEnable "#(echo; ${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick)"}${lib.optionalString agentUsageEnable "#(echo; ${script.tmux-agent-usage}/bin/tmux-agent-usage --tick)"}#(${picker-statusline-bin} --session #{qs:session_name} --thm-bg '#{@thm_bg}' --thm-red '#{@thm_red}' --thm-mauve '#{@thm_mauve}' --thm-blue '#{@thm_blue}' --thm-text '#{@thm_fg}' --thm-subtext0 '#{@thm_subtext_0}' --thm-overlay1 '#{@thm_overlay_1}' --thm-peach '#{@thm_peach}' --thm-green '#{@thm_green}' --icon-session '#{@icon_session}' --icon-branch '#{@icon_branch}' --icon-dir '#{@icon_dir}' --icon-remote '#{@icon_remote}' --icon-linear '${enrichIconSet.linear}' --icon-github '${enrichIconSet.github}'${lib.optionalString agentUsageEnable " --icon-usage-claude '${processIcons.claude or "🧠"}' --icon-usage-codex '${processIcons.codex or "🤖"}' --icon-usage-cursor '${processIcons."cursor-agent" or "🧊"}' --agent-usage-monthly-threshold '${toString agentUsageMonthlyThreshold}'"})"
     # Lines 1-3: Window list (dynamically generated by tmux-reflow-windows hook)
     # A window tagged by an external fan-out orchestrator (@crew_name codename +
     # @crew_color) shows the codename as a badge after "index: ", tinted by that

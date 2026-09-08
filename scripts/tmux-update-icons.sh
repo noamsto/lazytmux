@@ -21,6 +21,12 @@ AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
 # tmux-reconcile-window's issue-stamp wiring); ${ISSUE_STAMP_BIN:-...} likewise
 # lets tests inject a real path via env.
 ISSUE_STAMP_BIN="${ISSUE_STAMP_BIN:-@issue_stamp@}"
+# Store path to tmux-carousel-restore, substituted at Nix build time when the
+# carousel viewer package is wired in (left as "@carousel_restore@" otherwise —
+# see the RESUME_CAROUSEL guard below, which never reaches an unsubstituted
+# placeholder). ${CAROUSEL_RESTORE_BIN:-...} is the same test-seam shape as
+# AGENT_DETECT_BIN above.
+CAROUSEL_RESTORE_BIN="${CAROUSEL_RESTORE_BIN:-@carousel_restore@}"
 
 # normalize_wrapped_cmd CMD
 # Strips nix makeWrapper's `.foo-wrapped` shape down to `foo` (what
@@ -92,6 +98,12 @@ main() {
 	# $3 is #{start_time}, expanded by the status format like $2 — avoids a
 	# display-message fork per tick; direct invocations (hooks) fall back to one.
 	SERVER_START=${3:-$(tmux display-message -p '#{start_time}')}
+	# $4 is #{@resume_carousel}, expanded by the status format like $2 — avoids a
+	# show-option fork per tick. "on" enables stamping any carousel viewer pane's
+	# @remux_relaunch override so tmux-remux resumes it via tmux-carousel-restore
+	# (not a bare shell) on restore. ${4:-} so the run-shell hook invocation
+	# (config/tmux.conf.nix), which passes only $1, means "off".
+	RESUME_CAROUSEL=${4:-}
 	MAX_ICONS=@MAX_ICONS@
 
 	setup_claude_colors
@@ -124,7 +136,7 @@ main() {
 	# that collide across sessions don't merge, and a '|' in a session name
 	# cannot shift later fields (the #580 discriminator: @window_icon_padded
 	# never set).
-	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
+	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch pane_img_src
 	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename win_cur_crew win_cur_crew_seen win_cur_bridge
 	declare -A all_sess sess_cur_active_icon sess_cur_session_fg sess_active_proc sess_active_win
 	# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
@@ -141,7 +153,9 @@ main() {
 	# @crew_name (harness-stamped codename) and @crew_seen (our shadow of it) are
 	# kebab tokens, so they sit safely before the free-form task; @bridge_win is
 	# "1" or empty and @bridge_proc is a command name, so both do too.
-	while IFS='|' read -r pane_id sess idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_task; do
+	# @claude_img_src is aeye's own pane option (a "<server pid>-<pane>" key, or
+	# empty) — no '|', so it too stays a fixed middle field before the task.
+	while IFS='|' read -r pane_id sess idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_img_src cur_task; do
 		[[ -n $pane_id ]] || continue
 		# A mirror pane runs the bridge renderer; @bridge_proc carries what the
 		# remote pane is actually running, which is what the icons should show.
@@ -149,6 +163,7 @@ main() {
 		wkey="$sess:$idx"
 		pane_to_win["${pane_id#%}"]="$wkey"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
+		pane_img_src["${pane_id#%}"]="$cur_img_src"
 		all_sess[$sess]=1
 		# Session options (same on every row of a session) must be copied here:
 		# the EOF read that ends the loop blanks the read variables themselves.
@@ -183,9 +198,30 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$wkey]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
+	done < <(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@claude_img_src}|#{@window_task}')
 
 	arm_agent_detect
+
+	# Carousel viewer restore: stamp @remux_relaunch on any pane running the aeye
+	# carousel (non-empty @claude_img_src) so tmux-remux relaunches it via
+	# tmux-carousel-restore (not a bare shell) on a future restore. A viewer pane
+	# has no claude-status state file, so it never appears in claude_pane_ids()
+	# below — this is a separate pass over the same batched read. Change-gated
+	# like the Claude stamp, and -q is likewise omitted so a lost write is loud.
+	# An unsubstituted placeholder disables the pass outright rather than being
+	# stamped as a command (same rule as @assume_dead_after@ in lib-claude.sh):
+	# stamping "@carousel_restore@" would relaunch a nonexistent command AND
+	# leave the pane marked as a restorable viewer, which is worse than not
+	# stamping. Nix already gates @resume_carousel on carousel-aeye != null, so
+	# this is belt-and-braces, not the primary guard.
+	if [[ $RESUME_CAROUSEL == on && $CAROUSEL_RESTORE_BIN != @* ]]; then
+		for pane_file in "${!pane_img_src[@]}"; do
+			[[ -n ${pane_img_src[$pane_file]} ]] || continue
+			cur="${pane_cur_relaunch[$pane_file]:-}"
+			[[ $CAROUSEL_RESTORE_BIN != "$cur" ]] || continue
+			tmux set -p -t "%$pane_file" @remux_relaunch "$CAROUSEL_RESTORE_BIN"
+		done
+	fi
 
 	# --- Claude status: read pane files, bucket by session:index ---
 	declare -A win_claude_state win_claude_fade win_claude_unseen win_claude_ts

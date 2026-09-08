@@ -125,6 +125,7 @@
     inherit pkgs lib;
     tmuxPkg = cfg.tmuxPackage;
     inherit carousel-toggle;
+    inherit carousel-aeye;
     inherit prdash;
     extraProcessIcons = cfg.processIcons;
     zoxideExclude = lib.concatStringsSep "," cfg.picker.zoxideExclude;
@@ -158,6 +159,7 @@
     notifyEnable = cfg.notifications.enable;
     # Only stamp @remux_relaunch when tmux-remux is actually installed to read it.
     resumeClaudeEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeClaude;
+    inherit resumeCarouselEnable;
   };
 
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
@@ -171,6 +173,10 @@
   # Only provision the cursor resume hooks when tmux-remux is actually
   # installed to act on @remux_relaunch, mirroring resumeCodexEnable above.
   resumeCursorEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCursor;
+
+  # Only stamp the carousel pane's @remux_relaunch when tmux-remux is actually
+  # installed to read it, mirroring resumeCursorEnable above.
+  resumeCarouselEnable = cfg.persist.enable && cfg.persist.package != null && cfg.persist.resumeCarousel;
 
   # Stable startup script shared by the Linux systemd service and the darwin
   # launchd agent. Resolves tmux from the user profile so the unit/plist never
@@ -484,6 +490,30 @@ in {
           Claude transcript path. If a future Cursor CLI version renames or drops
           the id field, the hook stamps nothing and the pane restores as a plain
           shell rather than a broken resume command. Restore is manual-by-default
+          (restoreMode = "off"), so this only fires on an explicit restore.
+        '';
+      };
+
+      resumeCarousel = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Resume the agent-carousel image viewer when a window is restored.
+          When on, tmux-update-icons stamps the carousel pane's
+          `@remux_relaunch` override with a fixed store-path relaunch that
+          execs the aeye viewer at that pane's restored key, so tmux-remux
+          relaunches the carousel instead of a bare shell. The pane becomes
+          the viewer at the new key rather than the one it had before the
+          restore — aeye's own `session-backfill` hook is what supplies the
+          images there, from the resumed Claude session's transcript. A
+          window that restores with two agent panes is ambiguous (which
+          agent's images does the carousel show), so host discovery resolves
+          to the lowest `pane_index` among them.
+
+          Defaults to false, like `persist.resumeCodex` and `resumeCursor`:
+          the two-agent-panes case picks a sibling by convention rather than
+          certainty, and a viewer relaunched into the wrong pane's images is a
+          more visible mistake than a plain shell. Restore is manual-by-default
           (restoreMode = "off"), so this only fires on an explicit restore.
         '';
       };
@@ -1032,6 +1062,7 @@ in {
           ]
           ++ lib.optionals resumeCodexEnable [tmuxConfig.script.codex-relaunch-stamp]
           ++ lib.optionals resumeCursorEnable [tmuxConfig.script.cursor-relaunch-stamp tmuxConfig.script.cursor-relaunch-hooks-install]
+          ++ lib.optionals resumeCarouselEnable [tmuxConfig.script.tmux-carousel-restore]
           ++ lib.optionals cfg.enrich.enable [
             tmuxConfig.script.tmux-issue-stamp
             tmuxConfig.script.tmux-issue-stamp-linear

@@ -80,6 +80,7 @@
           inherit pkgs lib;
           tmuxPkg = mkTmux pkgs;
           carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+          carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
           prdash = inputs.prdash.packages.${pkgs.system}.prdash;
         };
 
@@ -486,6 +487,7 @@
                   inherit pkgs lib;
                   tmuxPkg = mkTmux pkgs;
                   carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+                  carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
                   prdash = inputs.prdash.packages.${pkgs.system}.prdash;
                 }
                 // args))
@@ -702,6 +704,37 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/update-icons-all-windows.bats
+              touch $out
+            '';
+
+          carousel-restore-tests =
+            pkgs.runCommand "carousel-restore-tests" {
+              # tmux: drives a private, config-less server (like
+              # update-icons-resume-guard-tests above). No gnused: both
+              # @carousel_aeye@ and @AGENT_COMMANDS@ have documented
+              # env-var test seams (AEYE_BIN / AGENT_COMMANDS), so the raw
+              # script runs unsubstituted.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/carousel-restore.bats
+              touch $out
+            '';
+
+          # Condition 1 (docs/superpowers/specs/2026-09-08-carousel-remux-resume-design.md):
+          # pin scripts/tmux-carousel-restore.sh's key formula against aeye's
+          # OWN flake input, not a local checkout — a checkout path would pass
+          # here and still fail once aeye's side actually drifts, which is
+          # exactly the silent-breakage mode this check exists to catch (the
+          # carousel opens, finds nothing, and reads as an unrelated bug).
+          carousel-key-formula-pin =
+            pkgs.runCommand "carousel-key-formula-pin" {
+              nativeBuildInputs = [pkgs.gnugrep];
+            } ''
+              grep -q 'Manifest key: <tmux server pid>-<pane>' ${inputs.aeye}/main.go
+              grep -q '="$srv-' ${inputs.aeye}/scripts/tmux-claude-images.sh
+              grep -q '="$srv-' ${./scripts/tmux-carousel-restore.sh}
               touch $out
             '';
 
