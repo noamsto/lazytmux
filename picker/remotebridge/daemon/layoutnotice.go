@@ -18,13 +18,12 @@ type layoutNotice struct {
 	zoomed bool
 }
 
-// parseLayoutNotice validates a %layout-change line's fields positionally
-// rather than by count alone, since a shifted line (the trailing flags field
-// pushed into a layout slot, or vice versa) can carry the right number of
-// fields with the wrong shape. Anything that doesn't fit — including a shape
-// this tmux has never been observed to emit — returns ok=false so the caller
-// falls back to a read: a future flag character costs one round-trip, never a
-// wrong answer.
+// parseLayoutNotice reads the layout string and zoom flag out of a
+// %layout-change line. Fields are checked by shape, not just count: an
+// overlong dump empties #{window_layout} and shifts the rest left, and an
+// empty flags field is dropped rather than emitted. Anything unexpected —
+// including a flag character this alphabet lacks — reports ok=false, so the
+// caller falls back to a read rather than act on a misread line.
 func parseLayoutNotice(l controlmode.Line) (layoutNotice, bool) {
 	switch len(l.Args) {
 	case 3:
@@ -42,15 +41,13 @@ func parseLayoutNotice(l controlmode.Line) (layoutNotice, bool) {
 	}
 }
 
-// layoutShaped reports whether s could be a %layout-change layout field: a
-// four-digit lowercase hex checksum, a comma, then at least one more byte.
-// It doesn't call controlmode.ParseLayout — the caller does that once, on the
-// field this picks out, and treats a parse error the same as ok=false here.
+// layoutShaped reports whether s starts like a layout dump: a four-digit
+// lowercase hex checksum, a comma, then at least one more byte.
 func layoutShaped(s string) bool {
 	if len(s) < 6 || s[4] != ',' {
 		return false
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		c := s[i]
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
 			return false
@@ -59,18 +56,7 @@ func layoutShaped(s string) bool {
 	return true
 }
 
-// flagsShaped reports whether s is entirely drawn from layoutFlagAlphabet.
-// Empty is rejected: window_printable_flags with nothing to report yields
-// an empty field, which tmux drops rather than emit, so a genuinely empty
-// 4th field never occurs.
+// flagsShaped reports whether s is a non-empty run of layoutFlagAlphabet.
 func flagsShaped(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if strings.IndexByte(layoutFlagAlphabet, s[i]) < 0 {
-			return false
-		}
-	}
-	return true
+	return s != "" && strings.Trim(s, layoutFlagAlphabet) == ""
 }

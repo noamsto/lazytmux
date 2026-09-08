@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -44,19 +43,15 @@ func noticeLine(win, layout, visible, flags string) controlmode.Line {
 }
 
 // noticeFake is the Config seam for reconcileLayoutFrom tests. LocalTmux
-// records every argv it's called with; LocalTmuxOut answers the
-// #{window_zoomed_flag} probe with local (err, if set, instead), counting
-// every call. When sent is non-nil, a call reached before anything is on the
-// wire fails the test outright: a fork must never precede the read a pure
-// gate has already decided to take.
+// records every argv it's called with. When sent is non-nil, a call reached
+// before anything is on the wire fails the test outright: a fork must never
+// precede the read a pure gate has already decided to take.
 type noticeFake struct {
 	t     *testing.T
 	sent  interface{ Len() int }
 	local string
-	err   error
 
 	localTmux []string
-	zoomAsks  int
 }
 
 func (f *noticeFake) config() Config {
@@ -66,13 +61,6 @@ func (f *noticeFake) config() Config {
 			return nil
 		},
 		LocalTmuxOut: func(args ...string) (string, error) {
-			if f.sent != nil && f.sent.Len() == 0 {
-				f.t.Fatal("LocalTmuxOut (zoom check) called before any read reached the wire")
-			}
-			f.zoomAsks++
-			if f.err != nil {
-				return "", f.err
-			}
 			for _, a := range args {
 				if a == "#{window_zoomed_flag}" {
 					return f.local, nil
@@ -105,6 +93,7 @@ func TestNoticeNoOpWritesNothing(t *testing.T) {
 				remotePanes: []string{"%3"},
 				localPanes:  []string{"%l3"},
 				layout:      noticeUnchangedLayout,
+				appliedZoom: c.local == "1\n",
 			}
 			rt, sent := scriptedRT("")
 			// No sent guard here: gate 3's own fork IS what runs before any
@@ -120,9 +109,6 @@ func TestNoticeNoOpWritesNothing(t *testing.T) {
 			}
 			if len(fake.localTmux) != 0 {
 				t.Errorf("LocalTmux calls = %v, want none", fake.localTmux)
-			}
-			if fake.zoomAsks != 1 {
-				t.Errorf("LocalTmuxOut calls = %d, want exactly one (the zoom check)", fake.zoomAsks)
 			}
 
 			// Negative control: today's read-first entry cannot keep the
@@ -164,9 +150,8 @@ func TestNoticeZoomOnReads(t *testing.T) {
 		"%begin 1 2 1", noticeUnchangedLayout + " %3 1", "%end 1 2 1", // trailing re-read: converged
 	}, "\n") + "\n"
 	rt, sent := scriptedRT(script)
-	// No sent guard: gate 3's own fork legitimately runs before the read here
-	// too — it's what decides the notification can't be trusted and a real
-	// zoom mismatch is what sends it to the read in the first place.
+	// Gate 3 sees the notification's zoom flag disagree with appliedZoom and
+	// sends this to the read-first path.
 	fake := &noticeFake{local: "0\n"}
 	l := noticeLine("@1", noticeUnchangedLayout, noticeUnchangedLayout, "*Z")
 
@@ -198,13 +183,14 @@ func TestNoticeUnzoomTransientReads(t *testing.T) {
 		remotePanes: []string{"%3"},
 		localPanes:  []string{"%l3"},
 		layout:      noticeUnchangedLayout,
+		appliedZoom: true,
 	}
 	script := strings.Join([]string{
 		"%begin 1 1 1", noticeUnchangedLayout + " %3 1", "%end 1 1 1", // readLayout: still zoomed
 	}, "\n") + "\n"
 	rt, sent := scriptedRT(script)
-	// No sent guard: gate 3's own fork is the one that finds the mismatch and
-	// sends this to the read.
+	// Gate 3 sees the notification's zoom flag disagree with appliedZoom and
+	// sends this to the read-first path.
 	fake := &noticeFake{local: "1\n"}
 	l := noticeLine("@1", noticeUnchangedLayout, noticeUnchangedLayout, "*")
 
@@ -230,28 +216,29 @@ func TestNoticeUnzoomTransientReads(t *testing.T) {
 	}
 }
 
-// TestNoticeUnknownLocalZoomReads is gate 3's !known case: with no way to
-// establish the mirror's own zoom state, the notification cannot be trusted
-// either way.
-func TestNoticeUnknownLocalZoomReads(t *testing.T) {
+// TestNoticeStaleAppliedZoomReads is gate 3's mismatch case: an unzoom
+// notification cannot be trusted while the mirror still records itself
+// zoomed, so the read-first path must establish the remote state.
+func TestNoticeStaleAppliedZoomReads(t *testing.T) {
 	w := &mirrorWindow{
 		remoteID:    "@1",
 		localWin:    "@101",
 		remotePanes: []string{"%3"},
 		localPanes:  []string{"%l3"},
 		layout:      noticeUnchangedLayout,
+		appliedZoom: true,
 	}
 	// Empty on purpose: readLayout's display-message reaches the wire before
 	// it fails on EOF, and the assertion is only that it was issued — there is
 	// nothing here to reply to it.
 	rt, sent := scriptedRT("")
-	fake := &noticeFake{err: errors.New("boom")}
+	fake := &noticeFake{}
 	l := noticeLine("@1", noticeUnchangedLayout, noticeUnchangedLayout, "*")
 
 	reconcileLayoutFrom(fake.config(), w, l, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
 
 	if !strings.Contains(sent.String(), "window_zoomed_flag") {
-		t.Errorf("sent %q, want a readLayout display-message (local zoom state unknown)", sent.String())
+		t.Errorf("sent %q, want a readLayout display-message (applied zoom state mismatched)", sent.String())
 	}
 }
 
@@ -331,7 +318,7 @@ func zoomOrFloatGateFake(t *testing.T, sent interface{ Len() int }) Config {
 // change.
 func TestNoticeZoomedReshapeReads(t *testing.T) {
 	w := shapedMirror(t)
-	// Empty on purpose, per TestNoticeUnknownLocalZoomReads: the read reaches
+	// Empty on purpose: the read reaches
 	// the wire and then fails on EOF, and the assertion only needs it issued.
 	rt, sent := scriptedRT("")
 	cfg := zoomOrFloatGateFake(t, sent)
@@ -368,16 +355,13 @@ func TestNoticeReshapeWithLocalFloatReads(t *testing.T) {
 // that stays.
 const readLayoutFmt = "#{window_layout} #{pane_id} #{window_zoomed_flag}"
 
-// geometryOrderingFake is the Config seam for gate 6's ordering tests.
-// LocalTmux appends its argv to log — the same trace scriptedRTRouterW writes
-// the control stream's commands into, so select-layout's position can be
-// compared against the stream's own reads. LocalTmuxOut is deliberately NOT
-// logged there (a naive strings.Count over one trace would then see the zoom
-// read twice): it answers #{window_zoomed_flag} with "0\n", recording
-// len(log.entries) at call time into zoomReads, and #{window_layout} — this
-// is localCellsMatch's read of the mirror window, never readLayout's own,
-// which goes over rt — with localShortLayout, a pane-count mismatch that
-// makes the #535 short-circuit miss so select-layout is actually reached.
+// geometryOrderingFake is the Config seam for the geometry-only tests.
+// LocalTmux argv lands in log, the trace the control stream also writes into,
+// so select-layout's position can be compared against the stream's reads.
+// LocalTmuxOut stays out of the log: it answers #{window_zoomed_flag} with
+// "0\n" and records len(log.entries) into zoomReads, and answers
+// #{window_layout} (localCellsMatch's read of the mirror) with
+// localShortLayout so the #535 short-circuit misses and select-layout runs.
 func geometryOrderingFake(log *orderedLog, zoomReads *[]int) Config {
 	return Config{
 		LocalTmux: func(args ...string) error {
@@ -403,10 +387,6 @@ func geometryOrderingFake(log *orderedLog, zoomReads *[]int) Config {
 // geometry-only reshape enters the pass loop straight from the notification's
 // layout, with no leading read — select-layout is applied from L.Raw, and the
 // wire carries only the trailing re-read that closes the pass.
-//
-// Negative control, run once and pasted in the PR: temporarily route gate 6
-// to reconcileLayout and re-run this test — it goes red, because the leading
-// read then consumes the first seed block and select-layout never appears.
 func TestNoticeGeometryOnlyAppliesFromNotification(t *testing.T) {
 	router := NewRouter()
 	router.Register("%0", newOutputSink(drainedPipe(t), nil))
@@ -444,7 +424,7 @@ func TestNoticeGeometryOnlyAppliesFromNotification(t *testing.T) {
 	}
 	for _, idx := range zoomReads {
 		if idx <= selIdx {
-			t.Errorf("local zoom check recorded at %d, want it after select-layout (index %d): the pass loop's own localZoomed must come after its own shape, never before", idx, selIdx)
+			t.Errorf("local zoom check recorded at %d, want it after select-layout (index %d): the pass loop's zoom assert must come after its own shape, never before", idx, selIdx)
 		}
 	}
 	if w.layout != noticeReshapedLayout {
@@ -457,10 +437,6 @@ func TestNoticeGeometryOnlyAppliesFromNotification(t *testing.T) {
 // re-read lands, so a second pass reapplies and reseeds against the newer
 // layout before converging — the same "run another pass on ground truth"
 // behaviour reconcileSnapshot always had, now reachable from a notification.
-//
-// Negative control, run once and pasted in the PR: temporarily set
-// maxReconcilePasses = 1 and re-run this test — it fails, with w.layout still
-// at the notification's own Raw rather than the converged C.
 func TestNoticeStaleGeometryHeals(t *testing.T) {
 	router := NewRouter()
 	router.Register("%0", newOutputSink(drainedPipe(t), nil))

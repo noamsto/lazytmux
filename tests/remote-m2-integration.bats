@@ -3175,14 +3175,11 @@ attach_pty_client() {
 }
 # === #570: layout-change notification carries the answer, not just a poke ===
 
-# Benefit and negative control: on `main`, every dispatched %layout-change
-# line costs one readLayout display-message at SRC — even a no-op one. A
-# select-layout of the window's OWN current layout emits two identical
-# %layout-change lines (layout-custom.c:289, cmd-select-layout.c:142) and
-# should therefore cost the remote nothing once the notification itself
-# carries #{window_layout} and the zoom flag. A 2-pane -h window (a
-# left/right root) so the positive control's -L resize below actually moves
-# a cell — -L on a -v split is a tmux no-op.
+# A select-layout of the window's own current layout emits two identical
+# %layout-change lines (layout-custom.c:289, cmd-select-layout.c:142); the
+# notification carries #{window_layout} and the zoom flag, so neither may cost
+# the remote a display-message. A -h window, so the positive control's -L
+# resize below moves a cell (-L on a -v split is a tmux no-op).
 @test "a no-op %layout-change costs the remote nothing" {
 	$SRC new-session -d -s rem -x 150 -y 40
 	$SRC split-window -h -t rem
@@ -3190,11 +3187,9 @@ attach_pty_client() {
 	bridge_up 2 noop
 
 	$SRC set -g @dm 0
-	# after-display-message also fires for the daemon's OWN reads (readLayout,
-	# the seeds' cursor probes, the clock-skew/session-pin/theme probes, ...);
-	# those run in the control client's queue as flag-0 %begin/%end blocks,
-	# which claimSeq treats as inert (#276) — not a desync. Their counter
-	# bumps are exactly what this test counts: any display-message at all.
+	# The hook fires for the daemon's own reads too — that is what is counted.
+	# Its set runs in the control client's queue as flag-0 %begin/%end blocks,
+	# which claimSeq treats as inert (#276).
 	$SRC set-hook -g after-display-message "set -gF @dm '#{e|+:#{@dm},1}'"
 
 	# Quiesce: wait until the counter holds still across 10 samples 0.15s
@@ -3219,13 +3214,10 @@ attach_pty_client() {
 	before="$($SRC show-options -gv @dm)"
 	$SRC select-layout -t rem "$layout"
 
-	# 1.5s: comfortably inside the daemon's 5s maintenance tick, so nothing on
-	# that tick fires here — the sweep and both shipper backstops read
-	# list-windows/list-panes, never a remote display-message, and
-	# reseedDropped/reseedReshaped act only on pending work, which the
-	# quiesce above already drained. A future addition to that tick which DOES
-	# issue a remote display-message fails this assertion outright rather
-	# than flaking it.
+	# Nothing on the daemon's 5s maintenance tick issues a remote
+	# display-message: the sweep and both shipper backstops read
+	# list-windows/list-panes, and reseedDropped/reseedReshaped act only on
+	# pending work, which the quiesce drained.
 	sleep 1.5
 	after="$($SRC show-options -gv @dm)"
 	src_dims="$(sorted_dims "$SRC" rem)"
@@ -3233,11 +3225,9 @@ attach_pty_client() {
 	[ "$after" = "$before" ]
 	[ "$src_dims" = "$dst_dims" ]
 
-	# Positive control, so a dead or stalled daemon cannot pass the assertion
-	# above by doing nothing at all: a real geometry change must still
-	# converge the mirror and still cost at least one display-message — gate
-	# 6 still pays the seeds' cursor reads and the trailing readLayout, on
-	# `main` and here alike.
+	# Positive control: a real geometry change must still converge the mirror
+	# and still cost at least one display-message (the seeds' cursor reads and
+	# the trailing readLayout), so a dead daemon cannot pass the flat counter.
 	pre_dims="$(sorted_dims "$SRC" rem)"
 	$SRC resize-pane -L -t rem:1.1 3
 	for _ in $(seq 1 60); do
@@ -3256,13 +3246,10 @@ attach_pty_client() {
 	[ "$dm" -gt "$after" ]
 }
 
-# Geometry-only regression net for gate 6: several remote resizes in
-# immediate succession, no pane-count change and no zoom, must still
-# converge the mirror's dims and repaint its content at the final geometry.
-# This cannot prove gate 6 was taken — the burst's own round-trips drain the
-# tail into the coalesced queue, so which line was stale isn't observable
-# from outside — it nets the case; gate 6 itself is discriminated in the
-# unit layer, where the read count on the stream is exact.
+# Several remote resizes in immediate succession, no pane-count change and no
+# zoom: the mirror's dims must converge and its content repaint at the final
+# geometry. Convergence only — which line of the burst was stale is not
+# observable from outside.
 @test "a burst of remote geometry changes converges the mirror" {
 	$SRC new-session -d -s rem -x 150 -y 40
 	$SRC split-window -h -t rem
@@ -3311,11 +3298,8 @@ attach_pty_client() {
 	[ "$src_screen" = "$dst_screen" ]
 }
 
-# Structural-burst regression net: split immediately followed by kill-pane on
-# the remote, once on an unzoomed window and once on a zoomed one. DST's pane
-# dims and zoom flag must converge to SRC's. Convergence-only — a disabled
-# gate 1 would still pass via the trailing re-read or resetWindow — kept as a
-# net, with gate 1 itself netted in the unit layer.
+# Split immediately followed by kill-pane on the remote, once unzoomed and once
+# zoomed: DST's pane dims and zoom flag must converge to SRC's.
 @test "a split immediately killed converges the mirror, zoomed or not" {
 	$SRC new-session -d -s rem -x 150 -y 40
 	$SRC split-window -h -t rem
