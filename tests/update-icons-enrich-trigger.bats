@@ -101,8 +101,10 @@ wait_for() {
 	# (e.g. macOS /tmp -> /private/tmp), same as `git rev-parse --show-toplevel`.
 	local top
 	top="$(git -C "$REPO" rev-parse --show-toplevel)"
-	# target/worktree/branch — no explicit id on the auto path.
-	[ "$(cat "$STAMP_LOG")" = "S:0 $top feat/42-foo" ]
+	# target/worktree/branch — window -t is session_id:index ($N:0).
+	local sid
+	sid="$(tmux display-message -t S -p '#{session_id}')"
+	[ "$(cat "$STAMP_LOG")" = "$sid:0 $top feat/42-foo" ]
 }
 
 @test "steady state (unchanged branch) does not re-fire" {

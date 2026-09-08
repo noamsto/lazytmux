@@ -692,6 +692,19 @@
               touch $out
             '';
 
+          update-icons-all-windows-tests =
+            pkgs.runCommand "update-icons-all-windows-tests" {
+              # tmux: drives a private, config-less server (like reflow-fanout-tests);
+              # git: builds a real repo so unseeded @branch seeding has a cwd.
+              # bash: copied to a binary named `claude` so pane_current_command is literal.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.git pkgs.tmux pkgs.bash];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/update-icons-all-windows.bats
+              touch $out
+            '';
+
           worktree-match-tests =
             pkgs.runCommand "worktree-match-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gawk pkgs.gnugrep];
