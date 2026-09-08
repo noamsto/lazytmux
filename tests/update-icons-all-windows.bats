@@ -113,3 +113,35 @@ display_of() {
 	disp=$(display_of B:1)
 	[ "$disp" = "C" ] || { echo "B:1 display [$disp] want [C]; cmd=$(tmux list-panes -t B:1 -F '#{pane_current_command}')" && false; }
 }
+
+@test "one pass on A stamps @window_icon_padded on a session named with a pipe" {
+	# tmux forbids '.' and ':' in session names; '|' is legal and would shift a
+	# middle #{session_name} field in list-panes -F, so wkey is wrong and the
+	# pad never lands — the same #580 discriminator.
+	# Restore a normal default-shell so this session is a shell window (empty
+	# pad), matching A:0 — setup() pointed default-shell at a `claude` binary
+	# only to give B:1 an ICON_MAP hit.
+	tmux set -g default-shell "$(command -v bash)"
+	if ! tmux new-session -d -s 'a|b' -c "$REPO" -x 200 -y 50 2>/dev/null; then
+		# skip citing version if this tmux rejects '|'-named sessions
+		skip "tmux $(tmux -V) rejects session names containing |"
+	fi
+
+	bash "$UPDATE_ICONS" A >/dev/null 2>&1
+
+	local line sid sname padded
+	sid=""
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		sname="${line#*|}"
+		if [ "$sname" = "a|b" ]; then
+			sid="${line%%|*}"
+			break
+		fi
+	done < <(tmux list-sessions -F '#{session_id}|#{session_name}')
+	[ -n "$sid" ] || { echo "could not resolve session id for a|b" && false; }
+
+	padded=$(padded_of "$sid:0")
+	[ "$padded" = "$(printf '%*s' "$PAD_LEN" '')" ] ||
+		{ echo "$sid:0 padded [$padded] want $PAD_LEN spaces" && false; }
+}

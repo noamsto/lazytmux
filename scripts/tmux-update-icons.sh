@@ -101,19 +101,38 @@ main() {
 	# name/task. No-op after the first tick of each server (marker-gated).
 	claude_prune_stale_state "$SERVER_START"
 
+	# session_id is $N and cannot contain '|'; session_name can. Key every
+	# window map by id:index, and parse names as the remainder after the first
+	# '|' so a pipe in the name cannot shift the id. @reflow@ still wants a
+	# name; window/session -t uses the id (numeric names are then unambiguous).
+	declare -A sess_name sess_id_of
+	while IFS= read -r line; do
+		[[ -n $line ]] || continue
+		sid="${line%%|*}"
+		sname="${line#*|}"
+		[[ -n $sid ]] || continue
+		sess_name[$sid]="$sname"
+		sess_id_of[$sname]="$sid"
+	done < <(tmux list-sessions -F '#{session_id}|#{session_name}')
+	INVOKE_SID="${sess_id_of[$SESSION]:-}"
+
 	# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
 	# list-panes -a, not -s: this script is invoked from status-format[0], which
 	# tmux only evaluates for a client drawing a status line. Sessions with no
 	# attached client never get their own tick, so one attached pass has to stamp
-	# every window (#580). Window arrays are keyed session:index so indices that
-	# collide across sessions don't merge.
+	# every window (#580). Window arrays are keyed session_id:index so indices
+	# that collide across sessions don't merge, and a '|' in a session name
+	# cannot shift later fields (the #580 discriminator: @window_icon_padded
+	# never set).
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
 	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename win_cur_crew win_cur_crew_seen win_cur_bridge
 	declare -A all_sess sess_cur_active_icon sess_cur_session_fg sess_active_proc sess_active_win
 	# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
 	# window with no @branch yet) collapses and shifts every later field left,
-	# corrupting cur_branch/active flags. '@window_task' is free-form so it stays
-	# last — read drops any stray '|' it contains into that final field.
+	# corrupting cur_branch/active flags. session_id ($N) is the session field —
+	# never session_name, which may itself contain '|'. '@window_task' is
+	# free-form so it stays last — read drops any stray '|' it contains into that
+	# final field.
 	# @window_ai_name is sanitized free of '|' (claude-status-update), so it is safe
 	# as a fixed middle field. @remux_relaunch is "claude --resume <uuid>" — no '|'
 	# either, so it also stays a fixed middle field before the free-form task.
@@ -164,7 +183,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$wkey]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -a -F '#{pane_id}|#{session_name}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
+	done < <(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
 
 	arm_agent_detect
 
@@ -317,11 +336,14 @@ main() {
 		# Branch detection forks git per window. A branch only changes in the window
 		# where a checkout/cd happens, so poll only the invoking session's active
 		# window each tick; other sessions' active windows and every inactive window
-		# trust their cached @branch (worktrunk stamps it on switch).
+		# trust their cached @branch (worktrunk stamps it on switch). Invoking
+		# session is matched by id ($N), looked up from $1 / $SESSION's name via
+		# the list-sessions map — a '|' in the name must not be compared as a
+		# middle format field.
 		# A window with no @branch yet (manual new-window, restore, never-attached
 		# session) is polled once to seed it, then trusted — this caps the steady
 		# git fork rate at ~1/tick plus unseeded windows.
-		if [[ ($s == "$SESSION" && $idx == "${sess_active_win[$SESSION]:-}") || -z ${win_cur_branch[$wkey]:-} ]]; then
+		if [[ ($s == "$INVOKE_SID" && $idx == "${sess_active_win[$INVOKE_SID]:-}") || -z ${win_cur_branch[$wkey]:-} ]]; then
 			# timeout so a stuck git (NFS stall, held index.lock) can't wedge the
 			# whole icon updater — it degrades to the cached branch for that tick.
 			branch=$(timeout 2 git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
@@ -453,12 +475,15 @@ main() {
 	# A branch or task change means window labels (built by reflow from
 	# @branch/@issue_*/@window_task) are stale — no tmux hook fires on cd or a new
 	# prompt, so kick a forced reflow here. Per session whose labels actually
-	# changed, not only the invoking session: an unattached session's first seed
-	# of @branch would otherwise leave its grid stale until someone attaches.
+	# changed, not only the invoking session. Reflow exits when #{client_width}
+	# is empty (no attached client), so an unattached session's first @branch
+	# seed still stamps the window option; the grid pass waits until a client
+	# exists. Icon stamps from this script do not depend on that.
 	# The call below is the reflow store path (not a bare name) so a config
-	# reload repoints it without a tmux server restart.
+	# reload repoints it without a tmux server restart. Reflow takes a session
+	# name; we map from the id we keyed on.
 	for s in "${!sess_need_reflow[@]}"; do
-		@reflow@ "$s" --force >/dev/null 2>&1 &
+		@reflow@ "${sess_name[$s]}" --force >/dev/null 2>&1 &
 		disown
 	done
 }
