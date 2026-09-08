@@ -782,6 +782,11 @@ func Run(cfg Config) error {
 	// window labels onto the mirror windows as @bridge_* options.
 	agents = newAgentShipper(cfg.LocalSess, remoteClockSkew(rt))
 	labels = newLabelShipper()
+	// Subscriptions are per control client, so this runs once per attach — here
+	// for the first one, and at the end of repair for every reconnect. Both
+	// shippers keep polling if the remote refuses.
+	subscribe := func() { labels.subscribed, agents.subscribed = subscribeFormats(rt) }
+	subscribe()
 	// Session-lifetime like the tick: a sweeper built per attach would restart
 	// its floor on every reconnect.
 	sweeper := &windowSweeper{}
@@ -834,6 +839,15 @@ func Run(cfg Config) error {
 						focusLocalPane(cfg, cst, mw, mw.remotePanes, pane)
 					}
 				}
+			}
+		case controlmode.SubscriptionChanged:
+			// Queued, not applied: the loop coalesces a burst — see
+			// queuedApplyDue.
+			if v, ok := subscriptionValue(l, labelSubName); ok {
+				labels.queue(v)
+			}
+			if v, ok := subscriptionValue(l, agentSubName); ok {
+				agents.queue(v)
 			}
 		case controlmode.Pause:
 			if len(l.Args) > 0 {
@@ -902,8 +916,13 @@ func Run(cfg Config) error {
 			// Same wake-up for an agent, which redraws its pane before it changes
 			// state; a window option carries no such traffic, which is what the
 			// tick below is for.
-			agents.poll(cfg, rt)
-			labels.poll(cfg, reg, rt)
+			gen := reg.gen()
+			// A subscription snapshot arrives as one notification per object and
+			// this loop runs a pass per line, so the shippers hold their queued
+			// rows while more lines are already buffered — see queuedApplyDue.
+			drained := len(c.pump.lines) == 0
+			agents.flush(cfg, rt, gen, drained)
+			labels.flush(cfg, reg, rt, gen, drained)
 			sweeper.sweep(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
 			reseedDropped(router, rt)
 			reseedReshaped(router, rt)
@@ -1020,6 +1039,10 @@ func Run(cfg Config) error {
 		// dropped by the remote, not buffered.
 		reseedPanes(reg, router, rt, activeWin, "after reattach")
 		agents.reskew(remoteClockSkew(rt))
+		// Last, and after the registry has settled: the fresh client carries no
+		// subscriptions, and re-subscribing re-reports every window and pane —
+		// so this doubles as the label/agent-state half of the repair.
+		subscribe()
 		return true
 	}
 

@@ -11,18 +11,24 @@ import (
 	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
 )
 
-// agentStatusPollInterval is the floor between two polls: rt reads the stream,
-// so only the main loop may poll. An agent that changes state redraws its pane
-// first, which is what wakes that loop on a busy bridge; mainLoopTickInterval
-// backs it, so a state that changed without a redraw is picked up within that
-// ceiling rather than never.
+// agentStatusPollInterval is the floor between two polls while this shipper is
+// unsubscribed: rt reads the stream, so only the main loop may poll. An agent
+// that changes state redraws its pane first, which is what wakes that loop on a
+// busy bridge; mainLoopTickInterval backs it, so a state that changed without a
+// redraw is picked up within that ceiling rather than never.
 const agentStatusPollInterval = time.Second
+
+// agentStatusBackstopInterval is that floor once %subscription-changed carries
+// the state, where a stamp is reported as it is made. See pollFloor.
+const agentStatusBackstopInterval = 30 * time.Second
 
 // agentStatusFormat reads each remote pane's foreground command plus whatever
 // claude-status-update stamped on it. @claude_status is "<state> <epoch>
 // <unseen>"; the free-form task goes last so a '|' inside it lands in the final
 // field instead of shifting the row.
-const agentStatusFormat = "'#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@claude_issues}|#{@claude_task}'"
+// Unquoted: it is both a -F argument and a subscription format, and only the
+// call site knows which quoting each needs.
+const agentStatusFormat = "#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@claude_issues}|#{@claude_task}"
 
 // paneStatus is one remote pane's foreground command and, when an agent runs
 // there, the state the hook writer stamped.
@@ -83,21 +89,52 @@ func (r *paneStatus) readStatus(v string) {
 // tree under the LOCAL pane ids, which is what every local consumer — window
 // icons, the session tint, the status aggregate, the pickers — reads.
 type agentShipper struct {
-	dir      string                // claude-status root
-	sess     string                // local mirror session, recorded in each pane file
-	skew     int64                 // localNow - remoteNow, so a remote stamp lands on our clock
-	written  map[string]paneStatus // local pane id (no %) -> the row last written for it
-	lastPoll time.Time
+	dir       string                // claude-status root
+	sess      string                // local mirror session, recorded in each pane file
+	skew      int64                 // localNow - remoteNow, so a remote stamp lands on our clock
+	written   map[string]paneStatus // local pane id (no %) -> the row last written for it
+	lastPoll  time.Time
+	lastApply time.Time // last time queued rows were applied; bounds the burst wait
+	lastGen   uint64    // registry generation the last backstop read was made against
+
+	// subscribed is set per connection by Run once the remote has accepted the
+	// subscription; false leaves this shipper polling.
+	subscribed bool
+	// pending holds the rows notifications carried, keyed by remote pane id so a
+	// burst collapses to one row per pane, and applied by flush rather than by
+	// the dispatch that queued them.
+	pending map[string]paneStatus
 }
 
-// poll re-reads the remote's stamped state and applies it, throttled to
-// agentStatusPollInterval. Main loop only: rt is not safe to share.
-func (a *agentShipper) poll(cfg Config, rt roundTrip) {
-	if time.Since(a.lastPoll) < agentStatusPollInterval {
+// queue records the row a %subscription-changed line carried. Pure: it is
+// called from dispatch, which may itself be running inside a reply reader's
+// drain, so it must not read the remote or fork tmux.
+func (a *agentShipper) queue(value string) {
+	for _, r := range parseAgentStatus(value) {
+		a.pending[r.pane] = r
+	}
+}
+
+// flush stamps whatever the notifications queued, then re-reads the remote if a
+// backstop read is due. Main loop only: rt is not safe to share.
+//
+// Only the backstop half holds the whole remote pane set, so only it may reap —
+// see apply.
+func (a *agentShipper) flush(cfg Config, rt roundTrip, gen uint64, drained bool) {
+	if queuedApplyDue(len(a.pending), drained, a.lastApply) {
+		rows := make([]paneStatus, 0, len(a.pending))
+		for _, r := range a.pending {
+			rows = append(rows, r)
+		}
+		clear(a.pending)
+		a.lastApply = time.Now()
+		a.stamp(cfg, rows)
+	}
+	if !due(a.lastPoll, pollFloor(a.subscribed, agentStatusPollInterval, agentStatusBackstopInterval), gen, a.lastGen) {
 		return
 	}
-	a.lastPoll = time.Now()
-	l, ok := one(rt, fmt.Sprintf("list-panes -s -t %s -F %s", tmuxQuote(cfg.RemoteSession), agentStatusFormat))
+	a.lastPoll, a.lastGen = time.Now(), gen
+	l, ok := one(rt, fmt.Sprintf("list-panes -s -t %s -F %s", tmuxQuote(cfg.RemoteSession), tmuxQuote(agentStatusFormat)))
 	if !ok || l.Kind == controlmode.Error {
 		return
 	}
@@ -109,7 +146,13 @@ func newAgentShipper(localSess string, skew int64) *agentShipper {
 	if dir == "" {
 		dir = "/tmp/claude-status"
 	}
-	return &agentShipper{dir: dir, sess: localSess, skew: skew, written: map[string]paneStatus{}}
+	return &agentShipper{
+		dir:     dir,
+		sess:    localSess,
+		skew:    skew,
+		written: map[string]paneStatus{},
+		pending: map[string]paneStatus{},
+	}
 }
 
 // reskew re-points the shipper at a freshly measured clock offset, keeping the
@@ -118,12 +161,29 @@ func newAgentShipper(localSess string, skew int64) *agentShipper {
 // reconnect follows an outage of unknown length (#482).
 func (a *agentShipper) reskew(skew int64) { a.skew = skew }
 
-// apply stamps each mirrored pane's remote command, writes a file per pane an
-// agent reported on, and drops the ones that stopped reporting (the agent
-// exited, or its pane is gone).
+// apply stamps rows and then drops the panes that stopped reporting (the agent
+// exited, or its pane is gone). Full-set only: a pane absent from rows is taken
+// as gone, so this may be called only with the whole remote pane set — which is
+// the backstop read alone. A subscription delivers one pane, and reaping against
+// it would drop every other pane's state on each notification.
 func (a *agentShipper) apply(cfg Config, rows []paneStatus) {
-	if cfg.LocalPanes == nil {
+	live, ok := a.stamp(cfg, rows)
+	if !ok {
 		return
+	}
+	for id := range a.written {
+		if live[id] {
+			continue
+		}
+		a.forget(id)
+	}
+}
+
+// stamp writes each row that moved and returns the local pane ids it saw, so
+// apply can reap against them. Safe with any subset of the remote's panes.
+func (a *agentShipper) stamp(cfg Config, rows []paneStatus) (map[string]bool, bool) {
+	if cfg.LocalPanes == nil {
+		return nil, false
 	}
 	local := cfg.LocalPanes()
 	live := make(map[string]bool, len(rows))
@@ -168,13 +228,7 @@ func (a *agentShipper) apply(cfg Config, rows []paneStatus) {
 		writeStatusFile(filepath.Join(a.dir, "tasks", id), lineOrEmpty(r.task))
 		writeStatusFile(filepath.Join(a.dir, "issues", id), lineOrEmpty(r.issues))
 	}
-
-	for id := range a.written {
-		if live[id] {
-			continue
-		}
-		a.forget(id)
-	}
+	return live, true
 }
 
 // clear drops every file this bridge wrote. The shell-side prune collects by

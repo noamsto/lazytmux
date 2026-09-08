@@ -57,6 +57,7 @@ const (
 	WindowPaneChanged
 	Pause
 	Continue
+	SubscriptionChanged
 )
 
 type Line struct {
@@ -170,6 +171,23 @@ func parseLine(raw []byte) Line {
 		return Line{Kind: WindowPaneChanged, Args: fieldsToStrings(bytes.Fields(rest))}
 	case "%pause":
 		return Line{Kind: Pause, Args: fieldsToStrings(bytes.Fields(rest))}
+	case "%subscription-changed":
+		// "%subscription-changed <name> <session> <window> <index> <pane> : <value>",
+		// where the ids are '-' for whatever the subscription's scope leaves
+		// unresolved. Everything after the FIRST " : " is the format's value and
+		// may hold ':' of its own (an issue title does), so cut once. tmux writes
+		// the separator unconditionally, so an emptied value arrives as a trailing
+		// space rather than as a line cutExtSep cannot split — which is what makes
+		// "the option was unset" reportable at all.
+		head, value, ok := cutExtSep(rest)
+		if !ok {
+			return Line{Kind: Other}
+		}
+		return Line{
+			Kind: SubscriptionChanged,
+			Args: fieldsToStrings(bytes.Fields(head)),
+			Data: bytes.Clone(value),
+		}
 	case "%continue":
 		return Line{Kind: Continue, Args: fieldsToStrings(bytes.Fields(rest))}
 	default:
