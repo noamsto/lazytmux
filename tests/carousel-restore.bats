@@ -223,3 +223,50 @@ pane_id_for_index() {
 	grep -qxF "$want_key" "$AEYE_LOG"
 	grep -qxF "HOST=$HOST_PANE" "$AEYE_LOG"
 }
+
+@test "the host-index hint picks that agent pane over the lowest-index one" {
+	# Two agent siblings. Without a hint the tie-break is lowest index (idx 1);
+	# the hint names idx 2, which is the pane the stamp recorded as the host, so
+	# it must win. This is the whole point of carrying the index across the
+	# restore — the alternative is an arbitrary pick between two live agents.
+	make_fake_agent claude
+	make_fake_agent codex
+	spawn_pane claude
+	spawn_pane codex
+	wait_for_pane_cmd 1 claude
+	wait_for_pane_cmd 2 codex
+
+	VIEWER_PANE="$(pane_id_for_index 0)"
+	LOW="$(pane_id_for_index 1)"
+	HINTED="$(pane_id_for_index 2)"
+
+	TMUX_PANE="$VIEWER_PANE" run bash "$SCRIPT" 2
+	[ "$status" -eq 0 ]
+
+	want_key="$SRV_PID-${HINTED#%}"
+	[ "$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src)" = "$want_key" ]
+	# And specifically NOT the lowest-index pane, which is what wins with no hint.
+	[ "$want_key" != "$SRV_PID-${LOW#%}" ]
+	grep -qxF "HOST=$HINTED" "$AEYE_LOG"
+}
+
+@test "a hint naming no agent pane falls back to the lowest-index agent" {
+	# tmux-remux's filter can drop a pane, shifting every index above it, so the
+	# hint can point at a pane that is not an agent (or not there at all). It is
+	# a preference, never an address: discovery must still land on a real agent
+	# rather than trusting a stale index.
+	make_fake_agent claude
+	make_fake_agent editor
+	spawn_pane claude
+	spawn_pane editor
+	wait_for_pane_cmd 1 claude
+	wait_for_pane_cmd 2 editor
+
+	VIEWER_PANE="$(pane_id_for_index 0)"
+	AGENT="$(pane_id_for_index 1)"
+
+	TMUX_PANE="$VIEWER_PANE" run bash "$SCRIPT" 2
+	[ "$status" -eq 0 ]
+
+	[ "$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src)" = "$SRV_PID-${AGENT#%}" ]
+}

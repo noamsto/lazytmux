@@ -270,17 +270,22 @@ run_update_icons_with_carousel() {
 
 @test "carousel viewer pane gets @remux_relaunch stamped when RESUME_CAROUSEL is on" {
 	local bin="$TDIR/store/tmux-carousel-restore"
-	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-%0"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
 
 	run_update_icons_with_carousel on "$bin"
 
-	assert_relaunch "$bin"
+	# The stamp carries the host pane's CURRENT index, which is what lets the
+	# restored script break ties between agent panes instead of guessing. Here
+	# @claude_img_src names this very pane, so the index is its own.
+	idx=$(tmux display-message -p -t "%$PANE_ID" '#{pane_index}')
+	assert_relaunch "$bin $idx"
 }
 
 @test "no write is issued when the carousel stamp already matches" {
 	local bin="$TDIR/store/tmux-carousel-restore"
-	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-%0"
-	tmux set -p -t "%$PANE_ID" @remux_relaunch "$bin"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
+	idx=$(tmux display-message -p -t "%$PANE_ID" '#{pane_index}')
+	tmux set -p -t "%$PANE_ID" @remux_relaunch "$bin $idx"
 
 	REAL_TMUX="$(command -v tmux)"
 	SPY_DIR="$TDIR/tmux-spy-carousel"
@@ -298,13 +303,13 @@ run_update_icons_with_carousel() {
 
 	# Same vacuity trap as the Claude-stamp version of this test: the stamp
 	# surviving is checked first, so a run that wiped it can't pass by omission.
-	assert_relaunch "$bin"
+	assert_relaunch "$bin $idx"
 	run ! grep -q '^set .*@remux_relaunch' "$SPY_LOG"
 }
 
 @test "RESUME_CAROUSEL off, or the arg omitted entirely, stamps nothing" {
 	local bin="$TDIR/store/tmux-carousel-restore"
-	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-%0"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
 
 	run_update_icons_with_carousel off "$bin"
 	assert_relaunch "<unset>"
@@ -328,7 +333,7 @@ run_update_icons_with_carousel() {
 
 @test "the carousel stamp is a bare value: no VAR=value prefix, no shell metacharacters" {
 	local bin="$TDIR/store/abc123-tmux-carousel-restore/bin/tmux-carousel-restore"
-	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-%0"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
 
 	run_update_icons_with_carousel on "$bin"
 
@@ -336,10 +341,13 @@ run_update_icons_with_carousel() {
 	# VAR=value env prefix and no shell metacharacter — checked on the value
 	# tmux actually holds, not on the fixture it was set to.
 	got=$(tmux show -pv -t "%$PANE_ID" @remux_relaunch 2>/dev/null) || got="<unset>"
-	[ "$got" = "$bin" ]
 	case "$got" in
 	*[A-Za-z_]=*) echo "stamp carries a VAR=value token: [$got]" && false ;;
 	esac
-	[[ $got =~ ^[A-Za-z0-9/_.-]+$ ]] ||
-		{ echo "stamp contains a shell metacharacter: [$got]" && false; }
+	# An absolute path, then at most a bare integer (the host pane index). The
+	# space is the only whitespace allowed and nothing else may appear: fish
+	# rejects a VAR=value prefix outright, and any of ;|&$`()<>*?" would be
+	# interpreted by every shell tmux-remux might hand this to.
+	[[ $got =~ ^[A-Za-z0-9/_.-]+( [0-9]+)?$ ]] ||
+		{ echo "stamp is not a bare path plus optional index: [$got]" && false; }
 }

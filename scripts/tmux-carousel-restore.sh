@@ -43,11 +43,22 @@ is_agent_cmd() {
 	esac
 }
 
+# $1 is the pane index the host had when the stamp was written, carried across
+# the restore in the relaunch string itself — the one piece of evidence about
+# WHICH sibling is the host that survives, since tmux-remux restores no pane
+# options and pane ids all change. It is a hint, never an address: tmux-remux's
+# filter can drop a pane (internal/restore/plan.go, SkipPane), which shifts
+# every index above it, so an index used on its own would confidently name the
+# wrong pane. It only breaks ties BETWEEN agent-command matches, where the
+# alternative is an arbitrary pick.
+HOST_HINT="${1:-}"
+[[ $HOST_HINT =~ ^[0-9]+$ ]] || HOST_HINT=""
+
 # scan_host_panes: one list-panes read of this pane's window (tmux scopes
 # list-panes to the target's own window with no -a/-s). Sets HOST to the
-# lowest-pane-index sibling running an agent command (condition 2 — a stated
-# tie-break, not incidental), or leaves it empty. OTHER/OTHER_COUNT track the
-# window's non-self panes for the exit-time fallback below.
+# sibling running an agent command, preferring the one at HOST_HINT and falling
+# back to the lowest pane index. OTHER/OTHER_COUNT track the window's non-self
+# panes for the exit-time fallback below.
 HOST=""
 OTHER=""
 OTHER_COUNT=0
@@ -55,7 +66,7 @@ scan_host_panes() {
 	HOST=""
 	OTHER=""
 	OTHER_COUNT=0
-	local best_idx="" idx pane_id cmd
+	local best_idx="" hinted="" idx pane_id cmd
 	while IFS='|' read -r idx pane_id cmd; do
 		[[ -n $pane_id && $pane_id != "$TMUX_PANE" ]] || continue
 		# `|| true`: a post-increment from 0 evaluates to 0, which is a
@@ -64,11 +75,14 @@ scan_host_panes() {
 		((OTHER_COUNT++)) || true
 		OTHER="$pane_id"
 		is_agent_cmd "$cmd" || continue
+		[[ -n $HOST_HINT && $idx == "$HOST_HINT" ]] && hinted="$pane_id"
 		if [[ -z $best_idx ]] || ((idx < best_idx)); then
 			best_idx="$idx"
 			HOST="$pane_id"
 		fi
 	done < <(tmux list-panes -t "$TMUX_PANE" -F '#{pane_index}|#{pane_id}|#{pane_current_command}' 2>/dev/null)
+	[[ -n $hinted ]] && HOST="$hinted"
+	return 0
 }
 
 # Bounded retry, not one sample: a command-name match can legitimately miss for
