@@ -344,19 +344,26 @@ func TestProxyRetentionCapEvictsOldestID(t *testing.T) {
 	}
 }
 
+// relaySrc builds a RelaySource seeded from termfeatures, sparing every
+// caller that only wants a fixed capability from writing NewRelaySource(
+// RelayFromTermFeatures(...)) out in full.
+func relaySrc(feats string) *RelaySource {
+	return NewRelaySource(RelayFromTermFeatures(feats))
+}
+
 // The gate on and off against the same input (R1/R6): a complete bare sixel
 // forwarded when the local client carries the sixel terminal-feature, dropped
 // otherwise.
 func TestProxyRelayGateForwardsOrDropsSixel(t *testing.T) {
 	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
 	t.Run("gate on forwards it bare", func(t *testing.T) {
-		p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("bpaste,sixel"), DefaultRasterHold)
+		p := NewRelay(&fakeLocalizer{}, nil, relaySrc("bpaste,sixel"), DefaultRasterHold)
 		if got := string(p.Filter([]byte("x" + sixel + "y"))); got != "x"+sixel+"y" {
 			t.Fatalf("out = %q, want the sixel forwarded bare", got)
 		}
 	})
 	t.Run("gate off drops it", func(t *testing.T) {
-		p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("bpaste"), DefaultRasterHold)
+		p := NewRelay(&fakeLocalizer{}, nil, relaySrc("bpaste"), DefaultRasterHold)
 		if got := string(p.Filter([]byte("x" + sixel + "y"))); got != "xy" {
 			t.Fatalf("out = %q, want the sixel dropped", got)
 		}
@@ -367,7 +374,7 @@ func TestProxyRelayGateForwardsOrDropsSixel(t *testing.T) {
 // cursor-positioned, and replaying one after a reseed would paint it wrong.
 func TestProxyRasterNeverRetainedForReplay(t *testing.T) {
 	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
-	p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("sixel"), DefaultRasterHold)
+	p := NewRelay(&fakeLocalizer{}, nil, relaySrc("sixel"), DefaultRasterHold)
 	if got := string(p.Filter([]byte(sixel))); got != sixel {
 		t.Fatalf("out = %q, want the sixel forwarded", got)
 	}
@@ -382,7 +389,7 @@ func TestProxyRasterNeverRetainedForReplay(t *testing.T) {
 func TestProxyRelayOffLogsSixelDropOncePerPane(t *testing.T) {
 	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
 	var logged int
-	p := NewRelay(&fakeLocalizer{}, func(string, ...any) { logged++ }, Relay{}, 0)
+	p := NewRelay(&fakeLocalizer{}, func(string, ...any) { logged++ }, nil, 0)
 	p.Filter([]byte(sixel + sixel + sixel))
 	if logged != 1 {
 		t.Fatalf("logged = %d after one batch of 3 sixels, want 1", logged)
@@ -393,13 +400,73 @@ func TestProxyRelayOffLogsSixelDropOncePerPane(t *testing.T) {
 	}
 }
 
+// The capability follows the viewer (R4): the same Proxy relays a sixel once
+// its RelaySource flips on, and drops it again once flipped back off — no
+// re-dial, no new Proxy, because Filter reads the source live on every call.
+func TestProxyFollowsRelaySourceFlips(t *testing.T) {
+	const sixel = "\x1bPq#0;2;100;0;0@@@@@@\x1b\\"
+	var logged int
+	src := NewRelaySource(Relay{})
+	p := NewRelay(&fakeLocalizer{}, func(string, ...any) { logged++ }, src, DefaultRasterHold)
+
+	if got := string(p.Filter([]byte(sixel))); got != "" {
+		t.Fatalf("phase 1 (off): out = %q, want the sixel dropped", got)
+	}
+	if logged != 1 {
+		t.Fatalf("phase 1 (off): logged = %d, want 1", logged)
+	}
+
+	src.Store(RelayFromTermFeatures("sixel"))
+	if got := string(p.Filter([]byte(sixel))); got != sixel {
+		t.Fatalf("phase 2 (on): out = %q, want the sixel relayed byte-identically", got)
+	}
+
+	src.Store(Relay{})
+	if got := string(p.Filter([]byte(sixel))); got != "" {
+		t.Fatalf("phase 3 (off again): out = %q, want the sixel dropped", got)
+	}
+	// loggedRelayOff is a once-per-pane latch (see the field doc), so this
+	// second off-phase logs nothing more — harmless, but newly reachable now
+	// that the capability can flip back off within one Proxy's life.
+	if logged != 1 {
+		t.Fatalf("phase 3 (off again): logged = %d, want still 1 (latch already tripped)", logged)
+	}
+
+	// The raster hold followed both flips: a >64 KiB partial sixel is held
+	// (not overflow-discarded) only while the capability is on, observed
+	// through Filter's forwarding rather than the scanner's private field.
+	bigBody := strings.Repeat("~", 70<<10)
+	bigSixel := "\x1bPq" + bigBody + st
+
+	src.Store(RelayFromTermFeatures("sixel"))
+	half := len(bigSixel) / 2
+	if got := string(p.Filter([]byte(bigSixel[:half]))); got != "" {
+		t.Fatalf("big sixel first half (hold applied): out = %q, want it held, not forwarded", got)
+	}
+	if got := string(p.Filter([]byte(bigSixel[half:]))); got != bigSixel {
+		t.Fatalf("big sixel second half (hold applied): out = %q, want the whole sixel relayed", got)
+	}
+
+	src.Store(Relay{})
+	if got := string(p.Filter([]byte(bigSixel[:half]))); got != "" {
+		t.Fatalf("big sixel first half (default hold): out = %q, want the overflow path to hold it too", got)
+	}
+	// Past the 64 KiB non-relay default, the overflow-discard path drops the
+	// partial sixel instead of holding it — the rest of the sequence, fed
+	// next, is consumed as discard tail rather than forwarded as text or
+	// relayed as an image.
+	if got := string(p.Filter([]byte(bigSixel[half:]))); got != "" {
+		t.Fatalf("big sixel second half (default hold): out = %q, want the overflowed sixel discarded", got)
+	}
+}
+
 // Relay-only mode (R7) forwards a well-formed kitty APC byte-identically,
 // bare and \ePtmux;-wrapped, and leaves t=s/t=t untouched — no Rewrite, no
 // EncodeWrapped, no Coalesce, no retain. A dropMalformed APC is the one
 // exception, and is covered separately (it never reaches Filter as a chunk at
 // all, in any mode).
 func TestRelayOnlyForwardsKittyByteIdentically(t *testing.T) {
-	p := NewRelay(nil, nil, Relay{}, 0)
+	p := NewRelay(nil, nil, nil, 0)
 
 	for _, in := range []string{bareSeq, wrappedSeq} {
 		if got := string(p.Filter([]byte(in))); got != in {
@@ -430,7 +497,7 @@ func TestLargeSixelSurvivesKeynegThenProxyFilterByteIdentically(t *testing.T) {
 	kf := keyneg.NewFilter()
 	stripped := append(kf.Feed([]byte(sixel)), kf.Flush()...)
 
-	p := NewRelay(&fakeLocalizer{}, nil, RelayFromTermFeatures("sixel"), DefaultRasterHold)
+	p := NewRelay(&fakeLocalizer{}, nil, relaySrc("sixel"), DefaultRasterHold)
 	if got := string(p.Filter(stripped)); got != sixel {
 		t.Fatalf("byte mismatch after keyneg+Filter: got %d bytes, want %d bytes", len(got), len(sixel))
 	}

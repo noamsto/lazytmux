@@ -70,7 +70,7 @@ func TestDialConnPropagatesDialError(t *testing.T) {
 }
 
 // TestConnHolderEmptySlotFailsClosed pins the "no live connection" contract
-// every long-lived capturer (pumpInput, watchResize, the ctl accept loop)
+// every long-lived capturer (pumpInput, watchLocalClient, the ctl accept loop)
 // relies on across a re-dial: send must report false rather than block, and
 // roundTrip must yield an immediately-exhausted batch rather than hang.
 func TestConnHolderEmptySlotFailsClosed(t *testing.T) {

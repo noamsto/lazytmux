@@ -393,6 +393,77 @@ whenever both the remote bridge (`programs.lazytmux.remote.hosts`) and the
 agent-carousel toggle (the `aeye` flake input) are wired in — no separate
 option.
 
+- **What the remote emits splits into two independently-driven halves
+  (#574).** The **relay capability** (the sixel drop gate plus
+  `LZTMUX_RELAY_GRAPHICS`) is fully local and continuous — see below. The
+  **advertised termname** — what aeye's `chooseRelayBackend` reads off the
+  remote's own `client_termname` to pick kitty placements vs block art — only
+  ever changes by dialling a whole new control client, and only on the
+  `prefix + I` carousel gesture, never on a poll. Before #574 the daemon
+  advertised whichever terminal *launched* the bridge, frozen for its life;
+  viewing that same mirror from a different terminal got kitty placeholders
+  (`U+10EEEE` tofu) or a dropped sixel it could actually paint.
+- **A control client's `client_termname` is exactly its `TERM` at dial time,
+  and tmux has no runtime setter for it** — measured on the pinned 3.7c:
+  `refresh-client`'s own usage string carries no termname flag among
+  `[-cDlLRSU] [-A pane:state] [-B name:what:format] ...`. So the only way to
+  change what the remote sees is a new control client, dialled with a fresh
+  `TERM` — there is no seam that patches the live one.
+- **Replacement rides the carousel gesture rather than a poll because aeye
+  picks its backend once per viewer *launch*, not continuously.** A poller
+  that replaced the control client on every terminal switch would race
+  `prefix + I`: a replacement still in flight when the keypress lands leaves
+  the freshly-launched viewer reading the *stale* termname and painting tofu
+  — the exact symptom this exists to fix. Tying the replacement to the
+  gesture instead makes it deterministic (nothing happens until a viewer is
+  about to launch) and bounds its cost to at most one dial per human
+  keypress.
+- **The multi-client rule is capability intersection, never last-writer-wins
+  or `list-clients` order.** Every non-control client attached to the mirror
+  session votes on two ANDs: `kitty` iff every one of them carries an
+  `xterm-kitty`/`xterm-ghostty`-prefixed termname, `sixel` iff every one
+  carries a whole `sixel` token in `client_termfeatures`. Control-mode
+  clients are excluded outright — their `client_termfeatures` is always
+  empty, so counting one would force sixel false and could hand it the
+  termname pick for a "client" that paints nothing. The advertised termname
+  is the lexicographically **smallest** termname among the clients that
+  witness the AND'd kitty capability, so the identity is a pure function of
+  who is attached rather than of attach order. No client attached at all
+  keeps whatever was last advertised — a mirror nobody is looking at is not
+  evidence to degrade it to block art.
+- **The discovering `prefix + I` is nacked with a "press again" message,
+  never queued across goroutines.** The ctl handler resolves, compares
+  against what the live client actually advertises, and raises the
+  replacement *before* `cst.submit` and *outside* `ctlState.mu` — it cannot
+  block waiting on main-loop progress while holding that lock, because
+  `repair()` → `reconcileWindows` → `cst.forgetWindow` takes the same mutex,
+  and a blocked handler would deadlock against the very repair its own raise
+  depends on. A differing termname therefore returns `"re-dialling for
+  <term> — press again"` instead of running the carousel; the press after
+  the swap lands submits normally, and same-terminal viewing is never nacked
+  at all because the resolved termname never changed.
+- **The ssh `ControlPath` is per-dial, owned by the transport `child` that
+  dialled it**, reached everywhere through one accessor: "the path of the
+  most recently started child that is still open." During a replacement's
+  overlap that is the new, still-unverified master; once an aborted
+  replacement's new child closes, the accessor falls back to the surviving
+  old path; once a successful swap closes the old child, it reports the new
+  one. Getting this wrong is not cosmetic — the graphics fetcher and the
+  paste upload both read the path through this same accessor, and a consumer
+  stuck on a dead child's path hands ssh a `-S` that no longer exists, which
+  makes `ControlMaster=auto` *silently* stop multiplexing and re-authenticate
+  per fetch with no tty, on exactly the path a failed replacement is supposed
+  to leave untouched.
+- **Two honest limits, not bugs.** An already-open carousel viewer never
+  re-picks its backend — aeye chooses once at process launch, so the
+  guarantee is "the *next* `prefix + I` paints correctly," never "an open one
+  repaints." And a real client attached **directly** to the remote session
+  (not through this bridge) defeats the whole mechanism: aeye's reader
+  requires every client of that session to be control-mode, so one real
+  client there makes it fall back to an untargeted `display-message` this
+  daemon does not control. Detecting that state would cost a remote
+  round-trip per carousel press to change nothing steerable, so it is a
+  documented limitation, not a guarded path.
 - **Placements need nothing.** Kitty unicode placeholders are ordinary grid
   text, so they cross the bridge (and survive `capture-pane` reseeds) on the
   normal text path. Only the store's `t=f`/`t=t` payload — a path on the
@@ -431,19 +502,30 @@ option.
   tmux last left the real cursor, unclipped, and be destroyed by the next
   redraw. Relaying means forwarding unchanged; a `\ePtmux;`-wrapped sixel
   keeps today's drop for exactly that reason.
-- **The gate is the local client's own `sixel` terminal-feature**
-  (`client_termfeatures`, read from the invoking client, never a bare
-  `display-message`) — deliberately tmux's own render condition, so lazytmux
-  and tmux can never disagree about which images paint. Anything narrower
-  relays images tmux only draws as a `SIXEL IMAGE (WxH)` placeholder (#319's
-  symptom). tmux enables `sixel` for no terminal by default, so
-  `programs.lazytmux.sixelTerminals` (a list of TERM strings, each getting a
-  `*` suffix) is what emits `set -as terminal-features '<term>*:sixel'`.
+- **The gate is the AND of every non-control client's own `sixel`
+  terminal-feature currently attached to the mirror session** — not, since
+  #574, a single sample of whichever client launched the bridge.
+  `client_termfeatures` is read continuously off `list-clients` (the
+  daemon's `watchLocalClient` watcher, nudged by `client-session-changed` and
+  `client-detached` session hooks) rather than once via a launch-time
+  `display-message`, and every `Proxy.Filter` plus the `LZTMUX_RELAY_GRAPHICS`
+  publish site load the *same* `graphics.RelaySource` cell, so the local drop
+  and the published value can never disagree. Still deliberately tmux's own
+  render condition underneath: anything narrower relays images tmux only
+  draws as a `SIXEL IMAGE (WxH)` placeholder (#319's symptom). tmux enables
+  `sixel` for no terminal by default, so `programs.lazytmux.sixelTerminals`
+  (a list of TERM strings, each getting a `*` suffix) is what emits `set -as
+  terminal-features '<term>*:sixel'`.
 - **The capability is published to the remote** as `LZTMUX_RELAY_GRAPHICS`
   (`sixel` or empty) in the bridged remote **session**'s environment via
-  control-mode `set-environment` — the same value that gates the local drop,
-  computed once, so the remote can never emit what we'd drop nor withhold
-  what we'd relay. Unset on teardown, but the dominant teardown path is
+  control-mode `set-environment` — the same cell that gates the local drop,
+  now **re-resolved continuously as the viewing client set changes** (#574)
+  rather than computed once at launch, so the remote can never emit what
+  we'd drop nor withhold what we'd relay. A capability change re-publishes
+  immediately with no re-dial and no attach; `repair()` also re-sends it
+  unconditionally on every reconnect, since the outage window is the one
+  stretch in which a capability change had no live connection to publish on.
+  Unset on teardown, but the dominant teardown path is
   SIGTERM, where the transport is already gone and the unset does not land —
   a stale value is then corrected only by the next bridge's unconditional
   write, and a direct attach to that remote session in the gap can read it.
@@ -597,6 +679,16 @@ started once and would otherwise hold a dead stream. An empty holder slot is a
 normal state: sends fail closed through `stampAll`'s existing `ok == false`
 path, which every caller already handles.
 
+- **Two callers replace the control client, and only one of them is a
+  reconnect.** `reattach` is involuntary: it runs off a connection drop,
+  closes the dead one *before* it dials, sets `@bridge_state disconnected`
+  for the outage, and tears the whole mirror down (`kill-session`) if it
+  cannot re-dial. `replaceConn` (#574) is voluntary: it runs off the
+  `prefix + I` carousel gesture wanting a fresher termname, dials, verifies
+  and primes the new client *before* touching the old one, never sets the
+  disconnected badge (the mirror is never actually down), and — unlike
+  `reattach` — abandons the attempt with the old connection still live and
+  published rather than risk the mirror over a nicety.
 - **Only a bare EOF is a drop.** `%exit` is the remote deliberately ending the
   client and is terminal, as is an emptied registry, a raised stop, and an
   exhausted retry budget. Measured: `detach-client` and `kill-server` both make
@@ -657,12 +749,19 @@ path, which every caller already handles.
   first dial so the badge appears within a status tick, cleared only after the
   reseed — a stale screen the user knows is stale is a paused mirror; one they
   don't is a lie. `tmux-statusline` renders it in red beside `@bridge_host`.
-- **The `ControlMaster` path is reused and must be unlinked first.** It is
-  derived from the daemon's pid, and the graphics fetcher captures it in a
-  closure, so it cannot move; but a transport killed without catching a signal
-  leaves the socket behind, and `ControlMaster=auto` meeting a stale socket
-  *disables multiplexing* rather than replacing it — silently, which is how
-  image fetches would go stale after the first reconnect.
+- **The `ControlMaster` path is per-dial, not pid-derived-and-fixed** (#574),
+  owned by the `child` that dialled it rather than captured in a closure: the
+  graphics fetcher and the paste upload both read it through
+  `transport.currentPath` — "the most recently started child that is still
+  open" — at call time, so a replacement's fresh path reaches them with no
+  capture to go stale. That retires the old hazard structurally rather than
+  working around it: `ControlMaster=auto` meeting a stale socket *disables
+  multiplexing* rather than replacing it, silently, but a fresh path per dial
+  has nothing stale to meet. `ControlPersist=no` still unlinks a path only on
+  a clean ssh exit, so `child.Close` unlinks its own child's path the instant
+  it runs rather than waiting on that, and `cleanup` at process exit is the
+  backstop for every path still tracked open — not one fixed path — for a
+  child that never went through `Close` at all.
 
 ### What the Remote Host Needs on PATH
 

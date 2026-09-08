@@ -34,7 +34,7 @@ const (
 //
 // No deadline beyond the retry budget above: it runs in the same unprotected
 // stretch as the list-windows round-trip immediately before it (past the
-// identity read's armIdentityDeadline, before repair's or watchResize's
+// identity read's armIdentityDeadline, before repair's or watchLocalClient's
 // timeouts exist), so a wedged default-shell on the remote blocks daemon
 // startup no differently than an already-accepted-but-silent remote already
 // can there.

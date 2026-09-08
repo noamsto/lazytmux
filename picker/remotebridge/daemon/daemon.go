@@ -76,10 +76,14 @@ type Config struct {
 	// IdentityTimeout bounds one attach's identity read; 0 takes
 	// defaultIdentityTimeout. See armIdentityDeadline.
 	IdentityTimeout time.Duration
-	// Relay is the local terminal's relayable-graphics capability (R5/R6):
-	// zero value means no relayable capability. Published to the remote
-	// session via relayenv.go and read by the graphics proxy's drop policy.
-	Relay graphics.Relay
+	// View is the daemon's live view-identity cell — see Viewing's doc in
+	// viewident.go for the full State model (Desired/Advertised/Relay).
+	// Desired is what every dial's argv reads; Relay is the single capability
+	// published to the remote via relayenv.go and read by the graphics
+	// proxy's drop policy (R4/R6). Seeded at startup by cmd/daemon/main.go,
+	// re-published on change by watchLocalClient below, and re-asserted on
+	// every reconnect by repair().
+	View *Viewing
 }
 
 // defaultIdentityTimeout bounds the identity read that leads every re-attach.
@@ -248,7 +252,7 @@ type helloWaiter func(n int) (map[string]net.Conn, error)
 const resizePollInterval = time.Second
 
 // resizeNudgeSuffix names the per-bridge file a session-scoped client-resized
-// hook touches (see registerResizeHook). Its mtime is the event watchResize
+// hook touches (see registerResizeHook). Its mtime is the event watchLocalClient
 // polls for instead of forking a query every tick.
 const resizeNudgeSuffix = ".resize"
 
@@ -262,25 +266,41 @@ const resizeNudgeSuffix = ".resize"
 // the unconditional poll this replaces — just far less often.
 const resizeFallbackInterval = 30 * time.Second
 
-// watchResize re-asserts every mirrored window's cap whenever the local client
-// area changes. A local terminal/client resize emits no control-stream event,
-// so the daemon polls — but cheaply: nudged reports the resize-hook file's
-// mtime via a plain os.Stat, and LocalArea's fork-per-call query only runs
-// once that mtime has advanced past the last one observed, collapsing the
-// steady-state cost from one fork/sec to one stat/sec (plus one fork every
-// resizeFallbackInterval as a safety net — see its doc). A tick whose stat
-// misses a touch is not lost: mtime persists on disk, so the next tick's stat
-// still sees it and converges — one poll cycle later than the hook itself.
+// watchLocalClient re-asserts every mirrored window's cap, and re-resolves the
+// viewing identity, whenever something about the local client changes — two
+// consequences of one nudge, which is why one watcher owns both (renamed from
+// watchResize when the second joined). A local terminal/client resize emits no
+// control-stream event, so the daemon polls — but cheaply: nudged reports the
+// resize-hook file's mtime via a plain os.Stat, and area's fork-per-call query
+// only runs once that mtime has advanced past the last one observed,
+// collapsing the steady-state cost from one fork/sec to one stat/sec (plus one
+// fork every resizeFallbackInterval as a safety net — see its doc). A tick
+// whose stat misses a touch is not lost: mtime persists on disk, so the next
+// tick's stat still sees it and converges — one poll cycle later than the hook
+// itself.
 //
-// On a change it re-pushes ConvergeCmd per mirrored window, which resizes the
-// remote and makes it emit %layout-change per window, driving the existing
+// On a size change it re-pushes ConvergeCmd per mirrored window, which resizes
+// the remote and makes it emit %layout-change per window, driving the existing
 // reconcile + re-seed (and the re-fit of the local window to the remote's new
 // size). send is the same mutex-guarded, no-op-when-closed sender the main
 // loop uses; this only injects fire-and-forget commands (their %begin/%end
 // acks are consumed harmlessly by the main loop's own nextLine read) — but it
 // reports whether the line was written, so a send onto a dead stream undoes
 // the converger's record rather than latching a size the remote never got.
-func watchResize(area func() (int, int), nudged func() (time.Time, bool), activeWin func() string, reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
+//
+// On a viewing-identity change (R10): resolveView is a function parameter,
+// like area and nudged, so this stays unit-testable with no tmux. A non-empty
+// resolution always moves Desired — every dial reads it fresh, so asserting it
+// costs nothing — and always refreshes the stored Relay (its raw diagnostic
+// included), but a RelayEnvCmd publish fires only when the resolved
+// CAPABILITY itself changed: a termname-only change, or no attached client at
+// all (R3 — the resolution is empty), publishes nothing. A failed send is
+// undone the same way the converger's is above: a write that never reached
+// the remote must not be recorded as current, or the next still-different
+// resolve would read as already-published and never retry. This watcher must
+// NEVER write Advertised — only a publish site does that (see Viewing's State
+// model).
+func watchLocalClient(area func() (int, int), nudged func() (time.Time, bool), activeWin func() string, resolveView func() (ViewIdentity, bool), view *Viewing, remoteSession string, reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
 	var lastNudge time.Time
 	lastCheck := time.Now()
 	for {
@@ -315,16 +335,31 @@ func watchResize(area func() (int, int), nudged func() (time.Time, bool), active
 					cv.unrecord(remoteID, w, h)
 				}
 			}
+			if id, ok := resolveView(); ok {
+				view.SetDesired(id.Term)
+				prev := view.Relay.Load()
+				view.Relay.Store(id.Relay)
+				if id.Relay.Sixel() != prev.Sixel() && !send(RelayEnvCmd(remoteSession, id.Relay.String())) {
+					view.Relay.Store(prev)
+				}
+			}
 		}
 	}
 }
 
-// resizeHookEvents are the two events that can grow the mirror session's
-// window: client-resized fires for an attached client's terminal resize,
+// resizeHookEvents are the events that can grow the mirror session's window,
+// or move the viewing identity a control client should advertise:
+// client-resized fires for an attached client's terminal resize,
 // window-resized for any window resize including a programmatic one against a
 // detached session (window-size is "latest", so the mirror stays detached
-// between launcher switches — #433's own reproduction resizes it that way).
-var resizeHookEvents = [...]string{"client-resized", "window-resized"}
+// between launcher switches — #433's own reproduction resizes it that way),
+// client-session-changed for a client switching onto or off this session
+// (measured redundant with client-attached on a fresh attach too, so that one
+// is left out), and client-detached for the last client leaving. Every one of
+// these now also runs watchLocalClient's area() fork and a re-resolve of the
+// viewing identity (R10) — cv.need and the Relay comparison dedupe the actual
+// sends, so a session switch or detach is cheap but no longer free.
+var resizeHookEvents = [...]string{"client-resized", "window-resized", "client-session-changed", "client-detached"}
 
 // localActiveWindow reports the mirror session's current window — the one the
 // local client is looking at — or "" when it can't be learned (detached
@@ -419,7 +454,7 @@ func newStream(w io.Writer) *stream { return &stream{w: bufio.NewWriter(w)} }
 // happened.
 //
 // One lock for the whole batch, so no foreign command from pumpInput, a ctl
-// request or watchResize lands between ours — correctness doesn't need it (the
+// request or watchLocalClient lands between ours — correctness doesn't need it (the
 // ordinals are assigned under the lock either way), but a contiguous batch keeps
 // a wire trace legible. The lock is never held across a read: this returns
 // before any reply is read, which is what keeps those three deadlock-free while
@@ -551,7 +586,7 @@ func Run(cfg Config) error {
 	// so a window created on the remote is born at the local client's size
 	// instead of tmux's 80-column control-client default (#449). It follows the
 	// identity read rather than leading it — nothing between the two creates a
-	// window. watchResize re-sends this slot only on a CHANGE, so a lost write
+	// window. watchLocalClient re-sends this slot only on a CHANGE, so a lost write
 	// here has nothing to correct it — every window created afterwards is born
 	// at the default — which is why the record is undone when the write did not
 	// happen (#481).
@@ -591,15 +626,14 @@ func Run(cfg Config) error {
 		notifyThemeMissing(cfg)
 	}
 
-	// Published once per Run() rather than repeated per attach: a reconnect is
-	// identity-verified against the same server (newSessionPin above), whose
-	// session environment table survives the outage, so the value written here
-	// is still there on repair. Sent unconditionally, empty value included — a
-	// prior bridge from a sixel-capable terminal can have left "sixel" in this
-	// same session's table, and skipping the write when this one has nothing to
-	// say would leave that stale value standing and make the remote emit
-	// graphics this proxy only drops.
-	send(RelayEnvCmd(cfg.RemoteSession, cfg.Relay.String()))
+	// Published here for the first attach; repair() (below) re-sends the same
+	// read on every later one, since a capability change during an outage has
+	// nobody else to tell the remote (R5). Sent unconditionally, empty value
+	// included — a prior bridge from a sixel-capable terminal can have left
+	// "sixel" in this same session's table, and skipping the write when this
+	// one has nothing to say would leave that stale value standing and make
+	// the remote emit graphics this proxy only drops.
+	send(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
 
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
@@ -632,6 +666,16 @@ func Run(cfg Config) error {
 		return waitHellos(c.pump.lines, router, c.async, c.st, connCh, n, helloTimeout)
 	}
 	cst := newCtlState()
+	// One query construction for the viewing identity, shared by the ctl
+	// handler's raise below, watchLocalClient's re-resolve (R10) and the
+	// startup seed in cmd/daemon/main.go, rather than building the
+	// list-clients argv once per reader.
+	resolveView := func() (ViewIdentity, bool) { return ResolveLocalViewIdentity(cfg.LocalTmuxOut, cfg.LocalSess) }
+	// Session-lifetime, like loopTick below and for the same reason: runConn
+	// selects on its channel, so a seam built per attach would leak one
+	// channel per reconnect and the loop could only watch the handle it can
+	// see.
+	replacer := newViewReplacer(cfg.View, resolveView, reconnect)
 	// The listener outlives a drop, so a keybind pressed mid-outage reaches
 	// here and gets nacked by the closed stream rather than hanging. The nack
 	// must carry a non-empty error or the keybind claims a gesture landed that
@@ -640,14 +684,7 @@ func Run(cfg Config) error {
 	// keeps lztmux-remote-open reusing this bridge instead of stacking a second
 	// daemon on the same socket.
 	go acceptConns(listener, connCh, func(argv []string) error {
-		req, err := cst.parseCtl(argv, cfg.RemoteSession)
-		if err != nil {
-			return err
-		}
-		if !cst.submit(req, sendCtl) {
-			return fmt.Errorf("bridge has no live connection to the remote")
-		}
-		return nil
+		return handleCtl(cst, replacer, argv, cfg.RemoteSession, sendCtl)
 	})
 
 	// @bridge_sock is the carrier a keybind reads to reach this daemon. Stamped
@@ -791,7 +828,7 @@ func Run(cfg Config) error {
 	}
 
 	// Re-converge the remote whenever the local client resizes. A local resize
-	// emits no control-stream event, so poll (cheaply — see watchResize);
+	// emits no control-stream event, so poll (cheaply — see watchLocalClient);
 	// teardown closes stopWatch and removes the hook registered above.
 	nudged := func() (time.Time, bool) {
 		fi, err := os.Stat(nudgePath)
@@ -800,10 +837,12 @@ func Run(cfg Config) error {
 		}
 		return fi.ModTime(), true
 	}
+	// The same tick drives the viewing-identity re-resolve (R10), through the
+	// resolveView built above.
 	ticker := time.NewTicker(resizePollInterval)
 	go func() {
 		defer ticker.Stop()
-		watchResize(cfg.LocalArea, nudged, func() string { return localActiveWindow(cfg) }, reg, cv, sendCtl, stopWatch, ticker.C)
+		watchLocalClient(cfg.LocalArea, nudged, func() string { return localActiveWindow(cfg) }, resolveView, cfg.View, cfg.RemoteSession, reg, cv, sendCtl, stopWatch, ticker.C)
 	}()
 
 	// Ship the remote's agent state into the local claude-status tree, and its
@@ -983,6 +1022,13 @@ func Run(cfg Config) error {
 			case <-loopTick.C:
 				// A remote window-option change produces no stream traffic at all,
 				// so falling through to the top is the only thing that polls it.
+			case <-replacer.C():
+				// The gesture that raised this deliberately sends no command of
+				// its own (R6), so nothing else would bring the loop back here
+				// before mainLoopTickInterval — every other ctl request rides
+				// its own reply block back. The replacement itself runs in the
+				// attach loop, the only place a round-trip may run.
+				return connReplace
 			}
 		}
 	}
@@ -993,16 +1039,16 @@ func Run(cfg Config) error {
 	// load-bearing throughout — see the design spec.
 	//
 	// Load-bearing, but not exclusive: reattach publishes the connection before
-	// calling this, so a watchResize tick can land in the same converger slots
+	// calling this, so a watchLocalClient tick can land in the same converger slots
 	// mid-pass. Tolerated — cv.reset can only discard a fact this pass re-asserts
 	// anyway — and nothing drains the pump until the first round-trip below,
 	// which follows the resume loop.
 	repair := func() bool {
 		// The converger caches what THIS control client told the remote, and the
 		// fresh one has told it nothing. Reset wholesale rather than invalidating
-		// a key: only setupWindow and watchResize write it, and neither runs for
+		// a key: only setupWindow and watchLocalClient write it, and neither runs for
 		// a window that survived the outage, so nothing else would re-assert
-		// those per-window caps. watchResize also records before it sends, so a
+		// those per-window caps. watchLocalClient also records before it sends, so a
 		// local resize during the outage left the converger believing a size the
 		// remote was never told — carried across, it is not merely stale but
 		// actively wrong, and every symptom is a silently 80-column mirror.
@@ -1071,6 +1117,13 @@ func Run(cfg Config) error {
 		// subscriptions, and re-subscribing re-reports every window and pane —
 		// so this doubles as the label/agent-state half of the repair.
 		subscribe()
+		// R5's second half: the remote session's environment table survives
+		// the outage (same server — see newSessionPin above), so the only gap
+		// this closes is a capability change that happened WHILE disconnected
+		// — watchLocalClient's own immediate publish had no live connection to
+		// send it on. Re-sent unconditionally, same as the one-shot at Run()'s
+		// own startup and for the same reason: a stale value must not stand.
+		send(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
 		return true
 	}
 
@@ -1079,12 +1132,41 @@ func Run(cfg Config) error {
 	// handle it can see.
 	loopTick = time.NewTicker(mainLoopTickInterval)
 
+attach:
 	for {
-		if runConn(c) != connDrop || !reconnect {
-			break
-		}
-		if c = reattach(cfg, router, hold, pin.identity, repair); c == nil {
-			break
+		switch runConn(c) {
+		case connReplace:
+			next, outcome := replaceConn(cfg, router, hold, pin.identity, reg, repair)
+			// After replaceConn returns, on every outcome: the Advertised
+			// write happens at its publish point, so clearing the flag any
+			// earlier would let a press in that window read the stale value
+			// and raise a second, redundant dial and repair().
+			replacer.done()
+			switch outcome {
+			case replaced:
+				c = next
+			case notReplaced:
+				// Nothing was closed — c is still the mirror's connection, so
+				// re-enter the loop on it and the gesture merely cost a dial.
+			case mirrorGone:
+				break attach
+			}
+		case connDrop:
+			// A raise that lost runConn's select to this drop is moot, and
+			// leaving it queued costs a redundant dial and reseed right after
+			// the outage's own — see viewReplacer.cancel.
+			replacer.cancel()
+			if !reconnect {
+				break attach
+			}
+			if c = reattach(cfg, router, hold, pin.identity, repair); c == nil {
+				break attach
+			}
+		default:
+			// connEnd: the remote ended this control client, or the mirror was
+			// left with no windows — either way there is nothing to re-dial
+			// into.
+			break attach
 		}
 	}
 	teardown()
@@ -1111,7 +1193,7 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 	// window's whole life, and the only client the mirrored session has is a
 	// control client, which no visibility test passes (#529).
 	send(PassthroughAllCmd(mw.remoteID))
-	// reg.add publishes the window before this runs, so watchResize can already
+	// reg.add publishes the window before this runs, so watchLocalClient can already
 	// have capped it — a cap tmux discarded, since the opt-out above had not
 	// landed yet, and which cv.need would then read as asserted. Changing a
 	// window's sizing eligibility invalidates any record made against it by

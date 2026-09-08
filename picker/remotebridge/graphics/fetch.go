@@ -40,8 +40,15 @@ const (
 // daemon's ssh ControlMaster socket, so no fetch pays a new handshake and image
 // bytes never share the control stream with live terminal output.
 type SSHFetcher struct {
-	Host     string
-	CtlSock  string
+	Host string
+	// CtlSock is read fresh inside fetch, once per ssh call — never cached at
+	// construction — because a Proxy (and the *SSHFetcher it holds) can be
+	// built before a transport replacement, and it must never keep dialling
+	// through a ControlPath a later replacement has already closed (R9). A
+	// nil func, like the old empty-string field, means "no -S": every caller
+	// that never wires a real transport (the --test-local/-ssh "" branch)
+	// leaves this nil rather than supplying func() string { return "" }.
+	CtlSock  func() string
 	CacheDir string
 	MaxBytes int64
 	// Run executes ssh; injected so tests never touch the network. It takes the
@@ -66,8 +73,10 @@ type fetchCall struct {
 	err   error
 }
 
-// NewSSHFetcher builds the production fetcher.
-func NewSSHFetcher(host, ctlSock, cacheDir string, maxBytes int64) *SSHFetcher {
+// NewSSHFetcher builds the production fetcher. ctlSock is an accessor rather
+// than a value so a proxy wired up before a transport replacement keeps
+// tracking the live ControlPath instead of a snapshot taken at construction.
+func NewSSHFetcher(host string, ctlSock func() string, cacheDir string, maxBytes int64) *SSHFetcher {
 	f := &SSHFetcher{Host: host, CtlSock: ctlSock, CacheDir: cacheDir, MaxBytes: maxBytes}
 	f.Run = func(ctx context.Context, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, "ssh", args...).Output()
@@ -167,8 +176,12 @@ func (f *SSHFetcher) fetch(ctx context.Context, remote, key string) (string, err
 	}
 
 	args := []string{}
-	if f.CtlSock != "" {
-		args = append(args, "-S", f.CtlSock)
+	sock := ""
+	if f.CtlSock != nil {
+		sock = f.CtlSock()
+	}
+	if sock != "" {
+		args = append(args, "-S", sock)
 	}
 	args = append(args, "-T", f.Host, "--", "sh", "-c", shQuote(remoteFetch), "_",
 		shQuote(remote), shQuote(key), strconv.FormatInt(f.MaxBytes, 10))

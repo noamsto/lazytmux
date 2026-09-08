@@ -18,7 +18,7 @@ func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
 	dir := t.TempDir()
 	var gotArgs []string
 	f := &SSHFetcher{
-		Host: "g6", CtlSock: "/run/x.sock", CacheDir: dir, MaxBytes: 1 << 20,
+		Host: "g6", CtlSock: func() string { return "/run/x.sock" }, CacheDir: dir, MaxBytes: 1 << 20,
 		Run: func(ctx context.Context, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte("1700000000 5\nHELLO"), nil
@@ -38,6 +38,65 @@ func TestFetcherWritesBytesToCacheAndReturnsLocalPath(t *testing.T) {
 	joined := strings.Join(gotArgs, " ")
 	if !strings.Contains(joined, "-S /run/x.sock") || !strings.Contains(joined, "g6") {
 		t.Fatalf("did not use the ControlMaster socket: %v", gotArgs)
+	}
+}
+
+// CtlSock is read fresh inside fetch on every call, never snapshotted at
+// construction: a Proxy (and the *SSHFetcher it holds) can be built before a
+// transport replacement completes, so a cached value could keep dialling
+// through a ControlPath a later replacement already closed (R9). An accessor
+// that goes back to returning "" must omit -S exactly like the old
+// empty-string field did.
+func TestFetcherReadsCtlSockAtCallTimeAndFallsBackWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	sock := "/run/first.sock"
+	var gotArgs []string
+	f := &SSHFetcher{
+		Host: "g6", CacheDir: dir, MaxBytes: 1 << 20,
+		CtlSock: func() string { return sock },
+		Run: func(ctx context.Context, args ...string) ([]byte, error) {
+			gotArgs = args
+			return []byte("1700000000 5\nHELLO"), nil
+		},
+	}
+	if _, err := f.Localize(context.Background(), "/tmp/a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(gotArgs, " "), "-S /run/first.sock") {
+		t.Fatalf("first fetch did not use the initial socket: %v", gotArgs)
+	}
+
+	sock = "/run/second.sock"
+	if _, err := f.Localize(context.Background(), "/tmp/b.png"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(gotArgs, " "), "-S /run/second.sock") {
+		t.Fatalf("second fetch did not follow the replaced socket: %v", gotArgs)
+	}
+
+	sock = ""
+	if _, err := f.Localize(context.Background(), "/tmp/c.png"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(gotArgs, " "), "-S ") {
+		t.Fatalf("an accessor returning \"\" must omit -S, got: %v", gotArgs)
+	}
+}
+
+// A nil CtlSock (every caller with no ssh transport at all) must behave
+// exactly like the old empty-string field: no -S added.
+func TestFetcherNilCtlSockOmitsDashS(t *testing.T) {
+	dir := t.TempDir()
+	var gotArgs []string
+	f := &SSHFetcher{Host: "g6", CacheDir: dir, MaxBytes: 1 << 20, Run: func(ctx context.Context, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("1700000000 5\nHELLO"), nil
+	}}
+	if _, err := f.Localize(context.Background(), "/tmp/a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(gotArgs, " "), "-S ") {
+		t.Fatalf("nil CtlSock must behave like the old empty string: %v", gotArgs)
 	}
 }
 

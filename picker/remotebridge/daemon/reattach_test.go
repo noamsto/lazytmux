@@ -64,6 +64,10 @@ func reattachCfg(dial func() (io.ReadWriteCloser, error), attempts int) Config {
 		RemoteHost:    "h",
 		RemoteSession: "A",
 		Dial:          dial,
+		// Every dial's argv reads View.Desired and every publish writes
+		// View.Advertised, so reattach needs the cell even where a test does
+		// not look at it.
+		View: &Viewing{},
 		Retry: &Backoff{
 			MaxAttempts: attempts,
 			Now:         time.Now,
@@ -110,6 +114,7 @@ func TestReattachBindsTheRouterOnlyAfterIdentityMatches(t *testing.T) {
 		"%output %1 LATE\n" +
 		"%begin 1 2 1\nok\n%end 1 2 1\n")
 	cfg := reattachCfg(func() (io.ReadWriteCloser, error) { return conn, nil }, 2)
+	cfg.View.SetDesired("foot")
 
 	c := reattach(cfg, router, &connHolder{}, mustIdentity(t, "A", "2151|1788283304|$1"), func() bool { return true })
 	if c == nil {
@@ -125,6 +130,12 @@ func TestReattachBindsTheRouterOnlyAfterIdentityMatches(t *testing.T) {
 	}
 	if got := sink.String(); got != "LATE" {
 		t.Errorf("sink got %q, want %q", got, "LATE")
+	}
+	// Publishing the connection publishes the term it was dialled with:
+	// Advertised left naming the old one has the next carousel press dial and
+	// repair a client that already carries what it wants (#574).
+	if got := cfg.View.Advertised(); got != "foot" {
+		t.Errorf("Advertised = %q after a reattach dialled with foot, want %q", got, "foot")
 	}
 }
 

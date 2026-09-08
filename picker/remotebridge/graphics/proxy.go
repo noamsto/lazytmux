@@ -30,6 +30,18 @@ const retainMaxIDs = 8
 // racing that flush. Filter may block there, bounded by timeout: holding one
 // pane's stream at a sequence boundary is what keeps a store ahead of the
 // placements that reference it (spec D4).
+//
+// The capability now follows the viewer (R4), which adds one shared read to
+// that confinement: src is an atomic cell other goroutines write, and Filter
+// loads it once per call, at the top, before Feed. rel is the pump-local
+// cache of that load, and every field derived from the capability — rel
+// itself and the scanner's raster hold — is written ONLY there, never from
+// outside the pump. A mid-hold flip is safe in both directions: scan.go's
+// SetRasterHold doc says the budget "decides when a partial raster is given
+// up on, never what happens to it", and holdLimit re-reads it on every Feed,
+// so narrowing it under a held partial sixel just makes the existing
+// overflow-discard path (already exercised at every value of n) fire sooner
+// — it cannot corrupt a sequence in flight.
 type Proxy struct {
 	sc        *Scanner
 	loc       Localizer
@@ -41,7 +53,9 @@ type Proxy struct {
 	retain map[string][]byte
 	order  []string // oldest-to-newest ids; drives Replay order and LRU eviction
 
-	rel Relay
+	src  *RelaySource // nil for a Proxy built via New; live capability for NewRelay (R4)
+	rel  Relay        // pump-local cache of src's last load; synced at the top of Filter
+	hold int64        // raster-hold budget applied while rel.Sixel() is true
 	// relayOnly is set only by NewRelay when it is handed no Localizer (R7).
 	// A full proxy placed on a same-machine transport would change four
 	// kitty behaviours no identity Localizer neutralises: t=s would start
@@ -72,26 +86,42 @@ func New(loc Localizer, logf func(format string, args ...any)) *Proxy {
 	}
 }
 
-// NewRelay creates a Proxy with the raster relay policy enabled: rel gates a
-// complete bare sixel (R1) and hold is the byte budget for holding one meant
-// for relay (R4), handed to the scanner via SetRasterHold. With relay off
-// (rel.Sixel() false) the scanner keeps its 64 KiB non-relay default — the
-// budget is spent only on a sequence this proxy intends to relay.
+// NewRelay creates a Proxy with the raster relay policy enabled, wired to src
+// — the one cell the local-client watcher and the ctl handler both write as
+// the viewer changes (R4). hold is the byte budget for holding a bare partial
+// sixel while src reports a sixel-capable viewer (R4), handed to the scanner
+// via SetRasterHold; Filter applies and withdraws it live as src's value
+// moves, so the scanner keeps its 64 KiB non-relay default whenever nothing
+// is watching for sixel.
 //
 // loc == nil means relay-only mode (R7); see the relayOnly field doc.
-func NewRelay(loc Localizer, logf func(format string, args ...any), rel Relay, hold int64) *Proxy {
+func NewRelay(loc Localizer, logf func(format string, args ...any), src *RelaySource, hold int64) *Proxy {
 	p := New(loc, logf)
-	p.rel = rel
+	p.src = src
+	p.hold = hold
 	p.relayOnly = loc == nil
-	if rel.Sixel() {
-		p.sc.SetRasterHold(int(hold))
-	}
 	return p
 }
 
 // Filter returns the bytes to forward to the renderer. An incomplete trailing
 // sequence is held until the next call.
 func (p *Proxy) Filter(data []byte) []byte {
+	// Load the live capability before Feed sees any bytes (R4/R11): a viewer
+	// switch must gate the very batch it lands in, not the next one. Only a
+	// change to Sixel() touches the scanner — narrowing or widening the hold
+	// on every call this cheaply would be pointless work on the hot path, and
+	// scan.go's holdLimit re-reads rasterHold on every Feed regardless of when
+	// it last changed.
+	cur := p.src.Load()
+	if cur.Sixel() != p.rel.Sixel() {
+		if cur.Sixel() {
+			p.sc.SetRasterHold(int(p.hold))
+		} else {
+			p.sc.SetRasterHold(0) // restores the scanner's non-relay default (maxPartial)
+		}
+	}
+	p.rel = cur
+
 	beforeMalformed := p.sc.Malformed
 	beforeInline := p.sc.InlineImage
 	chunks := p.sc.Feed(data)
