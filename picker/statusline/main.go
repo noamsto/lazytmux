@@ -265,10 +265,17 @@ func paneCmdDisplay(cmd string) string {
 // sideways (#260).
 //
 // tmux does the measuring, not Go: #{=/N/…:} truncates to N display cells and
-// appends a 1-cell ellipsis, and #{p-N:} left-pads to N cells with the same
+// appends a 1-cell ellipsis, and #{p-N:}/#{pN:} pad to N cells with the same
 // utf8_cstrwidth() that computes the right section's width in format-draw.c, so
 // the pad cannot disagree with tmux's own layout. 16 cells fits the longest
 // agent command in use (cursor-agent, 12) plus a 2-cell icon and a space.
+//
+// Measured empirically (the man page's prose is inverted from actual
+// behaviour): `#{p-N:...}` pads on the LEFT (blanks before the content),
+// `#{pN:...}` pads on the RIGHT (blanks after it) — do not "fix" this back to
+// match the man page. Either way the total rendered width is exactly
+// paneSlotPad cells, which is the only thing #260 cares about (see paneSlot),
+// so choosing a side never reintroduces that jitter.
 const (
 	paneSlotKeep = 16
 	// Derived, not independent: bumping keep without the pad would let the
@@ -295,7 +302,20 @@ func slotSafe(s string) string {
 // paneSlot renders the icon+command unit at exactly paneSlotPad cells. #{l:} is
 // required, not defensive: a modifier's argument is resolved as a format, so bare
 // literal text would vanish entirely.
-func paneSlot(icon, cmd string) string {
+//
+// adjacentToUsage flips which side of the box the reserved pad cells land on
+// (#575): left-pad (today's default) leaves a command-length-dependent dead
+// run between the usage segment and a short pane command, since usage is
+// emitted immediately before this slot in renderLine. Right-pad instead
+// pushes that slack to the command's right, so the command sits flush
+// against usage — safe per the width invariant above. Gated on usage being
+// non-empty: with no agent running there's nothing to be adjacent to, so
+// that render stays byte-identical to before this parameter existed.
+func paneSlot(icon, cmd string, adjacentToUsage bool) string {
+	if adjacentToUsage {
+		return fmt.Sprintf("#{p%d:#{=/%d/…:#{l:%s %s}}}",
+			paneSlotPad, paneSlotKeep, slotSafe(icon), slotSafe(cmd))
+	}
 	return fmt.Sprintf("#{p-%d:#{=/%d/…:#{l:%s %s}}}",
 		paneSlotPad, paneSlotKeep, slotSafe(icon), slotSafe(cmd))
 }
@@ -312,7 +332,7 @@ func renderLine(a args, claudeDir, theme string, prefixActive bool, now int64, u
 	b.WriteString("  #[fg=" + a.thmOverlay1 + "]" + claudeSegment(claudeDir, a.session, theme, now))
 	b.WriteString(" #[align=right]") // literal space mirrors `#(claude) #[align=right]` in the old format
 	b.WriteString(usage)
-	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + paneSlot(a.paneIcon, paneCmdDisplay(a.paneCmd)) + " ")
+	b.WriteString("#[fg=" + a.thmSubtext0 + "]" + paneSlot(a.paneIcon, paneCmdDisplay(a.paneCmd), usage != "") + " ")
 	return b.String()
 }
 
