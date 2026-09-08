@@ -50,7 +50,7 @@ func TestApplyPaneOpsSplitsOnTheRemoteAxis(t *testing.T) {
 	}
 
 	ops := paneOps{Append: []string{"%2"}}
-	waiter := func(int) (map[string]net.Conn, error) { return map[string]net.Conn{}, nil }
+	waiter := func([]string) (map[string]net.Conn, error) { return map[string]net.Conn{}, nil }
 	if err := applyPaneOps(cfg, w, ops, L, []string{"%1"}, []string{"%1", "%2"},
 		func(string) {}, NewRouter(), waiter, nil); err != nil {
 		t.Fatalf("applyPaneOps: %v", err)
@@ -73,13 +73,17 @@ func TestApplyPaneOpsSplitsOnTheRemoteAxis(t *testing.T) {
 	if !strings.HasPrefix(splitCmd, "split-window -v ") {
 		t.Errorf("split = %q, want the remote's -v axis", splitCmd)
 	}
-	for _, want := range []string{
-		"LZTMUX_RENDER_PANE=%2",
-		"LZTMUX_RENDER_SOCK=/run/sock",
-		"/nix/store/x-renderer/bin/renderer",
-	} {
-		if !strings.Contains(splitCmd, want) {
-			t.Errorf("split %q missing %q", splitCmd, want)
-		}
+	if strings.Contains(splitCmd, "LZTMUX_RENDER") || strings.Contains(splitCmd, " -e ") {
+		t.Errorf("split %q still wires the renderer by env", splitCmd)
+	}
+	bin := "/nix/store/x-renderer/bin/renderer"
+	i := strings.Index(splitCmd, bin)
+	if i < 0 {
+		t.Fatalf("split %q missing renderer binary", splitCmd)
+	}
+	got := strings.Fields(splitCmd[i:])
+	want := []string{bin, "/run/sock", "%2"}
+	if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("renderer argv = %v, want %v after the binary", got, want)
 	}
 }

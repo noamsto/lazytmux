@@ -47,7 +47,11 @@ type mirrorWindow struct {
 	// against an unchanged remote. Cleared whenever a shape lands.
 	shapeFailedFor string
 	layout         string // last tiled layout string applied locally, "" = none yet
-	conns          map[string]net.Conn
+	// appliedZoom is the zoom flag last successfully asserted on the mirror
+	// window via if -F. Compared against readLayout's remote flag for dedup;
+	// zero value is unzoomed.
+	appliedZoom bool
+	conns       map[string]net.Conn
 	// spawned reports whether the last setupWindow reached its spawnRenderer
 	// loop — the point after which a kept pane's old renderer is dead
 	// (respawn-pane -k) and its old conn must not be merged back on failure.

@@ -247,6 +247,7 @@ func TestApplyLayoutShortCircuitsWhenTheFitAlreadyMatched(t *testing.T) {
 func TestApplyLayoutDropsFloatsWhenTheCellsDisagree(t *testing.T) {
 	f := &layoutTmux{windowLayout: localShortLayout}
 	w := mirrorWithFloat()
+	w.appliedZoom = true
 	L := mustLayout(t, tiledFloatLayout)
 
 	if !applyLayout(f.config(), w, L, NewRouter()) {
@@ -265,6 +266,9 @@ func TestApplyLayoutDropsFloatsWhenTheCellsDisagree(t *testing.T) {
 	}
 	if !w.floatsDropped {
 		t.Error("floatsDropped = false; a second applyLayout in the same pass would respawn the renderers again")
+	}
+	if w.appliedZoom {
+		t.Error("appliedZoom still true after select-layout, want false")
 	}
 }
 
@@ -480,7 +484,7 @@ func TestReconcileLayoutResetPathSkipsTheTail(t *testing.T) {
 	// The tiled pane hellos, the float does not: setupWindow's own
 	// reconcileFloats then adds and immediately drops it.
 	var helloCalls int
-	waiter := func(int) (map[string]net.Conn, error) {
+	waiter := func([]string) (map[string]net.Conn, error) {
 		helloCalls++
 		if helloCalls == 1 {
 			return map[string]net.Conn{"%0": conn}, nil
@@ -663,7 +667,7 @@ func TestReconcileLayoutReAddsFloatsAfterAFailedPaneOp(t *testing.T) {
 	// The appended pane's renderer never connects, which is what fails
 	// applyPaneOps after the drop; the float's own wait then succeeds.
 	calls := 0
-	waiter := func(int) (map[string]net.Conn, error) {
+	waiter := func([]string) (map[string]net.Conn, error) {
 		calls++
 		if calls == 1 {
 			return nil, errors.New("renderer never connected")
@@ -704,7 +708,7 @@ func TestReconcileLayoutDoesNotReAddFloatsIntoALostWindow(t *testing.T) {
 	rt, _ := scriptedRT("%begin 1 1 1\n" + tiledFloatLayout + " %0 0\n%end 1 1 1\n")
 
 	if retire := reconcileLayout(f.config(), w, func(string) {}, NewRouter(),
-		func(int) (map[string]net.Conn, error) { return nil, errors.New("renderer never connected") },
+		func([]string) (map[string]net.Conn, error) { return nil, errors.New("renderer never connected") },
 		newCtlState(), newConverger(), rt); !retire {
 		t.Fatal("reconcileLayout retire = false, want true: the local window is gone")
 	}

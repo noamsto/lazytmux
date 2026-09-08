@@ -83,9 +83,10 @@ func TestMirrorPaneRowsReportsAnUnreadableListing(t *testing.T) {
 	}
 }
 
-// With remain-on-exit on the mirror window, a renderer's exit leaves a dead
+// With remain-on-exit on the mirror window, a renderer crash/exit leaves a dead
 // pane instead of closing the window (and, for a single-pane mirror, the
-// session). Nothing else can find that corpse — a dead pane is still a pane to
+// session). A user Respawn reconnects via argv and does not produce this
+// corpse. Nothing else can find a crash corpse — a dead pane is still a pane to
 // list-panes, so the pane diff reads the local set as matching the remote's —
 // so this pass is what notices.
 func TestHealDeadRenderersRebuildsAMirrorHoldingACorpse(t *testing.T) {

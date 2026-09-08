@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"io"
 	"net"
 	"reflect"
 	"strings"
@@ -86,9 +87,9 @@ func TestSetupWindowResizesEachPaneFromItsOwnLayoutCell(t *testing.T) {
 	connCh <- helloConn{paneID: "%0", conn: conn0}
 	connCh <- helloConn{paneID: "%2", conn: conn2}
 	connCh <- helloConn{paneID: "%9", conn: stray}
-	waiter := func(n int) (map[string]net.Conn, error) {
+	waiter := func(want []string) (map[string]net.Conn, error) {
 		out := map[string]net.Conn{}
-		for i := 0; i < n; i++ {
+		for range want {
 			hc := <-connCh
 			out[hc.paneID] = hc.conn
 		}
@@ -252,9 +253,9 @@ func TestSetupWindowFailsWhenSolePaneSeedFails(t *testing.T) {
 
 	connCh := make(chan helloConn, 1)
 	connCh <- helloConn{paneID: "%0", conn: conn}
-	waiter := func(n int) (map[string]net.Conn, error) {
+	waiter := func(want []string) (map[string]net.Conn, error) {
 		out := map[string]net.Conn{}
-		for i := 0; i < n; i++ {
+		for range want {
 			hc := <-connCh
 			out[hc.paneID] = hc.conn
 		}
@@ -278,5 +279,58 @@ func TestSetupWindowFailsWhenSolePaneSeedFails(t *testing.T) {
 	err := setupWindow(cfg, func(string) {}, NewRouter(), waiter, newCtlState(), mw, newConverger(), setupWindowRT(script))
 	if err == nil || !strings.Contains(err.Error(), "sole pane") {
 		t.Fatalf("setupWindow err = %v, want a sole-pane seed failure", err)
+	}
+}
+
+// PlanWindow ends in select-layout, which unzooms; setupWindow must assert the
+// remote zoom flag after refreshLocalPanes so appliedZoom matches reality.
+func TestSetupWindowAssertsRemoteZoom(t *testing.T) {
+	const layout = "bd67,190x45,0,0,3"
+
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+	go func() { io.Copy(io.Discard, peer) }()
+
+	connCh := make(chan helloConn, 1)
+	connCh <- helloConn{paneID: "%3", conn: conn}
+	waiter := func(want []string) (map[string]net.Conn, error) {
+		out := map[string]net.Conn{}
+		for range want {
+			hc := <-connCh
+			out[hc.paneID] = hc.conn
+		}
+		return out, nil
+	}
+
+	script := strings.Join([]string{
+		"%begin 1 1 1", "%end 1 1 1", // ConvergeCmd
+		"%begin 1 2 1", layout + " %3 1", "%end 1 2 1", // readLayout: zoomed, pane %3 active
+		"%begin 1 3 1", "0 0 0 0", "%end 1 3 1", // PaneSeeds(%3): cursor
+		"%begin 1 4 1", "SEED-3", "%end 1 4 1", // PaneSeeds(%3): capture
+	}, "\n") + "\n"
+
+	var zoomCmd []string
+	cfg := Config{
+		LocalArea: func() (int, int) { return 190, 45 },
+		LocalTmux: func(args ...string) error {
+			if len(args) > 0 && args[0] == "if" {
+				zoomCmd = append([]string(nil), args...)
+			}
+			return nil
+		},
+		LocalTmuxOut: func(...string) (string, error) { return "%l3 0\n", nil },
+	}
+	mw := newRegistry().add("@1", "@101")
+	mw.appliedZoom = true
+
+	if err := setupWindow(cfg, func(string) {}, NewRouter(), waiter, newCtlState(), mw, newConverger(), setupWindowRT(script)); err != nil {
+		t.Fatalf("setupWindow: %v", err)
+	}
+	if target, ok := parseZoomAssertTarget(zoomCmd); !ok || target != "%l3" {
+		t.Errorf("zoom assert = %v, want if -F zoom-on targeting %%l3", zoomCmd)
+	}
+	if !mw.appliedZoom {
+		t.Error("appliedZoom = false after remote zoom assert, want true")
 	}
 }
