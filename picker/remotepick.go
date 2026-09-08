@@ -116,7 +116,9 @@ func shellQuote(s string) string {
 // tmux-float-refit can reassert them when the window resizes (#371) — tmux
 // itself bakes them into cells at creation and never revisits them.
 // @pane_keys_raw keeps C-hjkl and M-l for the remote picker's own keymap, which
-// the root key table would otherwise eat (tmux-smart-nav).
+// the root key table would otherwise eat (tmux-smart-nav). remain-on-exit off is
+// mkFloat's other stamp: a mirror window sets it on (#547) and this float is
+// opened from inside one, which left its pane dead on screen (#587).
 func remotePickNewPaneArgs(bin, host string) []string {
 	return []string{
 		"new-pane",
@@ -128,6 +130,8 @@ func remotePickNewPaneArgs(bin, host string) []string {
 		"set", "-p", "@float_geom", "90% 85% 5% 8%",
 		";",
 		"set", "-p", "@pane_keys_raw", "1",
+		";",
+		"set", "-p", "remain-on-exit", "off",
 	}
 }
 

@@ -1186,7 +1186,12 @@ func (m tuiModel) restoreCursor(keep string) tuiModel {
 		m.cursor = m.firstSelectable(0)
 		return m
 	}
-	if m.cursor >= len(m.visible) {
+	// No row to re-find, but the rebuild can still have moved a header under a
+	// cursor resting on empty space: the Remote section arrives from an ssh probe
+	// seconds after the query is typed, so a query matching only a remote session
+	// selects nothing, stays at 0, and finds the Remote header there (#588).
+	// refreshMsg and zoxideMsg clamp on selectability for the same reason.
+	if m.cursor >= len(m.visible) || !m.isSelectable(m.visible[m.cursor]) {
 		m.cursor = m.firstSelectable(0)
 	}
 	return m

@@ -419,3 +419,22 @@ func TestPaneSlotPadDirectionLiveTmux(t *testing.T) {
 		}
 	}
 }
+
+// In a mirror the local pane runs the bridge renderer, so the command beside
+// the pane icon must come from @bridge_proc — the icon itself already does, and
+// the two disagreeing is what #590 looked like.
+func TestPaneCmdDisplayPrefersBridgeProc(t *testing.T) {
+	for _, tc := range []struct {
+		name, cmd, bridgeProc, want string
+	}{
+		{"no bridge", ".nvim-wrapped", "", "nvim"},
+		{"mirror", "lztmux-remote-bridge-renderer", "claude", "claude"},
+		{"mirror unwraps too", "lztmux-remote-bridge-renderer", ".nvim-wrapped", "nvim"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paneCmdDisplay(tc.cmd, tc.bridgeProc); got != tc.want {
+				t.Errorf("paneCmdDisplay(%q, %q) = %q, want %q", tc.cmd, tc.bridgeProc, got, tc.want)
+			}
+		})
+	}
+}

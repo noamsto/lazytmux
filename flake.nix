@@ -464,6 +464,14 @@
                 exit 1
               fi
 
+              # And the remain-on-exit pin (#587), asserted for the same reason:
+              # a bind that forgets it looks right until it is pressed inside a
+              # mirror window, whose own remain-on-exit the pane inherits.
+              if grep -E '^bind(-key)? .*new-pane' joined | grep -v 'remain-on-exit off'; then
+                echo "float bind above does not pin remain-on-exit off — its pane will linger dead inside a mirror window" >&2
+                exit 1
+              fi
+
               grep -E 'set-hook -g window-resized .*/nix/store/[^ ]*/bin/tmux-float-refit #\{q:window_id\}' "$CONF"
 
               # ORDER, as for the alert hooks above: the clear must precede the
