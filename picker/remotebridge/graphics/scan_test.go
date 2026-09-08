@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
-	"time"
 )
 
 const (
@@ -732,42 +731,37 @@ func TestFeedHoldIsAmortised(t *testing.T) {
 // loaded box: 4x the input costs ~4x linear and ~16x quadratic, so 8x separates
 // them with room to spare. Each figure is the best of three runs, so a
 // scheduling spike lengthens a run instead of failing the test.
+
 func TestFeedHoldScanIsLinear(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing test")
-	}
-	feed := func(size int) time.Duration {
-		const piece = 4096
-		sixel := append([]byte("\x1bPq"), bytes.Repeat([]byte("~"), size)...)
-		sixel = append(sixel, st...)
-		s := NewScanner()
-		s.SetRasterHold(32 << 20)
-		start := time.Now()
-		var got []Chunk
-		for i := 0; i < len(sixel); i += piece {
-			got = append(got, s.Feed(sixel[i:min(i+piece, len(sixel))])...)
+	const piece = 4096
+	body := bytes.Repeat([]byte("~"), 4<<20)
+	sixel := append([]byte("\x1bPq"), body...)
+	sixel = append(sixel, st...)
+
+	s := NewScanner()
+	s.SetRasterHold(32 << 20)
+	var got []Chunk
+	searched := 0
+	for i := 0; i < len(sixel); i += piece {
+		resume := s.rasterScanned
+		got = append(got, s.Feed(sixel[i:min(i+piece, len(sixel))])...)
+		if len(s.held) == 0 {
+			continue // the raster completed on this Feed; nothing is carried
 		}
-		elapsed := time.Since(start)
-		if chunkKinds(got) != "R" || len(got[0].Raster) != len(sixel) {
-			t.Fatalf("kinds = %q, want one complete R", chunkKinds(got))
-		}
-		return elapsed
+		// The ST search runs from the carried resume to the end of the hold, so
+		// this is exactly the bytes this Feed examined.
+		searched += len(s.held) - resume
 	}
-	best := func(size int) time.Duration {
-		d := feed(size)
-		for i := 0; i < 2; i++ {
-			if e := feed(size); e < d {
-				d = e
-			}
-		}
-		return d
+	if chunkKinds(got) != "R" || len(got[0].Raster) != len(sixel) {
+		t.Fatalf("kinds = %q, want one complete R", chunkKinds(got))
 	}
-	small, large := best(4<<20), best(16<<20)
-	if small <= 0 {
-		t.Skip("clock too coarse to compare")
-	}
-	if ratio := float64(large) / float64(small); ratio > 8 {
-		t.Fatalf("4x the input cost %.1fx the time (%v vs %v) — the hold is re-scanning", ratio, large, small)
+	// Linear: every byte is searched once, plus the len(st)-1 overlap each Feed
+	// re-examines so a terminator split across the boundary is still found. A
+	// hold re-scanned from the start instead would search ~n^2/piece — for this
+	// input over 500x the bound.
+	if limit := 2 * len(sixel); searched > limit {
+		t.Fatalf("searched %d bytes for a %d byte raster (limit %d) — the hold is re-scanning",
+			searched, len(sixel), limit)
 	}
 }
 
