@@ -30,7 +30,7 @@ func testStream() *stream { return newStream(io.Discard) }
 
 // noHellos is the waiter for the mirror paths that append no pane, and so never
 // reach a hello wait. Calling it at all is the bug it would expose.
-func noHellos(int) (map[string]net.Conn, error) { return nil, nil }
+func noHellos([]string) (map[string]net.Conn, error) { return nil, nil }
 
 // errWriter stands in for a half-closed ssh stdin — io.Discard never errors, so
 // the flush guard has nothing to trip on without it.
@@ -490,7 +490,7 @@ func TestWaitHellosTimesOutWhenRenderersDontConnect(t *testing.T) {
 	pump := startCtlPump(controlmode.NewReader(pr))
 
 	start := time.Now()
-	_, err = waitHellos(pump.lines, NewRouter(), &asyncQueue{}, testStream(), connCh, 1, 100*time.Millisecond)
+	_, err = waitHellos(pump.lines, NewRouter(), &asyncQueue{}, testStream(), connCh, []string{"%1"}, 100*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {

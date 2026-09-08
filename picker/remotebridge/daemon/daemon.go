@@ -186,14 +186,13 @@ func parseWindowID(s string) (string, error) {
 // at 0); the pane-base-index override keeps that true regardless of the host's
 // global (real hosts set 1).
 //
-// remain-on-exit goes on because a renderer's exit must not be structural. A
-// renderer wired by pane environment (spawnRenderer's -e) dies at dial the
-// moment anything re-runs its command without that environment — which a bare
-// respawn-pane does, and four default binds offer it (prefix + < and >, and
-// both right-click pane menus) — and with the host's global off the pane then
+// remain-on-exit goes on because a renderer's exit must not be structural.
+// argv covers a user Respawn: spawnRenderer passes sock and remote pane id
+// as renderer arguments, so a bare respawn-pane reconnects. A genuine crash
+// still exits, and with the host's global remain-on-exit off the pane then
 // closes, taking the window and, for a single-pane mirror, the whole mirror
 // session with it (#547). A dead pane instead of a lost session is the
-// difference; sweepDeadRenderers repairs it from there.
+// difference; healDeadRenderers repairs it from there.
 func stampMirrorWindow(cfg Config, localWin, remoteName string) {
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "@bridge_win", "1")
 	cfg.LocalTmux("set-option", "-w", "-t", localWin, "pane-base-index", "0")
@@ -236,11 +235,11 @@ type helloConn struct {
 	conn   net.Conn
 }
 
-// helloWaiter collects the n renderer connections a caller just spawned. Every
-// mirror path takes one of these rather than the connection channel itself: the
-// wait has to keep the control stream moving (see waitHellos), and the pump it
-// drains to do that is Run's alone.
-type helloWaiter func(n int) (map[string]net.Conn, error)
+// helloWaiter collects a renderer connection for each remote pane id the
+// caller just spawned. Every mirror path takes one of these rather than the
+// connection channel itself: the wait has to keep the control stream moving
+// (see waitHellos), and the pump it drains to do that is Run's alone.
+type helloWaiter func(want []string) (map[string]net.Conn, error)
 
 // resizePollInterval is how often the resize watcher re-checks the nudge
 // file's mtime (an os.Stat, not a fork). It only forks LocalArea's
@@ -621,16 +620,6 @@ func Run(cfg Config) error {
 		fmt.Fprintf(os.Stderr, "daemon: write pidfile %s: %v\n", pidFile, err)
 	}
 	connCh := make(chan helloConn, 64)
-	// The one waiter every mirror path gets. connCh goes no further than this
-	// closure: draining the stream while waiting needs the pump, and only Run
-	// has it.
-	waitHellosFn := func(n int) (map[string]net.Conn, error) {
-		c := hold.get()
-		if c == nil {
-			return nil, fmt.Errorf("daemon: hello wait with no control connection")
-		}
-		return waitHellos(c.pump.lines, router, c.async, c.st, connCh, n, helloTimeout)
-	}
 	cst := newCtlState()
 	// The listener outlives a drop, so a keybind pressed mid-outage reaches
 	// here and gets nacked by the closed stream rather than hanging. The nack
@@ -667,6 +656,28 @@ func Run(cfg Config) error {
 	clearBridgeState(cfg)
 
 	reg := newRegistry()
+	// The one waiter every mirror path gets. connCh goes no further than this
+	// closure: draining the stream while waiting needs the pump, and only Run
+	// has it. unexpected hellos are reconnects that arrived mid-wait (a
+	// respawn whose pane is not in this spawn set); collect them here and
+	// rebind after waitHellos returns. rebindRenderer seeds via a round-trip,
+	// and waitHellos is already the goroutine reading that stream.
+	waitHellosFn := func(want []string) (map[string]net.Conn, error) {
+		c := hold.get()
+		if c == nil {
+			return nil, fmt.Errorf("daemon: hello wait with no control connection")
+		}
+		var extras []helloConn
+		out, err := waitHellos(c.pump.lines, router, c.async, c.st, connCh, want, helloTimeout, func(hc helloConn) {
+			extras = append(extras, hc)
+		})
+		// Adopt extras even when the wait failed: closeConns already dropped
+		// the want-set, and these panes reconnect independently of it.
+		for _, hc := range extras {
+			rebindRenderer(cfg, hc, send, router, reg, rt)
+		}
+		return out, err
+	}
 	// nudgePath is the file registerResizeHook's client-resized hook touches;
 	// removed here so a stale touch from a prior daemon on this same socket
 	// path can't be mistaken for a resize before the hook ever fires again.
@@ -980,6 +991,10 @@ func Run(cfg Config) error {
 				if dispatch(l) {
 					return connEnd
 				}
+			case hc := <-connCh:
+				// waitHellos is not running here; a hello is a renderer that
+				// redialed (bare respawn-pane keeps argv and reconnects).
+				rebindRenderer(cfg, hc, send, router, reg, rt)
 			case <-loopTick.C:
 				// A remote window-option change produces no stream traffic at all,
 				// so falling through to the top is the only thing that polls it.
@@ -1161,10 +1176,10 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		}
 	}
 
-	// Collect exactly len(remotePanes) Hellos (any order) before seeding —
+	// Collect a hello for every remote pane (any order) before seeding —
 	// seeding is sequential over the single control stream, so all renderers
 	// must be connected (and hence writable) first.
-	byRemote, err := waitHellos(len(mw.remotePanes))
+	byRemote, err := waitHellos(mw.remotePanes)
 	if err != nil {
 		return err
 	}
@@ -1597,22 +1612,22 @@ func readLayout(rt roundTrip, target string) (l0 controlmode.Layout, active stri
 // with the pane through select-layout and swap-pane (verified), so this is the
 // only place it needs writing.
 func spawnRenderer(cfg Config, target, remotePane string) error {
-	if err := cfg.LocalTmux(append([]string{"respawn-pane", "-k"},
-		append(rendererSpawnArgs(cfg, remotePane), "-t", target, cfg.RendererBin)...)...); err != nil {
+	if err := cfg.LocalTmux(append([]string{"respawn-pane", "-k", "-t", target, "--"},
+		rendererSpawnArgs(cfg, remotePane)...)...); err != nil {
 		return err
 	}
 	markRendererPane(cfg, target, remotePane)
 	return nil
 }
 
-// rendererSpawnArgs is the environment a renderer pane needs, shared by
+// rendererSpawnArgs is the command a renderer pane runs, shared by
 // respawn-pane (an existing pane) and split-window (a pane created to run it
 // directly, which is how a mirrored split avoids painting a shell first).
+// Sock paths are daemon-pid-derived absolute paths and remote pane ids are
+// %N, so neither is a tmux flag today; callers still pass -- before this
+// slice so a future path cannot become one.
 func rendererSpawnArgs(cfg Config, remotePane string) []string {
-	return []string{
-		"-e", "LZTMUX_RENDER_SOCK=" + cfg.SockPath,
-		"-e", "LZTMUX_RENDER_PANE=" + remotePane,
-	}
+	return []string{cfg.RendererBin, cfg.SockPath, remotePane}
 }
 
 // markRendererPane stamps the reverse mapping a keybind reads to reach the
@@ -1676,44 +1691,112 @@ func acceptConns(l net.Listener, out chan<- helloConn, onCtl func(argv []string)
 	}
 }
 
-// waitHellos reads exactly n renderer connections off connCh, keyed by the
-// remote pane id each announced, while keeping the control stream draining:
-// every mirror path that waits here runs on the goroutine that owns the stream,
-// so a wait that only watched connCh would let the remote's output back up for
-// its whole duration and tmux would %pause every busy pane behind it (#434).
+// waitHellos reads renderer connections off connCh until every id in want has
+// announced, keyed by the remote pane id each hello carries, while keeping the
+// control stream draining: every mirror path that waits here runs on the
+// goroutine that owns the stream, so a wait that only watched connCh would let
+// the remote's output back up for its whole duration and tmux would %pause
+// every busy pane behind it (#434).
 //
 // Bounded by timeout so a renderer that never dials back can't wedge the caller
 // forever (see helloTimeout); on timeout, or once the stream ends, any
 // connections already collected are closed here (nothing else owns them yet)
 // and an error is returned.
 //
-// got counts connections received rather than len(out), since two hellos naming
-// the same pane collapse to one entry.
-func waitHellos(lines <-chan controlmode.Line, router *Router, async *asyncQueue, st *stream, connCh <-chan helloConn, n int, timeout time.Duration) (map[string]net.Conn, error) {
+// A second hello for an id already in out replaces the previous conn (closed)
+// and does not fill an extra slot. A hello whose pane is not in want is handed
+// to unexpected — a reconnect mid-wait — never counted; nil unexpected closes
+// it.
+func waitHellos(lines <-chan controlmode.Line, router *Router, async *asyncQueue, st *stream, connCh <-chan helloConn, want []string, timeout time.Duration, unexpected func(helloConn)) (map[string]net.Conn, error) {
+	wanted := make(map[string]struct{}, len(want))
+	for _, id := range want {
+		wanted[id] = struct{}{}
+	}
 	out := map[string]net.Conn{}
 	deadline := time.After(timeout)
-	for got := 0; got < n; {
+	for len(out) < len(wanted) {
 		select {
 		case hc, ok := <-connCh:
 			if !ok {
 				closeConns(out)
-				return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", got, n)
+				return nil, fmt.Errorf("daemon: renderer socket closed after %d/%d connections", len(out), len(wanted))
+			}
+			if _, ok := wanted[hc.paneID]; !ok {
+				if unexpected != nil {
+					unexpected(hc)
+				} else {
+					hc.conn.Close()
+				}
+				continue
+			}
+			if prev := out[hc.paneID]; prev != nil {
+				prev.Close()
 			}
 			out[hc.paneID] = hc.conn
-			got++
 		case l, ok := <-lines:
 			if !ok {
 				closeConns(out)
-				return nil, fmt.Errorf("daemon: control stream ended after %d/%d connections", got, n)
+				return nil, fmt.Errorf("daemon: control stream ended after %d/%d connections", len(out), len(wanted))
 			}
 			claimSeq(l, st)
 			handleAsideLine(l, router, async)
 		case <-deadline:
 			closeConns(out)
-			return nil, fmt.Errorf("daemon: timed out after %s waiting for renderers (%d/%d connected)", timeout, got, n)
+			return nil, fmt.Errorf("daemon: timed out after %s waiting for renderers (%d/%d connected)", timeout, len(out), len(wanted))
 		}
 	}
 	return out, nil
+}
+
+// rebindRenderer adopts a reconnect hello: a bare respawn-pane re-execs the
+// renderer argv and redials, and nothing else would replace the dead sink
+// (the pane is live, so heal does not fire). Called from the main loop when
+// waitHellos is not running, and from waitHellosFn after the wait returns
+// for extras collected mid-wait — never from inside waitHellos, which would
+// nest a seed round-trip on the stream reader.
+func rebindRenderer(cfg Config, hc helloConn, send func(string), router *Router, reg *registry, rt roundTrip) {
+	var mw *mirrorWindow
+	for _, w := range reg.all() {
+		for _, id := range w.allRemotePanes() {
+			if id == hc.paneID {
+				mw = w
+				break
+			}
+		}
+		if mw != nil {
+			break
+		}
+	}
+	if mw == nil {
+		hc.conn.Close()
+		return
+	}
+	if old := mw.conns[hc.paneID]; old != nil {
+		old.Close()
+	}
+	mw.conns[hc.paneID] = hc.conn
+	router.Unregister(hc.paneID)
+	seedRenderer(rt, router, hc.conn, hc.paneID, rendererDims(mw, hc.paneID), cfg.graphicsFor(hc.paneID))
+	go pumpInput(hc.conn, hc.paneID, send, cfg.paster())
+}
+
+func rendererDims(mw *mirrorWindow, paneID string) controlmode.PaneCell {
+	if g, ok := mw.floatGeom[paneID]; ok {
+		return g
+	}
+	if mw.layout == "" {
+		return controlmode.PaneCell{}
+	}
+	L, err := controlmode.ParseLayout(mw.layout)
+	if err != nil {
+		return controlmode.PaneCell{}
+	}
+	for _, c := range L.Panes {
+		if c.ID == paneID {
+			return c
+		}
+	}
+	return controlmode.PaneCell{}
 }
 
 func closeConns(conns map[string]net.Conn) {

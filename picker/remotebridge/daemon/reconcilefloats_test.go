@@ -51,7 +51,11 @@ func (f *floatTmux) out(argv ...string) (string, error) {
 }
 
 func (f *floatTmux) config() Config {
-	return Config{RendererBin: "/nix/store/renderer", LocalTmux: f.run, LocalTmuxOut: f.out}
+	return Config{
+		SockPath:    "/run/sock",
+		RendererBin: "/nix/store/renderer",
+		LocalTmux:   f.run, LocalTmuxOut: f.out,
+	}
 }
 
 // find returns the first recorded argv starting with verb followed by prefix,
@@ -91,7 +95,7 @@ func (f *floatTmux) at(verb, target string) int {
 // hellos is the waiter for a test that adds floats: it hands back a canned
 // pane->conn map rather than waiting on a socket.
 func hellos(byPane map[string]net.Conn) helloWaiter {
-	return func(int) (map[string]net.Conn, error) { return byPane, nil }
+	return func([]string) (map[string]net.Conn, error) { return byPane, nil }
 }
 
 // deadRT is the round-trip for a path that must not seed: every reply reads as
@@ -138,8 +142,16 @@ func TestReconcileFloatsAddMirrorsARemoteFloat(t *testing.T) {
 	if got := f.find("set-option", "-p", "-t", "%l9", "@float_geom"); !reflect.DeepEqual(got, wantStamp) {
 		t.Errorf("@float_geom stamp = %v, want %v", got, wantStamp)
 	}
-	if got := f.find("respawn-pane"); got == nil || got[len(got)-1] != "/nix/store/renderer" {
-		t.Errorf("respawn-pane argv = %v, want the renderer binary in the new float", got)
+	wantSpawn := []string{"respawn-pane", "-k", "-t", "%l9", "--", "/nix/store/renderer", "/run/sock", "%7"}
+	if got := f.find("respawn-pane"); !reflect.DeepEqual(got, wantSpawn) {
+		t.Errorf("respawn-pane argv = %v, want %v", got, wantSpawn)
+	}
+	if got := f.find("respawn-pane"); got != nil {
+		for _, w := range got {
+			if strings.HasPrefix(w, "-e") || strings.Contains(w, "LZTMUX_RENDER") {
+				t.Errorf("respawn-pane still wires by env: %v", got)
+			}
+		}
 	}
 	if w.localFloats["%7"] != "%l9" {
 		t.Errorf("localFloats = %v, want %%7 -> %%l9", w.localFloats)

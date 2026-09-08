@@ -561,8 +561,8 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 			return fmt.Errorf("reconcile: window %s has no pane to split", w.localWin)
 		}
 		axis := SplitAxis(L, newRemote, srcID, id)
-		split := append([]string{"split-window", axis}, rendererSpawnArgs(cfg, id)...)
-		if err := cfg.LocalTmux(append(split, "-t", last, cfg.RendererBin)...); err != nil {
+		split := append([]string{"split-window", axis, "-t", last, "--"}, rendererSpawnArgs(cfg, id)...)
+		if err := cfg.LocalTmux(split...); err != nil {
 			return fmt.Errorf("reconcile split-window: %w", err)
 		}
 		if err := refreshLocalPanes(cfg, w); err != nil {
@@ -587,7 +587,7 @@ func applyPaneOps(cfg Config, w *mirrorWindow, ops paneOps, L controlmode.Layout
 
 		// Seeding is sequential over the single control stream, so every new
 		// renderer must be connected first (mirrors setupWindow).
-		added, err := waitHellos(len(ops.Append))
+		added, err := waitHellos(ops.Append)
 		if err != nil {
 			return fmt.Errorf("reconcile: %w", err)
 		}
@@ -850,7 +850,11 @@ func reconcileFloats(cfg Config, w *mirrorWindow, L controlmode.Layout, send fun
 		// One batch for every add, after the whole create/spawn loop (mirrors
 		// applyPaneOps): seeding is sequential over the single control stream,
 		// so every renderer has to be connected — and hence writable — first.
-		conns, err := waitHellos(len(added))
+		ids := make([]string, len(added))
+		for i, cell := range added {
+			ids[i] = cell.ID
+		}
+		conns, err := waitHellos(ids)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: reconcile floats: %v\n", err)
 		}

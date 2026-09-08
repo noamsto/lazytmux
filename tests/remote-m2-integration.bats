@@ -2617,14 +2617,10 @@ transport_child() {
 	[ "$dst_screen" = "$src_screen" ]
 }
 
-# #547: tmux's own default binds carry a Respawn item — prefix + < and >, plus
-# both right-click pane menus — and it runs respawn-pane -k. respawn-pane
-# re-runs the pane's COMMAND without the -e environment spawnRenderer wired it
-# with, so the renderer dies at dial ("dial : missing address"), and with the
-# host's remain-on-exit off the pane then closed, taking the window and, for a
-# single-pane mirror, the whole mirror session with it. Two halves: the exit
-# must not be structural, and the corpse it leaves must be repaired — nothing
-# else can find one, since a dead pane is still a pane to list-panes.
+# argv survives a bare respawn-pane; pane -e does not. spawnRenderer now
+# passes sock + remote pane id as renderer arguments, so Respawn is a
+# reconnect, not a repair event — env no longer dies at dial. remain-on-exit
+# still stamps so a genuine crash cannot take the session (#547).
 @test "a respawned mirror pane leaves the session standing and the mirror recovers" {
 	# The real host's value, not this suite's: DST_CONF turns remain-on-exit ON
 	# globally so panes outlive daemon exit for the other cases' assertions,
@@ -2649,10 +2645,9 @@ transport_child() {
 	$DST has-session -t '=host-sess'
 	[ "$($DST list-windows -t host-sess -F '#{window_id}' | wc -l)" -eq 1 ]
 
-	# Recovery: a live renderer again, painting live remote output. The window
-	# is a rebuild, so its id is a new one — count the @bridge_win stamp rather
-	# than look for $win.
-	marker="RESPAWNHEAL_$$"
+	# Recovery is the same window: argv reconnects the renderer in place.
+	# A heal rebuild would mint a new window id.
+	marker="RESPAWNRECONNECT_$$"
 	healed=no
 	deadline=$((SECONDS + BRIDGE_UP_BUDGET_SECS))
 	while [ "$SECONDS" -lt "$deadline" ]; do
@@ -2671,13 +2666,73 @@ transport_child() {
 		tail -60 "$BATS_TEST_TMPDIR/respawn.log" >&3 2>/dev/null || true
 	fi
 
-	stamped="$($DST list-windows -t host-sess -F '#{@bridge_win}' | grep -c '^1$')" || stamped=0
-	corpses="$($DST list-panes -s -t host-sess -F '#{pane_dead}' | grep -c '^1$')" || corpses=0
+	win_after="$($DST list-windows -t host-sess -F '#{window_id}' | head -1)"
+	dead="$($DST display-message -p -t host-sess:1.0 '#{pane_dead}')"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$healed" = yes ]
-	[ "$stamped" -eq 1 ]
-	[ "$corpses" -eq 0 ]
+	[ "$win_after" = "$win" ]
+	[ "$dead" = 0 ]
+}
+
+# Crash net: SIGKILL the renderer process (not respawn). remain-on-exit holds
+# a corpse; healDeadRenderers then rebuilds a live mirror.
+@test "killing a renderer process leaves the session standing and heal restores the mirror" {
+	printf 'set -g base-index 1\nset -g pane-base-index 1\nset -g status on\nset -g pane-border-status top\nset -g remain-on-exit off\nset -g renumber-windows on\n' >"$DST_CONF"
+
+	$SRC new-session -d -s rem -x 100 -y 30
+	$DST new-session -d -s host-sess -x 100 -y 30
+	bridge_up 1 killrnd
+
+	[ "$($DST show-options -gv remain-on-exit)" = off ]
+	win="$($DST list-windows -t host-sess -F '#{window_id}' | head -1)"
+	[ "$($DST show-options -wv -t "$win" remain-on-exit)" = on ]
+
+	pid="$($DST display-message -p -t host-sess:1.0 '#{pane_pid}')"
+	kill -KILL "$pid"
+
+	$DST has-session -t '=host-sess'
+
+	saw_corpse=no
+	for _ in $(seq 1 50); do
+		if [ "$($DST display-message -p -t host-sess:1.0 '#{pane_dead}' 2>/dev/null)" = 1 ]; then
+			saw_corpse=yes
+			break
+		fi
+		sleep 0.1
+	done
+	if [ "$saw_corpse" != yes ]; then
+		printf -- '--- no corpse ---\n%s\n--- daemon log ---\n' \
+			"$($DST list-panes -s -t host-sess -F '#{window_id}|#{pane_id}|#{pane_dead}|#{@bridge_pane}|#{pane_pid}' 2>&1)" >&3
+		tail -60 "$BATS_TEST_TMPDIR/killrnd.log" >&3 2>/dev/null || true
+	fi
+
+	# mainLoopTickInterval is 5s; heal runs on that sweep. 20s covers a
+	# contended tick plus resetWindow's spawn/hello/seed.
+	marker="KILLHEAL_$$"
+	healed=no
+	deadline=$((SECONDS + 20))
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		$SRC send-keys -t rem "printf '$marker\\n'" Enter
+		for _ in $(seq 1 10); do
+			if mirror_contains 1 "$marker"; then
+				healed=yes
+				break 2
+			fi
+			sleep 0.1
+		done
+	done
+	if [ "$healed" != yes ]; then
+		printf -- '--- DST panes ---\n%s\n--- daemon log ---\n' \
+			"$($DST list-panes -s -t host-sess -F '#{window_id}|#{pane_id}|#{pane_dead}|#{@bridge_pane}' 2>&1)" >&3
+		tail -60 "$BATS_TEST_TMPDIR/killrnd.log" >&3 2>/dev/null || true
+	fi
+
+	kill "$daemon_pid" 2>/dev/null || true
+	wait "$daemon_pid" 2>/dev/null || true
+
+	[ "$saw_corpse" = yes ]
+	[ "$healed" = yes ]
 }
