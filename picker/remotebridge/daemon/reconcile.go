@@ -63,13 +63,13 @@ func reconcileLayoutFrom(cfg Config, w *mirrorWindow, l controlmode.Line, send f
 	if !noFloatWork(w, L) {
 		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
 	}
+	// Only the zoom flag can still disagree. A mismatch is a real zoom or
+	// unzoom, or the unzoomed line that opens a push/pop-zoom bracket;
+	// only the read's post-command snapshot tells them apart.
+	if n.zoomed != w.appliedZoom {
+		return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
+	}
 	if L.Raw == w.layout {
-		// Only the zoom flag can still disagree. A mismatch is a real zoom or
-		// unzoom, or the unzoomed line that opens a push/pop-zoom bracket;
-		// only the read's post-command snapshot tells them apart.
-		if n.zoomed != w.appliedZoom {
-			return reconcileLayout(cfg, w, send, router, waitHellos, cst, cv, rt)
-		}
 		return false
 	}
 	// A zoomed reshape needs the active pane for the -Z toggle and the zoomed

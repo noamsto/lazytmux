@@ -242,6 +242,26 @@ func TestNoticeStaleAppliedZoomReads(t *testing.T) {
 	}
 }
 
+// TestNoticeChangedLayoutUnzoomReadsWhenMirrorZoomed covers the case where a
+// flag-off notification also changes geometry. The zoom mismatch must win over
+// the geometry-only fast path, since a push/pop-zoom bracket can emit a
+// transient unzoomed layout.
+func TestNoticeChangedLayoutUnzoomReadsWhenMirrorZoomed(t *testing.T) {
+	w := shapedMirror(t)
+	w.appliedZoom = true
+	// Empty on purpose: the read reaches the wire and then fails on EOF. The
+	// LocalTmux seam fails if notification application happens first.
+	rt, sent := scriptedRT("")
+	cfg := zoomOrFloatGateFake(t, sent)
+	l := noticeLine("@1", noticeReshapedLayout, noticeReshapedLayout, "*")
+
+	reconcileLayoutFrom(cfg, w, l, func(string) {}, NewRouter(), noHellos, newCtlState(), newConverger(), rt)
+
+	if !strings.Contains(sent.String(), "window_zoomed_flag") {
+		t.Errorf("sent %q, want a readLayout display-message before applying changed geometry", sent.String())
+	}
+}
+
 // TestNoticePaneSetChangeReads is gate 1: the notification's pane set has
 // moved past what the mirror last saw, so it needs the active pane for
 // focus-follow and must not be trusted at face value — the read here finds
