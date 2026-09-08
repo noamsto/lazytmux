@@ -102,12 +102,14 @@ main() {
 	claude_prune_stale_state "$SERVER_START"
 
 	# --- Single batched list-panes call: all data in one tmux IPC roundtrip ---
+	# list-panes -a, not -s: this script is invoked from status-format[0], which
+	# tmux only evaluates for a client drawing a status line. Sessions with no
+	# attached client never get their own tick, so one attached pass has to stamp
+	# every window (#580). Window arrays are keyed session:index so indices that
+	# collide across sessions don't merge.
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch
 	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename win_cur_crew win_cur_crew_seen win_cur_bridge
-	active_pane_proc=""
-	active_win_idx=""
-	cur_active_icon=""
-	cur_session_fg=""
+	declare -A all_sess sess_cur_active_icon sess_cur_session_fg sess_active_proc sess_active_win
 	# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
 	# window with no @branch yet) collapses and shifts every later field left,
 	# corrupting cur_branch/active flags. '@window_task' is free-form so it stays
@@ -120,60 +122,64 @@ main() {
 	# @crew_name (harness-stamped codename) and @crew_seen (our shadow of it) are
 	# kebab tokens, so they sit safely before the free-form task; @bridge_win is
 	# "1" or empty and @bridge_proc is a command name, so both do too.
-	while IFS='|' read -r pane_id idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_task; do
+	while IFS='|' read -r pane_id sess idx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_task; do
+		[[ -n $pane_id ]] || continue
 		# A mirror pane runs the bridge renderer; @bridge_proc carries what the
 		# remote pane is actually running, which is what the icons should show.
 		[[ -n $bridge_proc ]] && proc="$bridge_proc"
-		pane_to_win["${pane_id#%}"]="$idx"
+		wkey="$sess:$idx"
+		pane_to_win["${pane_id#%}"]="$wkey"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
-		# Session options (same on every row) must be copied here: the EOF read
-		# that ends the loop blanks the read variables themselves.
-		cur_active_icon="$opt_active_icon"
-		cur_session_fg="$opt_session_fg"
+		all_sess[$sess]=1
+		# Session options (same on every row of a session) must be copied here:
+		# the EOF read that ends the loop blanks the read variables themselves.
+		sess_cur_active_icon[$sess]="$opt_active_icon"
+		sess_cur_session_fg[$sess]="$opt_session_fg"
 		# First pane per window wins for path/branch/task — panes in a window share a
 		# cwd, and @window_task/@branch are window options (same for every pane).
-		if [[ -z ${win_pane_path[$idx]+x} ]]; then
-			win_pane_path[$idx]="$pane_path"
-			win_cur_branch[$idx]="$cur_branch"
-			win_cur_task[$idx]="$cur_task"
-			win_cur_name[$idx]="$cur_ai_name"
-			win_cur_display[$idx]="$cur_display"
-			win_cur_padded[$idx]="$cur_padded"
-			win_cur_ago[$idx]="$cur_ago"
-			win_cur_rename[$idx]="$cur_rename"
-			win_cur_crew[$idx]="$cur_crew"
-			win_cur_crew_seen[$idx]="$cur_crew_seen"
-			win_cur_bridge[$idx]="$cur_bridge"
+		if [[ -z ${win_pane_path[$wkey]+x} ]]; then
+			win_pane_path[$wkey]="$pane_path"
+			win_cur_branch[$wkey]="$cur_branch"
+			win_cur_task[$wkey]="$cur_task"
+			win_cur_name[$wkey]="$cur_ai_name"
+			win_cur_display[$wkey]="$cur_display"
+			win_cur_padded[$wkey]="$cur_padded"
+			win_cur_ago[$wkey]="$cur_ago"
+			win_cur_rename[$wkey]="$cur_rename"
+			win_cur_crew[$wkey]="$cur_crew"
+			win_cur_crew_seen[$wkey]="$cur_crew_seen"
+			win_cur_bridge[$wkey]="$cur_bridge"
 		fi
 		# The task file is keyed by the pane Claude runs in, so resolve the genuinely
 		# active pane (list-panes orders by index, not active-first).
-		[[ $pane_active == 1 ]] && win_active_pane[$idx]="${pane_id#%}"
-		[[ $window_active == 1 ]] && active_win_idx="$idx"
-		# Track the session's active pane command (active pane in active window)
-		[[ $pane_active == 1 && $window_active == 1 ]] && active_pane_proc="$proc"
+		[[ $pane_active == 1 ]] && win_active_pane[$wkey]="${pane_id#%}"
+		[[ $window_active == 1 ]] && sess_active_win[$sess]="$idx"
+		# Track each session's active pane command (active pane in that session's
+		# active window) — @active_pane_icon is session-scoped.
+		[[ $pane_active == 1 && $window_active == 1 ]] && sess_active_proc[$sess]="$proc"
 		# Collect unique processes per window
 		[[ -z $proc ]] && continue
-		existing="${win_procs[$idx]:-}"
+		existing="${win_procs[$wkey]:-}"
 		case " $existing " in
 		*" $proc "*) ;;
-		*) win_procs[$idx]="${existing:+$existing }$proc" ;;
+		*) win_procs[$wkey]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
+	done < <(tmux list-panes -a -F '#{pane_id}|#{session_name}|#{window_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@window_task}')
 
 	arm_agent_detect
 
-	# --- Claude status: read pane files, bucket by window index ---
+	# --- Claude status: read pane files, bucket by session:index ---
 	declare -A win_claude_state win_claude_fade win_claude_unseen win_claude_ts
 	# Per-window per-state counts + that state's freshest pane fade/unseen
-	# (keys: "<win_idx>,<state>"); the winning state is resolved after the loop.
+	# (keys: "<wkey>,<state>"); the winning state is resolved after the loop.
 	declare -A win_cnt win_state_fade win_state_unseen win_has_claude
-	# Session-wide tally drives the status-bar session-name tint (@claude_session_fg)
-	sess_w=0 sess_k=0 sess_p=0 sess_d=0 sess_i=0 sess_e=0 sess_dn=0 sess_int=0
-	sess_min_fade=100 sess_unseen=0
+	# Per-session tally drives that session's status-bar tint (@claude_session_fg)
+	declare -A sess_w sess_k sess_p sess_d sess_i sess_e sess_dn sess_int sess_min_fade sess_unseen
 	while IFS= read -r pane_file; do
 		[[ -n $pane_file ]] || continue
 		win_idx="${pane_to_win[$pane_file]:-}"
 		[[ -n $win_idx ]] || continue
+		s="${win_idx%:*}"
 		read_pane_state "$CLAUDE_PANES_DIR/$pane_file" || continue
 		state="$REPLY"
 		fade=$REPLY_FADE
@@ -206,17 +212,17 @@ main() {
 			win_claude_ts[$win_idx]=$REPLY_TS
 		# Session aggregate: count states, freshest pane wins the fade
 		case "$state" in
-		error) ((sess_e++)) ;;
-		waiting) ((sess_w++)) ;;
-		compacting) ((sess_k++)) ;;
-		interrupted) ((sess_int++)) ;;
-		processing) ((sess_p++)) ;;
-		done) ((sess_d++)) ;;
-		idle) ((sess_i++)) ;;
-		denied) ((sess_dn++)) ;;
+		error) ((sess_e[$s]++)) ;;
+		waiting) ((sess_w[$s]++)) ;;
+		compacting) ((sess_k[$s]++)) ;;
+		interrupted) ((sess_int[$s]++)) ;;
+		processing) ((sess_p[$s]++)) ;;
+		done) ((sess_d[$s]++)) ;;
+		idle) ((sess_i[$s]++)) ;;
+		denied) ((sess_dn[$s]++)) ;;
 		esac
-		((fade < sess_min_fade)) && sess_min_fade=$fade
-		[[ $unseen == 1 ]] && sess_unseen=1
+		((fade < ${sess_min_fade[$s]:-100})) && sess_min_fade[$s]=$fade
+		[[ $unseen == 1 ]] && sess_unseen[$s]=1
 		# Per-window: tally the state and track the freshest fade / any-unseen for
 		# it. The winning state (and its pane's fade) is picked after the loop.
 		key="$win_idx,$state"
@@ -248,37 +254,41 @@ main() {
 		win_claude_unseen[$win_idx]="${win_state_unseen[$key]:-0}"
 	done
 
-	# Session-name color: tint with the aggregate claude state, faded by the
-	# freshest pane's age. Empty when no claude panes — the format falls back to
-	# the theme's session color.
-	claude_priority_state "$sess_w" "$sess_k" "$sess_p" "$sess_d" "$sess_i" "$sess_e" "$sess_dn" "$sess_int"
-	claude_faded_hex "$REPLY" "$sess_min_fade" "$sess_unseen"
-	session_fg=$REPLY
+	# Session-name color: tint with that session's aggregate claude state, faded
+	# by its freshest pane's age. Empty when no claude panes — the format falls
+	# back to the theme's session color.
+	declare -A sess_fg
+	for s in "${!all_sess[@]}"; do
+		claude_priority_state "${sess_w[$s]:-0}" "${sess_k[$s]:-0}" "${sess_p[$s]:-0}" "${sess_d[$s]:-0}" "${sess_i[$s]:-0}" "${sess_e[$s]:-0}" "${sess_dn[$s]:-0}" "${sess_int[$s]:-0}"
+		claude_faded_hex "$REPLY" "${sess_min_fade[$s]:-100}" "${sess_unseen[$s]:-0}"
+		sess_fg[$s]=$REPLY
+	done
 
 	# --- Compute process icons + claude per window, measure display widths ---
 	declare -a all_idx=()
 	declare -A win_icons win_icon_dw win_display
+	declare -A sess_need_reflow
 
 	# Collect all tmux set commands to batch via `tmux source -`
 	tmux_cmds=""
-	branch_changed=0
-	labels_changed=0
 
-	for idx in "${!win_pane_path[@]}"; do
-		all_idx+=("$idx")
-		pane_path="${win_pane_path[$idx]}"
-		target="${SESSION}:${idx}"
+	for wkey in "${!win_pane_path[@]}"; do
+		all_idx+=("$wkey")
+		s="${wkey%:*}"
+		idx="${wkey##*:}"
+		pane_path="${win_pane_path[$wkey]}"
+		target="$wkey"
 
 		# Task label tracks the active pane's self-reported "what Claude is doing"
 		# phrase (UserPromptSubmit hook). It can change in any window, so poll every
 		# window each tick — a single small file read. Set directly (not batched via
 		# `source -`): the phrase is free-form and would break the command parser.
 		task=""
-		[[ -f "$CLAUDE_TASKS_DIR/${win_active_pane[$idx]}" ]] &&
-			IFS= read -r task <"$CLAUDE_TASKS_DIR/${win_active_pane[$idx]}"
-		if [[ $task != "${win_cur_task[$idx]:-}" ]]; then
+		[[ -f "$CLAUDE_TASKS_DIR/${win_active_pane[$wkey]}" ]] &&
+			IFS= read -r task <"$CLAUDE_TASKS_DIR/${win_active_pane[$wkey]}"
+		if [[ $task != "${win_cur_task[$wkey]:-}" ]]; then
 			tmux set -qw -t "$target" @window_task "$task"
-			labels_changed=1
+			sess_need_reflow[$s]=1
 		fi
 
 		# AI name: the active pane's Claude-set window title (claude-status-update
@@ -286,11 +296,11 @@ main() {
 		# build_window_label prefers it over the raw task. Mirror like the task —
 		# free-form, set directly, only on change so reflow isn't kicked every tick.
 		ai_name=""
-		[[ -f "$CLAUDE_NAMES_DIR/${win_active_pane[$idx]}" ]] &&
-			IFS= read -r ai_name <"$CLAUDE_NAMES_DIR/${win_active_pane[$idx]}"
-		if [[ $ai_name != "${win_cur_name[$idx]:-}" ]]; then
+		[[ -f "$CLAUDE_NAMES_DIR/${win_active_pane[$wkey]}" ]] &&
+			IFS= read -r ai_name <"$CLAUDE_NAMES_DIR/${win_active_pane[$wkey]}"
+		if [[ $ai_name != "${win_cur_name[$wkey]:-}" ]]; then
 			tmux set -qw -t "$target" @window_ai_name "$ai_name"
-			labels_changed=1
+			sess_need_reflow[$s]=1
 		fi
 
 		# Crew badge: the fan-out harness stamps @crew_name directly, and no tmux
@@ -299,21 +309,23 @@ main() {
 		# reflow-computed (@window_crew_disp + crew_colw), so a name change must
 		# recompute; @crew_color is read live by the format and needs no reflow.
 		# @crew_seen is our own shadow of the last name we acted on.
-		if [[ ${win_cur_crew[$idx]:-} != "${win_cur_crew_seen[$idx]:-}" ]]; then
-			tmux set -qw -t "$target" @crew_seen "${win_cur_crew[$idx]:-}"
-			labels_changed=1
+		if [[ ${win_cur_crew[$wkey]:-} != "${win_cur_crew_seen[$wkey]:-}" ]]; then
+			tmux set -qw -t "$target" @crew_seen "${win_cur_crew[$wkey]:-}"
+			sess_need_reflow[$s]=1
 		fi
 
 		# Branch detection forks git per window. A branch only changes in the window
-		# where a checkout/cd happens, so poll only the active window each tick;
-		# inactive windows trust their cached @branch (worktrunk stamps it on switch).
-		# A window with no @branch yet (manual new-window, restore) is polled once to
-		# seed it, then trusted — this caps the steady git fork rate at ~1/tick.
-		if [[ $idx == "$active_win_idx" || -z ${win_cur_branch[$idx]:-} ]]; then
+		# where a checkout/cd happens, so poll only the invoking session's active
+		# window each tick; other sessions' active windows and every inactive window
+		# trust their cached @branch (worktrunk stamps it on switch).
+		# A window with no @branch yet (manual new-window, restore, never-attached
+		# session) is polled once to seed it, then trusted — this caps the steady
+		# git fork rate at ~1/tick plus unseeded windows.
+		if [[ ($s == "$SESSION" && $idx == "${sess_active_win[$SESSION]:-}") || -z ${win_cur_branch[$wkey]:-} ]]; then
 			# timeout so a stuck git (NFS stall, held index.lock) can't wedge the
 			# whole icon updater — it degrades to the cached branch for that tick.
 			branch=$(timeout 2 git -C "$pane_path" branch --show-current 2>/dev/null) || branch=""
-			if [[ $branch != "${win_cur_branch[$idx]:-}" ]]; then
+			if [[ $branch != "${win_cur_branch[$wkey]:-}" ]]; then
 				# Direct argv (not the tmux_cmds/`tmux source -` batch below): a git
 				# branch name can legally contain a single quote, which a batched
 				# single-quoted token has no escape for — `tmux source -` would
@@ -324,14 +336,14 @@ main() {
 				# Re-derive git root when branch changes (different repo or worktree)
 				git_root=$(timeout 2 git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || git_root=""
 				tmux set-option -t "$target" -w @git_root "$git_root"
-				branch_changed=1
+				sess_need_reflow[$s]=1
 				# Auto re-stamp (#137): a genuine transition (previous branch non-empty,
 				# so this isn't the initial seed already covered by post-switch/
 				# reconcile-window) means a `git checkout -b` happened in-place — the
 				# new branch's issue/PR never got a chance to stamp. Re-fire so
 				# @issue_* catches up; serialized through tmux-issue-stamp's own
 				# per-window lock, so this never races post-switch or `enrich`.
-				if [[ -n $ISSUE_STAMP_BIN && $ISSUE_STAMP_BIN != @* && -n ${win_cur_branch[$idx]:-} && -n $branch ]]; then
+				if [[ -n $ISSUE_STAMP_BIN && $ISSUE_STAMP_BIN != @* && -n ${win_cur_branch[$wkey]:-} && -n $branch ]]; then
 					"$ISSUE_STAMP_BIN" "$target" "$git_root" "$branch" >/dev/null 2>&1 &
 					disown
 				fi
@@ -339,16 +351,16 @@ main() {
 		fi
 
 		# Build process icons from batched data
-		build_proc_icons "${win_procs[$idx]:-}" "$MAX_ICONS"
+		build_proc_icons "${win_procs[$wkey]:-}" "$MAX_ICONS"
 		proc_icon_str="${REPLY% }"
 		icon="$REPLY"
 		# shellcheck disable=SC2153 # REPLY_DW set by build_proc_icons (sourced lib)
 		icon_dw=$REPLY_DW
 
 		# Append colored claude status icon (shares the icon column)
-		c_state="${win_claude_state[$idx]:-}"
+		c_state="${win_claude_state[$wkey]:-}"
 		display="${proc_icon_str}"
-		claude_colored_icon "$c_state" "${win_claude_fade[$idx]:-0}" "${win_claude_unseen[$idx]:-0}"
+		claude_colored_icon "$c_state" "${win_claude_fade[$wkey]:-0}" "${win_claude_unseen[$wkey]:-0}"
 		if [[ -n $REPLY ]]; then
 			icon+="$REPLY"
 			((icon_dw += 2)) # 1-cell nerd font icon + 1 space
@@ -357,9 +369,9 @@ main() {
 			display+="${REPLY% }" # strip trailing space for display
 		fi
 
-		win_icons[$idx]="$icon"
-		win_icon_dw[$idx]=$icon_dw
-		win_display[$idx]="$display"
+		win_icons[$wkey]="$icon"
+		win_icon_dw[$wkey]=$icon_dw
+		win_display[$wkey]="$display"
 
 		# "Last active" time: shown only for halted states (the live icon already
 		# conveys active ones). A bare unit like "5m" is parser-safe, so batch it.
@@ -368,39 +380,42 @@ main() {
 		ago=""
 		case "$c_state" in
 		idle | done | interrupted | error)
-			ts="${win_claude_ts[$idx]:-0}"
+			ts="${win_claude_ts[$wkey]:-0}"
 			if ((ts > 0 && CLAUDE_NOW > ts)); then
 				claude_ago "$((CLAUDE_NOW - ts))"
 				ago="$REPLY"
 			fi
 			;;
 		esac
-		if [[ $ago != "${win_cur_ago[$idx]:-}" ]]; then
+		if [[ $ago != "${win_cur_ago[$wkey]:-}" ]]; then
 			tmux_cmds+="set -qw -t '$target' @window_claude_ago '$ago'"$'\n'
 		fi
 	done
 
-	# Set active pane icon for top-right display (from batched data)
-	active_icon=""
-	normalize_wrapped_cmd "$active_pane_proc"
-	active_pane_proc="$REPLY"
-	[[ -n $active_pane_proc ]] && active_icon="${ICON_MAP[$active_pane_proc]:-}"
-	if [[ $active_icon != "$cur_active_icon" ]]; then
-		tmux_cmds+="set -q -t '$SESSION' @active_pane_icon '$active_icon'"$'\n'
-	fi
-	if [[ $session_fg != "$cur_session_fg" ]]; then
-		tmux_cmds+="set -q -t '$SESSION' @claude_session_fg '$session_fg'"$'\n'
-	fi
+	# Set per-session active pane icon and claude tint (from batched data)
+	for s in "${!all_sess[@]}"; do
+		active_icon=""
+		proc="${sess_active_proc[$s]:-}"
+		normalize_wrapped_cmd "$proc"
+		proc="$REPLY"
+		[[ -n $proc ]] && active_icon="${ICON_MAP[$proc]:-}"
+		if [[ $active_icon != "${sess_cur_active_icon[$s]:-}" ]]; then
+			tmux_cmds+="set -q -t '$s' @active_pane_icon '$active_icon'"$'\n'
+		fi
+		if [[ ${sess_fg[$s]:-} != "${sess_cur_session_fg[$s]:-}" ]]; then
+			tmux_cmds+="set -q -t '$s' @claude_session_fg '${sess_fg[$s]}'"$'\n'
+		fi
+	done
 
 	# --- Second pass: set unpadded + padded icon variables ---
 	# Fixed column: worst case MAX_ICONS emoji (3 cells each) + 1 nerd font claude (2 cells)
 	TARGET_DW=$((MAX_ICONS * 3 + 2))
-	for idx in "${all_idx[@]}"; do
-		target="${SESSION}:${idx}"
+	for wkey in "${all_idx[@]}"; do
+		target="$wkey"
 
 		# Unpadded (for window names — process icons + colored claude)
-		if [[ ${win_display[$idx]} != "${win_cur_display[$idx]:-}" ]]; then
-			tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$idx]}'"$'\n'
+		if [[ ${win_display[$wkey]} != "${win_cur_display[$wkey]:-}" ]]; then
+			tmux_cmds+="set -qw -t '$target' @window_icon_display '${win_display[$wkey]}'"$'\n'
 		fi
 
 		# Re-assert automatic-rename: window names are derived (label + icon via
@@ -414,17 +429,17 @@ main() {
 		# rename-window, and tmux only re-derives a name when the active pane
 		# produces output — an idle renderer never does, so the name freezes on
 		# whatever the format yielded at that instant (the launcher's cwd).
-		if [[ ${win_cur_bridge[$idx]:-} == 1 ]]; then
-			if [[ ${win_cur_rename[$idx]:-} == 1 ]]; then
+		if [[ ${win_cur_bridge[$wkey]:-} == 1 ]]; then
+			if [[ ${win_cur_rename[$wkey]:-} == 1 ]]; then
 				tmux_cmds+="set -qw -t '$target' automatic-rename off"$'\n'
 			fi
-		elif [[ ${win_cur_rename[$idx]:-} != 1 ]]; then
+		elif [[ ${win_cur_rename[$wkey]:-} != 1 ]]; then
 			tmux_cmds+="set -qw -t '$target' automatic-rename on"$'\n'
 		fi
 
 		# Padded (for status bar — process icons + claude, fixed width)
-		pad_to_width "${win_icons[$idx]}" "${win_icon_dw[$idx]}" "$TARGET_DW"
-		if [[ $REPLY != "${win_cur_padded[$idx]:-}" ]]; then
+		pad_to_width "${win_icons[$wkey]}" "${win_icon_dw[$wkey]}" "$TARGET_DW"
+		if [[ $REPLY != "${win_cur_padded[$wkey]:-}" ]]; then
 			tmux_cmds+="set -qw -t '$target' @window_icon_padded '$REPLY'"$'\n'
 		fi
 	done
@@ -437,12 +452,15 @@ main() {
 
 	# A branch or task change means window labels (built by reflow from
 	# @branch/@issue_*/@window_task) are stale — no tmux hook fires on cd or a new
-	# prompt, so kick a forced reflow here. The call below is the reflow store path
-	# (not a bare name) so a config reload repoints it without a tmux server restart.
-	if ((branch_changed || labels_changed)); then
-		@reflow@ "$SESSION" --force >/dev/null 2>&1 &
+	# prompt, so kick a forced reflow here. Per session whose labels actually
+	# changed, not only the invoking session: an unattached session's first seed
+	# of @branch would otherwise leave its grid stale until someone attaches.
+	# The call below is the reflow store path (not a bare name) so a config
+	# reload repoints it without a tmux server restart.
+	for s in "${!sess_need_reflow[@]}"; do
+		@reflow@ "$s" --force >/dev/null 2>&1 &
 		disown
-	fi
+	done
 }
 
 [[ ${BASH_SOURCE[0]} == "$0" ]] && main "$@"
