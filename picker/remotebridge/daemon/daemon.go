@@ -1124,7 +1124,7 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 		}
 	}
 
-	L, _, _, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
+	L, remoteActive, zoomed, err := readLayout(rt, remoteWinTarget(cfg, mw.remoteID))
 	if err != nil {
 		return err
 	}
@@ -1144,6 +1144,9 @@ func setupWindow(cfg Config, send func(string), router *Router, waitHellos hello
 	// mirror.go), so the tiled list lines up index-for-index with remotePanes.
 	if err := refreshLocalPanes(cfg, mw); err != nil {
 		return fmt.Errorf("daemon: mirror panes for %s: %w", mw.remoteID, err)
+	}
+	if assertMirrorZoom(cfg, mw, zoomed, remoteActive, mw.remotePanes) {
+		mw.appliedZoom = zoomed
 	}
 	if len(mw.localPanes) != len(mw.remotePanes) {
 		return fmt.Errorf("daemon: mirror for %s: %d local panes for %d remote",

@@ -54,7 +54,7 @@ func reconcileLayout(cfg Config, w *mirrorWindow, send func(string), router *Rou
 	// enough for that: it is deliberately the unzoomed geometry (see
 	// readLayout's doc comment), so the zoom flag has to agree too.
 	if L.Raw == w.layout {
-		if local, ok := localZoomed(cfg, w.localWin); ok && local == zoomed {
+		if w.appliedZoom == zoomed {
 			// ParseLayout prunes floats out of Raw, so a float opening, moving
 			// or closing leaves it byte-identical — every float bind and every
 			// carousel toggle lands here. The floats are settled from here, not
@@ -124,34 +124,21 @@ passes:
 			// the window it shapes (measured), and before the dims and seeds below,
 			// which describe and paint the pane at whatever geometry it holds now.
 			//
-			// tmux exposes zoom only as a toggle, and nothing here is guaranteed to
-			// have cleared a local one first: applyLayout skips select-layout when the
-			// tiled layout string is unchanged, which is exactly what a zoom-only
-			// reconcile is. So read both sides and toggle only on a mismatch —
-			// applying the remote's flag outright would turn an unzoom into a zoom.
+			// tmux exposes zoom only as a toggle; if -F asserts the flag in one
+			// idempotent command rather than reading local state and toggling on
+			// mismatch. applyLayout may skip select-layout on a zoom-only reconcile,
+			// so a bare toggle would fire on every pass and an even count inverts.
 			// A zoomed pane is usually the active one, but a float can be active
 			// while the window stays zoomed — see the -Z targeting note below.
 			//
-			// localIsZoomed then carries what this daemon imposed rather than what the
-			// remote reported, which is what the dims below are entitled to claim. A
-			// zoom that never landed must not stop the pass: the reseed still owes
-			// every pane a fresh screen, and skipping it reopens #233/#417.
-			localIsZoomed, zoomKnown := localZoomed(cfg, w.localWin)
-			if zoomKnown && localIsZoomed != zoomed {
-				// Never -Z a float: zoom-on converts it into a zoomed tiled pane
-				// (measured on next-3.8). When remoteActive is a float, skip the
-				// toggle (same as #517's localPaneAt miss) rather than guessing a
-				// tiled pane — pane 0 would zoom the wrong cell when the remote
-				// had zoomed a different tiled pane before focusing the float.
-				// (-A floats stay active under a tiled -Z; no focus restore.)
-				target, ok := localPaneAt(w, indexOf(newRemote, remoteActive))
-				if ok {
-					if err := cfg.LocalTmux("resize-pane", "-Z", "-t", target); err != nil {
-						fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
-					} else {
-						localIsZoomed = zoomed
-					}
-				}
+			// localIsZoomed carries what the assert landed, not what the remote
+			// reported — what the dims below are entitled to claim. A zoom that
+			// never landed must not stop the pass: the reseed still owes every
+			// pane a fresh screen, and skipping it reopens #233/#417.
+			localIsZoomed := false
+			if assertMirrorZoom(cfg, w, zoomed, remoteActive, newRemote) {
+				localIsZoomed = zoomed
+				w.appliedZoom = zoomed
 			}
 			// select-layout reshapes every surviving pane, so push each its new
 			// dims (layout is daemon-authoritative — renderers only record them).
@@ -416,6 +403,7 @@ func applyLayout(cfg Config, w *mirrorWindow, L controlmode.Layout, router *Rout
 		return false
 	}
 	w.shapeFailedFor = ""
+	w.appliedZoom = false // select-layout unzooms; caller's assertMirrorZoom may set it again
 	w.layout = L.Raw
 	return true
 }
@@ -737,6 +725,7 @@ func dropMirroredPanes(cfg Config, w *mirrorWindow) {
 	w.remotePanes = nil
 	w.localPanes = nil
 	w.layout = ""
+	w.appliedZoom = false // select-layout in setupWindow unzooms; stale true would dedup forever
 }
 
 // localPaneFor resolves the local pane rendering remoteID: a mirrored float by
@@ -940,4 +929,26 @@ func indexOf(ids []string, id string) int {
 		}
 	}
 	return -1
+}
+
+// assertMirrorZoom idempotently matches the mirror window's zoom flag to the
+// remote's. Zoom-on targets the tiled local pane rendering remoteActive; unzoom
+// targets the window. Zoom-on is skipped when remoteActive is a float (#517).
+func assertMirrorZoom(cfg Config, w *mirrorWindow, zoomed bool, remoteActive string, newRemote []string) bool {
+	if zoomed {
+		target, ok := localPaneAt(w, indexOf(newRemote, remoteActive))
+		if !ok {
+			return false
+		}
+		if err := cfg.LocalTmux("if", "-F", "-t", w.localWin, "#{window_zoomed_flag}", "", "resize-pane -Z -t "+target); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
+			return false
+		}
+		return true
+	}
+	if err := cfg.LocalTmux("if", "-F", "-t", w.localWin, "#{window_zoomed_flag}", "resize-pane -Z -t "+w.localWin, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: layout-change zoom: %v\n", err)
+		return false
+	}
+	return true
 }
