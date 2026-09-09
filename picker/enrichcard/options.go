@@ -137,8 +137,8 @@ func detectBaseBranch(dir string) string {
 
 // unquote strips a matched surrounding quote pair. tmux show-options quotes
 // values needing it with double quotes (e.g. spaces) and renders an empty value
-// as ”. Both styles must be stripped, else a cleared option like `@branch ”`
-// parses as the literal "”" and defeats the empty-value fallbacks/guards.
+// as ''. Both styles must be stripped, else a cleared option like `@branch ''`
+// parses as the literal "''" and defeats the empty-value fallbacks/guards.
 func unquote(s string) string {
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
 		return s[1 : len(s)-1]

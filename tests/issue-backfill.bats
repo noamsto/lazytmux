@@ -289,13 +289,10 @@ windowlist_line() {
 }
 
 @test "stale branch argument: a real worktree's live branch wins over a stale argument" {
-	# Regression test for a race a slow backfill retry can hit: the sweep's
-	# list-windows scan can be seconds old by the time its recursive
-	# invocation reaches the lock, and a real branch switch in between must
-	# not be clobbered with the scan's stale branch. Needs a REAL git repo —
-	# every other test's "worktree" is a plain mkdir, which the live-branch
-	# read silently no-ops against (git fails, so the passed argument wins),
-	# so this is the one case that actually exercises the override.
+	# Needs a REAL git repo — every other test's "worktree" is a plain mkdir,
+	# which the live-branch read silently no-ops against (git fails, so the
+	# passed argument wins), so this is the one case that exercises the
+	# override.
 	repo="$BATS_TEST_TMPDIR/repo11"
 	mkdir -p "$repo"
 	git -C "$repo" init -q

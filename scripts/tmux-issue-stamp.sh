@@ -28,11 +28,9 @@ BACKFILL_SWEEP_CAP=20
 # url still empty) and re-run the one-shot path on each, up to BACKFILL_MAX_TRIES
 # per window. Title/url are read as presence-booleans (#{?#{@issue_title},1,}),
 # not their text, since sanitize_title doesn't strip '|' and this format uses
-# '|' as its delimiter — the sweep only needs emptiness, never the text.
-# The remaining fields (branch, worktree/git_root paths, explicit id) are
-# still read as literal text and could in principle themselves contain a '|'
-# (git permits it in a branch name); this is the same pre-existing assumption
-# tmux-pr-enrich.sh's own -F format makes, not a new one.
+# '|' as its delimiter — the sweep only needs emptiness, never the text. The
+# remaining fields are still literal text and could themselves contain a '|'
+# (git permits it in a branch name), same as tmux-pr-enrich.sh's -F format.
 run_backfill_pass() {
 	local windows
 	mapfile -t windows < <(tmux list-windows -a -F \
@@ -107,13 +105,10 @@ if ! acquire_lock "$ENRICH_STAMP_LOCK_DIR/${win_id#@}.lock"; then
 	exit 0
 fi
 
-# A window's branch can move between when a caller last observed it (the
-# backfill sweep's list-windows scan, taken before this invocation ever
-# reached the lock) and now — providers can block up to 15s each, and a
-# concurrent real switch that loses this same lock gets no automatic retry
-# (#599). Trust the worktree's live branch over a possibly-stale argument so
-# a slow backfill retry can never win the lock and clobber a since-changed
-# window with old branch data.
+# A window's branch can move between the backfill sweep's list-windows scan
+# and this invocation reaching the lock — providers can block up to 15s each,
+# and a losing concurrent switch gets no automatic retry (#599). Trust the
+# worktree's live branch over a possibly-stale argument.
 if [[ -n $worktree ]]; then
 	live_branch="$(git -C "$worktree" branch --show-current 2>/dev/null)" || live_branch=""
 	[[ -n $live_branch ]] && branch="$live_branch"
@@ -193,13 +188,10 @@ tmux set-option -t "$target" -w @issue_branch "$branch"
 log_enabled && log_event enrich event stamp provider "$chosen_provider" id "$id" title "$title" url "$url" win_id "$win_id" sess "$(tmux display-message -t "$target" -p '#{session_name}' 2>/dev/null || true)"
 
 # Backfill bookkeeping (#599): a complete stamp clears the retry counter; a
-# partial one increments it — unless the branch OR the explicit id just
-# changed underneath this window, in which case this is attempt #1 on the new
-# branch/id, not a continuation of the old one's failures. The explicit-id
-# comparison matters on its own: two different explicit ids can share the
-# same branch (mid-session `enrich <ID>` doesn't require a branch change), and
-# without it a fresh id would inherit a prior id's exhausted counter and never
-# get backfilled at all.
+# partial one increments it — unless the branch or explicit id changed
+# underneath this window, restarting the count at attempt #1. The explicit-id
+# check matters on its own: a fresh mid-session id on the same branch would
+# otherwise inherit a prior id's exhausted counter and never get backfilled.
 if [[ -n $title && -n $url ]]; then
 	tmux set-option -t "$target" -wu @issue_backfill_tries 2>/dev/null
 else
