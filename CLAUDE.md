@@ -580,6 +580,25 @@ option.
 - **`prefix + I`** is gated on `bridgeGate`: inside a mirror window it runs the
   toggle on the remote (ctl verb `carousel`), so the carousel is a remote
   split mirrored back like any other structural change.
+- **A press that opens nothing still reports itself, as a local status
+  message** (#593). Nothing the remote can say reaches the user: its only
+  client is the daemon's control client, which renders no status line, so a
+  `display-message` there evaporates — which is why the empty-manifest and
+  missing-binary paths used to open a 90%x90% float on the remote and mirror
+  it home to say one sentence. The remote script now stamps its outcome
+  (`ok` / `noimages` / `nobin`) on the ctl pane as `@lztmux_carousel` and
+  `daemon/carouselprobe.go` reads it back: a session-lifetime seam like
+  `viewReplacer` (its two sides are closures over `Run`'s locals), armed by
+  the ctl handler *after* the submit, with a timer `runConn` selects on —
+  a press with no images changes nothing the mirror can see, so its own reply
+  block is the last thing that would wake the loop. The read happens on the
+  main loop, the only place a round-trip may run. Verdicts are a **closed
+  set**, since the option is remote-derived; an unrecognised one says nothing
+  but still stops the probe. An **empty read is not an answer** — the stamp
+  rides a `run-shell -b`, so it lands a few forks after the press — hence
+  bounded retries (250ms x 8), past which the press is treated as launched.
+  `ok` is stamped before the `exec` so the common case stops the probe
+  instead of burning that budget.
 - Remote host needs `tmux-claude-images` and `resvg` on PATH.
 
 ### Bridge Image Paste

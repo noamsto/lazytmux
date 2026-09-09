@@ -665,6 +665,9 @@ func Run(cfg Config) error {
 	// channel per reconnect and the loop could only watch the handle it can
 	// see.
 	replacer := newViewReplacer(cfg.View, resolveView, reconnect)
+	// Session lifetime, like replacer and loopTick: runConn selects on its
+	// timer, and one built per attach would leak a timer per reconnect.
+	carousel := newCarouselProbe()
 	// The listener outlives a drop, so a keybind pressed mid-outage reaches
 	// here and gets nacked by the closed stream rather than hanging. The nack
 	// must carry a non-empty error or the keybind claims a gesture landed that
@@ -673,7 +676,7 @@ func Run(cfg Config) error {
 	// keeps lztmux-remote-open reusing this bridge instead of stacking a second
 	// daemon on the same socket.
 	go acceptConns(listener, connCh, func(argv []string) error {
-		return handleCtl(cst, replacer, argv, cfg.RemoteSession, sendCtl)
+		return handleCtl(cst, replacer, carousel, argv, cfg.RemoteSession, sendCtl)
 	})
 
 	// @bridge_sock is the carrier a keybind reads to reach this daemon. Stamped
@@ -1034,6 +1037,12 @@ func Run(cfg Config) error {
 				// waitHellos is not running here; a hello is a renderer that
 				// redialed (bare respawn-pane keeps argv and reconnects).
 				rebindRenderer(cfg, hc, send, router, reg, rt)
+			case <-carousel.C():
+				// A carousel press that found no images changes nothing the
+				// mirror can see, so its own reply block is the last thing
+				// that would wake this loop — hence a timer of its own rather
+				// than waiting out mainLoopTickInterval to tell the user.
+				carousel.poll(cfg, rt, sendCtl)
 			case <-loopTick.C:
 				// A remote window-option change produces no stream traffic at all,
 				// so falling through to the top is the only thing that polls it.
