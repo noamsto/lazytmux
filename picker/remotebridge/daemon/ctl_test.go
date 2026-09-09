@@ -334,17 +334,24 @@ func TestCarouselVerbBuildsRemoteToggle(t *testing.T) {
 		"AEYE_BRIDGED=1",
 		"tmux-claude-images",
 		"command -v",
-		"new-pane",
-		remoteFloatFull,
+		carouselStampCmd("%5", carouselVerdictNoImages),
+		carouselStampCmd("%5", carouselVerdictNoBin),
+		carouselStampCmd("%5", carouselVerdictOK),
+		carouselClearCmd("%5"),
 	} {
 		if !strings.Contains(cmds[0], want) {
 			t.Fatalf("command %q missing %q", cmds[0], want)
 		}
 	}
-	for _, ban := range []string{"display-message", "#{@claude_img_src}", "''|*", "split-window", "@float_geom"} {
+	// new-pane and a float shape are what #593 removed: every outcome is a
+	// verdict stamp the daemon reads back, so nothing opens on the remote.
+	for _, ban := range []string{"display-message", "#{@claude_img_src}", "''|*", "split-window", "@float_geom", "new-pane", remoteFloatFull} {
 		if strings.Contains(cmds[0], ban) {
 			t.Fatalf("command %q must not contain %q", cmds[0], ban)
 		}
+	}
+	if !v.probe {
+		t.Fatal("every outcome is a verdict stamp the daemon must read back: needs probe")
 	}
 	if !v.moves || !v.layout {
 		t.Fatal("the toggle opens a float that takes focus: needs moves+layout")
@@ -395,8 +402,8 @@ func TestCarouselResolveScriptManifestCheck(t *testing.T) {
 		name        string
 		hasManifest bool
 	}{
-		{"empty manifest falls back to a visible split", false},
-		{"present manifest launches the carousel, no split", true},
+		{"empty manifest stamps a verdict, opens nothing", false},
+		{"present manifest launches the carousel, opens nothing", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -442,95 +449,114 @@ echo launched >>"`+launchLog+`"
 				t.Fatalf("source-file: %v\n%s", err, out)
 			}
 
-			// run-shell -b is asynchronous; poll for its effect (either the
-			// stub's launch marker, or a second, new-pane float).
+			// run-shell -b is asynchronous; poll for its effect (the stub's
+			// launch marker, or the verdict stamp).
+			wantVerdict := carouselVerdictNoImages
+			if tc.hasManifest {
+				wantVerdict = carouselVerdictOK
+			}
 			deadline := time.Now().Add(3 * time.Second)
-			var launched bool
-			var paneCount int
+			var (
+				launched bool
+				verdict  string
+			)
 			for time.Now().Before(deadline) {
 				if b, _ := os.ReadFile(launchLog); len(b) > 0 {
 					launched = true
 				}
-				out, err := tmux("list-panes", "-t", "w").Output()
+				out, err := tmux("show-options", "-pqv", "-t", pane, carouselVerdictOpt).Output()
 				if err == nil {
-					paneCount = len(strings.Split(strings.TrimSpace(string(out)), "\n"))
+					verdict = strings.TrimSpace(string(out))
 				}
-				if launched || paneCount > 1 {
+				if verdict == wantVerdict && launched == tc.hasManifest {
 					break
 				}
 				time.Sleep(50 * time.Millisecond)
 			}
 
-			if tc.hasManifest {
-				if !launched {
-					t.Fatal("tmux-claude-images was never exec'd for a present manifest")
-				}
-				if paneCount > 1 {
-					t.Fatalf("a fallback float was also opened (%d panes) for a present manifest", paneCount)
-				}
-				return
+			if verdict != wantVerdict {
+				t.Errorf("%s = %q, want %q", carouselVerdictOpt, verdict, wantVerdict)
 			}
-			if launched {
-				t.Fatal("tmux-claude-images was exec'd despite an empty manifest")
+			if launched != tc.hasManifest {
+				t.Errorf("tmux-claude-images exec'd = %v, want %v", launched, tc.hasManifest)
 			}
-			if paneCount <= 1 {
-				t.Fatal("no fallback float appeared for an empty manifest")
+			// The verdict IS the whole report now: a fallback pane would be
+			// the 90%x90% float #593 removed, mirrored home to say one
+			// sentence.
+			out, err := tmux("list-panes", "-t", "w").Output()
+			if err != nil {
+				t.Fatalf("list-panes: %v", err)
 			}
-			// Floats are not reliably addressable as w.N; find the floating
-			// pane by flag (or any pane that is not the original). The float
-			// can exist a tick before its shell command paints, so poll the
-			// capture too.
-			var (
-				fallback string
-				floating bool
-				capOut   []byte
-				listOut  []byte
-			)
-			for time.Now().Before(deadline) {
-				var err error
-				listOut, err = tmux("list-panes", "-t", "w", "-F", "#{pane_id} #{pane_floating_flag}").Output()
-				if err != nil {
-					t.Fatalf("list-panes: %v", err)
-				}
-				fallback, floating = "", false
-				for _, line := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
-					fields := strings.Fields(line)
-					if len(fields) != 2 {
-						continue
-					}
-					id, flag := fields[0], fields[1]
-					if flag == "1" {
-						fallback = id
-						floating = true
-						break
-					}
-					if id != pane && fallback == "" {
-						fallback = id
-					}
-				}
-				if fallback == "" {
-					time.Sleep(50 * time.Millisecond)
-					continue
-				}
-				capOut, err = tmux("capture-pane", "-p", "-t", fallback).Output()
-				if err != nil {
-					t.Fatalf("capture-pane: %v", err)
-				}
-				if strings.Contains(string(capOut), "no images yet for this pane") {
-					break
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
-			if fallback == "" {
-				t.Fatalf("could not find fallback pane among %q", listOut)
-			}
-			if !floating {
-				t.Fatalf("fallback pane %s is not floating (pane_floating_flag!=1); list=%q", fallback, listOut)
-			}
-			if !strings.Contains(string(capOut), "no images yet for this pane") {
-				t.Fatalf("fallback float content = %q, want the no-images-yet message", capOut)
+			if n := len(strings.Split(strings.TrimSpace(string(out)), "\n")); n > 1 {
+				t.Errorf("window has %d panes, want 1 — a fallback pane was opened:\n%s", n, out)
 			}
 		})
+	}
+}
+
+// A remote with no toggle at all reports nobin. Its own branch because it is
+// the one outcome that returns before the manifest is ever resolved (#593),
+// and because the message it produces names a rebuild the user has to do.
+func TestCarouselResolveScriptStampsNoBin(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not on PATH")
+	}
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A PATH holding tmux and nothing else: the script needs tmux to stamp
+	// with, and must not find a tmux-claude-images this host happens to have
+	// installed.
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(tmuxPath, filepath.Join(binDir, "tmux")); err != nil {
+		t.Fatal(err)
+	}
+
+	tmux := startIsolatedTmux(t, "PATH="+binDir)
+	paneOut, err := tmux("display-message", "-p", "-t", "w", "#{pane_id}").Output()
+	if err != nil {
+		t.Fatalf("display-message: %v", err)
+	}
+	pane := strings.TrimSpace(string(paneOut))
+
+	cmds, err := verbs["carousel"].build(pane, "@0", "w", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(dir, "cmd.conf")
+	if err := os.WriteFile(conf, []byte(cmds[0]+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := tmux("source-file", conf).CombinedOutput(); err != nil {
+		t.Fatalf("source-file: %v\n%s", err, out)
+	}
+
+	var verdict string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := tmux("show-options", "-pqv", "-t", pane, carouselVerdictOpt).Output()
+		if err == nil {
+			verdict = strings.TrimSpace(string(out))
+		}
+		if verdict != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if verdict != carouselVerdictNoBin {
+		t.Errorf("%s = %q, want %q", carouselVerdictOpt, verdict, carouselVerdictNoBin)
+	}
+	out, err := tmux("list-panes", "-t", "w").Output()
+	if err != nil {
+		t.Fatalf("list-panes: %v", err)
+	}
+	if n := len(strings.Split(strings.TrimSpace(string(out)), "\n")); n > 1 {
+		t.Errorf("window has %d panes, want 1 — a fallback pane was opened:\n%s", n, out)
 	}
 }
 
@@ -969,7 +995,7 @@ func sender(sent *[]string) func(string) bool {
 func TestHandleCtlSubmitsWhenTheViewerMatches(t *testing.T) {
 	cst, rep, _, sent := handlerFixture(t, "foot", "foot")
 
-	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err != nil {
+	if err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent)); err != nil {
 		t.Fatalf("handleCtl: %v, want no error", err)
 	}
 	if len(*sent) != 1 {
@@ -986,7 +1012,7 @@ func TestHandleCtlSubmitsWhenTheViewerMatches(t *testing.T) {
 func TestHandleCtlNacksAndRaisesOnAStaleViewer(t *testing.T) {
 	cst, rep, view, sent := handlerFixture(t, "xterm-kitty", "foot")
 
-	err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent))
 	if err == nil || err.Error() != pressAgain {
 		t.Fatalf("error = %v, want %q", err, pressAgain)
 	}
@@ -1011,8 +1037,8 @@ func TestHandleCtlNacksAndRaisesOnAStaleViewer(t *testing.T) {
 func TestHandleCtlGivesAnInFlightPressTheSameText(t *testing.T) {
 	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
 
-	first := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
-	second := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	first := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent))
+	second := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent))
 	if first == nil || second == nil {
 		t.Fatalf("errors = (%v, %v), want both nacked", first, second)
 	}
@@ -1032,7 +1058,7 @@ func TestHandleCtlGivesAnInFlightPressTheSameText(t *testing.T) {
 func TestHandleCtlSubmitsAfterAReplacementCompleted(t *testing.T) {
 	cst, rep, view, sent := handlerFixture(t, "xterm-kitty", "foot")
 
-	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err == nil {
+	if err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent)); err == nil {
 		t.Fatal("first press was not nacked")
 	}
 	// What replaceConn does at its publish point, and what the attach loop
@@ -1040,7 +1066,7 @@ func TestHandleCtlSubmitsAfterAReplacementCompleted(t *testing.T) {
 	view.setAdvertised("foot")
 	rep.done()
 
-	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err != nil {
+	if err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent)); err != nil {
 		t.Fatalf("second press: %v, want it to submit", err)
 	}
 	if len(*sent) != 1 {
@@ -1054,7 +1080,7 @@ func TestHandleCtlSubmitsAfterAReplacementCompleted(t *testing.T) {
 func TestHandleCtlRaisesAgainAfterAFailedReplacement(t *testing.T) {
 	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
 
-	if err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent)); err == nil {
+	if err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent)); err == nil {
 		t.Fatal("first press was not nacked")
 	}
 	// replaceConn's notReplaced path: the loop took the wake-up, the dial
@@ -1064,7 +1090,7 @@ func TestHandleCtlRaisesAgainAfterAFailedReplacement(t *testing.T) {
 	}
 	rep.done()
 
-	err := handleCtl(cst, rep, carouselPress(), "rem", sender(sent))
+	err := handleCtl(cst, rep, newCarouselProbe(), carouselPress(), "rem", sender(sent))
 	if err == nil || err.Error() != pressAgain {
 		t.Fatalf("error = %v, want %q again", err, pressAgain)
 	}
@@ -1083,7 +1109,7 @@ func TestHandleCtlLeavesOtherVerbsAloneOnAStaleViewer(t *testing.T) {
 	cst, rep, _, sent := handlerFixture(t, "xterm-kitty", "foot")
 
 	argv := []string{wire.CtlProtocolVersion, "split-h", "%3"}
-	if err := handleCtl(cst, rep, argv, "rem", sender(sent)); err != nil {
+	if err := handleCtl(cst, rep, newCarouselProbe(), argv, "rem", sender(sent)); err != nil {
 		t.Fatalf("handleCtl: %v, want no error", err)
 	}
 	if len(*sent) != 1 {

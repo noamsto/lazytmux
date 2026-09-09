@@ -120,6 +120,9 @@ type ctlRequest struct {
 	// needsView carries the verb's flag of the same name through to the
 	// handler.
 	needsView bool
+	// probePane is the remote pane whose verdict stamp the handler must wait
+	// on, or "" for a verb that reports nothing back (carouselprobe.go).
+	probePane string
 }
 
 // verb is one entry of the fixed translation table. The daemon builds every
@@ -139,7 +142,13 @@ type verb struct {
 	// what a verb means, and the handler asks the parsed request a typed
 	// question instead.
 	needsView bool
-	build     func(pane, win, sess string, args []string) ([]string, error)
+	// probe marks a verb whose remote command reports its outcome by stamping
+	// carouselVerdictOpt rather than by changing anything the mirror can see,
+	// so the daemon has to read that stamp back to say anything about it
+	// (#593). A field here for needsView's reason: the table stays the only
+	// thing that knows what a verb means.
+	probe bool
+	build func(pane, win, sess string, args []string) ([]string, error)
 }
 
 // Whitelisted direction flags, so a request cannot smuggle an arbitrary option
@@ -254,11 +263,12 @@ var verbs = map[string]verb{
 	// Backgrounded (-b) so a slow launch never blocks the remote command queue;
 	// the split arrives as a %layout-change like any other structural event.
 	//
-	// A missing binary surfaces as a short remote split rather than a
-	// display-message: the only client attached to this remote is the daemon's
-	// control client, which has no status line for a message to land on, while a
-	// split mirrors back into the window the human is looking at.
-	"carousel": {layout: true, moves: true, needsView: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
+	// Nothing the remote can say reaches the user directly: the only client
+	// attached to it is this daemon's control client, which has no status line
+	// for a display-message to land on. So neither a missing binary nor an
+	// empty manifest opens anything there — the script stamps a verdict and
+	// carouselProbe reads it back into a local message (#593).
+	"carousel": {layout: true, moves: true, needsView: true, probe: true, build: func(pane, _, _ string, _ []string) ([]string, error) {
 		// show-options (not display-message -F "#{@…}"): run-shell expands #{}
 		// before /bin/sh runs. Case arms omit an '' empty alternative — that
 		// becomes a dense '\'' stack after double tmuxQuote and is not portable.
@@ -278,7 +288,10 @@ var verbs = map[string]verb{
 	//
 	// A bare command name, never the local ${tool}/bin/tool store path, which
 	// exists on this host only. A remote missing the tool degrades to a
-	// short-lived message pane, as carousel does.
+	// short-lived message pane — unlike carousel, which reports its own
+	// failures as a local status message (#593): this verb is asked to open a
+	// float either way, so the message rides the float the press already
+	// implies rather than needing a verdict read back for it.
 	//
 	// Never stamps @float_geom on the remote pane: that option is read by the
 	// remote's own tmux-float-refit, which would then fight the mirror for
@@ -381,10 +394,21 @@ func toolResolveScript(tool string) string {
 // An empty/absent manifest is checked here rather than left to
 // tmux-claude-images' own `[[ ! -s $MANIFEST ]]` branch: that branch's
 // `tmux display-message` lands on the control-mode client's nonexistent
-// status line and evaporates, same as the missing-binary case above it — so
-// this uses `tmux-claude-images --resolve` (prints MODE\tKEY\tMANIFEST,
-// launches nothing) to test the manifest itself and falls back to the same
-// short-lived float.
+// status line and evaporates — so this uses `tmux-claude-images --resolve`
+// (prints MODE\tKEY\tMANIFEST, launches nothing) to test the manifest itself.
+//
+// Every outcome is reported by stamping carouselVerdictOpt on the ctl pane and
+// nothing else: the daemon reads it back and shows the local one-line message
+// the purely-local bind shows (#593). It used to open a 90%x90% float here
+// instead, which mirrors home as a bordered pane that steals focus for five
+// seconds to say one sentence.
+//
+// The stamp lands on the ctl pane, never on $src: $src is the pane whose
+// IMAGES these are (@claude_img_src can point elsewhere), while the ctl pane
+// is the only id the daemon knows to read back. Cleared at entry so a
+// previous press cannot be read as this one's answer; the daemon unsets it
+// again on read, which covers a press whose verdict arrived after the probe
+// had given up.
 //
 // manifest=${res####*$tab}, not ${res##*$tab}: run-shell format-expands its
 // whole command string before /bin/sh ever sees it, and a run of `#`
@@ -394,7 +418,8 @@ func toolResolveScript(tool string) string {
 // `#` in it, i.e. four, so the shell that actually runs still sees `##`.
 func carouselResolveScript(pane string) string {
 	return fmt.Sprintf(
-		"src=$(tmux show-options -pqv -t %s @claude_img_src); "+
+		"%s; "+
+			"src=$(tmux show-options -pqv -t %s @claude_img_src); "+
 			"case \"$src\" in %%[0-9]*) case \"${src#%%}\" in *[!0-9]*) src=%s;; esac;; *) src=%s;; esac; "+
 			// @carousel_bin repoints on a config reload; PATH is frozen at
 			// server start, so a bare name would keep resolving to the old
@@ -403,18 +428,23 @@ func carouselResolveScript(pane string) string {
 			"bin=$(tmux show-options -gqv @carousel_bin); "+
 			"if [ -n \"$bin\" ] && [ ! -x \"$bin\" ]; then bin=; fi; "+
 			"if [ -z \"$bin\" ]; then bin=$(command -v tmux-claude-images 2>/dev/null); fi; "+
-			"if [ -n \"$bin\" ]; then "+
+			"if [ -z \"$bin\" ]; then %s; exit 0; fi; "+
 			"tab=$(printf \"\\t\"); "+
 			"res=$(env TMUX_PANE=\"$src\" \"$bin\" --resolve 2>/dev/null); "+
 			"manifest=${res####*$tab}; "+
 			"if [ -n \"$manifest\" ] && [ -s \"$manifest\" ]; then "+
+			// Stamped before the exec, so a press that launched is an answer
+			// too: the probe stops on it rather than burning its whole retry
+			// budget on the common case.
+			"%s; "+
 			"exec env TMUX_PANE=\"$src\" AEYE_BRIDGED=1 \"$bin\"; "+
 			"fi; "+
-			`tmux new-pane -t "$src" %s "echo lazytmux: no images yet for this pane; sleep 5"; `+
-			"exit 0; "+
-			"fi; "+
-			`tmux new-pane -t "$src" %s "echo lazytmux: tmux-claude-images not found on this host; sleep 5"`,
-		pane, pane, pane, remoteFloatFull, remoteFloatFull,
+			"%s",
+		"tmux "+carouselClearCmd(pane),
+		pane, pane, pane,
+		"tmux "+carouselStampCmd(pane, carouselVerdictNoBin),
+		"tmux "+carouselStampCmd(pane, carouselVerdictOK),
+		"tmux "+carouselStampCmd(pane, carouselVerdictNoImages),
 	)
 }
 
@@ -470,6 +500,9 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 		return ctlRequest{}, err
 	}
 	req := ctlRequest{cmds: cmds, wantWindows: v.windows, needsView: v.needsView}
+	if v.probe {
+		req.probePane = pane
+	}
 	if v.layout {
 		req.wantLayout = win
 	}
@@ -544,7 +577,7 @@ func pressAgainErr(term string) error {
 // is returned when the replacement is RAISED, not when it completes: a message
 // arriving after a multi-second dial reads as a timeout rather than an
 // instruction.
-func handleCtl(cst *ctlState, rep *viewReplacer, argv []string, sess string, send func(string) bool) error {
+func handleCtl(cst *ctlState, rep *viewReplacer, probe *carouselProbe, argv []string, sess string, send func(string) bool) error {
 	req, err := cst.parseCtl(argv, sess)
 	if err != nil {
 		return err
@@ -556,6 +589,12 @@ func handleCtl(cst *ctlState, rep *viewReplacer, argv []string, sess string, sen
 	}
 	if !cst.submit(req, send) {
 		return fmt.Errorf("bridge has no live connection to the remote")
+	}
+	// After the submit, never before: a press whose command was not written
+	// has no verdict coming, and arming for it would spend the whole retry
+	// budget reading an option nothing is going to stamp.
+	if req.probePane != "" {
+		probe.arm(req.probePane)
 	}
 	return nil
 }
