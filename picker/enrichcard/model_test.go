@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 func testCfg() cfg {
 	return cfg{
-		target: "$0:@0", prEnrichBin: "/bin/true",
+		target: "$0:@0", prEnrichBin: "/bin/true", issueStampBin: "/bin/true",
 		fg: "#cdd6f4", mauve: "#cba6f7", red: "#f38ba8",
 		green: "#a6e3a1", peach: "#fab387", blue: "#89b4fa",
 		overlay0: "#6c7086", subtext0: "#a6adc8",
@@ -221,5 +222,37 @@ func TestFlashDeadline(t *testing.T) {
 	expired := model{cfg: testCfg(), width: 60, height: 18, flash: "gone now", flashUntil: time.Now().Add(-time.Second)}
 	if m, _ := expired.Update(tickMsg{}); m.(model).flash != "" {
 		t.Errorf("flash past its deadline must clear on the next tick, got %q", m.(model).flash)
+	}
+}
+
+func TestIssueStampArgs(t *testing.T) {
+	if got, want := issueStampArgs("$0:@0", "/repo", "feat/x", ""), []string{"$0:@0", "/repo", "feat/x"}; !slices.Equal(got, want) {
+		t.Errorf("issueStampArgs with no explicit id = %v, want %v", got, want)
+	}
+	if got, want := issueStampArgs("$0:@0", "/repo", "main", "GH-42"), []string{"$0:@0", "/repo", "main", "GH-42"}; !slices.Equal(got, want) {
+		t.Errorf("issueStampArgs with explicit id = %v, want %v", got, want)
+	}
+}
+
+func TestShouldStampIssue(t *testing.T) {
+	full := cfg{issueStampBin: "/bin/true"}
+	win := winState{branch: "feat/x"}
+
+	cases := []struct {
+		name string
+		c    cfg
+		w    winState
+		dir  string
+		want bool
+	}{
+		{"all present", full, win, "/repo", true},
+		{"no issue-stamp binary", cfg{}, win, "/repo", false},
+		{"no branch", full, winState{}, "/repo", false},
+		{"no dir (reclaimed worktree)", full, win, "", false},
+	}
+	for _, tc := range cases {
+		if got := shouldStampIssue(tc.c, tc.w, tc.dir); got != tc.want {
+			t.Errorf("%s: shouldStampIssue = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
