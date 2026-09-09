@@ -14,18 +14,31 @@ import (
 // refresh, the theme palette, and the enrich glyphs (raw — NOT ##-escaped).
 type cfg struct {
 	target, prEnrichBin string
-	fg, mauve, red, green, peach, blue, overlay0, subtext0 string
+	// bridgeCtlBin/bridgeSock/bridgePane give a mirror window's [r] a ctl
+	// handle to the remote's own poller (D5). All three are empty on a
+	// non-mirror window, and can also be empty on a mirror whose bind
+	// couldn't resolve @bridge_sock/@bridge_pane — hasBridgeHandle is the
+	// single place that distinguishes "no handle" from "has one".
+	bridgeCtlBin, bridgeSock, bridgePane                                                string
+	fg, mauve, red, green, peach, blue, overlay0, subtext0                              string
 	icLinear, icGitHub, icPending, icSuccess, icFailure, icMerged, icClosed, icConflict string
-	icDraft                                                                            string
+	icDraft                                                                             string
 }
 
 type model struct {
 	cfg           cfg
 	win           winState
+	mirror        bool // true when the window is a bridge mirror; win came from @bridge_* only
 	baseBranch    string
 	width, height int
 	refreshing    bool
-	flash         string // transient footer note ("opened ↗"), cleared on next tick
+	// sending is the bridged-refresh re-entrancy guard, distinct from
+	// refreshing: prBlock renders refreshing as "⧗ #N refreshing…", which
+	// would misdescribe a local socket write as a PR fetch. Set on dispatch,
+	// cleared by bridgeRefreshDoneMsg.
+	sending    bool
+	flash      string    // transient footer note ("opened ↗", a ctl error, …)
+	flashUntil time.Time // when flash clears; zero means nothing to clear
 }
 
 const (
@@ -164,13 +177,26 @@ func (m model) claudeBlock() string {
 	return m.sty(c.subtext0).Render(strings.Join(parts, "  ·  "))
 }
 
+// hasBridgeHandle reports whether the launch-time flags gave this card a ctl
+// handle to reach the bridge daemon through. Flags, not an option read — see
+// the cfg field comment.
+func (m model) hasBridgeHandle() bool {
+	return m.cfg.bridgeSock != "" && m.cfg.bridgePane != ""
+}
+
+// footer renders the four [r] states from the design's contract (D5): a
+// missing branch or a missing bridge handle both stay inert, and only a
+// mirror with a handle takes the ctl route rather than the local poller.
 func (m model) footer() string {
 	c := m.cfg
 	plain := m.sty(c.subtext0)
 	items := []string{plain.Render("[o] issue"), plain.Render("[p] PR")}
-	if m.win.branch == "" {
+	switch {
+	case m.win.branch == "":
 		items = append(items, m.sty(c.overlay0).Render("[r] no branch"))
-	} else {
+	case m.mirror && !m.hasBridgeHandle():
+		items = append(items, m.sty(c.overlay0).Render("[r] no bridge"))
+	default:
 		items = append(items, plain.Render("[r] refresh"))
 	}
 	items = append(items, plain.Render("[q] close"))
@@ -200,6 +226,22 @@ func (m model) card() string {
 
 type tickMsg struct{}
 type refreshDoneMsg struct{}
+type bridgeRefreshDoneMsg struct{ errText string } // errText == "" is success
+
+const (
+	// ctlErrorPrefix matches lztmux-remote-bridge-ctl's own errorPrefix
+	// (remotebridge/cmd/ctl/main.go) and is stripped from a captured failure
+	// so the flash shows the ctl's message alone, not the binary name
+	// repeated next to a footer already labeled [r].
+	ctlErrorPrefix = "lztmux-remote-bridge-ctl: "
+
+	// Flash lifetimes follow house precedent rather than an invented number:
+	// 5s matches the ctl's own `display-message -d 5000` on its failure path
+	// (cmd/ctl/main.go); 2s is the confirmation duration for "opened ↗" and
+	// "refresh sent ↗".
+	flashErrorDuration   = 5 * time.Second
+	flashConfirmDuration = 2 * time.Second
+)
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
@@ -226,6 +268,33 @@ func refreshCmd(c cfg, w winState) tea.Cmd {
 	}
 }
 
+// bridgeRefreshArgv is the ctl invocation for the enrich-refresh verb, split
+// out of bridgeRefreshCmd so a test can assert it without executing a binary.
+func bridgeRefreshArgv(sock, pane string) []string {
+	return []string{"--sock", sock, "enrich-refresh", pane}
+}
+
+// bridgeRefreshCmd runs the ctl synchronously — a tea.Cmd is already a
+// goroutine, so the UI never blocks — and relies on the ctl's own 2s
+// overallTimeout rather than a context of its own.
+//
+// Output is captured, never inherited: the card is a bubbletea altscreen
+// program and the ctl reports failure via fmt.Fprintln(os.Stderr, …)
+// (remotebridge/cmd/ctl/main.go), which would paint over the card.
+func bridgeRefreshCmd(bin, sock, pane string) tea.Cmd {
+	return func() tea.Msg {
+		out, err := exec.Command(bin, bridgeRefreshArgv(sock, pane)...).CombinedOutput()
+		if err == nil {
+			return bridgeRefreshDoneMsg{}
+		}
+		text := strings.TrimPrefix(strings.TrimSpace(string(out)), ctlErrorPrefix)
+		if text == "" {
+			text = err.Error()
+		}
+		return bridgeRefreshDoneMsg{errText: text}
+	}
+}
+
 // Init only schedules the first tick; the initial window read is done in main
 // (the value-receiver model passed to NewProgram is what bubbletea seeds with,
 // so assigning m.win here would not persist).
@@ -238,13 +307,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		if !m.refreshing {
-			m.win = readWindowState(m.cfg.target)
+			opts := readWindowState(m.cfg.target)
+			m.win, m.mirror = resolve(opts), opts.mirror
 		}
-		m.flash = ""
+		// A deadline, never a "clear after one tick" counter: tickCmd is a 1s
+		// tea.Tick whose phase relative to the keypress is arbitrary, so a
+		// counter reproduces the same 0-1000ms window a flash used to have.
+		if !m.flashUntil.IsZero() && !time.Now().Before(m.flashUntil) {
+			m.flash = ""
+			m.flashUntil = time.Time{}
+		}
 		return m, tickCmd()
 	case refreshDoneMsg:
 		m.refreshing = false
-		m.win = readWindowState(m.cfg.target)
+		opts := readWindowState(m.cfg.target)
+		m.win, m.mirror = resolve(opts), opts.mirror
+		return m, nil
+	case bridgeRefreshDoneMsg:
+		m.sending = false
+		if msg.errText != "" {
+			m.flash = msg.errText
+			m.flashUntil = time.Now().Add(flashErrorDuration)
+		} else {
+			m.flash = "refresh sent ↗"
+			m.flashUntil = time.Now().Add(flashConfirmDuration)
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg.String())
@@ -259,15 +346,27 @@ func (m model) handleKey(k string) (tea.Model, tea.Cmd) {
 	case "o":
 		if m.win.issueURL != "" {
 			m.flash = "opened ↗"
+			m.flashUntil = time.Now().Add(flashConfirmDuration)
 			return m, openCmd(m.win.issueURL)
 		}
 	case "p":
 		if m.win.prURL != "" {
 			m.flash = "opened ↗"
+			m.flashUntil = time.Now().Add(flashConfirmDuration)
 			return m, openCmd(m.win.prURL)
 		}
 	case "r":
-		if m.win.branch != "" && !m.refreshing {
+		if m.win.branch == "" {
+			return m, nil // [r] no branch — inert on both paths, see footer
+		}
+		if m.mirror {
+			if !m.hasBridgeHandle() || m.sending {
+				return m, nil // [r] no bridge, or a held press already in flight
+			}
+			m.sending = true
+			return m, bridgeRefreshCmd(m.cfg.bridgeCtlBin, m.cfg.bridgeSock, m.cfg.bridgePane)
+		}
+		if !m.refreshing {
 			m.refreshing = true
 			return m, refreshCmd(m.cfg, m.win)
 		}

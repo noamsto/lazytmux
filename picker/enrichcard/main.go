@@ -11,6 +11,9 @@ func main() {
 	var c cfg
 	flag.StringVar(&c.target, "target", "", "session_id:window_id to inspect")
 	flag.StringVar(&c.prEnrichBin, "pr-enrich-bin", "tmux-pr-enrich", "path to the PR poller binary")
+	flag.StringVar(&c.bridgeCtlBin, "bridge-ctl-bin", "", "path to lztmux-remote-bridge-ctl, for [r] in a mirror")
+	flag.StringVar(&c.bridgeSock, "bridge-sock", "", "bridge daemon socket, for [r] in a mirror")
+	flag.StringVar(&c.bridgePane, "bridge-pane", "", "remote pane id, for [r] in a mirror")
 	flag.StringVar(&c.fg, "thm-fg", "", "")
 	flag.StringVar(&c.mauve, "thm-mauve", "", "")
 	flag.StringVar(&c.red, "thm-red", "", "")
@@ -30,12 +33,21 @@ func main() {
 	flag.StringVar(&c.icDraft, "icon-draft", "", "")
 	flag.Parse()
 
-	w := readWindowState(c.target)
+	opts := readWindowState(c.target)
+	w := resolve(opts)
 	dir := w.worktree
 	if dir == "" {
 		dir = w.gitRoot
 	}
-	m := model{cfg: c, win: w, baseBranch: detectBaseBranch(dir)}
+	// detectBaseBranch shells `git -C <dir>` against dir, which in a mirror
+	// is a path on the remote — the same path can exist locally as an
+	// unrelated repo, so skip it rather than risk a base branch read from
+	// the wrong checkout (design D3/I5).
+	var base string
+	if !opts.mirror {
+		base = detectBaseBranch(dir)
+	}
+	m := model{cfg: c, win: w, mirror: opts.mirror, baseBranch: base}
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		os.Exit(1)
 	}

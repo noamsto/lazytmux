@@ -7,9 +7,36 @@ import (
 )
 
 func TestParseWindowLabels(t *testing.T) {
+	// The format is the third leg the constant has to hold together, beside the
+	// parser's SplitN and oneRow's fixture — a field added to one and not the
+	// others is a shifted row stamping wrong values under the existing names.
+	// Every position boundary is "}|#{"; a plain '|' count would also find the
+	// ones inside each wrapper's [|] bracket expression.
+	if n := strings.Count(windowLabelFormat, "}|#{") + 1; n != windowLabelFields {
+		t.Fatalf("windowLabelFormat carries %d fields, want %d", n, windowLabelFields)
+	}
+
+	// One full row, spelled out to document the wire shape.
+	full := "@1|nova|#89b4fa|123|open|success|mergeable| PR #123|" +
+		"github|460|https://github.com/o/r/issues/460|https://github.com/o/r/pull/123|1|" +
+		"feat/460-card|/home/noams/wt/card|Card reads bridge state|Ship the card|GH #460| ship it"
+	// The remote's #{s/[|]/ /:…} has already run over positions 8-16, so a title
+	// that held a '|' arrives carrying a space and shifts nothing. Only the
+	// trailing @window_label_rest_long is unwrapped, where a '|' lands in itself.
+	piped := "@2|orbit|#[fg=red]|none|OPEN|success|unknown|||||||||a  piped title||| a #[fg=red]title | with a pipe"
+	if n := strings.Count(full, "|") + 1; n != windowLabelFields {
+		t.Fatalf("full fixture has %d fields, want %d", n, windowLabelFields)
+	}
+	// piped carries an extra '|' inside its trailing field on purpose, so it is
+	// counted the way the parser counts: everything past the last separator is
+	// field 18.
+	if n := len(strings.SplitN(piped, "|", windowLabelFields)); n != windowLabelFields {
+		t.Fatalf("piped fixture splits into %d fields, want %d", n, windowLabelFields)
+	}
+
 	body := strings.Join([]string{
-		"@1|nova|#89b4fa|123|open|success|mergeable| PR #123|GH #460| ship it",
-		"@2|orbit|#[fg=red]|none|OPEN|success|unknown||| a #[fg=red]title | with a pipe",
+		full,
+		piped,
 		"@3|zephyr", // trailing empty fields may not survive the trip
 		"",          // blank line
 	}, "\n")
@@ -24,17 +51,25 @@ func TestParseWindowLabels(t *testing.T) {
 		prState: "open", prCheck: "success", prMergeable: "mergeable",
 		// The leading space of @window_pr_plain is load-bearing for reflow's
 		// pr_colw padding, so nothing trims it.
-		prPlain: " PR #123", labelID: "GH #460", labelRest: " ship it",
+		prPlain:       " PR #123",
+		issueProvider: "github", issueID: "460",
+		issueURL: "https://github.com/o/r/issues/460",
+		prURL:    "https://github.com/o/r/pull/123",
+		prDraft:  "1", branch: "feat/460-card", dir: "/home/noams/wt/card",
+		issueTitle: "Card reads bridge state", prTitle: "Ship the card",
+		labelID: "GH #460", labelRest: " ship it",
 	}
 	if got[0] != want0 {
 		t.Errorf("row 0 = %+v, want %+v", got[0], want0)
 	}
 
-	// The free-form field is last, so a '|' inside it lands there and shifts
-	// nothing: the enum fields either side still read correctly.
+	// The unwrapped field is last, so a '|' inside it shifts nothing: the enum
+	// fields either side still read correctly, and a title that already lost its
+	// pipes remotely arrives whole.
 	want1 := labelRow{
 		id: "@2", crewName: "orbit", prCheck: "success", prMergeable: "unknown",
-		labelRest: " a title  with a pipe",
+		issueTitle: "a  piped title",
+		labelRest:  " a title  with a pipe",
 	}
 	if got[1] != want1 {
 		t.Errorf("row 1 = %+v, want %+v", got[1], want1)
@@ -48,7 +83,7 @@ func TestParseWindowLabels(t *testing.T) {
 // oneRow parses a single-window body whose field i holds v.
 func oneRow(t *testing.T, i int, v string) labelRow {
 	t.Helper()
-	fields := make([]string, 10)
+	fields := make([]string, windowLabelFields)
 	fields[0] = "@1"
 	fields[i] = v
 	rows := parseWindowLabels(strings.Join(fields, "|"))
@@ -88,46 +123,159 @@ func TestWindowLabelValidation(t *testing.T) {
 		}
 	}
 
+	// Every identity field: the validator, a DROP rather than a cut at the cap,
+	// and a DROP rather than a strip for #[…] markup. Every markup case below is
+	// chosen to PASS its own validator once stripWindowName has deleted the
+	// markup, so each one is only caught by the before/after compare — a cut URL
+	// opens the wrong page, and so does a de-markup'd one.
+	identity := []struct {
+		name  string
+		field int
+		cases []struct{ in, want string }
+	}{
+		{"issueProvider", 8, []struct{ in, want string }{
+			{"github", "github"}, {"linear", "linear"},
+			{"GitHub", ""}, {"git hub", ""},
+			{"git#[x]hub", ""}, // strips to a valid "github"
+			{strings.Repeat("a", providerMaxRunes), strings.Repeat("a", providerMaxRunes)},
+			{strings.Repeat("a", providerMaxRunes+1), ""},
+		}},
+		{"issueID", 9, []struct{ in, want string }{
+			{"LZT-123", "LZT-123"}, {"460", "460"}, {"a_b-C9", "a_b-C9"},
+			{"has space", ""}, {"has/slash", ""},
+			{"LZT#[x]-123", ""}, // strips to a valid "LZT-123"
+			{strings.Repeat("a", issueIDMaxRunes+1), ""},
+		}},
+		{"issueURL", 10, []struct{ in, want string }{
+			{"https://linear.app/x/issue/LZT-1/a", "https://linear.app/x/issue/LZT-1/a"},
+			{"http://x.test/a", "http://x.test/a"},
+			{"ftp://x.test/a", ""}, {"/local/path", ""}, {"https://x.test/a b", ""},
+			// Strips to "https://x.test/ac" — a different, still-valid URL.
+			{"https://x.test/a#[b]c", ""},
+			{"https://x.test/a\x01c", ""}, // and a control byte, same route
+			{"https://x.test/" + strings.Repeat("a", urlMaxRunes-14), ""},
+		}},
+		{"prURL", 11, []struct{ in, want string }{
+			{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/1"},
+			{"github.com/o/r/pull/1", ""},
+			{"https://github.com/o/r#[x]/pull/1", ""},
+		}},
+		{"prDraft", 12, []struct{ in, want string }{
+			{"1", "1"}, {"0", ""}, {"", ""}, {"11", ""}, {"true", ""},
+			{"1#[x]", ""}, // strips to a valid "1"
+		}},
+		{"branch", 13, []struct{ in, want string }{
+			{"feat/598-card", "feat/598-card"},
+			{"has space", ""}, {"", ""},
+			{"feat#[x]/598-card", ""}, // strips to a valid "feat/598-card"
+			{strings.Repeat("a", branchMaxRunes), strings.Repeat("a", branchMaxRunes)},
+			{strings.Repeat("a", branchMaxRunes+1), ""},
+		}},
+		{"dir", 14, []struct{ in, want string }{
+			{"/home/noams/wt/card", "/home/noams/wt/card"}, {"/", "/"},
+			{"relative/path", ""}, {"~/wt", ""},
+			// A legal worktree path containing a space is rejected: an absent
+			// dir line is correct-but-incomplete, an unquoted path is not.
+			{"/home/my wt", ""},
+			{"/home#[x]/wt", ""}, // strips to a valid "/home/wt"
+			{"/" + strings.Repeat("a", dirMaxRunes), ""},
+		}},
+	}
+	for _, f := range identity {
+		for _, c := range f.cases {
+			got := rowField(t, oneRow(t, f.field, c.in), f.field)
+			if got != c.want {
+				t.Errorf("%s(%q) = %q, want %q", f.name, c.in, got, c.want)
+			}
+		}
+	}
+
 	// Caps count runes, so one pathological remote value cannot dominate a column.
 	if got := []rune(oneRow(t, 1, strings.Repeat("é", 200)).crewName); len(got) != crewNameMaxRunes {
 		t.Errorf("crewName capped to %d runes, want %d", len(got), crewNameMaxRunes)
 	}
-	if got := []rune(oneRow(t, 9, strings.Repeat("x", 300)).labelRest); len(got) != labelTextMaxRunes {
-		t.Errorf("labelRest capped to %d runes, want %d", len(got), labelTextMaxRunes)
+	// The titles and the label segments are display text, so they strip markup
+	// and truncate where the identity fields above drop whole. Dropping a title
+	// for holding markup would regress what already ships.
+	for _, f := range []int{15, 16, 17, 18} {
+		if got := rowField(t, oneRow(t, f, "a #[fg=red]title"), f); got != "a title" {
+			t.Errorf("field %d: markup value = %q, want it stripped and kept", f, got)
+		}
+	}
+	for _, f := range []int{15, 16, 17, 18} {
+		got := []rune(rowField(t, oneRow(t, f, strings.Repeat("x", 300)), f))
+		if len(got) != labelTextMaxRunes {
+			t.Errorf("field %d capped to %d runes, want %d", f, len(got), labelTextMaxRunes)
+		}
 	}
 
 	// LocalTmux execs without a shell, so tmux's own args_parse would read this
-	// as a flag.
-	if got := oneRow(t, 9, "-n oops").labelRest; got != "" {
-		t.Errorf("flag-shaped value = %q, want it dropped", got)
+	// as a flag. The titles have no validator to fall back on, so this drop and
+	// the ';' one below are their only guard.
+	for _, f := range []int{15, 16, 18} {
+		if got := rowField(t, oneRow(t, f, "-n oops"), f); got != "" {
+			t.Errorf("field %d: flag-shaped value = %q, want it dropped", f, got)
+		}
 	}
 
 	// A lone ';' is the separator apply joins its per-window sequence with:
 	// tmux fails the whole batch on it and drops every later option in the
 	// sequence. One *inside* a value is not a separator and is kept.
-	for _, f := range []int{1, 7, 8, 9} {
-		if got := oneRow(t, f, ";"); rowField(got, f) != "" {
-			t.Errorf("field %d: lone ';' = %q, want it dropped", f, rowField(got, f))
+	for _, f := range []int{1, 7, 15, 16, 17, 18} {
+		if got := rowField(t, oneRow(t, f, ";"), f); got != "" {
+			t.Errorf("field %d: lone ';' = %q, want it dropped", f, got)
 		}
 	}
-	if got := oneRow(t, 9, " a;b").labelRest; got != " a;b" {
+	if got := oneRow(t, 18, " a;b").labelRest; got != " a;b" {
 		t.Errorf("labelRest(%q) = %q, want it kept", " a;b", got)
 	}
 }
 
-// rowField reads the field oneRow placed at index i, so the ';' table can walk
-// every value that carries no regex of its own.
-func rowField(r labelRow, i int) string {
+// rowField reads the field oneRow placed at index i. Exhaustive on purpose, and
+// fatal on an unmapped index: a default arm here is how a field that MOVES turns
+// every index-keyed assertion above into a vacuous pass against an empty field.
+func rowField(t *testing.T, r labelRow, i int) string {
+	t.Helper()
 	switch i {
 	case 1:
 		return r.crewName
+	case 2:
+		return r.crewColor
+	case 3:
+		return r.prNumber
+	case 4:
+		return r.prState
+	case 5:
+		return r.prCheck
+	case 6:
+		return r.prMergeable
 	case 7:
 		return r.prPlain
 	case 8:
+		return r.issueProvider
+	case 9:
+		return r.issueID
+	case 10:
+		return r.issueURL
+	case 11:
+		return r.prURL
+	case 12:
+		return r.prDraft
+	case 13:
+		return r.branch
+	case 14:
+		return r.dir
+	case 15:
+		return r.issueTitle
+	case 16:
+		return r.prTitle
+	case 17:
 		return r.labelID
-	default:
+	case 18:
 		return r.labelRest
 	}
+	t.Fatalf("rowField: index %d is not mapped to a labelRow field", i)
+	return ""
 }
 
 func TestLabelShipperApply(t *testing.T) {

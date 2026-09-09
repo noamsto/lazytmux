@@ -15,22 +15,33 @@ type winState struct {
 	task, claudeAgo, paneIcon                              string
 }
 
+// winOpts is the raw parse of one `show-options -w` read: the window's own
+// (possibly stale, in a mirror) local values, the daemon-shipped bridge
+// values, and whether the window is a mirror at all. resolve (bridge.go)
+// turns this into the single winState the rest of the card renders.
+type winOpts struct {
+	local, bridge winState
+	mirror        bool
+}
+
 // readWindowState runs one `tmux show-options -w -t <target>` and parses it.
-// On any error (e.g. the window closed) it returns the zero winState; callers
+// On any error (e.g. the window closed) it returns the zero winOpts; callers
 // keep their last good state.
-func readWindowState(target string) winState {
-	var w winState
+func readWindowState(target string) winOpts {
+	var o winOpts
 	out, err := exec.Command("tmux", "show-options", "-w", "-t", target).Output()
 	if err != nil {
-		return w
+		return o
 	}
-	parseWindowOptions(string(out), &w)
-	return w
+	parseWindowOptions(string(out), &o)
+	return o
 }
 
 // parseWindowOptions parses `show-options -w` lines (`@name value` or
-// `@name "quoted value"`) into w; unknown options are ignored.
-func parseWindowOptions(out string, w *winState) {
+// `@name "quoted value"`) into o; unknown options are ignored. Local and
+// bridge (`@bridge_*`) names are parsed into their own winState side by
+// side — see resolve in bridge.go for how they're combined.
+func parseWindowOptions(out string, o *winOpts) {
 	for _, line := range strings.Split(out, "\n") {
 		name, val, ok := strings.Cut(line, " ")
 		if !ok {
@@ -39,39 +50,70 @@ func parseWindowOptions(out string, w *winState) {
 		val = unquote(strings.TrimSpace(val))
 		switch name {
 		case "@issue_provider":
-			w.issueProvider = val
+			o.local.issueProvider = val
 		case "@issue_id":
-			w.issueID = val
+			o.local.issueID = val
 		case "@issue_title":
-			w.issueTitle = val
+			o.local.issueTitle = val
 		case "@issue_url":
-			w.issueURL = val
+			o.local.issueURL = val
 		case "@pr_number":
-			w.prNumber = val
+			o.local.prNumber = val
 		case "@pr_title":
-			w.prTitle = val
+			o.local.prTitle = val
 		case "@pr_state":
-			w.prState = val
+			o.local.prState = val
 		case "@pr_check_state":
-			w.prCheck = val
+			o.local.prCheck = val
 		case "@pr_url":
-			w.prURL = val
+			o.local.prURL = val
 		case "@pr_mergeable":
-			w.prMergeable = val
+			o.local.prMergeable = val
 		case "@pr_draft":
-			w.prDraft = val
+			o.local.prDraft = val
 		case "@branch":
-			w.branch = val
+			o.local.branch = val
 		case "@worktree":
-			w.worktree = val
+			o.local.worktree = val
 		case "@git_root":
-			w.gitRoot = val
+			o.local.gitRoot = val
 		case "@window_task":
-			w.task = val
+			o.local.task = val
 		case "@window_claude_ago":
-			w.claudeAgo = val
+			o.local.claudeAgo = val
 		case "@active_pane_icon":
-			w.paneIcon = val
+			o.local.paneIcon = val
+		case "@bridge_win":
+			o.mirror = val == "1"
+		case "@bridge_issue_provider":
+			o.bridge.issueProvider = val
+		case "@bridge_issue_id":
+			o.bridge.issueID = val
+		case "@bridge_issue_title":
+			o.bridge.issueTitle = val
+		case "@bridge_issue_url":
+			o.bridge.issueURL = val
+		case "@bridge_pr_number":
+			o.bridge.prNumber = val
+		case "@bridge_pr_title":
+			o.bridge.prTitle = val
+		case "@bridge_pr_state":
+			o.bridge.prState = val
+		case "@bridge_pr_check_state":
+			o.bridge.prCheck = val
+		case "@bridge_pr_url":
+			o.bridge.prURL = val
+		case "@bridge_pr_mergeable":
+			o.bridge.prMergeable = val
+		case "@bridge_pr_draft":
+			o.bridge.prDraft = val
+		case "@bridge_branch":
+			o.bridge.branch = val
+		case "@bridge_dir":
+			// Already resolved on the remote as worktree || git_root
+			// (I2/I5) — lands in worktree so the existing
+			// worktree||gitRoot fallback reads it with no special case.
+			o.bridge.worktree = val
 		}
 	}
 }

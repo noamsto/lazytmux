@@ -327,6 +327,20 @@ var verbs = map[string]verb{
 		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
+	// The enrich card's [r] in a mirror window: the remote's own tmux-pr-enrich
+	// has never run for a bridged session (its poller is a status-line #(), and
+	// a control client renders no status line), so a local refresh cannot reach
+	// the values the card displays. This asks the remote to poll its own window.
+	//
+	// No windows/layout/moves: the poller opens nothing and moves nothing, and
+	// its result comes home as a %subscription-changed label row, never a
+	// reconcile. No needsView/probe either — it depends on no terminal identity
+	// and reports through that row rather than a stamp read back.
+	"enrich-refresh": {build: func(pane, win, _ string, _ []string) ([]string, error) {
+		script := enrichRefreshScript(win)
+		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		return []string{cmd}, nil
+	}},
 }
 
 // themeApplyScript is the POSIX body run under exec /bin/sh -c. Like the two
@@ -446,6 +460,46 @@ func carouselResolveScript(pane string) string {
 		"tmux "+carouselStampCmd(pane, carouselVerdictOK),
 		"tmux "+carouselStampCmd(pane, carouselVerdictNoImages),
 	)
+}
+
+// enrichRefreshScript is the POSIX body run under exec /bin/sh -c. Like its two
+// siblings above it must contain zero single-quote characters so double
+// tmuxQuote only wraps, and it restores PATH from the global environment for
+// toolResolveScript's measured reason — run-shell spawns through the remote's
+// default-shell, which on NixOS rebuilds PATH from the login profile, and
+// tmux-pr-enrich reaches the remote tmux only through lazytmux's wrapper.
+// Parameter expansion is spelled ${p#*=} for that same reason: run-shell
+// format-expands the whole string first, where #P would become the pane index.
+// That is the body's ONLY literal #, and it survives because #* is not one of
+// tmux's format codes; any # that would be read as one has to be doubled.
+//
+// Both resolved values are guarded before the poller runs, and neither empty is
+// a harmless no-op. An empty branch falls THROUGH the poller's single-target
+// guard (tmux-pr-enrich.sh:463) into tick mode, where --force skips the age gate
+// outright, touches the remote's .last-tick and detaches a whole-server
+// run_full_pass (:405) — one keypress enriching every window on that host and
+// resetting its tick clock. An empty dir keeps single-target mode but skips the
+// conditional cd (:234), so gh pr list --head runs in the remote tmux server's
+// cwd; if that happens to sit in a repo, that repo's PR for the branch name is
+// written to the remote window's own @pr_* and ships home as @bridge_pr_* — a
+// wrong value rather than an absent one. The card's local [r] no-branch footer
+// gate does not cover either: it reads the value carried home, on a different
+// host, and never gates dir at all.
+//
+// The target is win, never <sess>:<win>. Config.RemoteSession may contain spaces
+// (daemon.go), and quoting it through run-shell's expansion, two tmuxQuote
+// layers and sh needs exactly the single quotes this body bans; win is a remote
+// window id (@N), a complete target-window on its own.
+func enrichRefreshScript(win string) string {
+	return fmt.Sprintf(
+		"p=$(tmux show-environment -g PATH 2>/dev/null); "+
+			"case $p in PATH=?*) PATH=${p#*=}:$PATH; export PATH;; esac; "+
+			"b=$(tmux show-options -wqv -t %s @branch); "+
+			"d=$(tmux show-options -wqv -t %s @worktree); "+
+			"[ -n \"$d\" ] || d=$(tmux show-options -wqv -t %s @git_root); "+
+			"[ -n \"$b\" ] && [ -n \"$d\" ] || exit 0; "+
+			"exec tmux-pr-enrich --target %s --branch \"$b\" --dir \"$d\" --force",
+		win, win, win, win)
 }
 
 // parseCtl validates a FrameCtl argv and resolves it against the current
