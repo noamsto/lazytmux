@@ -270,3 +270,70 @@ pane_id_for_index() {
 
 	[ "$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src)" = "$SRV_PID-${AGENT#%}" ]
 }
+
+@test "no agent command anywhere (the real restore shape): the hint names the host" {
+	# THE regression this file exists for. A tmux-remux-restored pane reports its
+	# SHELL as pane_current_command, never the relaunched program — the relaunch
+	# is a child sharing the shell's process group. So on the one path this
+	# script exists for there are NO agent matches, and discovery has to run on
+	# the index hint alone. Three panes, none an agent, hint names index 2.
+	make_fake_agent editor
+	make_fake_agent pager
+	spawn_pane editor
+	spawn_pane pager
+	wait_for_pane_cmd 1 editor
+	wait_for_pane_cmd 2 pager
+
+	VIEWER_PANE="$(pane_id_for_index 0)"
+	HINTED="$(pane_id_for_index 2)"
+
+	TMUX_PANE="$VIEWER_PANE" run bash "$SCRIPT" 2
+	[ "$status" -eq 0 ]
+
+	# Before the fix this window restored NOTHING: no agent match ever, and the
+	# sole-sibling fallback declines with two siblings.
+	[ "$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src)" = "$SRV_PID-${HINTED#%}" ]
+	grep -qxF "HOST=$HINTED" "$AEYE_LOG"
+}
+
+@test "no agent command and a hint naming no pane: exits 0, nothing stamped" {
+	# remux's filter can drop a pane and shift every index above it, so a hint
+	# can point at nothing. With more than one sibling there is no way to tell
+	# which is the host, and guessing would key the carousel to the wrong pane —
+	# worse than leaving today's bare shell.
+	make_fake_agent editor
+	make_fake_agent pager
+	spawn_pane editor
+	spawn_pane pager
+	wait_for_pane_cmd 1 editor
+	wait_for_pane_cmd 2 pager
+
+	VIEWER_PANE="$(pane_id_for_index 0)"
+
+	CAROUSEL_RESTORE_TRIES=2 TMUX_PANE="$VIEWER_PANE" run bash "$SCRIPT" 9
+	[ "$status" -eq 0 ]
+
+	got=$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src 2>/dev/null) || got="<unset>"
+	[ "$got" = "<unset>" ]
+	[ ! -s "$AEYE_LOG" ]
+}
+
+@test "an agent command outranks the hint when both resolve" {
+	# The hint is the authority only when commands are useless. In a live session
+	# a pane may have moved since the stamp, so positive evidence (this pane is
+	# running an agent) beats a possibly-stale index.
+	make_fake_agent claude
+	make_fake_agent editor
+	spawn_pane claude
+	spawn_pane editor
+	wait_for_pane_cmd 1 claude
+	wait_for_pane_cmd 2 editor
+
+	VIEWER_PANE="$(pane_id_for_index 0)"
+	AGENT="$(pane_id_for_index 1)"
+
+	TMUX_PANE="$VIEWER_PANE" run bash "$SCRIPT" 2
+	[ "$status" -eq 0 ]
+
+	[ "$(tmux show -pv -t "$VIEWER_PANE" @claude_img_src)" = "$SRV_PID-${AGENT#%}" ]
+}

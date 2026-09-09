@@ -44,29 +44,34 @@ is_agent_cmd() {
 }
 
 # $1 is the pane index the host had when the stamp was written, carried across
-# the restore in the relaunch string itself — the one piece of evidence about
-# WHICH sibling is the host that survives, since tmux-remux restores no pane
-# options and pane ids all change. It is a hint, never an address: tmux-remux's
-# filter can drop a pane (internal/restore/plan.go, SkipPane), which shifts
-# every index above it, so an index used on its own would confidently name the
-# wrong pane. It only breaks ties BETWEEN agent-command matches, where the
-# alternative is an arbitrary pick.
+# the restore in the relaunch string itself. On a restore it is the ONLY usable
+# evidence of which sibling is the host: tmux-remux restores no pane options,
+# every pane id changes, and — measured — a restored pane reports its SHELL as
+# pane_current_command, never the relaunched program, because the relaunch runs
+# as a child sharing the shell's process group and tmux names the group leader
+# (`<cmd>; exec <shell>`, internal/restore/startup.go:42-47). So the agent-name
+# match below cannot fire on the very path this script exists for.
 HOST_HINT="${1:-}"
 [[ $HOST_HINT =~ ^[0-9]+$ ]] || HOST_HINT=""
 
 # scan_host_panes: one list-panes read of this pane's window (tmux scopes
-# list-panes to the target's own window with no -a/-s). Sets HOST to the
-# sibling running an agent command, preferring the one at HOST_HINT and falling
-# back to the lowest pane index. OTHER/OTHER_COUNT track the window's non-self
-# panes for the exit-time fallback below.
-HOST=""
+# list-panes to the target's own window with no -a/-s). Reports three
+# candidates, in the order the resolver below trusts them:
+#   AGENT_HOST — a sibling whose command is an agent: the hinted index if one
+#                matches, else the lowest index. Only available in a live
+#                session, never on a restore (see above).
+#   HINT_HOST  — the sibling sitting at HOST_HINT, whatever it is running.
+#   OTHER/OTHER_COUNT — the window's non-self panes, for the last resort.
+AGENT_HOST=""
+HINT_HOST=""
 OTHER=""
 OTHER_COUNT=0
 scan_host_panes() {
-	HOST=""
+	AGENT_HOST=""
+	HINT_HOST=""
 	OTHER=""
 	OTHER_COUNT=0
-	local best_idx="" hinted="" idx pane_id cmd
+	local best_idx="" hinted_agent="" idx pane_id cmd
 	while IFS='|' read -r idx pane_id cmd; do
 		[[ -n $pane_id && $pane_id != "$TMUX_PANE" ]] || continue
 		# `|| true`: a post-increment from 0 evaluates to 0, which is a
@@ -74,44 +79,61 @@ scan_host_panes() {
 		# first sibling found (claude-status.sh:47-53 does the same).
 		((OTHER_COUNT++)) || true
 		OTHER="$pane_id"
+		[[ -n $HOST_HINT && $idx == "$HOST_HINT" ]] && HINT_HOST="$pane_id"
 		is_agent_cmd "$cmd" || continue
-		[[ -n $HOST_HINT && $idx == "$HOST_HINT" ]] && hinted="$pane_id"
+		[[ -n $HOST_HINT && $idx == "$HOST_HINT" ]] && hinted_agent="$pane_id"
 		if [[ -z $best_idx ]] || ((idx < best_idx)); then
 			best_idx="$idx"
-			HOST="$pane_id"
+			AGENT_HOST="$pane_id"
 		fi
 	done < <(tmux list-panes -t "$TMUX_PANE" -F '#{pane_index}|#{pane_id}|#{pane_current_command}' 2>/dev/null)
-	[[ -n $hinted ]] && HOST="$hinted"
+	[[ -n $hinted_agent ]] && AGENT_HOST="$hinted_agent"
 	return 0
 }
 
-# Bounded retry, not one sample: a command-name match can legitimately miss for
-# a while after a restore.
-#   - Scrollback replay: a restoring pane's startup is
-#     `cat-scrollback <sha>; <relaunch>; exec <shell>`, so pane_current_command
-#     reads "tmux-remux" (not the agent) until the replay finishes.
-#   - A pane-0 carousel is briefly the window's only pane: tmux-remux creates
-#     the window from its first pane and adds the rest as later splits.
-# 250ms * 60 = ~15s, generous enough to outlast either.
+# Bounded retry, not one sample: neither candidate is necessarily there yet.
+#   - A pane-0 carousel is briefly the window's only pane — tmux-remux creates
+#     the window from its first pane and adds the rest as later splits — so the
+#     hinted index names nothing until they land.
+#   - In a live session an agent pane can be mid-exec, or replaying scrollback
+#     (`cat-scrollback` runs first, so the pane reads "tmux-remux").
+# 250ms * 60 = ~15s ceiling, but the loop normally settles in two passes.
 # ${CAROUSEL_RESTORE_TRIES:-} is a test seam (bats shortens the bound so the
-# expiry paths below are reachable in under a second), not a user knob — same
+# expiry path below is reachable in under a second), not a user knob — same
 # shape as AEYE_BIN above; tmux's update-environment never carries it, so a
 # restored pane cannot pick one up.
 tries="${CAROUSEL_RESTORE_TRIES:-60}"
 [[ $tries =~ ^[0-9]+$ ]] || tries=60
+HOST=""
+prev_count=-1
 while :; do
 	scan_host_panes
-	[[ -n $HOST ]] && break
+	# An agent command is positive evidence and is trusted at once. It also
+	# outranks the hint: in a live session the index may have moved since the
+	# stamp, while the command cannot lie about what a pane is running.
+	if [[ -n $AGENT_HOST ]]; then
+		HOST="$AGENT_HOST"
+		break
+	fi
+	# No agent in sight — the restore case. Trust the hint, but only once the
+	# window has stopped changing shape: remux adds panes one at a time and
+	# every insertion renumbers the panes above it, so an index read mid-restore
+	# can name a pane that is about to become someone else.
+	if [[ -n $HINT_HOST && $OTHER_COUNT == "$prev_count" ]]; then
+		HOST="$HINT_HOST"
+		break
+	fi
+	prev_count="$OTHER_COUNT"
 	((tries-- > 0)) || break
 	sleep 0.25
 done
 
-# On expiry, exactly one non-self pane in the window is the host by
-# elimination — matching "not me" is immune to whatever command it shows.
-if [[ -z $HOST ]]; then
-	if ((OTHER_COUNT == 1)); then
-		HOST="$OTHER"
-	fi
+# Last resort: exactly one non-self pane in the window is the host by
+# elimination — matching "not me" is immune to whatever command it shows, and
+# to a hint whose index no longer exists (remux's filter can drop a pane and
+# shift every index above it).
+if [[ -z $HOST ]] && ((OTHER_COUNT == 1)); then
+	HOST="$OTHER"
 fi
 
 # Never a partial stamp: no host found means today's bare shell, unchanged.

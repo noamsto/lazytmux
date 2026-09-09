@@ -1,6 +1,6 @@
 # Restore aeye carousel panes with their images (#577)
 
-> Revision 4. Three designs were refuted before this one, each by code rather
+> Revision 5. Three designs were refuted before this one, each by code rather
 > than opinion, and §"Rejected designs" records all three because each is
 > something the next person will reach for:
 >
@@ -16,10 +16,12 @@
 > launcher guard, no split, no kill. The spec revision cap was lifted by the
 > dispatcher to reach it, on two conditions recorded in §Conditions.
 >
-> **Rev 4 is not finished.** A real save / kill-server / restore against the real
-> `tmux-remux` binary found that host discovery is gated on a signal that does
-> not exist on a restore (fact 11) — see §"KNOWN DEFECT". The mechanism it gates
-> is verified working; the gate is not. PR #584 is a draft for this reason.
+> **Rev 5** reworks host discovery. A real save / kill-server / restore against
+> the real `tmux-remux` binary showed the original gate — matching a sibling's
+> `pane_current_command` against the agent set — can never fire on a restore
+> (fact 11), so a window of three or more panes restored no carousel at all.
+> The pane-index hint is now the authority whenever no agent command is visible.
+> Verified end-to-end against the real binary; see §"Host discovery".
 
 ## Problem
 
@@ -202,46 +204,42 @@ Read out of `/home/noams/Data/git/noamsto/aeye` at `240e707` and
     sandbox test in this repo exercises the restore path end to end, which is
     exactly why it survived the gate.
 
-## KNOWN DEFECT — host discovery is gated on a signal that is absent on restore
+## Host discovery — resolved against fact 11
 
-**Status: not fixed. The PR is a draft for this reason.** The mechanism below is
-correct and verified; the gate in front of it is not.
+Fact 11 kills the obvious gate: matching a sibling's `pane_current_command`
+against the agentdetect set cannot fire on a restore, because every restored
+pane reports its shell. The first implementation did exactly that, and a real
+restore showed the cost — a two-pane window survived only by falling through the
+full ~15s retry into the sole-sibling fallback, and **a window of three or more
+panes restored no carousel at all**.
 
-`tmux-carousel-restore` finds its host by matching a sibling's
-`pane_current_command` against the agentdetect set. Per fact 11 the restored
-agent pane reports `bash`, so **that match never succeeds on a restore** — the
-one path the feature exists for. What follows:
+Discovery therefore resolves in this order, strongest evidence first:
 
-- Every restore burns the full ~15s retry, then survives only via the
-  sole-non-self-sibling fallback.
-- A two-pane window (agent + carousel) works, but slowly and incidentally.
-- A window with three or more panes fails outright: `OTHER_COUNT > 1`, the
-  fallback declines, and no carousel is restored.
-- The pane-index hint is dead code on the restore path, because it only breaks
-  ties *between agent matches* and there are never any.
+1. **A sibling running an agent command** — the one at the hinted index if any,
+   else the lowest index. Positive evidence, trusted immediately, and it
+   deliberately outranks the hint: in a live session a pane may have moved since
+   the stamp, but a command cannot lie about what a pane is running.
+2. **The sibling at the hinted index**, whatever it runs — the restore case,
+   where step 1 is structurally unavailable. Accepted only once the window has
+   stopped changing shape (the non-self pane count is unchanged between two
+   consecutive polls), because remux adds panes one at a time and every
+   insertion renumbers the panes above it; an index read mid-restore can name a
+   pane that is about to become someone else.
+3. **The sole non-self sibling**, after the retry expires — host by elimination,
+   immune both to command names and to a hint whose index no longer exists.
+4. Otherwise exit without stamping, leaving today's bare shell.
 
-Verified working in the same run, so the defect is confined to discovery: across
-a real restore (server pid 528168 → 528696, host pane `%0` → `%1`) the script
-recomputed and stamped `@claude_img_src=528696-1`, stamped
-`@claude_img_axis=side`, exported `AEYE_HOST_PANE=%1`, and left the viewer
-process alive. The key logic, the stamping and the exec are all sound.
+The hint stays a hint: remux's filter can drop a pane and shift every index
+above it (`plan.go:157`), so step 2 can name the wrong pane. That is bounded —
+a wrong sibling keys the carousel to the wrong images, recoverable with one
+`prefix + I` — and step 3 declines rather than guessing when more than one
+sibling remains.
 
-### The fix, for whoever picks this up
-
-Invert the priority. The index hint is the only signal that survives a restore,
-so it must be primary rather than a tie-break:
-
-1. sibling at the hinted index → use it
-2. else exactly one agent-command sibling → use it
-3. else exactly one non-self sibling → use it
-4. else exit without stamping
-
-The hinted pane exists immediately, so most of the 15s retry disappears with it.
-Keep the retry for the no-hint case (a carousel opened but never re-stamped
-before the save). Two harness notes for re-running the end-to-end check: a
-session that was never *attached* is skipped by remux's smart filter as `stale`
-(`internal/filter/filter.go:42-47`, `LastAttached`), and nothing should be
-judged before ~20s or the retry is still running.
+**Verified end-to-end against the real `tmux-remux`**, three-pane window
+(agent / unrelated / carousel), save → `kill-server` → restore: server pid
+2021966 → 2024884, host pane `%0` → `%1`, every restored pane reporting `bash`,
+and the viewer resolved via the hint to `@claude_img_src=2024884-1` with
+`AEYE_HOST_PANE=%1`. That is the exact shape that restored nothing before.
 
 ## Rejected designs
 
@@ -308,9 +306,10 @@ which is the only shape portable across all four shells fact 7(a) allows.
 body is bash regardless of the pane's shell), run in the restored viewer pane,
 where `$TMUX_PANE` is the viewer's **new** id:
 
-1. Find the host: among the panes of its own window, excluding itself, the one
-   whose `pane_current_command` is an agent. Bounded retry, since the agent
-   pane's own relaunch runs asynchronously (fact 9) and may not have exec'd yet.
+1. Find the host among the panes of its own window, excluding itself, by the
+   four-step priority in §"Host discovery" — agent command, then the hinted
+   index once the window has settled, then a sole sibling, else give up.
+   Bounded retry, since neither candidate is necessarily present yet.
 2. Compute `key="<server pid>-<host pane id sans %>"`, the shape `main.go:37`
    documents (see §Conditions — this formula is pinned and tested).
 3. Stamp `@claude_img_src="$key"` on **its own** pane, plus `@claude_img_axis`,
@@ -361,15 +360,19 @@ optional polish.
 
 ### Host discovery is the one heuristic, and it is bounded
 
-There is no way to carry the host pane's identity across a restore: remux
-restores no pane options (fact 6), and the host's new id does not exist at stamp
-time. Discovery is therefore unavoidable, and it is scoped to *within the
-restored window*, using the same agent-command set `tmux-update-icons` already
-derives from the agentdetect manifest. A window holding two agent panes and one
-carousel is ambiguous; the script picks the **lowest pane index** among the
-matches (condition 2 — a stated rule, so the outcome is reproducible) because
-guessing wrong costs a carousel keyed to the wrong sibling — recoverable with one
-keypress — not data.
+The host pane's new id does not exist at stamp time and remux restores no pane
+options (fact 6), so discovery is unavoidable. It is scoped to *within the
+restored window* and ordered by strength of evidence — see §"Host discovery" for
+the four steps and why the pane-index hint has to outrank the agent-command match
+on a restore.
+
+Two residual ambiguities, both bounded. Two agent panes in one window resolve to
+the hinted index, or to the **lowest pane index** when the hint names neither
+(condition 2 — a stated rule, so the outcome is reproducible). And a hint whose
+index shifted (remux dropped a pane) can name the wrong sibling. Either way a
+wrong guess keys the carousel to the wrong sibling's images — recoverable with
+one `prefix + I` — never data loss, and the sole-sibling step declines rather
+than guessing when more than one candidate remains.
 
 ### Key hygiene
 
