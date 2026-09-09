@@ -80,6 +80,7 @@
           inherit pkgs lib;
           tmuxPkg = mkTmux pkgs;
           carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+          carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
           prdash = inputs.prdash.packages.${pkgs.system}.prdash;
         };
 
@@ -504,6 +505,7 @@
                   inherit pkgs lib;
                   tmuxPkg = mkTmux pkgs;
                   carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+                  carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
                   prdash = inputs.prdash.packages.${pkgs.system}.prdash;
                 }
                 // args))
@@ -720,6 +722,53 @@
               cp -r ${./scripts} scripts
               cp -r ${./tests} tests
               bats tests/update-icons-all-windows.bats
+              touch $out
+            '';
+
+          carousel-restore-tests =
+            pkgs.runCommand "carousel-restore-tests" {
+              # tmux: drives a private, config-less server (like
+              # update-icons-resume-guard-tests above). No gnused: both
+              # @carousel_aeye@ and @AGENT_COMMANDS@ have documented
+              # env-var test seams (AEYE_BIN / AGENT_COMMANDS), so the raw
+              # script runs unsubstituted.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/carousel-restore.bats
+              touch $out
+            '';
+
+          # tmux-carousel-restore recomputes aeye's manifest key itself, so a
+          # change on aeye's side breaks the carousel silently — it opens, finds
+          # nothing, and reads as an unrelated bug. Pinned BEHAVIOURALLY: ask
+          # aeye's own shipped launcher what key it derives (`--resolve` is that
+          # script's documented seam and needs no tmux server, it parses $TMUX as
+          # a string) and compare against the shape this repo hardcodes. A
+          # substring grep for `="$srv-` stays green through a key EXTENSION
+          # (`$srv-$pane-$winid`), which is the drift that matters. Reads
+          # ${inputs.aeye}, never a local checkout, which would pass here and
+          # still miss the drift.
+          carousel-key-formula-pin =
+            pkgs.runCommand "carousel-key-formula-pin" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils inputs.aeye.packages.${pkgs.system}.toggle];
+            } ''
+              # Two distinct pairs, so a reordering ("<pane>-<srv>") cannot pass
+              # by coincidence on a single sample.
+              for pair in "12345 %7 12345-7" "999 %0 999-0"; do
+                set -- $pair
+                got="$(TMUX="/tmp/sock,$1,0" TMUX_PANE="$2" tmux-claude-images --resolve | cut -f2)"
+                if [ "$got" != "$3" ]; then
+                  echo "aeye's manifest key formula changed: TMUX_PANE=$2 srv=$1 now derives '$got', expected '$3'." >&2
+                  echo "scripts/tmux-carousel-restore.sh computes <srv>-<pane sans %> and must be updated to match." >&2
+                  exit 1
+                fi
+              done
+
+              # And pin our side, so a change here without one there is equally
+              # loud. Anchored on the assignment, not a bare substring.
+              grep -qF 'key="$srv-''${HOST#%}"' ${./scripts/tmux-carousel-restore.sh}
               touch $out
             '';
 

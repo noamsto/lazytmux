@@ -104,6 +104,18 @@ assert_relaunch() {
 	fi
 }
 
+# run_update_icons_with_carousel VALUE BIN — like run_update_icons, but passes
+# VALUE as $4 (RESUME_CAROUSEL / #{@resume_carousel}) and BIN as
+# CAROUSEL_RESTORE_BIN (a prefix env, not `export`, so the value never has to
+# be read back through a shell variable — see the callers below). $3
+# (SERVER_START) is left blank so the script falls back to its own
+# display-message read against the real private server, same as
+# run_update_icons's $3 does.
+run_update_icons_with_carousel() {
+	UI_LOG="$TDIR/update-icons.log"
+	CAROUSEL_RESTORE_BIN="$2" bash "$UPDATE_ICONS" S on "" "$1" >/dev/null 2>"$UI_LOG" || true
+}
+
 @test "screen-only pane (no hook transcript) does not clobber another agent's relaunch stamp" {
 	printf 'state=idle\ntimestamp=%s\n' "$(date +%s)" >"$CLAUDE_STATUS_DIR/screen/$PANE_ID"
 	tmux set -p -t "%$PANE_ID" @remux_relaunch "cursor-agent --resume abc123"
@@ -249,4 +261,93 @@ assert_relaunch() {
 	# Match the pane id, not tmux's wording — the id is ours, the message is not.
 	grep -q '%999' "$UI_LOG" ||
 		{ echo "write was silent; stderr was [$(cat "$UI_LOG")]" && false; }
+}
+
+# --- RESUME_CAROUSEL (carousel viewer restore, #577) ---
+# A viewer pane has no claude-status state file, so this is a separate pass
+# over the same batched list-panes read, gated on @claude_img_src rather than
+# a pane file. These tests never touch CLAUDE_STATUS_DIR for that reason.
+
+@test "carousel viewer pane gets @remux_relaunch stamped when RESUME_CAROUSEL is on" {
+	local bin="$TDIR/store/tmux-carousel-restore"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
+
+	run_update_icons_with_carousel on "$bin"
+
+	# The stamp carries the host pane's CURRENT index, which is what lets the
+	# restored script break ties between agent panes instead of guessing. Here
+	# @claude_img_src names this very pane, so the index is its own.
+	idx=$(tmux display-message -p -t "%$PANE_ID" '#{pane_index}')
+	assert_relaunch "$bin $idx"
+}
+
+@test "no write is issued when the carousel stamp already matches" {
+	local bin="$TDIR/store/tmux-carousel-restore"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
+	idx=$(tmux display-message -p -t "%$PANE_ID" '#{pane_index}')
+	tmux set -p -t "%$PANE_ID" @remux_relaunch "$bin $idx"
+
+	REAL_TMUX="$(command -v tmux)"
+	SPY_DIR="$TDIR/tmux-spy-carousel"
+	SPY_LOG="$TDIR/tmux-calls-carousel.log"
+	mkdir -p "$SPY_DIR"
+	: >"$SPY_LOG"
+	cat >"$SPY_DIR/tmux" <<-SPYEOF
+		#!/bin/sh
+		printf '%s\n' "\$*" >>"$SPY_LOG"
+		exec "$REAL_TMUX" "\$@"
+	SPYEOF
+	chmod +x "$SPY_DIR/tmux"
+
+	PATH="$SPY_DIR:$PATH" run_update_icons_with_carousel on "$bin"
+
+	# Same vacuity trap as the Claude-stamp version of this test: the stamp
+	# surviving is checked first, so a run that wiped it can't pass by omission.
+	assert_relaunch "$bin $idx"
+	run ! grep -q '^set .*@remux_relaunch' "$SPY_LOG"
+}
+
+@test "RESUME_CAROUSEL off, or the arg omitted entirely, stamps nothing" {
+	local bin="$TDIR/store/tmux-carousel-restore"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
+
+	run_update_icons_with_carousel off "$bin"
+	assert_relaunch "<unset>"
+
+	# The arg omitted entirely, as the run-shell hook invocation
+	# (config/tmux.conf.nix) does — run_update_icons never passes a 4th argv.
+	# CAROUSEL_RESTORE_BIN is supplied anyway: left unset it defaults to the
+	# literal "@carousel_restore@", which trips the independent placeholder
+	# guard on its own, so this case would pass even with the $RESUME_CAROUSEL
+	# check deleted. Passing a real path isolates the missing-$4 default as the
+	# only thing that can keep the stamp away.
+	CAROUSEL_RESTORE_BIN="$bin" run_update_icons
+	assert_relaunch "<unset>"
+}
+
+@test "a pane with no @claude_img_src is never stamped as a carousel viewer" {
+	run_update_icons_with_carousel on "$TDIR/store/tmux-carousel-restore"
+
+	assert_relaunch "<unset>"
+}
+
+@test "the carousel stamp is a bare value: no VAR=value prefix, no shell metacharacters" {
+	local bin="$TDIR/store/abc123-tmux-carousel-restore/bin/tmux-carousel-restore"
+	tmux set -p -t "%$PANE_ID" @claude_img_src "12345-$PANE_ID"
+
+	run_update_icons_with_carousel on "$bin"
+
+	# fact 7(a): the stamp must be valid under fish as well as POSIX sh — no
+	# VAR=value env prefix and no shell metacharacter — checked on the value
+	# tmux actually holds, not on the fixture it was set to.
+	got=$(tmux show -pv -t "%$PANE_ID" @remux_relaunch 2>/dev/null) || got="<unset>"
+	case "$got" in
+	*[A-Za-z_]=*) echo "stamp carries a VAR=value token: [$got]" && false ;;
+	esac
+	# An absolute path, then at most a bare integer (the host pane index). The
+	# space is the only whitespace allowed and nothing else may appear: fish
+	# rejects a VAR=value prefix outright, and any of ;|&$`()<>*?" would be
+	# interpreted by every shell tmux-remux might hand this to.
+	[[ $got =~ ^[A-Za-z0-9/_.-]+( [0-9]+)?$ ]] ||
+		{ echo "stamp is not a bare path plus optional index: [$got]" && false; }
 }
