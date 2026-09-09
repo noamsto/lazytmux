@@ -201,6 +201,16 @@
               touch $out
             '';
 
+          agent-usage-gate-tests =
+            pkgs.runCommand "agent-usage-gate-tests" {
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/agent-usage-gate.bats
+              touch $out
+            '';
+
           reflow-tests =
             pkgs.runCommand "reflow-tests" {
               nativeBuildInputs = [pkgs.bats pkgs.coreutils];

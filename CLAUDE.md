@@ -377,6 +377,12 @@ status line 0. Enabled by default via `programs.lazytmux.agentUsage.enable`.
 - **Both sides gate on "an agent is running".** The poller skips passes and
   the Go renderer hides the segment (live `list-panes -a` scan, basenames
   normalized for nix's `.foo-wrapped`) when no pane runs a manifest command.
+  In the poller that gate precedes the `.last-tick` stamp, and the order is
+  load-bearing: stamping first meant every agent-free tick spent a refresh
+  cycle, so the first tick after an agent started was refused and the segment
+  reappeared showing the previous session's numbers for one more window. The
+  `#()` path stays cheap either way — the stamp's mtime check short-circuits
+  first, so the scan forks at most once per `refreshSeconds`.
 - **Monthly is threshold-gated** (`monthlyThreshold`, default 50): the monthly
   spend window renders only at/above that utilization; short windows (5h, 7d)
   are always on. Colors: <70 green, <90 peach, ≥90 red.

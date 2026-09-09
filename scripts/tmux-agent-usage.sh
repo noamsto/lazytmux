@@ -8,7 +8,10 @@
 #
 # A pass only runs while a coding-agent pane exists somewhere: the display
 # gate (tmux-statusline) hides the segment otherwise, so polling would burn
-# provider quota for an invisible segment.
+# provider quota for an invisible segment. Both modes check that gate, and in
+# tick mode it precedes the .last-tick stamp — a gated-out tick that spent the
+# cycle would leave the segment on the previous session's numbers for a second
+# refresh window after an agent starts.
 set -uo pipefail
 
 # shellcheck source=/dev/null
@@ -20,6 +23,22 @@ REFRESH_SECONDS="@refresh_seconds@"
 # (claude codex cursor-agent) — same source as the update-icons sweep.
 AGENT_COMMANDS="@AGENT_COMMANDS@"
 
+# agent_running: true while some pane's foreground command is a coding agent.
+# One `list-panes` fork, reached only past the refresh window in tick mode.
+agent_running() {
+	local cmds cmd base agent
+	cmds=$(tmux list-panes -a -F '#{pane_current_command}' 2>/dev/null) || return 1
+	while IFS= read -r cmd; do
+		base=${cmd##*/}
+		base=${base#.}
+		base=${base%-wrapped}
+		for agent in $AGENT_COMMANDS; do
+			[[ $base == "$agent" ]] && return 0
+		done
+	done <<<"$cmds"
+	return 1
+}
+
 mode="tick"
 [[ ${1:-} == "--tick-run" ]] && mode="tickrun"
 
@@ -28,6 +47,10 @@ if [[ $mode == "tick" ]]; then
 	if [[ -f $last_tick ]] && ((EPOCHSECONDS - $(file_mtime "$last_tick") < REFRESH_SECONDS)); then
 		exit 0
 	fi
+	# Gate BEFORE the stamp: a tick with no agent must not spend the cycle, or
+	# the first tick after an agent appears waits out another one and the segment
+	# comes back showing the last agent session's numbers.
+	agent_running || exit 0
 	# Mark fresh BEFORE daemonizing (same best-effort trade as tmux-pr-enrich):
 	# a crashed pass waits one cycle.
 	mkdir -p "$CACHE_DIR" 2>/dev/null
@@ -37,22 +60,10 @@ if [[ $mode == "tick" ]]; then
 fi
 
 # --- tick-run ---
+# Re-checked here because --tick-run is its own entry point, and an agent can
+# exit between the tick's gate and the detached pass.
+agent_running || exit 0
 mkdir -p "$CACHE_DIR" 2>/dev/null
-
-cmds=$(tmux list-panes -a -F '#{pane_current_command}' 2>/dev/null) || exit 0
-running=0
-while IFS= read -r cmd; do
-	base=${cmd##*/}
-	base=${base#.}
-	base=${base%-wrapped}
-	for agent in $AGENT_COMMANDS; do
-		[[ $base == "$agent" ]] && {
-			running=1
-			break 2
-		}
-	done
-done <<<"$cmds"
-((running)) || exit 0
 
 # Per-provider lock: two overlapping passes (stale .last-tick race) otherwise
 # curl the same endpoint twice; the atomic cache write makes the loser harmless.
