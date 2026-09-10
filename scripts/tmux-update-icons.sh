@@ -461,7 +461,7 @@ main() {
 					# renumber-window is on, so an index captured during the read
 					# above can slide onto a neighbour before either lands.
 					tmux set-option -t "${win_cwd_pane[$wkey]}" -w @window_cwd_seen "$cwd"
-					"$RECONCILE_BIN" "${win_cwd_pane[$wkey]}" >/dev/null 2>&1 &
+					"$RECONCILE_BIN" "${win_cwd_pane[$wkey]}" --cwd-move >/dev/null 2>&1 &
 					disown
 				fi
 			fi

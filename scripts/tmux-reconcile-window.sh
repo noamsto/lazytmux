@@ -7,11 +7,15 @@
 # worktree window, and reused by the worktrunk post-switch hook for navigation.
 #
 # Usage:
-#   tmux-reconcile-window <target>                      # cwd-derived (creation hooks)
+#   tmux-reconcile-window <target>               # cwd-derived (creation hooks)
+#   tmux-reconcile-window <target> --cwd-move     # cwd-derived (#596 move detector)
 #   tmux-reconcile-window <target> <worktree> <branch>  # explicit (post-switch nav)
 # <target> is any tmux target; the creation hooks pass #{window_id} (globally
 # unique), which sidesteps both numeric-session ambiguity and $-reexpansion.
 # Explicit mode trusts its caller to name a worktree a pane is in, or moving to.
+# --cwd-move marks a call from tmux-update-icons's cwd-move detector rather than
+# a creation hook — see the forced-reflow gate below for why that distinction
+# can't be recovered from @worktree state alone.
 set -uo pipefail
 
 target="${1:-}"
@@ -24,6 +28,7 @@ target="${1:-}"
 # Empty when enrich is disabled (Nix build-time substitution).
 issue_stamp="@issue_stamp@"
 
+cwd_move=0
 if [[ -n ${2:-} && -n ${3:-} ]]; then
 	# Explicit mode: the caller (worktrunk) knows the worktree/branch
 	# authoritatively. Avoids reading pane_current_path, which lags behind the
@@ -31,8 +36,8 @@ if [[ -n ${2:-} && -n ${3:-} ]]; then
 	top="$2"
 	br="$3"
 	root="$2"
-	explicit_mode=1
 else
+	[[ ${2:-} == "--cwd-move" ]] && cwd_move=1
 	# cwd mode: derive from the target window's active pane. Read the path PINNED
 	# to the target — a bare #{pane_current_path} in a hook resolves against the
 	# attached client's active window, not the just-created one.
@@ -45,7 +50,6 @@ else
 	# a detached HEAD, which is fine — tags still set, stamp self-bails below.
 	br=$(git -C "$cwd" branch --show-current 2>/dev/null) || br=""
 	root="$top"
-	explicit_mode=0
 fi
 
 # Idempotent: skip the writes (and the redundant issue-stamp) when nothing changed.
@@ -88,13 +92,19 @@ if [[ -n $issue_stamp && -n $br ]]; then
 	disown
 fi
 
-if [[ -n $cur_wt && $explicit_mode -eq 0 ]]; then
-	# Force a reflow on a re-tag in cwd mode only: window creation is excluded
-	# (the after-new-window hook already reflows) and explicit mode is
-	# excluded (worktrunk's post-switch already reflows too, so every `wt
-	# switch` would otherwise pay an extra forced reflow). Needed at all
-	# because this otherwise relies on tmux-issue-stamp to reflow, and that
-	# only runs when enrich is enabled AND the branch is non-empty.
+if [[ $cwd_move -eq 1 ]]; then
+	# Force a reflow only for a call from the #596 cwd-move detector, never a
+	# bare creation-hook call: window creation is excluded (the after-new-window
+	# hook already reflows) and explicit mode is excluded (worktrunk's
+	# post-switch already reflows too, so every `wt switch` would otherwise pay
+	# an extra forced reflow). `-n $cur_wt` used to stand in for "this is a
+	# re-tag, not creation", but a window untagged since creation (no @worktree
+	# at all — e.g. it started in a non-git cwd) hits this same first-time-tag
+	# shape on its first successful move into a repo, and that call is
+	# indistinguishable from creation by @worktree state alone (#605) — hence a
+	# caller-supplied flag instead. Needed at all because this otherwise relies
+	# on tmux-issue-stamp to reflow, and that only runs when enrich is enabled
+	# AND the branch is non-empty.
 	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	disown
 fi
