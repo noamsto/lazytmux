@@ -173,6 +173,14 @@ if [[ -z $id ]]; then
 	tmux set-option -t "$target" -wu @issue_explicit_id 2>/dev/null
 	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	log_enabled && log_event enrich event stamp_clear win_id "$win_id" sess "$(tmux display-message -t "$target" -p '#{session_name}' 2>/dev/null || true)"
+	# A branch with no issue id still has a PR (the common case) — kick the same
+	# immediate fetch the id-found path does below, rather than waiting on
+	# tmux-pr-enrich's own full pass (up to prRefreshSeconds, 120s default).
+	# Guarded on $worktree: with --dir "" the poller skips its cd and gh would
+	# run in the tmux server's cwd, the wrong-repo bug this script's header calls out.
+	if [[ -n $worktree ]]; then
+		@pr_enrich@ --target "$target" --branch "$branch" --dir "$worktree" --force >/dev/null 2>&1 &
+	fi
 	disown -a
 	exit 0
 fi

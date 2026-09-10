@@ -139,6 +139,19 @@ wait_for() {
 	grep -q 'unset @issue_id' "$STATE/setlog"
 }
 
+@test "branch-derived: no match still kicks a PR fetch when worktree is non-empty" {
+	run bash "$STAMP" sess:1 /repo unrelated-branch
+	[ "$status" -eq 0 ]
+	wait_for "$STATE/prlog"
+	grep -q -- '--force' "$STATE/prlog"
+}
+
+@test "branch-derived: no match skips the PR fetch when worktree is empty" {
+	run bash "$STAMP" sess:1 "" unrelated-branch
+	[ "$status" -eq 0 ]
+	[ ! -f "$STATE/prlog" ]
+}
+
 @test "explicit-id mode: GH-<number> resolves via github, skipping branch derivation" {
 	run bash "$STAMP" sess:1 /repo unrelated-branch GH-42
 	[ "$status" -eq 0 ]

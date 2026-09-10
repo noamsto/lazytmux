@@ -31,6 +31,7 @@ if [[ -n ${2:-} && -n ${3:-} ]]; then
 	top="$2"
 	br="$3"
 	root="$2"
+	explicit_mode=1
 else
 	# cwd mode: derive from the target window's active pane. Read the path PINNED
 	# to the target — a bare #{pane_current_path} in a hook resolves against the
@@ -44,6 +45,7 @@ else
 	# a detached HEAD, which is fine — tags still set, stamp self-bails below.
 	br=$(git -C "$cwd" branch --show-current 2>/dev/null) || br=""
 	root="$top"
+	explicit_mode=0
 fi
 
 # Idempotent: skip the writes (and the redundant issue-stamp) when nothing changed.
@@ -53,11 +55,47 @@ cur_br=$(tmux show-options -t "$target" -wqv @branch 2>/dev/null)
 
 tmux set-option -t "$target" -w @worktree "$top"
 tmux set-option -t "$target" -w @git_root "$root"
-[[ -n $br ]] && tmux set-option -t "$target" -w @branch "$br"
+if [[ -n $br ]]; then
+	tmux set-option -t "$target" -w @branch "$br"
+elif [[ -n $cur_wt ]]; then
+	# Re-tag onto a detached HEAD: otherwise the previous repository's branch
+	# stays in place beside the new @worktree, and tmux-pr-enrich groups the
+	# window under the new @worktree but queries the OLD repo's branch name
+	# inside it.
+	tmux set-option -t "$target" -wu @branch 2>/dev/null
+fi
+
+if [[ -n $cur_wt && $cur_wt != "$top" ]]; then
+	# @worktree actually changed on a re-tag: only a successful fetch
+	# overwrites these, and nothing reads @pr_branch, so the old repo's PR
+	# badge/URL would otherwise survive the move. Clearing @pr_state and
+	# @pr_check_state specifically also keeps notify_pr_change from firing a
+	# false "PR merged"/"checks failed" toast on the next fetch, since it reads
+	# an empty prior field as discovery.
+	tmux set-option -t "$target" -wu @pr_number 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_title 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_state 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_check_state 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_url 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_mergeable 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_draft 2>/dev/null
+	tmux set-option -t "$target" -wu @pr_branch 2>/dev/null
+fi
 
 # Derive @issue_* from the branch (enrich only; placeholder empty when disabled).
 if [[ -n $issue_stamp && -n $br ]]; then
 	"$issue_stamp" "$target" "$top" "$br" >/dev/null 2>&1 &
+	disown
+fi
+
+if [[ -n $cur_wt && $explicit_mode -eq 0 ]]; then
+	# Force a reflow on a re-tag in cwd mode only: window creation is excluded
+	# (the after-new-window hook already reflows) and explicit mode is
+	# excluded (worktrunk's post-switch already reflows too, so every `wt
+	# switch` would otherwise pay an extra forced reflow). Needed at all
+	# because this otherwise relies on tmux-issue-stamp to reflow, and that
+	# only runs when enrich is enabled AND the branch is non-empty.
+	@reflow@ "$(tmux display-message -t "$target" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	disown
 fi
 

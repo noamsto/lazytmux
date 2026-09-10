@@ -21,6 +21,9 @@ AGENT_DETECT_BIN="${AGENT_DETECT_BIN:-@agent_detect_bin@}"
 # tmux-reconcile-window's issue-stamp wiring); ${ISSUE_STAMP_BIN:-...} likewise
 # lets tests inject a real path via env.
 ISSUE_STAMP_BIN="${ISSUE_STAMP_BIN:-@issue_stamp@}"
+# Same shape: empty (unsubstituted @*) means the cwd-move re-stamp (#596) below
+# is off; ${RECONCILE_BIN:-...} likewise lets tests inject a real path via env.
+RECONCILE_BIN="${RECONCILE_BIN:-@reconcile@}"
 # Store path to tmux-carousel-restore, substituted at Nix build time when the
 # carousel viewer package is wired in (left as "@carousel_restore@" otherwise —
 # see the RESUME_CAROUSEL guard below, which never reaches an unsubstituted
@@ -35,6 +38,18 @@ CAROUSEL_RESTORE_BIN="${CAROUSEL_RESTORE_BIN:-@carousel_restore@}"
 normalize_wrapped_cmd() {
 	REPLY="$1"
 	[[ $REPLY == .*-wrapped ]] && REPLY="${REPLY#.}" && REPLY="${REPLY%-wrapped}"
+}
+
+# under PATH BASE
+# True when PATH is BASE itself, or nested under it — mirrors the awk under()
+# in tmux-worktree-match.sh. A nested .worktrees/ checkout belongs to a
+# different branch, and a plain prefix match would also read
+# "/x/lazytmux-old" as inside "/x/lazytmux". False when either is empty.
+under() {
+	local p="$1" base="$2"
+	[[ -z $p || -z $base ]] && return 1
+	[[ $p == "$base" ]] && return 0
+	[[ $p == "$base"/* && $p != "$base"/.worktrees/* ]]
 }
 
 # Arms `agent-detect` on agent panes that don't already have a live pipe,
@@ -139,6 +154,12 @@ main() {
 	declare -A pane_to_win win_procs win_pane_path win_cur_branch win_active_pane win_cur_task win_cur_name pane_cur_relaunch pane_img_src pane_idx
 	declare -A win_cur_display win_cur_padded win_cur_ago win_cur_rename win_cur_crew win_cur_crew_seen win_cur_bridge
 	declare -A all_sess sess_cur_active_icon sess_cur_session_fg sess_active_proc sess_active_win
+	# cwd-move re-stamp (#596): win_cwd/win_cwd_pane/win_worktree/win_cwd_seen are
+	# captured on the window's first NON-floating pane — a separate authority from
+	# win_pane_path's plain first-pane-wins, since a floating scratch pane commonly
+	# sits in a different directory. win_poison fails a window closed when a '|' in
+	# a path has shifted its fields (see the read loop below).
+	declare -A win_cwd win_cwd_pane win_worktree win_cwd_seen win_poison
 	# '|' delimiter, not tab: tab is IFS-whitespace, so an empty middle field (a
 	# window with no @branch yet) collapses and shifts every later field left,
 	# corrupting cur_branch/active flags. session_id ($N) is the session field —
@@ -155,12 +176,25 @@ main() {
 	# "1" or empty and @bridge_proc is a command name, so both do too.
 	# @claude_img_src is aeye's own pane option (a "<server pid>-<pane>" key, or
 	# empty) — no '|', so it too stays a fixed middle field before the task.
-	while IFS='|' read -r pane_id sess idx pidx pane_path proc cur_branch pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_img_src cur_task; do
+	# pane_floating_flag and pane_active are both closed sets ("0"/"1"), so —
+	# like session_id — they're safe as fixed middle fields no matter what's in
+	# neighboring paths; win_poison below fails a window closed when either reads
+	# outside that set, since a shifted row can never be told apart from a
+	# genuine one. @worktree and @window_cwd_seen are paths and carry the same
+	# '|' exposure pane_current_path already does, so both sit ahead of
+	# pane_active/window_active — a '|' in either then cannot shift the flags the
+	# rest of this script trusts as fixed-format.
+	while IFS='|' read -r pane_id sess idx pidx pane_path proc cur_branch pane_floating cur_worktree cur_cwd_seen pane_active window_active cur_ai_name cur_relaunch cur_display cur_padded cur_ago cur_rename opt_active_icon opt_session_fg cur_crew cur_crew_seen cur_bridge bridge_proc cur_img_src cur_task; do
 		[[ -n $pane_id ]] || continue
 		# A mirror pane runs the bridge renderer; @bridge_proc carries what the
 		# remote pane is actually running, which is what the icons should show.
 		[[ -n $bridge_proc ]] && proc="$bridge_proc"
 		wkey="$sess:$idx"
+		# A '|' in a path shifts every field after it in THIS row; pane_active is
+		# the fixed-format canary. Fail closed like tmux-worktree-match's NF check:
+		# poison the whole window rather than risk a compare that can never
+		# settle, which would be a reconcile fork every tick forever.
+		[[ $pane_active == 0 || $pane_active == 1 ]] || win_poison[$wkey]=1
 		pane_to_win["${pane_id#%}"]="$wkey"
 		pane_cur_relaunch["${pane_id#%}"]="$cur_relaunch"
 		pane_img_src["${pane_id#%}"]="$cur_img_src"
@@ -185,6 +219,18 @@ main() {
 			win_cur_crew_seen[$wkey]="$cur_crew_seen"
 			win_cur_bridge[$wkey]="$cur_bridge"
 		fi
+		# cwd authority (#596): the FIRST NON-FLOATING pane, not the first pane full
+		# stop and not the active pane — a floating scratch pane commonly sits in a
+		# different directory, and keying on the active pane would re-tag the
+		# window on every `prefix + o` between two repos, which is
+		# user-gesture-driven git/gh/reflow load for a keystroke that changed
+		# nothing.
+		if [[ -z ${win_cwd[$wkey]+x} && $pane_floating != 1 ]]; then
+			win_cwd[$wkey]="$pane_path"
+			win_cwd_pane[$wkey]="$pane_id"
+			win_worktree[$wkey]="$cur_worktree"
+			win_cwd_seen[$wkey]="$cur_cwd_seen"
+		fi
 		# The task file is keyed by the pane Claude runs in, so resolve the genuinely
 		# active pane (list-panes orders by index, not active-first).
 		[[ $pane_active == 1 ]] && win_active_pane[$wkey]="${pane_id#%}"
@@ -199,7 +245,7 @@ main() {
 		*" $proc "*) ;;
 		*) win_procs[$wkey]="${existing:+$existing }$proc" ;;
 		esac
-	done < <(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_index}|#{pane_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@claude_img_src}|#{@window_task}')
+	done < <(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_index}|#{pane_index}|#{pane_current_path}|#{pane_current_command}|#{@branch}|#{pane_floating_flag}|#{@worktree}|#{@window_cwd_seen}|#{pane_active}|#{window_active}|#{@window_ai_name}|#{@remux_relaunch}|#{@window_icon_display}|#{@window_icon_padded}|#{@window_claude_ago}|#{automatic-rename}|#{@active_pane_icon}|#{@claude_session_fg}|#{@crew_name}|#{@crew_seen}|#{@bridge_win}|#{@bridge_proc}|#{@claude_img_src}|#{@window_task}')
 
 	arm_agent_detect
 
@@ -340,7 +386,14 @@ main() {
 		all_idx+=("$wkey")
 		s="${wkey%:*}"
 		idx="${wkey##*:}"
-		pane_path="${win_pane_path[$wkey]}"
+		# win_cwd (first non-floating pane), not win_pane_path (first pane full
+		# stop): the #137 branch poll below and the cwd-move gate must read the
+		# same pane, or they stamp @branch/@git_root from different panes and
+		# revert each other on a split window. Falls back to win_pane_path for a
+		# window that is ALL float — killing the last tiled pane leaves one — since
+		# the poll writes whatever git returns, and an empty path would blank
+		# @branch/@git_root and then re-fork git every tick on the -z arm below.
+		pane_path="${win_cwd[$wkey]:-${win_pane_path[$wkey]}}"
 		target="$wkey"
 
 		# Task label tracks the active pane's self-reported "what Claude is doing"
@@ -376,6 +429,42 @@ main() {
 		if [[ ${win_cur_crew[$wkey]:-} != "${win_cur_crew_seen[$wkey]:-}" ]]; then
 			tmux set -qw -t "$target" @crew_seen "${win_cur_crew[$wkey]:-}"
 			sess_need_reflow[$s]=1
+		fi
+
+		# cwd-move re-stamp (#596): a window whose first non-floating pane cd'd into
+		# a different worktree keeps the old repo's @worktree/@branch/@git_root
+		# forever — no tmux hook fires on a plain `cd`. Ride this batched read and
+		# delegate the actual re-tagging to the reconciler, which already knows how
+		# to derive @worktree/@branch/@git_root/@issue_* from a target pane and
+		# bails on a bridge mirror itself — this gate only decides WHEN to fire it.
+		# No sess_need_reflow here: the reconciler forces its own reflow, and one
+		# fired from here would race ahead of the stamps it is meant to render.
+		if [[ $RECONCILE_BIN != @* && -z ${win_poison[$wkey]:-} && ${win_cur_bridge[$wkey]:-} != 1 && -n ${win_cwd[$wkey]:-} ]]; then
+			cwd="${win_cwd[$wkey]}"
+			# Free path: a cwd already inside its stamped worktree (same repo, or a
+			# `cd` deeper into it) costs nothing and writes nothing — the common
+			# case on every tick, and what keeps a 40-window tmux-remux restore from
+			# firing 40 reconciles at once.
+			if ! under "$cwd" "${win_worktree[$wkey]:-}"; then
+				# Bounds what the free path above cannot settle: after a move into a
+				# non-git directory the reconciler exits without writing, so
+				# @worktree still names the old repo and the check above stays true
+				# forever. The memo is what stops that being one fork per tick.
+				if [[ $cwd != "${win_cwd_seen[$wkey]:-}" ]]; then
+					# Direct argv, not the tmux_cmds/`tmux source -` batch below: a
+					# directory name can legally contain a single quote, which a
+					# batched single-quoted token has no escape for — same hazard
+					# the @branch write below documents. No -q either, same reason:
+					# a lost write should surface as a loud "invalid option", not
+					# silently return 0 (#373).
+					# Both calls target the PANE, never "$target" ($sess:$idx):
+					# renumber-window is on, so an index captured during the read
+					# above can slide onto a neighbour before either lands.
+					tmux set-option -t "${win_cwd_pane[$wkey]}" -w @window_cwd_seen "$cwd"
+					"$RECONCILE_BIN" "${win_cwd_pane[$wkey]}" >/dev/null 2>&1 &
+					disown
+				fi
+			fi
 		fi
 
 		# Branch detection forks git per window. A branch only changes in the window
