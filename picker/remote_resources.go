@@ -31,8 +31,9 @@ var remoteResourcesCmd = `getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1; ` +
 	remoteTmuxCmd(`list-panes -a -F '#{session_name}|#{pane_pid}'`) +
 	`; echo ` + remoteResourcesSeparator + `; ps ` + strings.Join(psArgs, " ")
 
-// remoteHostResources is one host's reply: CPU normalised against its own core
-// count, keyed by remote session name.
+// remoteHostResources is one host's reply: per-session totals in the same
+// unit the local leg produces (a raw per-core ps sum), plus the host's core
+// count so the renderer can scale colour against the right machine.
 type remoteHostResources struct {
 	cores     int
 	bySession map[string]sessionResources
@@ -64,9 +65,9 @@ func ensureRemoteResourceCacheLocked() {
 }
 
 // parseRemoteResources turns remoteResourcesCmd's stdout into per-session
-// totals, with CPU divided by the remote's core count so the column reads as
-// "% of that machine" — a raw ps sum is per-core and a 64-core remote would
-// report several thousand percent against a column sized for this machine.
+// totals. CPU stays the raw per-core ps sum the local leg also produces: one
+// column cannot carry two units, and dividing by the remote's core count
+// compressed every row on a 32-core host into a permanent "<1%".
 func parseRemoteResources(stdout string) remoteHostResources {
 	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
 	if len(lines) == 0 {
@@ -102,10 +103,6 @@ func parseRemoteResources(stdout string) remoteHostResources {
 	}
 
 	res := aggregateResources(rootPIDs, strings.Join(rest[psStart:], "\n"))
-	for sess, r := range res {
-		r.cpuPct /= float64(cores)
-		res[sess] = r
-	}
 	return remoteHostResources{cores: cores, bySession: res}
 }
 
@@ -208,6 +205,7 @@ func mergeRemoteResources(sessions []sessionData) {
 		}
 		sessions[i].cpuPct = r.cpuPct
 		sessions[i].memMB = r.memMB
+		sessions[i].cores = float64(res.cores)
 	}
 }
 

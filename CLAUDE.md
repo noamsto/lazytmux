@@ -167,11 +167,17 @@ session, not the local renderers its panes actually run (`picker/remote_resource
   whatever the user set, and fish reads `echo --` as end-of-options and prints a
   blank line, which silently swallowed it and left every mirror at 0% / 0M.
   `getconf _NPROCESSORS_ONLN`, never `nproc` — coreutils-only, absent on macOS.
-- **CPU is normalised by the remote's core count**, so the column reads as "% of
-  that machine". A raw `ps` sum is per-core: a 24-core remote reports figures a
-  column sized to `numCPU * 100` for *this* machine cannot hold. The knock-on is
-  that real remote work often lands under 1%, which is why `formatCPU` renders
-  `<1%` instead of rounding to a flat `0%`.
+- **CPU is the raw per-core `ps` sum on both legs, and the host's core count
+  rides beside it.** Normalising the remote leg by its own core count read as
+  "% of that machine", but the local leg does no such division, so one column
+  carried two units 32x apart — measured on a 32-core remote, every session
+  rendered a permanent `<1%` (a whole core pegged reads 3%). `sessionData.cores`
+  now carries the owning machine's count (0 means this one) and `cpuColor`
+  scales against *that*, where before it divided an already-divided remote value
+  by the local `numCPU` again and pinned every mirror row to the grey tint. The
+  column widens off the rendered strings, so `cpuColWidth` stays a floor.
+  Unrelated and still true of both legs: `ps` `%CPU` is a lifetime average, not
+  a rate, so a long-lived pane's figure lags reality in either direction.
 - **Never blocks the render.** `remoteResourcesFor` returns what is cached and
   kicks a background refresh (`remoteResourceTTL`, 10s — an ssh round-trip where
   the local leg costs a fork). A host already in flight is skipped, not queued,

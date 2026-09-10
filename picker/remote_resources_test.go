@@ -57,9 +57,10 @@ func TestParseRemoteResources(t *testing.T) {
 	if got.cores != 8 {
 		t.Fatalf("cores = %d, want 8", got.cores)
 	}
-	// 80% summed over 8 cores is 10% of the machine.
-	if got.bySession["work"].cpuPct != 10.0 {
-		t.Errorf("work cpu = %v, want 10.0", got.bySession["work"].cpuPct)
+	// The raw per-core sum, undivided: the local leg reports the same unit,
+	// and one column cannot carry two.
+	if got.bySession["work"].cpuPct != 80.0 {
+		t.Errorf("work cpu = %v, want 80.0", got.bySession["work"].cpuPct)
 	}
 	if got.bySession["work"].memMB != 4.0 {
 		t.Errorf("work mem = %v MiB, want 4.0", got.bySession["work"].memMB)
@@ -167,6 +168,14 @@ func TestMergeRemoteResourcesOverridesRendererFigures(t *testing.T) {
 	if sessions[1].cpuPct != 12 || sessions[1].memMB != 300 {
 		t.Errorf("mirror kept renderer figures: %+v", sessions[1])
 	}
+	// The remote's core count rides along, or the colour scales against this
+	// machine's and a mirror row is grey whatever the host is doing.
+	if sessions[1].cores != 4 {
+		t.Errorf("mirror cores = %v, want 4", sessions[1].cores)
+	}
+	if sessions[0].cores != 0 {
+		t.Errorf("local session must keep cores unset (means this machine): %+v", sessions[0])
+	}
 	// lab has not answered: the row must say "unknown", not show the
 	// renderer's figures and not a fabricated zero.
 	if !sessions[2].resUnknown {
@@ -190,5 +199,20 @@ func TestFormatCPUSubOnePercent(t *testing.T) {
 	// The reserved column must still fit the widest string it can produce.
 	if len("<1%") > cpuColWidth() {
 		t.Errorf("<1%% (%d cells) overflows the %d-cell CPU column", len("<1%"), cpuColWidth())
+	}
+}
+
+func TestCPUColorScalesAgainstTheRowsOwnMachine(t *testing.T) {
+	rc := resourceColors{low: "low", med: "med", high: "high", crit: "crit"}
+	// One core pegged: critical on a single-core host, background noise on 32.
+	if got := rc.cpuColor(100, 1); got != rc.crit {
+		t.Errorf("100%% of 1 core = %q, want crit", got)
+	}
+	if got := rc.cpuColor(100, 32); got != rc.low {
+		t.Errorf("100%% of 32 cores = %q, want low", got)
+	}
+	// A local row carries no core count and must fall back to this machine's.
+	if got := rc.cpuColor(numCPU*100, 0); got != rc.crit {
+		t.Errorf("fully loaded local row = %q, want crit", got)
 	}
 }
