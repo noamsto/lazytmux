@@ -721,6 +721,10 @@
       script = "cursor-status-hook";
       summary = "Cursor CLI status hook entry point";
     };
+    "carousel restore" = {
+      script = "tmux-carousel-restore";
+      summary = "Rebind an aeye carousel viewer after a tmux-remux restore (not run directly)";
+    };
     "codex stamp" = {
       script = "codex-relaunch-stamp";
       summary = "Stamp Codex relaunch state";
