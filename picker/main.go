@@ -61,6 +61,7 @@ type sessionData struct {
 	cpuPct     float64 // total CPU% across all descendant processes
 	memMB      float64 // total RSS in MiB across all descendant processes
 	resUnknown bool    // mirror whose host has not reported yet: render "-", never the renderer's own figures
+	cores      float64 // cores of the machine these processes run on; 0 means this one
 }
 
 type windowData struct {
@@ -566,8 +567,7 @@ func mergeResources(sessions []sessionData, res map[string]sessionResources) {
 }
 
 // formatCPU returns a compact CPU% string. Busy but under 1% reads as "<1%",
-// not a flat 0%: a mirror's figure is divided by the remote's core count, so
-// real work routinely lands below one percent.
+// not a flat 0%: a single process ticking over lands there on either leg.
 func formatCPU(cpuPct float64) string {
 	if cpuPct > 0 && cpuPct < 1 {
 		return "<1%"
@@ -606,10 +606,14 @@ func newResourceColors(tmuxOpts map[string]string) resourceColors {
 
 var numCPU = float64(runtime.NumCPU())
 
-// cpuColor thresholds scale with core count:
+// cpuColor thresholds scale with the core count of the machine the processes
+// run on, which for a mirror row is the remote's, not this one's:
 // low: <10% of total, med: <25%, high: <60%, crit: ≥60%
-func (rc resourceColors) cpuColor(pct float64) string {
-	ratio := pct / (numCPU * 100)
+func (rc resourceColors) cpuColor(pct, cores float64) string {
+	if cores < 1 {
+		cores = numCPU
+	}
+	ratio := pct / (cores * 100)
 	switch {
 	case ratio < 0.10:
 		return rc.low

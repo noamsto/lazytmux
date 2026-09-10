@@ -1941,7 +1941,7 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 			hostCell(r.sess.bridgeHost, cName),
 			icons,
 			cpuPad,
-			rc.cpuColor(r.sess.cpuPct)+cpuStrs[i]+reset,
+			rc.cpuColor(r.sess.cpuPct, r.sess.cores)+cpuStrs[i]+reset,
 			cDim+"/"+reset,
 			memPad,
 			rc.memColor(r.sess.memMB)+memStrs[i]+reset,
