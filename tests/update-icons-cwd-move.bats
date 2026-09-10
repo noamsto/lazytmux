@@ -121,7 +121,7 @@ wait_for() {
 	wait_for "$RECONCILE_LOG"
 
 	top_b="$(git -C "$REPO_B" rev-parse --show-toplevel)"
-	[ "$(cat "$RECONCILE_LOG")" = "$pane_id" ]
+	[ "$(cat "$RECONCILE_LOG")" = "$pane_id --cwd-move" ]
 	[ "$(tmux show -wv -t "$WIN" @window_cwd_seen)" = "$top_b" ]
 
 	# Settles: no re-fire on a later tick over the same (now-seen) cwd.
@@ -154,7 +154,7 @@ wait_for() {
 	pane_id="$(tmux display -t "$WIN" -p '#{pane_id}')"
 	run_update_icons
 	wait_for "$RECONCILE_LOG"
-	[ "$(cat "$RECONCILE_LOG")" = "$pane_id" ]
+	[ "$(cat "$RECONCILE_LOG")" = "$pane_id --cwd-move" ]
 	[ "$(tmux show -wv -t "$WIN" @window_cwd_seen)" = "$top_a" ]
 
 	run_update_icons
@@ -195,7 +195,7 @@ wait_for() {
 
 	run_update_icons
 	wait_for "$RECONCILE_LOG"
-	[ "$(cat "$RECONCILE_LOG")" = "$pane_id" ]
+	[ "$(cat "$RECONCILE_LOG")" = "$pane_id --cwd-move" ]
 	[ "$(tmux show -wv -t "$WIN" @window_cwd_seen)" = "$(physical "$NONGIT")" ]
 
 	run_update_icons

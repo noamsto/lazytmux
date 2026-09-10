@@ -123,20 +123,34 @@ wait_for() {
 	[ "$(cat "$STATE/stamplog")" = "@1 /some/worktree feat/95-explicit" ]
 }
 
-@test "re-tag in cwd mode fires the reflow fake exactly once with --force" {
+@test "re-tag in cwd mode with --cwd-move fires the reflow fake exactly once with --force" {
 	printf '%s' "$TOP" >"$STATE/opt_@worktree"
 	printf '%s' "old-branch" >"$STATE/opt_@branch"
-	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1 --cwd-move
 	[ "$status" -eq 0 ]
 	wait_for "$STATE/reflowlog"
 	[ "$(wc -l <"$STATE/reflowlog")" -eq 1 ]
 	grep -q -- '--force' "$STATE/reflowlog"
 }
 
-@test "creation seed does not fire the reflow" {
+@test "creation seed tags from empty but does not fire the reflow" {
+	# No prior @worktree — the plain creation-hook call shape — proves the
+	# loosened gate didn't bring back the duplicate reflow on window creation.
 	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
 	[ "$status" -eq 0 ]
+	[ "$(cat "$STATE/opt_@worktree")" = "$TOP" ]
 	[ ! -f "$STATE/reflowlog" ]
+}
+
+@test "a window untagged since creation, reconciled via --cwd-move once it sits in a repo, fires the reflow fake exactly once" {
+	# No prior @worktree at all (the #605 case: window was created in a non-git
+	# cwd, so the creation seed exited early and never tagged it).
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1 --cwd-move
+	[ "$status" -eq 0 ]
+	[ "$(cat "$STATE/opt_@worktree")" = "$TOP" ]
+	wait_for "$STATE/reflowlog"
+	[ "$(wc -l <"$STATE/reflowlog")" -eq 1 ]
+	grep -q -- '--force' "$STATE/reflowlog"
 }
 
 @test "idempotent early exit does not fire the reflow" {
