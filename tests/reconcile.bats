@@ -10,11 +10,13 @@ setup() {
 	export FAKE_TMUX_STATE="$STATE"
 
 	# Fake tmux: answers display-message/show-options from env+state, records
-	# every set-option to $STATE/setlog and mirrors the value into $STATE/opt_*.
-	# Arg shapes match reconcile's exact calls:
+	# every set-option (both -w OPT VAL and the -wu OPT unset form) to
+	# $STATE/setlog and mirrors into $STATE/opt_*. Arg shapes match reconcile's
+	# exact calls:
 	#   display-message -t T -p FMT      (we only need pane_current_path -> FAKE_CWD)
 	#   show-options    -t T -wqv OPT    -> OPT is $5
 	#   set-option      -t T -w OPT VAL  -> OPT is $5, VAL is $6
+	#   set-option      -t T -wu OPT     -> OPT is $5 (unset)
 	cat >"$FAKEBIN/tmux" <<-'EOF'
 		#!/bin/sh
 		st="$FAKE_TMUX_STATE"
@@ -24,8 +26,13 @@ setup() {
 			[ -f "$st/opt_$5" ] && cat "$st/opt_$5"
 			;;
 		set-option)
-			printf '%s' "$6" >"$st/opt_$5"
-			echo "$5=$6" >>"$st/setlog"
+			if [ "$4" = "-wu" ]; then
+				rm -f "$st/opt_$5"
+				echo "unset $5" >>"$st/setlog"
+			else
+				printf '%s' "$6" >"$st/opt_$5"
+				echo "$5=$6" >>"$st/setlog"
+			fi
 			;;
 		esac
 		exit 0
@@ -39,9 +46,19 @@ setup() {
 	EOF
 	chmod +x "$FAKEBIN/issue-stamp"
 
-	# Build a runnable reconcile with the @issue_stamp@ placeholder resolved.
+	# Fake reflow: records its argv so we can assert whether/how it fired.
+	cat >"$FAKEBIN/reflow" <<-'EOF'
+		#!/bin/sh
+		echo "$*" >>"$FAKE_TMUX_STATE/reflowlog"
+	EOF
+	chmod +x "$FAKEBIN/reflow"
+
+	# Build a runnable reconcile with the @issue_stamp@/@reflow@ placeholders resolved.
 	RECONCILE="$BATS_TEST_TMPDIR/reconcile.sh"
-	sed "s|@issue_stamp@|$FAKEBIN/issue-stamp|" scripts/tmux-reconcile-window.sh >"$RECONCILE"
+	sed \
+		-e "s|@issue_stamp@|$FAKEBIN/issue-stamp|" \
+		-e "s|@reflow@|$FAKEBIN/reflow|" \
+		scripts/tmux-reconcile-window.sh >"$RECONCILE"
 
 	# A real git worktree to derive from, on a known branch.
 	REPO="$BATS_TEST_TMPDIR/repo"
@@ -104,4 +121,68 @@ wait_for() {
 	[ "$(cat "$STATE/opt_@branch")" = "feat/95-explicit" ]
 	wait_for "$STATE/stamplog"
 	[ "$(cat "$STATE/stamplog")" = "@1 /some/worktree feat/95-explicit" ]
+}
+
+@test "re-tag in cwd mode fires the reflow fake exactly once with --force" {
+	printf '%s' "$TOP" >"$STATE/opt_@worktree"
+	printf '%s' "old-branch" >"$STATE/opt_@branch"
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	wait_for "$STATE/reflowlog"
+	[ "$(wc -l <"$STATE/reflowlog")" -eq 1 ]
+	grep -q -- '--force' "$STATE/reflowlog"
+}
+
+@test "creation seed does not fire the reflow" {
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	[ ! -f "$STATE/reflowlog" ]
+}
+
+@test "idempotent early exit does not fire the reflow" {
+	printf '%s' "$TOP" >"$STATE/opt_@worktree"
+	printf '%s' "feat/95-test" >"$STATE/opt_@branch"
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	[ ! -f "$STATE/reflowlog" ]
+}
+
+@test "explicit mode does not fire the reflow even on a re-tag" {
+	printf '%s' "/old/worktree" >"$STATE/opt_@worktree"
+	printf '%s' "old-branch" >"$STATE/opt_@branch"
+	FAKE_CWD="$PLAIN" run bash "$RECONCILE" @1 "/some/worktree" "feat/95-explicit"
+	[ "$status" -eq 0 ]
+	[ ! -f "$STATE/reflowlog" ]
+}
+
+@test "re-tag onto a detached HEAD unsets @branch" {
+	git -C "$REPO" checkout -q --detach
+	printf '%s' "$TOP" >"$STATE/opt_@worktree"
+	printf '%s' "old-branch" >"$STATE/opt_@branch"
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	grep -q 'unset @branch' "$STATE/setlog"
+	[ ! -f "$STATE/opt_@branch" ]
+}
+
+@test "re-tag that changes @worktree unsets all eight @pr_* options" {
+	printf '%s' "/old/worktree" >"$STATE/opt_@worktree"
+	printf '%s' "old-branch" >"$STATE/opt_@branch"
+	for opt in @pr_number @pr_title @pr_state @pr_check_state @pr_url @pr_mergeable @pr_draft @pr_branch; do
+		printf 'x' >"$STATE/opt_$opt"
+	done
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	for opt in @pr_number @pr_title @pr_state @pr_check_state @pr_url @pr_mergeable @pr_draft @pr_branch; do
+		[ ! -f "$STATE/opt_$opt" ]
+	done
+}
+
+@test "re-tag that does not change @worktree leaves @pr_* alone" {
+	printf '%s' "$TOP" >"$STATE/opt_@worktree"
+	printf '%s' "old-branch" >"$STATE/opt_@branch"
+	printf 'keep' >"$STATE/opt_@pr_number"
+	FAKE_CWD="$REPO" run bash "$RECONCILE" @1
+	[ "$status" -eq 0 ]
+	[ "$(cat "$STATE/opt_@pr_number")" = "keep" ]
 }

@@ -712,6 +712,18 @@
               touch $out
             '';
 
+          update-icons-cwd-move-tests =
+            pkgs.runCommand "update-icons-cwd-move-tests" {
+              # tmux: drives a private, config-less server (like reflow-fanout-tests);
+              # git: builds two real repos to exercise a genuine cwd move.
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.git pkgs.tmux];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/update-icons-cwd-move.bats
+              touch $out
+            '';
+
           update-icons-resume-guard-tests =
             pkgs.runCommand "update-icons-resume-guard-tests" {
               # tmux: drives a private, config-less server (like reflow-fanout-tests);

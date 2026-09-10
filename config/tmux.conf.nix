@@ -420,7 +420,7 @@
   mkScriptIcons = name:
     pkgs.writeShellScriptBin name
     (builtins.replaceStrings
-      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@AGENT_COMMANDS@" "@issue_stamp@" "@carousel_restore@"])
+      (iconSubstFrom ++ ["@reflow@" "@agent_detect_bin@" "@AGENT_COMMANDS@" "@issue_stamp@" "@carousel_restore@" "@reconcile@"])
       (iconSubstTo
         ++ [
           "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
@@ -432,6 +432,7 @@
             else ""
           )
           carouselRestoreBin
+          "${script.tmux-reconcile-window}/bin/tmux-reconcile-window"
         ])
       (builtins.readFile ../scripts/${name}.sh));
 
@@ -587,13 +588,14 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@issue_stamp@"]
+      ["@issue_stamp@" "@reflow@"]
       [
         (
           if enrichEnable
           then "${script.tmux-issue-stamp}/bin/tmux-issue-stamp"
           else ""
         )
+        "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
       ]
       raw;
   in
@@ -1233,7 +1235,10 @@
     # primary navigation path), while pane-focus-in fires on every pane focus
     # change, the hottest per-interaction path in this config, and
     # tmux-reconcile-window forks ~7 subprocesses even in its idempotent
-    # branch. Not worth it.
+    # branch. Not worth it. That residual gap is closed since #596, in
+    # tmux-update-icons' batched read instead of a hook: it already walks every
+    # pane each tick, so noticing the move costs a format field rather than a
+    # fork, and it fires only when the cwd leaves the window's @worktree.
 
     # Mirror local pane focus onto the remote inside a bridge window.
     # after-select-pane is the reliable seam: it fires whether or not a client is
