@@ -258,6 +258,25 @@ setup_sweep() {
 	[[ "$(cat "$BATS_TEST_TMPDIR/reap.log")" == *'%3'*'codex'* ]]
 }
 
+@test "a non-empty first argument (the monitor-hook sweep caller) skips the reap entirely" {
+	# claude_reap_dead_panes deletes from CLAUDE_STATUS_DIR by checking pane
+	# ids against THIS CALLER's own list-panes -a -- safe for the per-tick
+	# status-format caller (gated by this server's own attached client), but
+	# the monitor-hook sweep runs on a client-independent timer on every
+	# wrapped-tmux server on the machine, which shares that same /tmp
+	# directory regardless of TMUX_TMPDIR/-L isolation. A non-empty first
+	# argument is exactly how main() marks that caller (see its
+	# LZTMUX_TICK_SWEEP dispatch), so arm_agent_detect must not reap on it.
+	setup_sweep
+	run bash -c '
+		claude_reap_dead_panes() { printf "%s" "$1" >"'"$BATS_TEST_TMPDIR"'/reap.log"; }
+		source scripts/tmux-update-icons.sh
+		arm_agent_detect force
+	'
+	[ "$status" -eq 0 ]
+	[ ! -s "$BATS_TEST_TMPDIR/reap.log" ]
+}
+
 @test "sweep still reaps when both arm and stamp are off" {
 	# arm=0 (AGENT_DETECT_BIN falls back to the unsubstituted placeholder) and
 	# stamp=0 (no ASSUME_DEAD_AFTER) together used to bail before the

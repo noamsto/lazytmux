@@ -327,10 +327,11 @@ var verbs = map[string]verb{
 		cmd := fmt.Sprintf("run-shell -b -t %s %s", pane, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
-	// The enrich card's [r] in a mirror window: the remote's own tmux-pr-enrich
-	// has never run for a bridged session (its poller is a status-line #(), and
-	// a control client renders no status line), so a local refresh cannot reach
-	// the values the card displays. This asks the remote to poll its own window.
+	// The enrich card's [r] in a mirror window: a local refresh cannot reach the
+	// values the card displays, since the remote's own tmux-pr-enrich runs
+	// against the remote's checkout, not this daemon's. This asks the remote to
+	// poll its own window on demand instead of waiting out the poller's own
+	// prRefreshSeconds/prCheckRefreshSeconds interval.
 	//
 	// No windows/layout/moves: the poller opens nothing and moves nothing, and
 	// its result comes home as a %subscription-changed label row, never a
