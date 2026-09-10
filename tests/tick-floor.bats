@@ -106,11 +106,18 @@ pane_pipe_armed() { [ "$(t display-message -p -t "$1" '#{pane_pipe}')" = 1 ]; }
 }
 
 @test "sweep arms pipe-pane on an agent pane with zero clients attached" {
-	# A standalone non-multicall process named "claude": `read` is a builtin,
-	# so bash never execs into a second process image, and exec -a's argv[0]
-	# rename survives intact -- unlike coreutils' sleep/cat/etc, which are a
-	# multicall binary that dispatches (and fails) on argv[0] itself.
-	t new-window -t s:99 -c "$PWD" -- bash -c 'exec -a claude bash -c "read x"'
+	# A process whose command name really is "claude" on BOTH platforms: a
+	# copy of the bash binary under that name (the pattern
+	# update-icons-all-windows.bats already uses). `exec -a claude bash` only
+	# rewrites argv[0], which is what linux's tmux reads (/proc cmdline) --
+	# darwin's tmux reads pbsi_comm, the exec'd FILE's name, so an exec -a
+	# fixture reports "bash" there, the agent manifest never matches, and the
+	# sweep correctly finds nothing to arm (the darwin-only failure this test
+	# had through six CI probe rounds on #608). `read` is a builtin, so the
+	# copy never execs into a second image.
+	cp -L "$(command -v bash)" "$BATS_TEST_TMPDIR/claude"
+	chmod +x "$BATS_TEST_TMPDIR/claude"
+	t new-window -t s:99 -c "$PWD" -- "$BATS_TEST_TMPDIR/claude" -c 'read x'
 	wait_for 20 pane_pipe_armed s:99
 }
 
