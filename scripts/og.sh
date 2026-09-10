@@ -74,11 +74,18 @@ if [[ $# -ge 2 ]]; then
 fi
 
 # A noun with subverbs (status, notify) also owning a bare one-token verb
-# only takes the bare match when it is the whole command -- any second token
-# is ambiguous between a passthrough argument and a misspelled/unknown
-# subverb, and letting it through here would skip the unknown_command /
-# print_noun_help path below for those two nouns.
-if [[ -z $verb && -n $1 && -n ${OG_TARGET[$1]+x} ]] && { [[ $# -eq 1 ]] || ! noun_has_subverbs "$1"; }; then
+# takes the bare match whenever a second token can't be an attempted subverb
+# spelling: the whole command, or a flag (subverbs are always bare words, so
+# a leading "-" can only be a passthrough argument). A bare second word is
+# ambiguous between a passthrough argument and a misspelled/unknown subverb,
+# so it falls through to the unknown_command/print_noun_help path below --
+# --help/-h stay excluded from the flag case since those spellings are
+# themselves how a noun's own help is requested.
+if [[ -z $verb && -n $1 && -n ${OG_TARGET[$1]+x} ]] && {
+	[[ $# -eq 1 ]] ||
+		! noun_has_subverbs "$1" ||
+		{ [[ ${2-} == -* ]] && [[ $2 != "--help" && $2 != "-h" ]]; }
+}; then
 	verb="$1"
 	target="${OG_TARGET[$1]}"
 	remaining=("${@:2}")

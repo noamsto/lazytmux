@@ -549,6 +549,17 @@
                 target = "${stub}/bin/stub";
                 summary = "stub";
               };
+              # A noun with both a bare verb and a subverb, mirroring status/
+              # notify's shape -- proves the flag-vs-subverb distinction
+              # without depending on a real script's own argument grammar.
+              "s" = {
+                target = "${stub}/bin/stub";
+                summary = "stub bare";
+              };
+              "s x" = {
+                target = "${stub}/bin/stub";
+                summary = "stub sub";
+              };
             };
           in
             pkgs.runCommand "og-dispatch-assertions" {
@@ -678,6 +689,32 @@
 
               status_help_out=$("$OG_BIN" status --help)
               grep -qE "^  status update( |\$)" <<<"$status_help_out"
+
+              # notify goes through the identical code path as status; cover
+              # it too rather than asserting on one representative noun.
+              rc=0
+              notify_bogus_out=$("$OG_BIN" notify frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: notify frobnicate" <<<"$notify_bogus_out"
+
+              notify_help_out=$("$OG_BIN" notify --help)
+              grep -qE "^  notify center( |\$)" <<<"$notify_help_out"
+
+              # a flag after the bare verb still passes through -- only a
+              # bare word is ambiguous with a subverb attempt. Exercised on
+              # the stub table (see ogStub's "s"/"s x" pair above) rather
+              # than the real status/notify scripts, whose own argument
+              # grammar this derivation has no business asserting on.
+              stub_flag_out=$("$OG_STUB_BIN" s --flag foo)
+              stub_flag_count=$(head -n1 <<<"$stub_flag_out")
+              [ "$stub_flag_count" = "2" ]
+              grep -qxF '[--flag]' <<<"$stub_flag_out"
+              grep -qxF '[foo]' <<<"$stub_flag_out"
+
+              rc=0
+              stub_bogus_out=$("$OG_STUB_BIN" s frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: s frobnicate" <<<"$stub_bogus_out"
 
               # the existing `remote` noun (subverbs only, no bare verb) is
               # unchanged by the guard above.
