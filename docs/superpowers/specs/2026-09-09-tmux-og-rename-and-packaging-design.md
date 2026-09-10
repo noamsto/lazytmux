@@ -147,8 +147,9 @@ renameable by anyone here. POSIX, coreutils and init-system names are
    cold-start path (`scripts/lztmux-remote-open.sh:224-231`). It survives the
    rename only because the name carries no project prefix; step 3 must keep
    it that way deliberately, not by luck.
-5. `tmux` itself — the single most-sent name. `config/tmux.conf.nix:1289-1298`
-   builds `tmux-wrapped`, whose only binary is `$out/bin/tmux` with
+5. `tmux` itself — the single most-sent name. `config/tmux.conf.nix`'s
+   `tmux-wrapped = pkgs.symlinkJoin` builds `tmux-wrapped`, whose only binary
+   is `$out/bin/tmux` with
    `meta.mainProgram = "tmux"`, installed by `modules/home-manager.nix:1022`.
    It is sent to the remote by bare name with a hard-coded per-user-profile
    fallback from `picker/remote.go:39` (the session probe and

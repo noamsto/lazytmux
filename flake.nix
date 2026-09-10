@@ -584,8 +584,19 @@
               remote_count=$(grep -cE '^  ' <<<"$remote_out")
               [ "$remote_count" -eq 5 ]
 
-              # 2: every target printed by --help is executable.
+              # 2: every target printed by --help is executable -- except a
+              # bare noun that also owns subverbs (status, notify), where
+              # "--help" means noun help (see check 12) rather than this
+              # verb's own summary/target.
               while read -r v; do
+                case "$v" in
+                  *' '*) ;;
+                  *)
+                    if grep -qE "^$v " <<<"$verbs"; then
+                      continue
+                    fi
+                    ;;
+                esac
                 # shellcheck disable=SC2086
                 target=$("$OG_BIN" $v --help | tail -1)
                 [ -x "$target" ]
@@ -656,6 +667,25 @@
               remote_help_count=$(grep -cE '^  ' <<<"$remote_help_out")
               [ "$remote_help_count" -eq 5 ]
 
+              # 12: a noun that owns both a bare one-token verb and subverbs
+              # (status, notify) must not let the bare match swallow a second
+              # token -- that bypassed unknown_command/print_noun_help below
+              # for exactly those two nouns.
+              rc=0
+              status_bogus_out=$("$OG_BIN" status frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: status frobnicate" <<<"$status_bogus_out"
+
+              status_help_out=$("$OG_BIN" status --help)
+              grep -qE "^  status update( |\$)" <<<"$status_help_out"
+
+              # the existing `remote` noun (subverbs only, no bare verb) is
+              # unchanged by the guard above.
+              rc=0
+              remote_bogus_out=$("$OG_BIN" remote frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: remote frobnicate" <<<"$remote_bogus_out"
+
               # 10: `og` never appears in the generated tmux config.
               if grep -qF "$OG" "$CONF"; then
                 echo "og store path leaked into the generated tmux config" >&2
@@ -664,7 +694,10 @@
 
               # 11: `og` also never reaches the tmux server's own PATH --
               # only scripts partitioned into ogVerbSpec/ogInternal do.
-              if grep -qF "$OG" "$TMUX_WRAPPED/bin/.tmux-wrapped"; then
+              # wrapProgram moves the pristine binary to bin/.tmux-wrapped and
+              # writes the PATH-bearing wrapper script to bin/tmux -- grepping
+              # the pristine binary would never see the PATH text at all.
+              if grep -qF "$OG" "$TMUX_WRAPPED/bin/tmux"; then
                 echo "og store path leaked into the tmux wrapper's PATH" >&2
                 exit 1
               fi

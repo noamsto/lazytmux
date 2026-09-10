@@ -73,7 +73,12 @@ if [[ $# -ge 2 ]]; then
 	fi
 fi
 
-if [[ -z $verb && -n $1 && -n ${OG_TARGET[$1]+x} ]]; then
+# A noun with subverbs (status, notify) also owning a bare one-token verb
+# only takes the bare match when it is the whole command -- any second token
+# is ambiguous between a passthrough argument and a misspelled/unknown
+# subverb, and letting it through here would skip the unknown_command /
+# print_noun_help path below for those two nouns.
+if [[ -z $verb && -n $1 && -n ${OG_TARGET[$1]+x} ]] && { [[ $# -eq 1 ]] || ! noun_has_subverbs "$1"; }; then
 	verb="$1"
 	target="${OG_TARGET[$1]}"
 	remaining=("${@:2}")
