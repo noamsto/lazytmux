@@ -123,14 +123,67 @@ none carries the project name: `@claude_status`, `@claude_task`,
 `@lztmux_theme_applied`, and 30 of the 31 `LZTMUX_*` variables, which are
 daemon-to-child and same-revision by construction.
 
-**Genuinely crosses a machine boundary:**
+**Genuinely crosses a machine boundary:** any name this repo or one of its
+flake inputs owns that is sent to a remote host by bare name. The ownership
+qualifier is load-bearing — the literal class "any binary name sent to a
+remote" also captures `sh`, `id`, `uname`, `hostname`, `cat`, `stat`,
+`getconf`, `ps`, `mktemp`, `find`, `rm`, `printf`, `systemctl`, `launchctl`
+and more. All of those are genuinely sent over ssh; none of them is
+renameable by anyone here. POSIX, coreutils and init-system names are
+**explicitly out of class**.
+
+**Crosses, and this repo owns the name:**
 
 1. `lztmux-remote-picker` — its presence on the remote *is* the capability
-   probe. Renamed, an un-rebuilt remote reports "remote lazytmux too old".
+   probe. Renamed, an un-rebuilt remote reports "remote lazytmux too old"
+   (`scripts/lztmux-remote-picker.sh:227`).
 2. `LZTMUX_RELAY_GRAPHICS` — written by the local daemon into the remote
-   session's environment and read there.
+   session's environment and read there
+   (`picker/remotebridge/daemon/relayenv.go:15`).
 3. The plugin marketplace name — `lazytmux@lazytmux` is what installed users
    have pinned.
+4. `tmux-startup.service` and its launchd label
+   `org.nix-community.home.tmux-startup` — restarted by name over ssh on the
+   cold-start path (`scripts/lztmux-remote-open.sh:224-231`). It survives the
+   rename only because the name carries no project prefix; step 3 must keep
+   it that way deliberately, not by luck.
+5. `tmux` itself — the single most-sent name. `config/tmux.conf.nix:1289-1298`
+   builds `tmux-wrapped`, whose only binary is `$out/bin/tmux` with
+   `meta.mainProgram = "tmux"`, installed by `modules/home-manager.nix:1022`.
+   It is sent to the remote by bare name with a hard-coded per-user-profile
+   fallback from `picker/remote.go:39` (the session probe and
+   `picker/remote_resources.go:30`'s resource fetch), from
+   `scripts/lztmux-remote-open.sh:129`, and from
+   `picker/remotebridge/cmd/daemon/main.go:169` (`LZTMUX_BRIDGE_TMUX`
+   defaults to the bare name). Like the startup unit, it survives the rename
+   only because the name carries no project prefix — step 3 must keep it
+   that way deliberately.
+
+**Crosses, owned elsewhere:** `tmux-claude-images`
+(`picker/remotebridge/daemon/ctl.go:405,416`, the `aeye` input),
+`theme-toggle` (`ctl.go:323,339`, ships from the desktop profile), `prdash`,
+`lazygit`, `yazi` (`ctl.go:153-164`, third-party tool binds), and
+`tmux-remux` (`scripts/lztmux-remote-open.sh:264`,
+`picker/remote.go:70`, a separate repo). None of these is this repo's to
+rename.
+
+**The audit surface regenerates from a two-leg grep, not a file list that
+rots:**
+
+1. **Executed binaries** — grep `picker/**` and `scripts/lztmux-remote-*.sh`
+   for `command -v`, `sh -c` and `ssh`, then filter to names owned by this
+   repo or its flake inputs. That leg returns seven files today:
+   `picker/remotebridge/daemon/ctl.go`, `scripts/lztmux-remote-open.sh`,
+   `picker/remote.go`, `picker/remote_resources.go`,
+   `picker/remotebridge/graphics/fetch.go`, `picker/remotebridge/cmd/daemon/main.go`,
+   and `scripts/lztmux-remote-picker.sh`. It is "files that execute code on a
+   remote host, to be audited then filtered by ownership" — not "files that
+   send owned names", which is why `graphics/fetch.go` is on the list despite
+   sending only `stat` and `cat`, both out of class.
+2. **Published environment** — grep for control-mode `set-environment`. This
+   leg exists because `LZTMUX_RELAY_GRAPHICS` crosses by being *written into
+   the remote session's environment* rather than executed; leg 1 can never
+   return it.
 
 Because the flip is hard, halo and both laptops must be rebuilt in the same
 sitting. Either order leaves the probe failing until the last host lands.

@@ -1053,7 +1053,7 @@ in {
 
       home = {
         packages =
-          [tmuxConfig.tmux-wrapped]
+          [tmuxConfig.tmux-wrapped tmuxConfig.og]
           ++ lib.optionals cfg.worktrunk.enable [pkgs.worktrunk]
           ++ lib.optionals (cfg.persist.enable && cfg.persist.package != null) [cfg.persist.package]
           ++ lib.optionals cfg.agentIntegration.enable [
