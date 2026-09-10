@@ -3,6 +3,7 @@ package main
 import (
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,10 +11,11 @@ import (
 	"github.com/noamsto/lazytmux/picker/enrichstate"
 )
 
-// cfg holds the launch-time flags: target, the poller binary to spawn for
-// refresh, the theme palette, and the enrich glyphs (raw — NOT ##-escaped).
+// cfg holds the launch-time flags: target, the PR-poller and issue-stamp
+// binaries to spawn for refresh, the theme palette, and the enrich glyphs
+// (raw — NOT ##-escaped).
 type cfg struct {
-	target, prEnrichBin string
+	target, prEnrichBin, issueStampBin string
 	// bridgeCtlBin/bridgeSock/bridgePane give a mirror window's [r] a ctl
 	// handle to the remote's own poller (D5). All three are empty on a
 	// non-mirror window, and can also be empty on a mirror whose bind
@@ -254,16 +256,49 @@ func openCmd(url string) tea.Cmd {
 	}
 }
 
-// refreshCmd runs the poller's single-target --force pass and BLOCKS until it
-// exits (a synchronous gh call, ~1-2s), then signals done. This converges the
-// spinner deterministically rather than guessing from a value-diff.
+// issueStampArgs builds tmux-issue-stamp's positional argv: target, dir,
+// branch, plus the explicit id as a 4th element when non-empty. explicitID is
+// only ever non-empty for a window stamped via `claude-status-update enrich
+// <ID>` (#137) — its real branch doesn't encode the issue, so a 3-arg
+// re-invocation would fall through to branch derivation and wipe a correct id
+// instead of re-resolving it (#599).
+func issueStampArgs(target, dir, branch, explicitID string) []string {
+	args := []string{target, dir, branch}
+	if explicitID != "" {
+		args = append(args, explicitID)
+	}
+	return args
+}
+
+// shouldStampIssue reports whether refreshCmd should also re-run the
+// issue-stamp binary. dir == "" means a reclaimed worktree: branch derivation
+// would find nothing and github's origin check would fail open, wiping a
+// valid stamp the same way an unresolved backfill-sweep candidate would
+// (#599) — so refresh must skip that leg rather than risk the wipe.
+func shouldStampIssue(c cfg, w winState, dir string) bool {
+	return c.issueStampBin != "" && w.branch != "" && dir != ""
+}
+
+// refreshCmd runs the PR poller's and (when known) the issue-identity
+// stamp's single-target --force-equivalent passes concurrently and BLOCKS
+// until both exit, then signals done. This converges the spinner
+// deterministically rather than guessing from a value-diff.
 func refreshCmd(c cfg, w winState) tea.Cmd {
 	dir := w.worktree
 	if dir == "" {
 		dir = w.gitRoot
 	}
 	return func() tea.Msg {
-		_ = exec.Command(c.prEnrichBin, "--target", c.target, "--branch", w.branch, "--dir", dir, "--force").Run()
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			_ = exec.Command(c.prEnrichBin, "--target", c.target, "--branch", w.branch, "--dir", dir, "--force").Run()
+		})
+		if shouldStampIssue(c, w, dir) {
+			wg.Go(func() {
+				_ = exec.Command(c.issueStampBin, issueStampArgs(c.target, dir, w.branch, w.issueExplicitID)...).Run()
+			})
+		}
+		wg.Wait()
 		return refreshDoneMsg{}
 	}
 }

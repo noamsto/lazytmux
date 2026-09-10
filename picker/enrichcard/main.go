@@ -14,6 +14,7 @@ func main() {
 	flag.StringVar(&c.bridgeCtlBin, "bridge-ctl-bin", "", "path to lztmux-remote-bridge-ctl, for [r] in a mirror")
 	flag.StringVar(&c.bridgeSock, "bridge-sock", "", "bridge daemon socket, for [r] in a mirror")
 	flag.StringVar(&c.bridgePane, "bridge-pane", "", "remote pane id, for [r] in a mirror")
+	flag.StringVar(&c.issueStampBin, "issue-stamp-bin", "tmux-issue-stamp", "path to the issue-identity stamp binary")
 	flag.StringVar(&c.fg, "thm-fg", "", "")
 	flag.StringVar(&c.mauve, "thm-mauve", "", "")
 	flag.StringVar(&c.red, "thm-red", "", "")

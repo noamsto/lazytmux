@@ -676,6 +676,18 @@
               touch $out
             '';
 
+          issue-backfill-tests =
+            pkgs.runCommand "issue-backfill-tests" {
+              # git: one test builds a real repo in $HOME to exercise the
+              # live-branch-vs-stale-argument override (like reconcile-tests).
+              nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.git];
+            } ''
+              cp -r ${./scripts} scripts
+              cp -r ${./tests} tests
+              bats tests/issue-backfill.bats
+              touch $out
+            '';
+
           enrich-command-tests =
             pkgs.runCommand "enrich-command-tests" {
               # git: the test derives worktree/branch from a real repo it builds

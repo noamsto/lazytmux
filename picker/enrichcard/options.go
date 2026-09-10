@@ -8,11 +8,12 @@ import (
 // winState is the live per-window enrichment data, read from tmux window
 // options. The card reflects these — it never re-derives issue/PR/claude data.
 type winState struct {
-	issueProvider, issueID, issueTitle, issueURL           string
+	issueProvider, issueID, issueTitle, issueURL            string
+	issueExplicitID                                         string
 	prNumber, prTitle, prState, prCheck, prURL, prMergeable string
-	prDraft                                                string
-	branch, worktree, gitRoot                              string
-	task, claudeAgo, paneIcon                              string
+	prDraft                                                 string
+	branch, worktree, gitRoot                               string
+	task, claudeAgo, paneIcon                               string
 }
 
 // winOpts is the raw parse of one `show-options -w` read: the window's own
@@ -57,6 +58,8 @@ func parseWindowOptions(out string, o *winOpts) {
 			o.local.issueTitle = val
 		case "@issue_url":
 			o.local.issueURL = val
+		case "@issue_explicit_id":
+			o.local.issueExplicitID = val
 		case "@pr_number":
 			o.local.prNumber = val
 		case "@pr_title":
