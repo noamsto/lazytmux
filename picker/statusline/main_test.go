@@ -375,18 +375,37 @@ func TestPaneSlotPadDirectionLiveTmux(t *testing.T) {
 		t.Skip("tmux is not available")
 	}
 
-	socket := "statusline-575-test-" + strings.ReplaceAll(t.Name(), "/", "-")
-	if out, err := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t1").CombinedOutput(); err != nil {
+	// tmux never unlinks a socket file on exit, so a server started in the
+	// ambient TMUX_TMPDIR leaves a dead entry in the user's runtime dir on
+	// every run. A private short dir (the path is capped at ~108 bytes) keeps
+	// the leftover inside what the cleanup removes.
+	tmpdir, err := os.MkdirTemp("", "lz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpdir) })
+	const socket = "s"
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmpdir)
+
+	start := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t1")
+	start.Env = env
+	if out, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("start tmux: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
+	t.Cleanup(func() {
+		stop := exec.Command("tmux", "-L", socket, "kill-server")
+		stop.Env = env
+		_ = stop.Run()
+	})
 
 	// Wraps the rendered format in sentinel brackets and strips only those
 	// plus the trailing newline — a stray strings.TrimSpace would erase the
 	// exact leading/trailing pad cells this test exists to measure.
 	render := func(icon, cmd string, adjacentToUsage bool) string {
 		format := "[" + paneSlot(icon, cmd, adjacentToUsage) + "]"
-		out, err := exec.Command("tmux", "-L", socket, "display-message", "-p", "-t", "t1", "-F", format).Output()
+		show := exec.Command("tmux", "-L", socket, "display-message", "-p", "-t", "t1", "-F", format)
+		show.Env = env
+		out, err := show.Output()
 		if err != nil {
 			t.Fatalf("display-message: %v", err)
 		}

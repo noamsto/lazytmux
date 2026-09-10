@@ -52,14 +52,32 @@ func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 
 	maliciousSess := "zz#(touch " + marker + ")x"
 
-	socket := "daemon-368-test-" + strings.ReplaceAll(t.Name(), "/", "-")
-	if out, err := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t1").CombinedOutput(); err != nil {
+	// tmux never unlinks a socket file on exit, so a server started in the
+	// ambient TMUX_TMPDIR leaves a dead entry in the user's runtime dir on
+	// every run. A private short dir (the path is capped at ~108 bytes) keeps
+	// the leftover inside what the cleanup removes.
+	tmpdir, err := os.MkdirTemp("", "lz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpdir) })
+	const socket = "s"
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmpdir)
+
+	start := exec.Command("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t1")
+	start.Env = env
+	if out, err := start.CombinedOutput(); err != nil {
 		t.Fatalf("start tmux: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
+	t.Cleanup(func() {
+		stop := exec.Command("tmux", "-L", socket, "kill-server")
+		stop.Env = env
+		_ = stop.Run()
+	})
 
-	args := reflowRunShellArgs(script, maliciousSess)
-	if out, err := exec.Command("tmux", append([]string{"-L", socket}, args...)...).CombinedOutput(); err != nil {
+	runShell := exec.Command("tmux", append([]string{"-L", socket}, reflowRunShellArgs(script, maliciousSess)...)...)
+	runShell.Env = env
+	if out, err := runShell.CombinedOutput(); err != nil {
 		t.Fatalf("run-shell: %v: %s", err, out)
 	}
 
