@@ -741,10 +741,10 @@
     ogVerbSpec);
 
   # --- Generator (og generate) ---
-  # The tmux.conf text still comes from the frozen reference; these bindings are
-  # the generator-side candidate the extraction check diffs against it. The
-  # generator is imported here rather than taken as a function argument, so the
-  # four direct importers in flake.nix keep working unchanged.
+  # What ships is the generator's output (tmuxConf = generatedConf); the frozen
+  # reference is now only the extraction check's oracle, until step 3 deletes
+  # it. The generator is imported here rather than taken as a function argument,
+  # so the four direct importers in flake.nix keep working unchanged.
   og-generate = import ../generator {inherit pkgs lib;};
 
   # A real TOML encoder, never string concatenation: the values carry PUA nerd
@@ -784,7 +784,9 @@
       providers = enrichProviders;
       pr_refresh_seconds = enrichPrRefreshSeconds;
       pr_check_refresh_seconds = enrichPrCheckRefreshSeconds;
-      # Overrides only — the defaults have exactly one home, on this side.
+      # Overrides only. The nine defaults live twice — enrichIconDefaults here
+      # and enrichIconDefaults in generator/render/keys.go — kept in step by
+      # hand and by the extraction check alone, so edit both.
       icons = enrichIcons;
     };
     notifications.enable = notifyEnable;
@@ -863,8 +865,9 @@
     cp out/tmux.conf $out
   '';
 
-  # The tmux.conf text itself lives in the frozen reference until the generator
-  # replaces it; see that file's header for the two-file rule it imposes.
+  # The frozen reference is the extraction check's oracle only -- the generator
+  # above is what ships. It survives until step 3; see that file's header for
+  # the two-file rule it imposes until then.
   reference = import ./tmux.conf.reference.nix {
     inherit pkgs lib;
     inherit prefix copyModeLineNumbers focusFollowsMouse defaultShell;
@@ -880,7 +883,6 @@
     inherit picker-bridge-ctl-bin picker-card-bin picker-splash-bin picker-statusline-bin;
     inherit enrichIconsDoubled enrichIconsRaw;
   };
-  inherit (reference) sections;
   referenceConf = reference.tmuxConf;
 
   # Config references ~/.config/tmux/tmux.conf (stable symlink managed by HM module)
@@ -907,4 +909,4 @@ in
     og dispatcher partition mismatch (see ogVerbSpec/ogInternal in config/tmux.conf.nix):
       in scriptNames but not in ogVerbSpec or ogInternal: ${lib.concatStringsSep ", " ogPartitionUndecided}
       in ogVerbSpec/ogInternal but not in scriptNames: ${lib.concatStringsSep ", " ogPartitionUnknown}
-  ''; {inherit tmux-wrapped tmuxConf script og mkOg ogVerbSpec referenceConf sections configToml pathsToml generatedConf;}
+  ''; {inherit tmux-wrapped tmuxConf script og mkOg ogVerbSpec referenceConf configToml pathsToml generatedConf;}

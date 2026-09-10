@@ -393,12 +393,6 @@ only `verify-extraction.sh` sees.
 
   *Acceptance:* **lint**; the files exist under `docs/superpowers/`.
 
-  *Amendment (applied during execution):* the decomposition went to
-  `docs/superpowers/plans/2026-09-10-og-generate-extract-config-generation-decomposition.md`,
-  not beside the spec. Every existing decomposition in this repo lives in
-  `plans/` and `specs/` holds only `-design.md`; "beside the spec" above was
-  loose phrasing about committing them in one PR, not a directory choice.
-
 ---
 
 ## Order and parallelism

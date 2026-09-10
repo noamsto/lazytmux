@@ -660,13 +660,22 @@
                 # each other, so a transcription error shared by both passes
                 # the diff; only a literal written here catches it.
                 extra = ''
-                  n=$(grep -n -Fx '# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===' candidate | cut -d: -f1) || true
-                  if [ -z "$n" ]; then
-                    echo "entry 10: persist block comment line absent" >&2
+                  marker='# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ==='
+                  # Exactly one, not merely at least one: a doubled block makes
+                  # $n multi-line and the arithmetic below dies with a generic
+                  # error instead of naming the regression it just found.
+                  hits=$(grep -c -Fx "$marker" candidate) || true
+                  if [ "$hits" != 1 ]; then
+                    echo "entry 10: persist block comment line appears $hits times, want 1" >&2
                     exit 1
                   fi
+                  n=$(grep -n -Fx "$marker" candidate | cut -d: -f1)
                   # The block's other two literal lines, in position: a blank
                   # line above and the run-shell below.
+                  if [ "$n" -lt 2 ]; then
+                    echo "entry 10: persist block is on line 1, so nothing precedes it" >&2
+                    exit 1
+                  fi
                   if [ -n "$(sed -n "$((n - 1))p" candidate)" ]; then
                     echo "entry 10: persist block is not preceded by a blank line" >&2
                     exit 1
@@ -706,7 +715,86 @@
                   focusFollowsMouse = true;
                 };
               }
+              # Entry 12's hole, one level down: the leaf values no other entry
+              # moves off its default. The gate's whole proof is "render both
+              # ways and diff", so a field pinned at its default renders the
+              # same bytes whether its plumbing is right or entirely dead, and a
+              # wrong hard-coded Go default is invisible.
+              #
+              # Five of the thirteen are carried for the Nix->TOML key spelling
+              # only and reach no tmux.conf byte: enrichProviders, the two
+              # enrich refresh seconds, agentUsageRefreshSeconds and
+              # claudeStatusAssumeDeadAfter are baked into scripts on the Nix
+              # side, so no render diff can witness them.
+              {
+                name = "13-leaf-values";
+                args = {
+                  enrichProviders = ["github" "linear"];
+                  enrichPrRefreshSeconds = 45;
+                  enrichPrCheckRefreshSeconds = 90;
+                  zoxideExclude = "*/.ssh,/tmp/*";
+                  pickerListRatio = 35;
+                  pickerLayout = "list";
+                  remoteBridgeHosts = "halo mbp";
+                  remoteAuthPersistSeconds = 3600;
+                  prefix = "a";
+                  agentUsageRefreshSeconds = 60;
+                  agentUsageMonthlyThreshold = 75;
+                  claudeStatusAssumeDeadAfter = 30;
+                  # Only the three agent keys reach tmux.conf, via the usage
+                  # segment's icons; the rest of the map is script-side.
+                  extraProcessIcons.claude = "C";
+                };
+                # The entry asserts nothing if its values happen to render the
+                # defaults' bytes, which a later change to any of those defaults
+                # would quietly make true.
+                extra = ''
+                  if cmp -s ${(mkEntry {name = "01-defaults";}).generatedConf} candidate; then
+                    echo "entry 13: renders the defaults' bytes, so it varies nothing" >&2
+                    exit 1
+                  fi
+                '';
+              }
             ];
+
+            # --prefix resolves the optional tools by existence under DIR/bin,
+            # and DIR does not exist in the smoke, so every optional renders off.
+            # Entry 6 is the one that also has them off, so it is the only entry
+            # line-for-line comparable with that render. Selected from the built
+            # matrix: re-running mkEntry on a bare name rebuilds the DEFAULTS
+            # entry under that label, optionals and all.
+            smokeEntry =
+              lib.findFirst (e: e.name == "06-no-optional-tools")
+              (throw "extraction smoke: matrix has no 06-no-optional-tools entry")
+              matrix;
+
+            # Shared by every store-path assertion. `[ -s ]` first, because an
+            # empty file passes a negative grep vacuously; and grep's exit 2 (an
+            # unreadable path, say) is a real error, not "no match" -- reading it
+            # as clean is how a broken check reports success.
+            storePathHelper = ''
+              no_store_path() {
+                label=$1
+                file=$2
+                if [ ! -s "$file" ]; then
+                  echo "$label: $file is empty" >&2
+                  exit 1
+                fi
+                rc=0
+                grep -F /nix/store "$file" >&2 || rc=$?
+                case $rc in
+                  0)
+                    echo "$label: carries a store path" >&2
+                    exit 1
+                    ;;
+                  1) ;;
+                  *)
+                    echo "$label: grep failed on $file (exit $rc)" >&2
+                    exit 1
+                    ;;
+                esac
+              }
+            '';
 
             entryCheck = e: ''
               echo "=== ${e.name}"
@@ -721,10 +809,7 @@
               # NOT an invariant of config.toml in general, because extra_config
               # copies cfg.extraConfig verbatim and a Nix user may legitimately
               # interpolate a store path into it.
-              if grep -F /nix/store ${e.configToml} >&2; then
-                echo "${e.name}: config.toml carries a store path" >&2
-                exit 1
-              fi
+              no_store_path "${e.name} config.toml" ${e.configToml}
 
               # The one property tests/verify-extraction.sh structurally cannot
               # see: every consumer of tmuxConf, tests/test-display.sh's wrapper
@@ -747,21 +832,43 @@
               # Same derivation packages.og-generate builds; identical inputs, one
               # store path, so this costs nothing extra.
               OG_GENERATE = "${pkgs.callPackage ./generator {}}/bin/og-generate";
-              SMOKE_CONFIG = (builtins.head matrix).configToml;
+              SMOKE_CONFIG = smokeEntry.configToml;
+              SMOKE_REFERENCE = smokeEntry.referenceConf;
               TEMPLATE = ./config/tmux.conf.tmpl;
-            } (lib.concatMapStrings entryCheck matrix
+            } (storePathHelper
+              + lib.concatMapStrings entryCheck matrix
               + ''
                 # --prefix is the resolver's second mode; the smoke proves it
                 # renders and that nothing store-shaped leaks into the output.
+                # It is the one render path with no reference diff behind it, so
+                # the assertions have to be positive: an empty file passes both
+                # `-f` and a negative grep, which made a render-nothing
+                # regression read as a clean pass.
                 echo "=== --prefix smoke"
                 mkdir -p prefixout
                 "$OG_GENERATE" --config "$SMOKE_CONFIG" --prefix /opt/lazytmux \
                   --template "$TEMPLATE" --out prefixout
-                [ -f prefixout/tmux.conf ]
-                if grep -F /nix/store prefixout/tmux.conf >&2; then
-                  echo "--prefix render carries a store path" >&2
+                if ! grep -q '^set -g ' prefixout/tmux.conf; then
+                  echo "--prefix render carries no 'set -g' line" >&2
                   exit 1
                 fi
+                if ! grep -Fq /opt/lazytmux/bin/ prefixout/tmux.conf; then
+                  echo "--prefix render carries no path under the given prefix" >&2
+                  exit 1
+                fi
+                # Presence is not completeness: the two greps above sit at lines
+                # 2 and 32 of a ~550-line render, so a truncation past those
+                # still satisfies them. The prefix render differs from its
+                # reference only in path text, and a path holds no newline, so
+                # the line counts must agree exactly.
+                want=$(wc -l <"$SMOKE_REFERENCE")
+                got=$(wc -l <prefixout/tmux.conf)
+                if [ "$got" != "$want" ]; then
+                  echo "--prefix render is $got lines, reference is $want" >&2
+                  exit 1
+                fi
+
+                no_store_path "--prefix render" prefixout/tmux.conf
 
                 touch $out
               '');

@@ -1,7 +1,9 @@
 package paths
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,5 +187,24 @@ func optionalsOf(p *Paths) map[string]*string {
 		"carousel_toggle":     p.CarouselToggle,
 		"carousel_aeye":       p.CarouselAeye,
 		"prdash":              p.Prdash,
+	}
+}
+
+// A probe error that is not "absent" must surface: silently treating it as a
+// disabled feature drops the feature the path names.
+func TestFromPrefixOptionalProbeError(t *testing.T) {
+	dir := t.TempDir()
+	// bin as a regular file makes every probe under it fail ENOTDIR, which is
+	// not os.IsNotExist and does not depend on the test user's privileges.
+	if err := os.WriteFile(filepath.Join(dir, "bin"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := FromPrefix(dir)
+	if err == nil {
+		t.Fatalf("FromPrefix = %v, want a probe error", p)
+	}
+	var perr *fs.PathError
+	if !errors.As(err, &perr) {
+		t.Errorf("err = %v, want it to wrap a *fs.PathError", err)
 	}
 }

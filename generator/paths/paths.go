@@ -122,8 +122,13 @@ func FromPrefix(dir string) (*Paths, error) {
 	}
 	for key, target := range optionals {
 		candidate := filepath.Join(bin, optionalBinNames[key])
-		if _, err := os.Stat(candidate); err == nil {
+		// Only a genuine absence is a disabled feature: an unreadable path
+		// would otherwise silently drop the feature it names.
+		switch _, err := os.Stat(candidate); {
+		case err == nil:
 			*target = &candidate
+		case !os.IsNotExist(err):
+			return nil, fmt.Errorf("paths: %s: %w", key, err)
 		}
 	}
 	if err := p.validate(); err != nil {
