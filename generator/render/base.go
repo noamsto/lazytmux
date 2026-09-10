@@ -10,7 +10,7 @@ import (
 // pluginConfigs is the catppuccin option block, which tmux must see before the
 // plugin is sourced. The blank line it ends with is part of the value, not
 // decoration: the template line that emits it contributes a newline of its own,
-// and the reference's literal had both.
+// and both are needed.
 const pluginConfigs = `# catppuccin theme
 # Detect theme from state file on first load (theme-toggle sets flavor before re-source)
 # The x-prefix keeps @catppuccin_flavor non-word-initial and safe when empty.

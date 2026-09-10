@@ -22,8 +22,8 @@ func carouselHooks(p *paths.Paths) string {
 }
 
 // persistBlock wires tmux-remux, or emits nothing when persist is off. The
-// leading blank line is part of the value: the template line it sits on has the
-// preceding blank line of its own, and the reference's literal opened with one.
+// leading blank line is part of the value, not decoration; the template line it
+// sits on carries the preceding one.
 // #{q:version} is literal text — tmux expands it, nothing here does.
 func persistBlock(p *paths.Paths) string {
 	if p.PersistWireScript == nil {
