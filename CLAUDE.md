@@ -951,6 +951,7 @@ isn't on PATH.
 - **Theme support**: Scripts detect light/dark from `$XDG_STATE_HOME/theme-state.json` and use Catppuccin Latte/Mocha colors accordingly.
 - **shfmt** uses tabs for indentation (project default).
 - **Enrichment window options** (`@issue_*`, `@pr_*`) are the single source of truth for issue/PR state — display formats, keybinds, and the window picker read them; only the stamp/enrich scripts write them.
+- **A scratch tmux server needs a private `TMUX_TMPDIR`.** A hand-rolled repro (`tmux -L s new-session -d …`) is detached and holds a shell, so it outlives the session that started it and nothing reaps it. Give each one a short private dir (`/tmp/lzt-$$` — the socket path is capped at ~108 bytes) and `kill-server` when the repro is done, so a forgotten server is confined to a dir you can find. tmux leaves the socket *file* behind on exit either way, unlinking a stale one only when a new server claims that name, so a shared `TMUX_TMPDIR` grows one dead entry per run. Every test here already works this way: the bats suites set a per-run `TMUX_TMPDIR`, and the Go tests that start a live tmux use `os.MkdirTemp("", "lz")` and pass it through the command env.
 
 ## Plans and Specs
 
