@@ -1,0 +1,177 @@
+package render
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/noamsto/lazytmux/generator/config"
+	"github.com/noamsto/lazytmux/generator/paths"
+)
+
+// bridgeGate is the format that says "this is a live mirror pane": @bridge_win
+// (window) and @bridge_pane (pane) are stamped by the bridge daemon. Requiring
+// both means a pane the daemon does not own falls through to the local action.
+const bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}"
+
+// bridgeCtl is the ctl invocation every gated bind's remote branch runs.
+// @bridge_sock is always in --sock= form, never word-initial.
+func bridgeCtl(p *paths.Paths) string {
+	return p.Bin["lztmux-remote-bridge-ctl"] + " --display-error=#{q:client_name} --sock=#{q:@bridge_sock}"
+}
+
+// floatShape is one float geometry in the three forms the binds need. tmux
+// resolves the percentages into absolute cells at creation and never revisits
+// them, so stamp carries them forward for tmux-float-refit; both come from one
+// place here so they cannot drift.
+type floatShape struct {
+	flags    string
+	flagsNoA string
+	stamp    string
+}
+
+func mkFloat(w, h, x, y string) floatShape {
+	base := fmt.Sprintf("-x %s -y %s -X %s -Y %s -B heavy", w, h, x, y)
+	return floatShape{
+		flags:    base + " -A",
+		flagsNoA: base,
+		stamp:    fmt.Sprintf("set -p @float_geom '%s %s %s %s' \\; set -p remain-on-exit off", w, h, x, y),
+	}
+}
+
+var (
+	floatFull  = mkFloat("90%", "90%", "5%", "5%")
+	floatShort = mkFloat("90%", "85%", "5%", "8%")
+	// The enrich card sizes to its contents, not to the client; only its
+	// offsets are percentages, and those are what walk off a shrinking window.
+	floatCard = mkFloat("64", "18", "20%", "15%")
+)
+
+// floatNewPaneGuard picks -A only on a server that has it. String-form
+// if-shell, because a brace block parses every branch at source time and an
+// older server would reject the unknown flag there (#407).
+//
+// The escaping is scoped to the inner new-pane command: it becomes the body of
+// a double-quoted if-shell argument, while the if-shell wrapper's own quotes
+// must stay bare.
+func floatNewPaneGuard(f floatShape, prefix, suffix string) string {
+	mk := func(flags string) string {
+		return strings.ReplaceAll(
+			fmt.Sprintf("new-pane %s%s %s \\; %s", prefix, flags, suffix, f.stamp),
+			`"`, `\"`)
+	}
+	return fmt.Sprintf(`if-shell "tmux list-commands new-pane | grep -q -- -A" "%s" "%s"`,
+		mk(f.flags), mk(f.flagsNoA))
+}
+
+func floatBind(key string, f floatShape, prefix, suffix string) string {
+	return "bind-key " + key + " " + floatNewPaneGuard(f, prefix, suffix)
+}
+
+// bridgedFloatTool hands the tool to the ctl `tool` verb in a mirror window:
+// #{pane_current_path} there expands on the renderer pane, which is the
+// daemon's cwd rather than the remote worktree on screen.
+func bridgedFloatTool(p *paths.Paths, key, tool string, f floatShape, prefix, suffix string) string {
+	return fmt.Sprintf("bind-key %s if-shell -F '%s' { run-shell \"%s tool #{q:@bridge_pane} %s\" } { %s }",
+		key, bridgeGate, bridgeCtl(p), tool, floatNewPaneGuard(f, prefix, suffix))
+}
+
+// carouselBind is empty when the toggle package is not wired in. It carries no
+// trailing newline: the template line it sits on supplies one, so an absent
+// bind leaves exactly one empty line. Same contract as prdashBind.
+func carouselBind(p *paths.Paths) string {
+	if p.CarouselToggle == nil {
+		return ""
+	}
+	return fmt.Sprintf("bind I if-shell -F '%s' { run-shell \"%s carousel #{q:@bridge_pane}\" } { run-shell 'TMUX_PANE=#{q:pane_id} %s' }",
+		bridgeGate, bridgeCtl(p), *p.CarouselToggle)
+}
+
+func prdashBind(p *paths.Paths) string {
+	if p.Prdash == nil {
+		return ""
+	}
+	return bridgedFloatTool(p, "p", "prdash", floatShort, "-c '#{pane_current_path}' ",
+		*p.Prdash+" \\; set -p @pane_label prdash")
+}
+
+func lazygitBind(p *paths.Paths) string {
+	return bridgedFloatTool(p, "g", "lazygit", floatFull, "-c '#{pane_current_path}' ",
+		"lazygit \\; set -p @pane_label lazygit")
+}
+
+func yaziBind(p *paths.Paths) string {
+	return bridgedFloatTool(p, "y", "yazi", floatShort, "-c '#{pane_current_path}' ",
+		"yazi \\; set -p @pane_label yazi")
+}
+
+func btopBind() string {
+	return floatBind("b", floatFull, "", "btop \\; set -p @pane_label btop")
+}
+
+// k9s is reached through PATH only, unlike the binds above: a pkgs.k9s
+// fallback dragged k9s + kubectl into every closure for a bind only k8s users
+// press.
+func k9sBind() string {
+	return floatBind("k", floatFull, "",
+		`"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s`)
+}
+
+// enrichIconDefaults are the Nerd Font (Material Design) glyph defaults;
+// config.toml carries the user's overrides alone, so the defaults live here.
+var enrichIconDefaults = map[string]string{
+	"linear":   "󰰍",
+	"github":   "󰊤",
+	"pending":  "󰦖",
+	"success":  "󰗠",
+	"failure":  "󰀨",
+	"merged":   "󰘭",
+	"closed":   "󰅖",
+	"conflict": "󰀦",
+	"draft":    "",
+}
+
+// enrichIconsRaw is the glyph the user typed, un-doubled. The card's stdout is
+// not re-parsed as a tmux format, so ##-escaped glyphs must not reach it.
+func enrichIconsRaw(cfg *config.Config) map[string]string {
+	m := make(map[string]string, len(enrichIconDefaults))
+	for k, v := range enrichIconDefaults {
+		m[k] = v
+	}
+	for k, v := range cfg.Enrich.Icons {
+		m[k] = v
+	}
+	return m
+}
+
+// enrichCardBind is a plain floatBind, never bridgeGate'd: the card only reads
+// local window options, and launching it on the remote would put [o]/[p]'s
+// xdg-open on a headless machine. The continuation lines' eight-space indent
+// is part of the emitted command, not source formatting.
+func enrichCardBind(cfg *config.Config, p *paths.Paths) string {
+	i := enrichIconsRaw(cfg)
+	suffix := fmt.Sprintf(`"%s \
+        --target '#{session_id}:#{window_id}' \
+        --pr-enrich-bin '%s' \
+        --bridge-ctl-bin '%s' \
+        --bridge-sock '#{@bridge_sock}' --bridge-pane '#{@bridge_pane}' \
+        --issue-stamp-bin '%s' \
+        --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
+        --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
+        --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \
+        --thm-subtext0 '#{@thm_subtext_0}' \
+        --icon-linear '%s' --icon-github '%s' \
+        --icon-pending '%s' --icon-success '%s' \
+        --icon-failure '%s' --icon-merged '%s' \
+        --icon-closed '%s' --icon-conflict '%s' \
+        --icon-draft '%s'" \; set -p @pane_label enrich`,
+		p.Bin["tmux-enrich-card"],
+		p.Scripts["tmux-pr-enrich"],
+		p.Bin["lztmux-remote-bridge-ctl"],
+		p.Scripts["tmux-issue-stamp"],
+		i["linear"], i["github"],
+		i["pending"], i["success"],
+		i["failure"], i["merged"],
+		i["closed"], i["conflict"],
+		i["draft"])
+	return floatBind("i", floatCard, "", suffix)
+}

@@ -4,6 +4,7 @@ result-*
 .pre-commit-config.yaml
 .claude/
 picker/picker
+generator/generator
 wt-explorer/wt-explorer
 
 # Sandbox/IDE artifacts

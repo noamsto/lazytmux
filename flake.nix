@@ -532,6 +532,240 @@
               touch $out
             '';
 
+          # The extraction gate (§ The extraction check in
+          # docs/superpowers/specs/2026-09-10-og-generate-extract-config-generation-design.md):
+          # render the tmux.conf both ways from the same arguments and diff.
+          # The matrix is defined here rather than inherited from the flake's own
+          # four direct imports, which cover only defaults, sixelTerminals and
+          # enrich+ agentUsage off -- never the off branch of splashEnable,
+          # notifyEnable or carousel-toggle/prdash, five of the de-indent hazard
+          # sites.
+          #
+          # The template is complete, so this is a whole-file diff: every byte
+          # of the candidate comes from Go. The positive control is what shows
+          # the diff bites at all -- a stray byte in the template must turn
+          # every entry red.
+          tmux-conf-extraction-assertions = let
+            # A real store path, so entry 10's persist grep asserts the shape
+            # the module produces rather than a placeholder string.
+            persistStub = pkgs.writeShellScript "persist-wire-stub" ''
+              exit 0
+            '';
+
+            mkEntry = {
+              name,
+              args ? {},
+              extra ? "",
+            }: let
+              cfg = import ./config/tmux.conf.nix ({
+                  inherit pkgs lib;
+                  tmuxPkg = mkTmux pkgs;
+                  carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+                  carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
+                  prdash = inputs.prdash.packages.${pkgs.system}.prdash;
+                }
+                // args);
+            in {
+              inherit name extra;
+              inherit (cfg) generatedConf referenceConf configToml;
+            };
+
+            # Every flag both ways: entry 12 exists because aiNamingFlag and
+            # resumeCarouselFlag are hand-transcribed bool->string maps whose
+            # arguments both default to false, so entries 1 and 11 render the
+            # same string for each and an inverted map would be invisible.
+            matrix = map mkEntry [
+              {name = "01-defaults";}
+              {
+                name = "02-splash-off";
+                args.splashEnable = false;
+              }
+              {
+                name = "03-notify-off";
+                args.notifyEnable = false;
+              }
+              {
+                name = "04-enrich-off";
+                args.enrichEnable = false;
+              }
+              {
+                name = "05-agent-usage-off";
+                args.agentUsageEnable = false;
+              }
+              {
+                name = "06-no-optional-tools";
+                args = {
+                  carousel-toggle = null;
+                  carousel-aeye = null;
+                  prdash = null;
+                };
+              }
+              {
+                name = "07-terminals";
+                args = {
+                  sixelTerminals = ["foot" "wezterm"];
+                  terminalTerm = "xterm-ghostty";
+                };
+              }
+              {
+                name = "08a-splash-remote-static";
+                args.splashRemote = "static";
+              }
+              {
+                name = "08b-splash-remote-skip";
+                args.splashRemote = "skip";
+              }
+              {
+                name = "09-values";
+                args = {
+                  # Raw dialect (I8): this entry imports tmux.conf.nix directly,
+                  # so it never passes through the module's '#' doubling.
+                  enrichIcons = {
+                    linear = "L#";
+                    github = "G#";
+                  };
+                  defaultShell = "/run/current-system/sw/bin/fish";
+                  copyModeLineNumbers = "hybrid";
+                  focusFollowsMouse = true;
+                };
+                # I8's only cover. No check imports the module, so the two
+                # dialects are asserted here, per site: `L#` is a substring of
+                # `L##`, so each grep carries the closing quote and is scoped to
+                # its own line rather than the whole file.
+                extra = ''
+                  if ! grep -F 'set -g status-format[0]' candidate \
+                    | grep -Fq -- "--icon-linear 'L##' --icon-github 'G##'"; then
+                    echo "entry 9: status-format[0] must carry the doubled dialect (--icon-linear 'L##')" >&2
+                    exit 1
+                  fi
+                  if ! grep -F -- '--icon-linear' candidate \
+                    | grep -Fv 'set -g status-format[0]' \
+                    | grep -Fq -- "--icon-linear 'L#' --icon-github 'G#'"; then
+                    echo "entry 9: the enrich card must carry the raw dialect (--icon-linear 'L#')" >&2
+                    exit 1
+                  fi
+                '';
+              }
+              {
+                name = "10-persist";
+                args = {
+                  extraConfText = ''
+                    # matrix entry 10
+                    set -g @matrix "quoted \"value\" and a # hash"
+                  '';
+                  persistWireScript = persistStub;
+                };
+                # I7's deliberate third copy of the persist block's bytes. The
+                # reference and the generator are otherwise compared only to
+                # each other, so a transcription error shared by both passes
+                # the diff; only a literal written here catches it.
+                extra = ''
+                  n=$(grep -n -Fx '# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===' candidate | cut -d: -f1) || true
+                  if [ -z "$n" ]; then
+                    echo "entry 10: persist block comment line absent" >&2
+                    exit 1
+                  fi
+                  # The block's other two literal lines, in position: a blank
+                  # line above and the run-shell below.
+                  if [ -n "$(sed -n "$((n - 1))p" candidate)" ]; then
+                    echo "entry 10: persist block is not preceded by a blank line" >&2
+                    exit 1
+                  fi
+                  if ! sed -n "$((n + 1))p" candidate | grep -Fxq 'run-shell "${persistStub} #{q:version}"'; then
+                    echo "entry 10: persist block run-shell line does not match" >&2
+                    exit 1
+                  fi
+                '';
+              }
+              {
+                name = "11-all-off";
+                args = {
+                  splashEnable = false;
+                  notifyEnable = false;
+                  enrichEnable = false;
+                  agentUsageEnable = false;
+                  aiNamingEnable = false;
+                  resumeClaudeEnable = false;
+                  resumeCarouselEnable = false;
+                  focusFollowsMouse = false;
+                  carousel-toggle = null;
+                  carousel-aeye = null;
+                  prdash = null;
+                };
+              }
+              {
+                name = "12-all-on";
+                args = {
+                  splashEnable = true;
+                  notifyEnable = true;
+                  enrichEnable = true;
+                  agentUsageEnable = true;
+                  aiNamingEnable = true;
+                  resumeClaudeEnable = true;
+                  resumeCarouselEnable = true;
+                  focusFollowsMouse = true;
+                };
+              }
+            ];
+
+            entryCheck = e: ''
+              echo "=== ${e.name}"
+              cat ${e.generatedConf} >candidate
+              if ! diff -u ${e.referenceConf} candidate >delta; then
+                echo "${e.name}: generated tmux.conf differs from the frozen reference" >&2
+                head -200 delta >&2
+                exit 1
+              fi
+
+              # Scoped to the matrix's own config.toml files on purpose: this is
+              # NOT an invariant of config.toml in general, because extra_config
+              # copies cfg.extraConfig verbatim and a Nix user may legitimately
+              # interpolate a store path into it.
+              if grep -F /nix/store ${e.configToml} >&2; then
+                echo "${e.name}: config.toml carries a store path" >&2
+                exit 1
+              fi
+
+              # The one property tests/verify-extraction.sh structurally cannot
+              # see: every consumer of tmuxConf, tests/test-display.sh's wrapper
+              # scrape included, needs a regular file named *-tmux.conf.
+              conf=${e.generatedConf}
+              [ -f "$conf" ]
+              case "$conf" in
+                *-tmux.conf) ;;
+                *)
+                  echo "${e.name}: $conf is not a *-tmux.conf store path" >&2
+                  exit 1
+                  ;;
+              esac
+
+              ${e.extra}
+            '';
+          in
+            pkgs.runCommand "tmux-conf-extraction-assertions" {
+              nativeBuildInputs = [pkgs.diffutils pkgs.gnugrep pkgs.gnused pkgs.coreutils];
+              # Same derivation packages.og-generate builds; identical inputs, one
+              # store path, so this costs nothing extra.
+              OG_GENERATE = "${pkgs.callPackage ./generator {}}/bin/og-generate";
+              SMOKE_CONFIG = (builtins.head matrix).configToml;
+              TEMPLATE = ./config/tmux.conf.tmpl;
+            } (lib.concatMapStrings entryCheck matrix
+              + ''
+                # --prefix is the resolver's second mode; the smoke proves it
+                # renders and that nothing store-shaped leaks into the output.
+                echo "=== --prefix smoke"
+                mkdir -p prefixout
+                "$OG_GENERATE" --config "$SMOKE_CONFIG" --prefix /opt/lazytmux \
+                  --template "$TEMPLATE" --out prefixout
+                [ -f prefixout/tmux.conf ]
+                if grep -F /nix/store prefixout/tmux.conf >&2; then
+                  echo "--prefix render carries a store path" >&2
+                  exit 1
+                fi
+
+                touch $out
+              '');
+
           # The og dispatcher's contract
           # (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md). Never
           # parses the generated table file -- every target assertion goes
@@ -1571,6 +1805,9 @@
           # The og dispatcher (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md).
           # .#default is tmux-wrapped, which by design contains no og.
           inherit (tmuxConfig) og;
+          # Renders tmux.conf from a serialized config + resolved paths. Its own
+          # Go module, so nothing under picker/ moves.
+          og-generate = pkgs.callPackage ./generator {};
         };
       };
 
