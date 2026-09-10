@@ -643,6 +643,167 @@
 
   scripts = lib.attrValues script;
 
+  # --- og dispatcher (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md) ---
+  # Curated public API over a subset of `script`: verb tokens -> the script
+  # name they target, plus the one-line summary `og <verb> --help` prints.
+  # Keyed by script *name* (not derivation) so ogPartitionOk below can read
+  # v.script directly; mkOg resolves names to "${script.<name>}/bin/<name>".
+  ogVerbSpec = {
+    "status" = {
+      script = "claude-status";
+      summary = "Aggregate claude/agent status for the status line";
+    };
+    "status update" = {
+      script = "claude-status-update";
+      summary = "Write claude/agent state, issue, task and name self-reports";
+    };
+    "remote open" = {
+      script = "lztmux-remote-open";
+      summary = "Open a remote tmux session as local mirror windows";
+    };
+    "remote picker" = {
+      script = "lztmux-remote-picker";
+      summary = "Browse a remote host's own tmux sessions";
+    };
+    "remote detach" = {
+      script = "lztmux-remote-detach";
+      summary = "Detach the bridge for a mirrored session";
+    };
+    "remote auth" = {
+      script = "lztmux-remote-auth";
+      summary = "Run one interactive ssh handshake for a bridge host";
+    };
+    "remote theme" = {
+      script = "lztmux-remote-theme";
+      summary = "Fan a light/dark theme toggle out to mirrored hosts";
+    };
+    "pick session" = {
+      script = "tmux-session-picker";
+      summary = "Session picker (sessions, remote hosts, zoxide suggestions)";
+    };
+    "pick window" = {
+      script = "tmux-window-picker";
+      summary = "Window picker, grouped by session or claude priority state";
+    };
+    "pick wall" = {
+      script = "tmux-window-wall";
+      summary = "Tiled grid of live window previews";
+    };
+    "issue stamp" = {
+      script = "tmux-issue-stamp";
+      summary = "Detect and stamp the Linear/GitHub issue for a window's branch";
+    };
+    "issue linear" = {
+      script = "tmux-issue-stamp-linear";
+      summary = "Linear issue provider dispatched by og issue stamp";
+    };
+    "issue github" = {
+      script = "tmux-issue-stamp-github";
+      summary = "GitHub issue provider dispatched by og issue stamp";
+    };
+    "pr" = {
+      script = "tmux-pr-enrich";
+      summary = "PR enrichment poller (--tick background job, not interactive)";
+    };
+    "cursor hooks" = {
+      script = "cursor-hooks-install";
+      summary = "Install Cursor CLI status hooks";
+    };
+    "cursor relaunch" = {
+      script = "cursor-relaunch-hooks-install";
+      summary = "Install Cursor's relaunch-hooks managed config";
+    };
+    "cursor stamp" = {
+      script = "cursor-relaunch-stamp";
+      summary = "Stamp Cursor relaunch state";
+    };
+    "cursor status-hook" = {
+      script = "cursor-status-hook";
+      summary = "Cursor CLI status hook entry point";
+    };
+    "carousel restore" = {
+      script = "tmux-carousel-restore";
+      summary = "Rebind an aeye carousel viewer after a tmux-remux restore (not run directly)";
+    };
+    "codex stamp" = {
+      script = "codex-relaunch-stamp";
+      summary = "Stamp Codex relaunch state";
+    };
+    "notify" = {
+      script = "lztmux-notify";
+      summary = "Send a notification through the configured routing";
+    };
+    "notify center" = {
+      script = "lztmux-notify-center";
+      summary = "Open the notification history";
+    };
+    "debug" = {
+      script = "lazytmux-debug";
+      summary = "Diagnose a lazytmux installation";
+    };
+  };
+
+  # Scripts reached only by store-path interpolation from this file, a parent
+  # script, or a respawn-pane argv -- no human runs one standalone, so none
+  # gets a verb. Recorded here, not just in the design doc, so ogPartitionOk
+  # can check the partition.
+  ogInternal = [
+    "tmux-agent-usage"
+    "tmux-agent-usage-claude"
+    "tmux-agent-usage-codex"
+    "tmux-agent-usage-cursor"
+    "tmux-apply-theme-colors"
+    "tmux-branch-display"
+    "tmux-default-size"
+    "tmux-dir-display"
+    "tmux-float-refit"
+    "tmux-kill-pane-guard"
+    "tmux-reconcile-window"
+    "tmux-reflow-windows"
+    "tmux-scratchpad"
+    "tmux-smart-nav"
+    "tmux-splash-maybe"
+    "tmux-update-icons"
+    "tmux-window-nav"
+    "tmux-worktree-match"
+    "lazytmux-log-event"
+  ];
+
+  # Forced by the assert on the returned attrset below, never on `og` itself:
+  # nothing in tmux-wrapped references og, so an assert there would never be
+  # evaluated and a script landing in scriptNames undecided would stay silent.
+  ogPartitioned = map (v: v.script) (lib.attrValues ogVerbSpec) ++ ogInternal;
+  ogPartitionOk =
+    builtins.sort builtins.lessThan ogPartitioned
+    == builtins.sort builtins.lessThan scriptNames;
+  # Both directions, so a failure names the offending script(s).
+  ogPartitionUndecided = lib.subtractLists ogPartitioned scriptNames;
+  ogPartitionUnknown = lib.subtractLists scriptNames ogPartitioned;
+
+  # mkOg is a function, not a fixed derivation, so a check can instantiate a
+  # dispatcher over a table of its own pointing at stub targets -- the only
+  # way to test argument passthrough without depending on a real script.
+  # `verbs` takes already-resolved targets: { "<tokens>" = { target =
+  # "<absolute exec path>"; summary = "..."; }; }.
+  mkOg = verbs: let
+    order = builtins.attrNames verbs; # Nix sorts attrset keys
+    targetLine = v: "OG_TARGET[${lib.escapeShellArg v}]=${lib.escapeShellArg verbs.${v}.target}";
+    summaryLine = v: "OG_SUMMARY[${lib.escapeShellArg v}]=${lib.escapeShellArg verbs.${v}.summary}";
+    ogTable = pkgs.writeText "og-table.sh" ''
+      ${lib.concatMapStringsSep "\n" targetLine order}
+      ${lib.concatMapStringsSep "\n" summaryLine order}
+      OG_ORDER=(${lib.concatMapStringsSep " " lib.escapeShellArg order})
+    '';
+  in
+    pkgs.writeShellScriptBin "og"
+    (builtins.replaceStrings ["@og_table@"] ["${ogTable}"] (builtins.readFile ../scripts/og.sh));
+
+  og = mkOg (lib.mapAttrs (_: v: {
+      target = "${script.${v.script}}/bin/${v.script}";
+      inherit (v) summary;
+    })
+    ogVerbSpec);
+
   inherit (pkgs) tmuxPlugins;
 
   # terminal-features line for the outer terminal, derived from its TERM string.
@@ -1376,6 +1537,9 @@
     '';
     meta.mainProgram = "tmux";
   };
-in {
-  inherit tmux-wrapped tmuxConf script;
-}
+in
+  assert lib.assertMsg ogPartitionOk ''
+    og dispatcher partition mismatch (see ogVerbSpec/ogInternal in config/tmux.conf.nix):
+      in scriptNames but not in ogVerbSpec or ogInternal: ${lib.concatStringsSep ", " ogPartitionUndecided}
+      in ogVerbSpec/ogInternal but not in scriptNames: ${lib.concatStringsSep ", " ogPartitionUnknown}
+  ''; {inherit tmux-wrapped tmuxConf script og mkOg ogVerbSpec;}

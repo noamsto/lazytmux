@@ -532,6 +532,216 @@
               touch $out
             '';
 
+          # The og dispatcher's contract
+          # (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md). Never
+          # parses the generated table file -- every target assertion goes
+          # through `og <verb> --help`, whose last line is the absolute
+          # target path alone (scripts/og.sh's pinned help shape). Argument
+          # passthrough is checked by re-instantiating mkOg over a stub
+          # table.
+          og-dispatch-assertions = let
+            stub = pkgs.writeShellScriptBin "stub" ''
+              echo "$#"
+              printf '[%s]\n' "$@"
+            '';
+            ogStub = tmuxConfig.mkOg {
+              "t echo" = {
+                target = "${stub}/bin/stub";
+                summary = "stub";
+              };
+              # A noun with both a bare verb and a subverb, mirroring status/
+              # notify's shape -- proves the flag-vs-subverb distinction
+              # without depending on a real script's own argument grammar.
+              "s" = {
+                target = "${stub}/bin/stub";
+                summary = "stub bare";
+              };
+              "s x" = {
+                target = "${stub}/bin/stub";
+                summary = "stub sub";
+              };
+            };
+          in
+            pkgs.runCommand "og-dispatch-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
+              OG = tmuxConfig.og;
+              OG_STUB = ogStub;
+              CONF = tmuxConfig.tmuxConf;
+              TMUX_WRAPPED = tmuxConfig.tmux-wrapped;
+              REMOTE_PICKER = "${tmuxConfig.script.lztmux-remote-picker}/bin/lztmux-remote-picker";
+              # Derived from ogVerbSpec itself (not retyped here) so a verb
+              # added there is asserted on automatically instead of silently
+              # skipping coverage.
+              VERBS = lib.concatStringsSep "\n" (builtins.attrNames tmuxConfig.ogVerbSpec);
+            } ''
+              OG_BIN="$OG/bin/og"
+              OG_STUB_BIN="$OG_STUB/bin/og"
+
+              verbs="$VERBS"
+
+              # 1: bare `og` and `og help` both list every verb, exit 0.
+              bare_out=$("$OG_BIN")
+              help_out=$("$OG_BIN" help)
+              while read -r v; do
+                grep -qE "^  $v( |\$)" <<<"$bare_out"
+                grep -qE "^  $v( |\$)" <<<"$help_out"
+              done <<<"$verbs"
+
+              # `og remote` prints exactly that noun's 5 verbs, exit 0.
+              remote_out=$("$OG_BIN" remote)
+              for v in "remote open" "remote picker" "remote detach" "remote auth" "remote theme"; do
+                grep -qE "^  $v( |\$)" <<<"$remote_out"
+              done
+              remote_count=$(grep -cE '^  ' <<<"$remote_out")
+              [ "$remote_count" -eq 5 ]
+
+              # 2: every target printed by --help is executable -- except a
+              # bare noun that also owns subverbs (status, notify), where
+              # "--help" means noun help (see check 12) rather than this
+              # verb's own summary/target.
+              while read -r v; do
+                case "$v" in
+                  *' '*) ;;
+                  *)
+                    if grep -qE "^$v " <<<"$verbs"; then
+                      continue
+                    fi
+                    ;;
+                esac
+                # shellcheck disable=SC2086
+                target=$("$OG_BIN" $v --help | tail -1)
+                [ -x "$target" ]
+              done <<<"$verbs"
+
+              # 3: two-token verbs resolve to the two-token target, not the
+              # one-token noun with the second token as a stray argument.
+              su_target=$("$OG_BIN" status update --help | tail -1)
+              case "$su_target" in
+                */bin/claude-status-update) ;;
+                *)
+                  echo "og status update resolved to $su_target" >&2
+                  exit 1
+                  ;;
+              esac
+              nc_target=$("$OG_BIN" notify center --help | tail -1)
+              case "$nc_target" in
+                */bin/lztmux-notify-center) ;;
+                *)
+                  echo "og notify center resolved to $nc_target" >&2
+                  exit 1
+                  ;;
+              esac
+
+              # 4: `og remote picker` execs the same derivation
+              # exposePickOnPath puts on PATH.
+              rp_target=$("$OG_BIN" remote picker --help | tail -1)
+              [ "$rp_target" = "$REMOTE_PICKER" ]
+
+              # 5: `og remote open --help` exits 0, prints the target,
+              # never execs it (no ssh in the sandbox to attempt).
+              ro_target=$("$OG_BIN" remote open --help | tail -1)
+              [ -x "$ro_target" ]
+
+              # 6: an unknown token exits 2 with empty stdout.
+              rc=0
+              bogus_out=$("$OG_BIN" bogus 2>/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              [ -z "$bogus_out" ]
+
+              # 7: arguments after the verb reach the target verbatim --
+              # a flag, a `--`, and an empty argument all survive.
+              stub_out=$("$OG_STUB_BIN" t echo foo --flag -- bar "")
+              stub_count=$(head -n1 <<<"$stub_out")
+              [ "$stub_count" = "5" ]
+              grep -qxF '[foo]' <<<"$stub_out"
+              grep -qxF '[--flag]' <<<"$stub_out"
+              grep -qxF '[--]' <<<"$stub_out"
+              grep -qxF '[bar]' <<<"$stub_out"
+              grep -qxF '[]' <<<"$stub_out"
+
+              # 8: og "" (bug: an empty first token used to hit bash's
+              # "bad array subscript") exits 2 with empty stdout.
+              rc=0
+              empty_out=$("$OG_BIN" "" 2>/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              [ -z "$empty_out" ]
+
+              # 9: og remote --help (bug: any noun-help spelling other than
+              # bare `og remote` used to hit unknown_command) exits 0 and
+              # lists the same 5 remote verbs.
+              rc=0
+              remote_help_out=$("$OG_BIN" remote --help) || rc=$?
+              [ "$rc" -eq 0 ]
+              for v in "remote open" "remote picker" "remote detach" "remote auth" "remote theme"; do
+                grep -qE "^  $v( |\$)" <<<"$remote_help_out"
+              done
+              remote_help_count=$(grep -cE '^  ' <<<"$remote_help_out")
+              [ "$remote_help_count" -eq 5 ]
+
+              # 12: a noun that owns both a bare one-token verb and subverbs
+              # (status, notify) must not let the bare match swallow a second
+              # token -- that bypassed unknown_command/print_noun_help below
+              # for exactly those two nouns.
+              rc=0
+              status_bogus_out=$("$OG_BIN" status frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: status frobnicate" <<<"$status_bogus_out"
+
+              status_help_out=$("$OG_BIN" status --help)
+              grep -qE "^  status update( |\$)" <<<"$status_help_out"
+
+              # notify goes through the identical code path as status; cover
+              # it too rather than asserting on one representative noun.
+              rc=0
+              notify_bogus_out=$("$OG_BIN" notify frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: notify frobnicate" <<<"$notify_bogus_out"
+
+              notify_help_out=$("$OG_BIN" notify --help)
+              grep -qE "^  notify center( |\$)" <<<"$notify_help_out"
+
+              # a flag after the bare verb still passes through -- only a
+              # bare word is ambiguous with a subverb attempt. Exercised on
+              # the stub table (see ogStub's "s"/"s x" pair above) rather
+              # than the real status/notify scripts, whose own argument
+              # grammar this derivation has no business asserting on.
+              stub_flag_out=$("$OG_STUB_BIN" s --flag foo)
+              stub_flag_count=$(head -n1 <<<"$stub_flag_out")
+              [ "$stub_flag_count" = "2" ]
+              grep -qxF '[--flag]' <<<"$stub_flag_out"
+              grep -qxF '[foo]' <<<"$stub_flag_out"
+
+              rc=0
+              stub_bogus_out=$("$OG_STUB_BIN" s frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: s frobnicate" <<<"$stub_bogus_out"
+
+              # the existing `remote` noun (subverbs only, no bare verb) is
+              # unchanged by the guard above.
+              rc=0
+              remote_bogus_out=$("$OG_BIN" remote frobnicate 2>&1 >/dev/null) || rc=$?
+              [ "$rc" -eq 2 ]
+              grep -qF "unknown command: remote frobnicate" <<<"$remote_bogus_out"
+
+              # 10: `og` never appears in the generated tmux config.
+              if grep -qF "$OG" "$CONF"; then
+                echo "og store path leaked into the generated tmux config" >&2
+                exit 1
+              fi
+
+              # 11: `og` also never reaches the tmux server's own PATH --
+              # only scripts partitioned into ogVerbSpec/ogInternal do.
+              # wrapProgram moves the pristine binary to bin/.tmux-wrapped and
+              # writes the PATH-bearing wrapper script to bin/tmux -- grepping
+              # the pristine binary would never see the PATH text at all.
+              if grep -qF "$OG" "$TMUX_WRAPPED/bin/tmux"; then
+                echo "og store path leaked into the tmux wrapper's PATH" >&2
+                exit 1
+              fi
+
+              touch $out
+            '';
+
           default-size-conf-assertions =
             pkgs.runCommand "default-size-conf-assertions" {
               nativeBuildInputs = [pkgs.gnugrep pkgs.coreutils];
@@ -1080,6 +1290,9 @@
           # Stable store path for the Codex managed-hook config (lazytmux#140
           # Task 3) to point its `command` at, independent of the tmux wrapper.
           codex-relaunch-stamp = tmuxConfig.script.codex-relaunch-stamp;
+          # The og dispatcher (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md).
+          # .#default is tmux-wrapped, which by design contains no og.
+          inherit (tmuxConfig) og;
         };
       };
 
