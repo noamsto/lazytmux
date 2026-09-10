@@ -1466,10 +1466,30 @@
           # already in the wrapper's PATH closure but is named here explicitly
           # because the test, not the wrapper, invokes it. CTL is the real binary,
           # which the harness self-test drives to prove the stub's ack satisfies it.
-          rename-bind-integration-tests =
+          #
+          # TMUX_BIN is built with enrich/agent-usage OFF (same knobs as
+          # tick-floor-disabled-conf-assertions above), not tmuxConfig.tmux-wrapped:
+          # since #603 the pr/backfill/usage monitor hooks fire on the server's own
+          # 5s clock with zero clients, so leaving them on had this test's server
+          # spawning three extra `run-shell -b` jobs every 5s for the run's whole
+          # duration, on top of the one keybind under test -- enough background
+          # contention on aarch64-darwin CI to push wait_for_frame's 10s poll past
+          # its deadline. The sweep hook stays on: it's unconditional by design and
+          # a single cheap list-panes -a, not a gh/curl-touching poller.
+          rename-bind-integration-tests = let
+            renameBindTmuxConfig = import ./config/tmux.conf.nix {
+              inherit pkgs lib;
+              tmuxPkg = mkTmux pkgs;
+              carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+              carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
+              prdash = inputs.prdash.packages.${pkgs.system}.prdash;
+              enrichEnable = false;
+              agentUsageEnable = false;
+            };
+          in
             pkgs.runCommand "rename-bind-integration-tests" {
               nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.diffutils pkgs.gnugrep pkgs.socat];
-              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              TMUX_BIN = "${renameBindTmuxConfig.tmux-wrapped}/bin/tmux";
               CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
               # A window name fixture is UTF-8, and so is the status line it is
               # read back from.

@@ -1317,9 +1317,6 @@
     set -g @lztmux_tick '%s'
     ${
       let
-        # `-g` leaves the monitor's session NULL (cmd-set-option.c), which keeps
-        # the hook alive for the server's whole life instead of dying with the
-        # session that loaded this config.
         esc = builtins.replaceStrings ["\""] ["\\\""];
         # The target field is deliberately EMPTY ('<name>::<format>'), never
         # ':session:' -- upstream 557967c3 turned an unrecognised non-empty
@@ -1329,6 +1326,10 @@
         # floor cannot make a new agent pane wait longer to be armed than today.
         tick = name: "${name}::#{e|/|:#{T:@lztmux_tick},5}";
         hookNames = ["@lztmux-pr-tick" "@lztmux-backfill-tick" "@lztmux-usage-tick" "@lztmux-sweep-tick"];
+        # `-g` leaves the monitor's session NULL (cmd-set-option.c), which keeps
+        # the hook alive for the server's whole life instead of dying with the
+        # session that loaded this config.
+        #
         # Cleared unconditionally, ABOVE the conditional setters: hooks_monitor_add
         # keys on the name so a reload replaces a hook, but disabling a feature
         # does not re-set one -- without this, `enrich.enable = false` + reload
