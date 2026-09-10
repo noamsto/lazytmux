@@ -46,7 +46,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 
 | Script | Invocation | Purpose |
 |--------|-----------|---------|
-| `tmux-update-icons` | `#()` every 1s (status-interval) | Sets `@window_icon_display` (unpadded), `@window_icon_padded` (fixed-width), `@active_pane_icon` per window. Reads claude status files. Builds a pane's icon from `@bridge_proc` when it has one (a remote-bridge mirror pane, whose own command is the renderer). Its every-5th-tick sweep also reaps `panes`/`screen`/`interrupt`/`watchers` state for pane ids `list-panes -a` no longer reports (issue #341). |
+| `tmux-update-icons` | `#()` every 1s (status-interval) | Sets the per-window `@window_icon_display` (unpadded) and `@window_icon_padded` (fixed-width), plus the **session**-scoped `@active_pane_icon` (`set -q -t '$s'`, not `-w` — so a reader using `show-options -w` never sees it). Reads claude status files. Builds a pane's icon from `@bridge_proc` when it has one (a remote-bridge mirror pane, whose own command is the renderer). Its every-5th-tick sweep also reaps `panes`/`screen`/`interrupt`/`watchers` state for pane ids `list-panes -a` no longer reports (issue #341). |
 | `tmux-reflow-windows` | tmux hooks (window add/remove/resize) | Computes multi-line window layout split points, sets `status-format[1-4]` and `status` line count (2-5), stamps `@window_per` (grid columns/row). Sizes each grid column to the windows stacked in it rather than charging one width to all (#271). Caches by window-count:width:height key to skip no-ops. |
 | `tmux-window-nav` | `M-J`/`M-K` (Alt+Shift, no prefix) | Moves the window selection down/up a row in the reflowed grid: jumps `±@window_per` in window-index order, clamps down to the last window when the column below is missing, no-ops at the top/bottom edge or in single-line mode. (`M-H`/`M-L` cover horizontal.) |
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (error > waiting > denied > compacting > interrupted > processing > done > idle). Handles staleness fade and interrupt reclassification (both in `read_pane_state`). |
@@ -61,7 +61,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `tmux-worktree-match` | worktrunk `post-switch` hook (navigation) | Resolves which window shows a worktree. One `list-panes -a`; ranks candidates by the `@worktree` tag **corroborated by a pane's cwd** (tag+active pane > tag+background pane > untagged window whose active pane sits there), so a tag that outlived the `cd` that earned it can't win (#199). Unsets a tag it proves false. Prints `<session>\t<window>\t<window_id>`, empty on no match. |
 | `tmux-issue-stamp` | worktrunk `post-switch` hook (one-shot, backgrounded) | Detects the Linear/GitHub issue for the new window's branch via provider priority; writes `@issue_provider`/`@issue_id`/`@issue_title`/`@issue_url`, then kicks an immediate PR fetch. |
 | `tmux-issue-stamp-linear` / `-github` | called by the dispatcher | Provider impls: branch regex (+ `linear`/`gh` CLI) → `id\ntitle\nurl`. First provider with a non-empty id wins. |
-| `tmux-pr-enrich` | `#()` in status-format[0] (`--tick`); `prefix + i` `r` (`--force`) | Background PR poller. Every gh call runs inside a checkout of the branch's repo (`--dir` / window `@worktree`/`@git_root`) — the poller's own cwd is the tmux server's, not a repo. Full pass groups windows by repo: fast PR-identity batches run every `prRefreshSeconds`, while check-rollup batches run every `prCheckRefreshSeconds`; per-branch fallback only handles heads with no open PR (cached at `/tmp/lazytmux-pr/`, 60s TTL, 1h for merged/closed, lock-guarded via the portable `acquire_lock`). Writes `@pr_number`/`@pr_title`/`@pr_state`/`@pr_check_state`/`@pr_url`/`@pr_draft`. |
+| `tmux-pr-enrich` | `#()` in status-format[0] (`--tick`); `prefix + i` `r` (`--force`) | Background PR poller. Every gh call runs inside a checkout of the branch's repo (`--dir` / window `@worktree`/`@git_root`) — the poller's own cwd is the tmux server's, not a repo. Full pass groups windows by repo: fast PR-identity batches run every `prRefreshSeconds`, while check-rollup batches run every `prCheckRefreshSeconds`; per-branch fallback only handles heads with no open PR (cached at `/tmp/lazytmux-pr/`, 60s TTL, 1h for merged/closed, lock-guarded via the portable `acquire_lock`). Writes `@pr_number`/`@pr_title`/`@pr_state`/`@pr_check_state`/`@pr_url`/`@pr_draft`. Single-target mode exits immediately on a `@bridge_win` window — a mirror's branch belongs to the launcher's repo, not the remote content — so a bridged `[r]` is routed to the remote's own copy by the `enrich-refresh` ctl verb instead (#598). |
 | `tmux-agent-usage` | `#()` in status-format[0] (`--tick`) | Background usage-limit poller. A pass runs only while an agent pane exists (pane-command scan against the agentdetect manifest commands) and refreshes `/tmp/lazytmux-agent-usage/<agent>.json` per authed CLI, lock-guarded via `acquire_lock`. Rendered top-right by `tmux-statusline` (Go) — same live gate, so the segment vanishes when the last agent exits. |
 | `tmux-agent-usage-claude` / `-codex` / `-cursor` | called by the dispatcher | Provider impls: curl the vendor usage endpoint with the CLI's own stored token (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.config/cursor/auth.json` — no extra API keys) → normalized `{windows:[{label,pct,reset_at}], monthly:{label,pct,reset_at}}`. Failed fetches keep the previous cache. Cursor chains four DashboardService calls (GetMe → GetHardLimit → GetCurrentPeriodUsage → GetAggregatedUsageEvents) to compute monthly spend-limit utilization. |
 | `tmux-claude-images` | `prefix + I` | Toggle the image carousel for the invoking Claude session. In tmux: split pane keyed by `$TMUX_PANE` (bound to `prefix + I`). Outside tmux in kitty (remote control on): `kitty @ launch` window keyed by `$CLAUDE_CODE_SESSION_ID`, tagged `user_var claude_img_src`. Renderer + manifest shared across modes. |
@@ -285,8 +285,48 @@ ships the remote window's own label state across instead.
   markup dropped, enums and colours regex-matched, a leading `-` rejected whole
   since `LocalTmux` execs without a shell) and length-capped. Teardown unsets
   what it wrote.
+- **Two cleaning policies, split on what a wrong value costs** (#598). Display
+  fields (`@bridge_issue_title`, `@bridge_pr_title`, and the two label segments)
+  **truncate** at their cap — a shortened title is still a title. Identity
+  fields (`@bridge_issue_provider`, `_issue_id`, `_issue_url`, `_pr_url`,
+  `_pr_draft`, `_branch`, `_dir`) **drop whole** via `cleanLabelValueExact`,
+  because a truncated URL opens the wrong page, a truncated branch refreshes the
+  wrong branch, and a truncated path names a directory that is not the one on
+  screen. That cleaner also rejects any value `stripWindowName` *altered*, not
+  just an over-cap one: the stripper deletes rather than rejects, so
+  `https://host/a#[b]c` would otherwise become `https://host/ac` — a different,
+  still-valid-looking URL that passes the regex. Every consumer renders absent
+  correctly, so absent beats plausibly-wrong. The drop set is therefore wider
+  than "over cap": markup, control bytes and a leading `-` all drop too.
+- **Free-form fields lose their pipes on the REMOTE**, wrapped
+  `#{s/[|]/ /:@opt}` in the read format. The bracket expression is load-bearing
+  — a bare `s/|/ /` is an ERE empty alternation — and it is what allows more
+  than one free-form field in the row at all: sanitization runs after the split
+  and cannot repair a shift. `@window_label_rest_long` is the one field left
+  unwrapped, kept last so its own `|` lands inside it rather than shifting the
+  row. `@bridge_dir` is `#{?@worktree,#{@worktree},#{@git_root}}` resolved
+  remotely, so no consumer re-implements that fallback.
 - Liveness: the codename and label track the remote live; `@pr_*` is only as
-  fresh as the remote's own `tmux-pr-enrich` poll.
+  fresh as the remote's own `tmux-pr-enrich` poll. That poll is **server-wide**
+  (`list-windows -a`), so a remote with a real client attached to any session
+  does refresh a bridged session's windows on its own schedule — but a remote
+  whose only client is this bridge renders no status line and so never polls at
+  all. Neither case gives an *on-demand* refresh, which is what the
+  `enrich-refresh` ctl verb is for (#598).
+- **The enrich card reads `@bridge_*` in a mirror, and only those** (#598).
+  `picker/enrichcard`'s `resolve()` returns the bridge values with no fallback to
+  `@issue_*`/`@pr_*`/`@branch`/`@worktree`/`@git_root` — those are the launcher's
+  residue from the `after-new-window` hook and can describe an unrelated repo, so
+  falling back to them is the bug, not a safety net. Same semantics as
+  `bridgeOpt` (`config/tmux.conf.nix`). `detectBaseBranch` is skipped in a
+  mirror: it shells `git -C <dir>` against a path on the *remote*, and the same
+  path can exist locally as a different repo. `prefix + i` stays a plain local
+  `floatBind` — the card has nothing to run remotely, and `[o]`/`[p]`'s
+  `xdg-open` on a headless host would break URL opening — but it is passed
+  `--bridge-sock`/`--bridge-pane`/`--bridge-ctl-bin` so `[r]` can route to the
+  remote. `[r]` in a mirror sends the `enrich-refresh` verb synchronously and
+  flashes the ctl's real outcome; a mirror with no ctl handle reads
+  `[r] no bridge`.
 
 ### Persist (tmux-remux)
 
@@ -340,7 +380,10 @@ line. Enabled by default via `programs.lazytmux.enrich.enable`.
   issue titles, `linear` provides Linear titles/URLs. Without a CLI, only the
   branch-regex-derived issue id is shown (no titles, no PR state).
 - **Keybindings:** `prefix + i` enters the enrich table — `i` open issue URL,
-  `p` open PR URL, `r` force-refresh the current window.
+  `p` open PR URL, `r` force-refresh the current window. In a **mirror** window
+  the card reads the bridged `@bridge_*` state and `r` routes to the remote via
+  the `enrich-refresh` ctl verb, since the local poller refuses a `@bridge_win`
+  target outright (see "Remote Window Labels", #598).
 - **Refresh:** `prRefreshSeconds` (default 120, clamped 10-300) gates fast PR
   identity polling. `prCheckRefreshSeconds` (default 300, clamped 10-300)
   separately gates the more expensive CI-rollup query; `r` refreshes both for
@@ -808,6 +851,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 | Remote-side picker (`prefix + s` `^o`) | `lztmux-remote-picker` (`remote.exposePickOnPath`, default true) |
 | Tool binds across a mirror (`prefix + p`/`g`/`y`) | whichever of `prdash`, `lazygit`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. The remote leg opens a **float**, which the mirror renders as a local float, so the remote's tmux must know `new-pane -A`. |
 | Theme fan-out (any light/dark toggle) | `theme-toggle` — it ships from the desktop profile, so a headless remote has none. The per-toggle apply stays silent (fire-and-forget, no exit status to see), but the daemon probes for it once per bridge connect and reports a miss via `display-message` (#545). |
+| `[r]` in the enrich card across a mirror (`prefix + i`) | lazytmux's own `tmux-pr-enrich` — the `enrich-refresh` ctl verb runs its single-target `--force` mode on the remote, where the checkout is. Also `gh`, which that poller already needs. The verb resolves the remote window's `@branch` and `@worktree`/`@git_root` itself and exits silently unless **both** are set: an empty branch would fall through the poller's single-target guard into a whole-server pass, and an empty dir would run `gh` in the tmux server's cwd and write another repo's PR onto the remote window (#598). |
 | Image paste into a mirror (`ctrl+v`) | nothing beyond POSIX `sh`/`mktemp`/`find` — the requirement is on the *local* host: `xclip` or `wl-paste` (without one the byte is forwarded, i.e. pre-#361 behaviour). |
 
 `lztmux-remote-picker` doubles as the picker's capability probe, so its absence

@@ -1824,6 +1824,21 @@ $pane 1" ]; then
 	# inside it rather than shifting the row, and the markup must not survive.
 	$SRC set -w -t rem:1 @window_label_rest_long ' a #[fg=red]title | piped'
 
+	# The nine bridge-state options the enrich card reads in mirror mode (#598).
+	# @pr_title carries a literal '|': unlike @window_label_rest_long above, this
+	# field IS wrapped in the remote's '#{s/[|]/ /:…}', so it is the other
+	# end-to-end proof that substitution actually fires — here as one space, not
+	# a dropped pipe.
+	$SRC set -w -t rem:1 @issue_provider linear
+	$SRC set -w -t rem:1 @issue_id ENG-460
+	$SRC set -w -t rem:1 @issue_url 'https://linear.app/factify/issue/ENG-460'
+	$SRC set -w -t rem:1 @pr_url 'https://github.com/noamsto/lazytmux/pull/460'
+	$SRC set -w -t rem:1 @pr_draft 1
+	$SRC set -w -t rem:1 @branch feat/460-card
+	$SRC set -w -t rem:1 @worktree /home/rem/wt/460
+	$SRC set -w -t rem:1 @issue_title 'card reads bridge state'
+	$SRC set -w -t rem:1 @pr_title 'fix|the thing'
+
 	bridge_up 1 lbl
 
 	# The bare-mirror half needs a window created AFTER bridge_up: bridge_up
@@ -1848,6 +1863,15 @@ $pane 1" ]; then
 	pr_plain="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_plain 2>/dev/null || true)"
 	label_id="$($DST show-options -w -t host-sess:1 -qv @bridge_label_id 2>/dev/null || true)"
 	label_rest="$($DST show-options -w -t host-sess:1 -qv @bridge_label_rest_long 2>/dev/null || true)"
+	issue_provider="$($DST show-options -w -t host-sess:1 -qv @bridge_issue_provider 2>/dev/null || true)"
+	issue_id="$($DST show-options -w -t host-sess:1 -qv @bridge_issue_id 2>/dev/null || true)"
+	issue_url="$($DST show-options -w -t host-sess:1 -qv @bridge_issue_url 2>/dev/null || true)"
+	pr_url="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_url 2>/dev/null || true)"
+	pr_draft="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_draft 2>/dev/null || true)"
+	branch="$($DST show-options -w -t host-sess:1 -qv @bridge_branch 2>/dev/null || true)"
+	dir="$($DST show-options -w -t host-sess:1 -qv @bridge_dir 2>/dev/null || true)"
+	issue_title="$($DST show-options -w -t host-sess:1 -qv @bridge_issue_title 2>/dev/null || true)"
+	pr_title="$($DST show-options -w -t host-sess:1 -qv @bridge_pr_title 2>/dev/null || true)"
 	bare_win="$($DST show-options -w -t host-sess:2 -qv @bridge_win 2>/dev/null || true)"
 	# An empty remote value UNSETS the local option. `show-options -qv` returns
 	# empty for unset and for "" alike, so list what the window actually holds;
@@ -1865,6 +1889,15 @@ $pane 1" ]; then
 	[ "$pr_plain" = " PR #123" ]
 	[ "$label_id" = "GH #460" ]
 	[ "$label_rest" = " a title  piped" ]
+	[ "$issue_provider" = "linear" ]
+	[ "$issue_id" = "ENG-460" ]
+	[ "$issue_url" = "https://linear.app/factify/issue/ENG-460" ]
+	[ "$pr_url" = "https://github.com/noamsto/lazytmux/pull/460" ]
+	[ "$pr_draft" = "1" ]
+	[ "$branch" = "feat/460-card" ]
+	[ "$dir" = "/home/rem/wt/460" ]
+	[ "$issue_title" = "card reads bridge state" ]
+	[ "$pr_title" = "fix the thing" ]
 	[ "$bare_win" = "1" ]
 	[ -z "$bare_labels" ]
 }

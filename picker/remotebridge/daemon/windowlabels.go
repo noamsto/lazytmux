@@ -29,27 +29,48 @@ const windowLabelBackstopInterval = 30 * time.Second
 const mainLoopTickInterval = 5 * time.Second
 
 // windowLabelFormat reads each remote window's crew badge, the label segments
-// its own reflow already built, and its PR state. @window_label_rest_long is
-// the one genuinely free-form field — a branch remainder or an issue title may
-// hold a '|' — so it goes last, where a '|' lands inside it instead of shifting
-// the row; sanitization runs after the split and cannot repair a shift.
+// its own reflow already built, its PR state, and the issue/PR identity the
+// enrich card needs. Sanitization runs after the split and cannot repair a
+// shift, so every free-form field is wrapped '#{s/[|]/ /:…}' and loses its
+// pipes on the REMOTE, before the row is assembled — the bracket expression is
+// load-bearing, since a bare s/|/ / is an ERE empty alternation.
+// @window_label_rest_long is the one free-form field left unwrapped, and must
+// stay last: a '|' inside it then lands in itself instead of shifting the row.
+// Position 14 resolves worktree||git_root on the remote — one field, one
+// authority — so no consumer re-implements that fallback.
 // Unquoted: it is both a -F argument and a subscription format, and only the
 // call site knows which quoting each needs.
-const windowLabelFormat = "#{window_id}|#{@crew_name}|#{@crew_color}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@window_pr_plain}|#{@window_label_id}|#{@window_label_rest_long}"
+const windowLabelFormat = "#{window_id}|#{@crew_name}|#{@crew_color}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@window_pr_plain}|" +
+	"#{s/[|]/ /:@issue_provider}|#{s/[|]/ /:@issue_id}|#{s/[|]/ /:@issue_url}|#{s/[|]/ /:@pr_url}|#{s/[|]/ /:@pr_draft}|" +
+	"#{s/[|]/ /:@branch}|#{s/[|]/ /:#{?@worktree,#{@worktree},#{@git_root}}}|#{s/[|]/ /:@issue_title}|#{s/[|]/ /:@pr_title}|" +
+	"#{@window_label_id}|#{@window_label_rest_long}"
+
+// windowLabelFields is windowLabelFormat's field count, shared with the test
+// fixture so the parser and the fixture cannot drift apart.
+const windowLabelFields = 19
 
 // labelRow is one remote window's carried label state, already sanitized and
 // validated. Comparable, so the unchanged-row check is a struct compare.
 type labelRow struct {
-	id          string // remote window id, @N
-	crewName    string
-	crewColor   string
-	prNumber    string
-	prState     string
-	prCheck     string
-	prMergeable string
-	prPlain     string
-	labelID     string
-	labelRest   string
+	id            string // remote window id, @N
+	crewName      string
+	crewColor     string
+	prNumber      string
+	prState       string
+	prCheck       string
+	prMergeable   string
+	prPlain       string
+	issueProvider string
+	issueID       string
+	issueURL      string
+	prURL         string
+	prDraft       string
+	branch        string
+	dir           string // the remote's worktree || git_root, already resolved
+	issueTitle    string
+	prTitle       string
+	labelID       string
+	labelRest     string
 }
 
 // bridgeLabelOptions maps each carried value to the daemon-owned @bridge_*
@@ -71,6 +92,15 @@ var bridgeLabelOptions = []struct {
 	{"@bridge_pr_check_state", func(r labelRow) string { return r.prCheck }},
 	{"@bridge_pr_mergeable", func(r labelRow) string { return r.prMergeable }},
 	{"@bridge_pr_plain", func(r labelRow) string { return r.prPlain }},
+	{"@bridge_issue_provider", func(r labelRow) string { return r.issueProvider }},
+	{"@bridge_issue_id", func(r labelRow) string { return r.issueID }},
+	{"@bridge_issue_url", func(r labelRow) string { return r.issueURL }},
+	{"@bridge_pr_url", func(r labelRow) string { return r.prURL }},
+	{"@bridge_pr_draft", func(r labelRow) string { return r.prDraft }},
+	{"@bridge_branch", func(r labelRow) string { return r.branch }},
+	{"@bridge_dir", func(r labelRow) string { return r.dir }},
+	{"@bridge_issue_title", func(r labelRow) string { return r.issueTitle }},
+	{"@bridge_pr_title", func(r labelRow) string { return r.prTitle }},
 	{"@bridge_label_id", func(r labelRow) string { return r.labelID }},
 	{"@bridge_label_rest_long", func(r labelRow) string { return r.labelRest }},
 }
@@ -78,6 +108,17 @@ var bridgeLabelOptions = []struct {
 const (
 	crewNameMaxRunes  = 24 // a codename; a cap so one value cannot dominate a column
 	labelTextMaxRunes = 120
+
+	// The exact-cleaned identity caps are sized to their own domain rather than
+	// sharing labelTextMaxRunes: a Linear issue URL routinely passes 120, 255 is
+	// git's refname limit and 4096 is PATH_MAX. A value over its cap is dropped,
+	// so a cap that is too small is a field that silently never arrives.
+	providerMaxRunes = 16
+	issueIDMaxRunes  = 64
+	urlMaxRunes      = 512
+	prDraftMaxRunes  = 1
+	branchMaxRunes   = 255
+	dirMaxRunes      = 4096
 )
 
 var (
@@ -88,6 +129,16 @@ var (
 	// case-insensitively: ansiFg accepts either case, and a lowercase-only
 	// regex would silently drop an uppercase colour to the mauve fallback.
 	crewColorRe = regexp.MustCompile(`^(#[0-9A-Fa-f]{6}|colour([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|[a-z]+)$`)
+
+	issueIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	urlRe     = regexp.MustCompile(`^https?://\S+$`)
+	prDraftRe = regexp.MustCompile(`^1$`)
+	branchRe  = regexp.MustCompile(`^\S+$`)
+	// dirRe rejects a path containing a space, which is a legal worktree path:
+	// the value crosses a '|'-delimited row and, for the card, a --dir argument,
+	// and an absent dir line is correct-but-incomplete where a shifted row is
+	// neither. Whitespace is what keeps both safe, so it stays excluded.
+	dirRe = regexp.MustCompile(`^/\S*$`)
 )
 
 // parseWindowLabels turns a windowLabelFormat reply body into one sanitized row
@@ -100,8 +151,8 @@ func parseWindowLabels(body string) []labelRow {
 		// it, so no TrimSpace, per row or per field.
 		line = strings.TrimRight(line, "\r")
 		// Trailing empty fields may or may not survive the trip, so read them
-		// positionally rather than demanding all ten.
-		fields := strings.SplitN(line, "|", 10)
+		// positionally rather than demanding the full width.
+		fields := strings.SplitN(line, "|", windowLabelFields)
 		at := func(i int) string {
 			if i < len(fields) {
 				return fields[i]
@@ -120,8 +171,19 @@ func parseWindowLabels(body string) []labelRow {
 			prCheck:     matching(cleanLabelValue(at(5), labelTextMaxRunes), lowerWordRe),
 			prMergeable: matching(cleanLabelValue(at(6), labelTextMaxRunes), lowerWordRe),
 			prPlain:     cleanLabelValue(at(7), labelTextMaxRunes),
-			labelID:     cleanLabelValue(at(8), labelTextMaxRunes),
-			labelRest:   cleanLabelValue(at(9), labelTextMaxRunes),
+			// Identity fields drop rather than truncate; the two titles are
+			// display text and truncate. See cleanLabelValueExact.
+			issueProvider: matching(cleanLabelValueExact(at(8), providerMaxRunes), lowerWordRe),
+			issueID:       matching(cleanLabelValueExact(at(9), issueIDMaxRunes), issueIDRe),
+			issueURL:      matching(cleanLabelValueExact(at(10), urlMaxRunes), urlRe),
+			prURL:         matching(cleanLabelValueExact(at(11), urlMaxRunes), urlRe),
+			prDraft:       matching(cleanLabelValueExact(at(12), prDraftMaxRunes), prDraftRe),
+			branch:        matching(cleanLabelValueExact(at(13), branchMaxRunes), branchRe),
+			dir:           matching(cleanLabelValueExact(at(14), dirMaxRunes), dirRe),
+			issueTitle:    cleanLabelValue(at(15), labelTextMaxRunes),
+			prTitle:       cleanLabelValue(at(16), labelTextMaxRunes),
+			labelID:       cleanLabelValue(at(17), labelTextMaxRunes),
+			labelRest:     cleanLabelValue(at(18), labelTextMaxRunes),
 		})
 	}
 	return out
@@ -137,6 +199,17 @@ func parseWindowLabels(body string) []labelRow {
 // joining apply's per-window command sequence — tmux fails the whole batch on it
 // ("empty value", exit 1) and drops every later option in that sequence. A ';'
 // inside a value is not a separator and is kept.
+//
+// NOT format-safe, and no caller may assume it is: stripWindowName removes
+// '#[...]' markup but leaves '#{...}' and '#(...)' intact. Every consumer of
+// the values this cleaner produces reads them as plain text — the enrich card
+// via `show-options -w` stdout, then Go string rendering — so a remote-supplied
+// title carrying '#(cmd)' can only garble a display today. Interpolate one into
+// a rendered tmux format and that becomes command execution on the LOCAL host,
+// off a remote-controlled value: a genuine remote-to-local crossing, not the
+// garbling this currently is. A future consumer that needs a format-safe value
+// must double every '#' itself (the @window_bridge_name dialect) rather than
+// assume this did it.
 func cleanLabelValue(v string, maxRunes int) string {
 	v = stripWindowName(v)
 	if strings.HasPrefix(v, "-") || v == ";" {
@@ -145,6 +218,35 @@ func cleanLabelValue(v string, maxRunes int) string {
 	r := []rune(v)
 	if len(r) > maxRunes {
 		return string(r[:maxRunes])
+	}
+	return v
+}
+
+// cleanLabelValueExact rejects where cleanLabelValue repairs: it shares the
+// whole-value drops for a leading '-' and a bare ';', but returns "" for a value
+// over the cap, and for one stripWindowName would have had to alter at all.
+//
+// Truncation is right for display text and wrong for an identity: a cut URL
+// opens the wrong page, a cut branch refreshes the wrong branch on the remote,
+// and a cut path names a directory that is not the one on screen. Every consumer
+// already renders an absent value correctly, so a silent wrong value is worse.
+//
+// stripWindowName DELETES rather than rejects, which is the same failure by a
+// quieter route: "https://host/a#[b]c" would come back as "https://host/ac",
+// which still satisfies urlRe and still opens the wrong page. Hence a
+// before/after compare rather than a '#[' test — it costs the same and cannot be
+// outflanked by whatever stripWindowName learns to strip next. A '|' is already
+// handled a layer earlier by the remote's #{s/[|]/ /:…}, which turns it into a
+// space that fails every validator here.
+func cleanLabelValueExact(v string, maxRunes int) string {
+	if stripWindowName(v) != v {
+		return ""
+	}
+	if strings.HasPrefix(v, "-") || v == ";" {
+		return ""
+	}
+	if len([]rune(v)) > maxRunes {
+		return ""
 	}
 	return v
 }
@@ -237,8 +339,8 @@ func (s *labelShipper) flush(cfg Config, reg *registry, rt roundTrip, gen uint64
 // apply stamps the rows whose values moved, and reports whether any did.
 //
 // A bare mirror's FIRST pass counts as changed: seen is false, so the row
-// compare cannot fire and the window gets nine `-u` for a row carrying nothing,
-// forcing one reflow at daemon start.
+// compare cannot fire and the window gets eighteen `-u` for a row carrying
+// nothing, forcing one reflow at daemon start.
 func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (changed bool) {
 	for _, r := range rows {
 		mw, ok := reg.byRemoteID(r.id)

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
@@ -23,6 +24,16 @@ func testCfg() cfg {
 }
 
 func render(m model) string { return stripANSI(m.card()) }
+
+// bridgedCfg is testCfg plus a resolved bridge handle — a mirror window whose
+// bind could resolve @bridge_sock/@bridge_pane.
+func bridgedCfg() cfg {
+	c := testCfg()
+	c.bridgeCtlBin = "/bin/true"
+	c.bridgeSock = "/tmp/bridge.sock"
+	c.bridgePane = "%3"
+	return c
+}
 
 func TestCardFullIssueAndPR(t *testing.T) {
 	m := model{cfg: testCfg(), width: 60, height: 18, win: winState{
@@ -99,5 +110,116 @@ func TestHandleKeyQuitAndActions(t *testing.T) {
 	noBranch.win.branch = ""
 	if m3, _ := noBranch.handleKey("r"); m3.(model).refreshing {
 		t.Error("r with empty branch must NOT start refreshing")
+	}
+}
+
+// TestFooterBridgeStates covers the four-row [r] contract from design D5.
+func TestFooterBridgeStates(t *testing.T) {
+	tests := []struct {
+		name string
+		m    model
+		want string
+	}{
+		{"non-mirror", model{cfg: testCfg(), width: 60, height: 18, win: winState{branch: "b"}}, "[r] refresh"},
+		{"mirror no branch", model{cfg: bridgedCfg(), width: 60, height: 18, mirror: true, win: winState{}}, "[r] no branch"},
+		{"mirror no bridge handle", model{cfg: testCfg(), width: 60, height: 18, mirror: true, win: winState{branch: "b"}}, "[r] no bridge"},
+		{"mirror with handle", model{cfg: bridgedCfg(), width: 60, height: 18, mirror: true, win: winState{branch: "b"}}, "[r] refresh"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if out := render(tc.m); !strings.Contains(out, tc.want) {
+				t.Errorf("footer missing %q\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+func TestBridgeRefreshArgv(t *testing.T) {
+	got := bridgeRefreshArgv("/tmp/bridge.sock", "%7")
+	want := []string{"--sock", "/tmp/bridge.sock", "enrich-refresh", "%7"}
+	if len(got) != len(want) {
+		t.Fatalf("argv = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestHandleKeyBridgedRefreshDispatchesAndGuardsReentry(t *testing.T) {
+	base := model{cfg: bridgedCfg(), width: 60, height: 18, mirror: true, win: winState{branch: "b"}}
+
+	m1, cmd := base.handleKey("r")
+	if cmd == nil {
+		t.Fatal("r on a mirror with a bridge handle should dispatch the ctl cmd")
+	}
+	m1s := m1.(model)
+	if !m1s.sending {
+		t.Error("dispatching the bridged refresh should set sending")
+	}
+	if m1s.refreshing {
+		t.Error("the bridged path has nothing local to converge on and must not set refreshing")
+	}
+
+	// A held press while sending must not queue a second remote --force pass.
+	if _, cmd2 := m1s.handleKey("r"); cmd2 != nil {
+		t.Error("a second r while sending should be a no-op")
+	}
+}
+
+func TestHandleKeyMirrorNoBridgeIsInert(t *testing.T) {
+	m := model{cfg: testCfg(), width: 60, height: 18, mirror: true, win: winState{branch: "b"}}
+	if _, cmd := m.handleKey("r"); cmd != nil {
+		t.Error("r on a mirror with no bridge handle must be inert")
+	}
+}
+
+func TestHandleKeyMirrorNoBranchIsInert(t *testing.T) {
+	m := model{cfg: bridgedCfg(), width: 60, height: 18, mirror: true, win: winState{}}
+	if _, cmd := m.handleKey("r"); cmd != nil {
+		t.Error("r on a mirror with no branch must stay inert even with a bridge handle (D5)")
+	}
+}
+
+func TestBridgeRefreshDoneMsgFlashesRealOutcome(t *testing.T) {
+	base := model{cfg: bridgedCfg(), width: 60, height: 18, sending: true}
+
+	okM, _ := base.Update(bridgeRefreshDoneMsg{})
+	ok := okM.(model)
+	if ok.sending {
+		t.Error("a done msg must clear sending on success")
+	}
+	if ok.flash != "refresh sent ↗" {
+		t.Errorf("flash = %q, want the success flash", ok.flash)
+	}
+	if !ok.flashUntil.After(time.Now().Add(flashConfirmDuration - time.Second)) {
+		t.Error("success flash should carry the confirm-duration deadline")
+	}
+
+	failM, _ := base.Update(bridgeRefreshDoneMsg{errText: "bridge daemon unreachable"})
+	fail := failM.(model)
+	if fail.sending {
+		t.Error("a done msg must clear sending on failure too")
+	}
+	if fail.flash != "bridge daemon unreachable" {
+		t.Errorf("flash = %q, want the ctl's own error text", fail.flash)
+	}
+	if !fail.flashUntil.After(time.Now().Add(flashConfirmDuration)) {
+		t.Error("a ctl error should carry the longer error-duration deadline, not the confirm one")
+	}
+}
+
+// TestFlashDeadline is the mutation-check target for the tick's flash expiry:
+// a flash must survive a tick before its deadline and be gone after it.
+func TestFlashDeadline(t *testing.T) {
+	notYet := model{cfg: testCfg(), width: 60, height: 18, flash: "still here", flashUntil: time.Now().Add(time.Hour)}
+	if m, _ := notYet.Update(tickMsg{}); m.(model).flash != "still here" {
+		t.Errorf("flash before its deadline must survive a tick, got %q", m.(model).flash)
+	}
+
+	expired := model{cfg: testCfg(), width: 60, height: 18, flash: "gone now", flashUntil: time.Now().Add(-time.Second)}
+	if m, _ := expired.Update(tickMsg{}); m.(model).flash != "" {
+		t.Errorf("flash past its deadline must clear on the next tick, got %q", m.(model).flash)
 	}
 }

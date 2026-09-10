@@ -946,12 +946,23 @@
     ${lib.optionalString enrichEnable ''
       # === Issue/PR enrichment ===
       # prefix + i opens the enrich card in a floating pane, window-scoped like
-      # yazi/prdash below (it reads the *current window's* @issue_*/@pr_*, so
-      # window scope is correct). Icons use the RAW set: the card's stdout is
-      # not re-parsed as a tmux format, so ##-escaped glyphs must not be passed.
+      # yazi/prdash below (it reads the *current window's* @issue_*/@pr_* — or
+      # their @bridge_* copies in a mirror — so window scope is correct). Icons
+      # use the RAW set: the card's stdout is not re-parsed as a tmux format, so
+      # ##-escaped glyphs must not be passed.
+      # Stays a plain floatBind — never bridgeGate'd, never bridgedFloatTool —
+      # because the card has nothing to run on the remote: it only reads local
+      # window options (which, after the bridge label shipper, already carry the
+      # remote's truth). Launching it on the remote would put [o]/[p]'s
+      # xdg-open on a headless machine, breaking URL opening outright. It still
+      # gets a ctl handle (--bridge-ctl-bin/--bridge-sock/--bridge-pane, all
+      # empty on a non-mirror window) so [r] refresh can reach the remote poller
+      # without moving the launch there.
       ${floatBind "i" floatCard "" ''        "${picker-card-bin} \
                 --target '#{session_id}:#{window_id}' \
                 --pr-enrich-bin '${script.tmux-pr-enrich}/bin/tmux-pr-enrich' \
+                --bridge-ctl-bin '${picker-bridge-ctl-bin}' \
+                --bridge-sock '#{@bridge_sock}' --bridge-pane '#{@bridge_pane}' \
                 --thm-fg '#{@thm_fg}' --thm-mauve '#{@thm_mauve}' \
                 --thm-red '#{@thm_red}' --thm-green '#{@thm_green}' --thm-peach '#{@thm_peach}' \
                 --thm-blue '#{@thm_blue}' --thm-overlay0 '#{@thm_overlay_0}' \

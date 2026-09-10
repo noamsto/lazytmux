@@ -108,6 +108,16 @@ func TestParseCtlVerbTranslation(t *testing.T) {
 			want:    []string{`rename-window -t @1 -- 'it'\''s'`},
 			windows: true,
 		},
+		{
+			// The poller runs against the pane's own window (@1), never
+			// <sess>:<win> — sess here has a space, which this body cannot
+			// quote. No reconcile intent: nothing opens on the remote, and the
+			// result comes home as a %subscription-changed label row.
+			name: "enrich-refresh targets the pane's window, not the session",
+			argv: []string{wire.CtlProtocolVersion, "enrich-refresh", "%3"},
+			want: []string{fmt.Sprintf("run-shell -b -t %%3 %s",
+				tmuxQuote("exec /bin/sh -c "+tmuxQuote(enrichRefreshScript("@1"))))},
+		},
 	}
 
 	for _, tc := range tests {
@@ -145,6 +155,7 @@ func TestParseCtlRejects(t *testing.T) {
 		{"wrong arity", []string{wire.CtlProtocolVersion, "resize", "%3", "U"}, "wants 2 argument"},
 		{"empty rename", []string{wire.CtlProtocolVersion, "rename", "%3", "|||"}, "empty name"},
 		{"truncated frame", []string{wire.CtlProtocolVersion, "split-h"}, "at least version"},
+		{"enrich-refresh takes no arguments", []string{wire.CtlProtocolVersion, "enrich-refresh", "%3", "@2"}, "wants 0 argument"},
 		// A config reload can hand a new ctl to an old daemon; the mismatch must
 		// be a message, not a silently-ignored gesture.
 		{"version skew", []string{"1", "split-h", "%3"}, "reopen the bridge"},
@@ -867,6 +878,59 @@ func TestThemeVerbRejectsUnlistedTheme(t *testing.T) {
 		if _, err := v.build("%5", "@2", "sess", []string{theme}); err != nil {
 			t.Fatalf("theme %q rejected: %v", theme, err)
 		}
+	}
+}
+
+// Nothing under nix flake check ever runs this body against a real remote
+// run-shell, so these substring assertions are the only regression net the two
+// emptiness guards will ever have — and what they prevent is severe: an empty
+// branch falls through tmux-pr-enrich.sh:463 into tick mode, where --force
+// detaches a whole-server run_full_pass, and an empty dir skips the conditional
+// cd at :234, writing another repo's PR onto the remote window's own @pr_*.
+func TestEnrichRefreshVerbGuardsBranchAndDir(t *testing.T) {
+	v, ok := verbs["enrich-refresh"]
+	if !ok {
+		t.Fatal("no enrich-refresh verb")
+	}
+	script := enrichRefreshScript("@2")
+	if strings.Contains(script, "'") {
+		t.Fatalf("refresh script must have zero single quotes: %q", script)
+	}
+	for _, want := range []string{`[ -n "$b" ]`, `[ -n "$d" ]`, "|| exit 0"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script %q missing %q: an empty branch runs a whole-server pass, an empty dir writes another repo's PR", script, want)
+		}
+	}
+	// run-shell format-expands the whole string before /bin/sh sees it, so the
+	// body must carry no sequence tmux would read as a format — #P in
+	// particular would corrupt ${p#*=} into ${p1ATH=}.
+	for _, bad := range []string{"#{", "#(", "#P", "#S", "#W", "#T", "#D", "#F", "#I", "#H"} {
+		if strings.Contains(script, bad) {
+			t.Errorf("script contains tmux format %q, which run-shell would expand: %q", bad, script)
+		}
+	}
+
+	cmds, err := v.build("%5", "@2", "my proj", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmds) != 1 {
+		t.Fatalf("want one command, got %v", cmds)
+	}
+	wantCmd := fmt.Sprintf("run-shell -b -t %%5 %s", tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+	if cmds[0] != wantCmd {
+		t.Fatalf("command\n got %q\nwant %q", cmds[0], wantCmd)
+	}
+	// The poller's target is win, never <sess>:<win>: RemoteSession may hold
+	// spaces, and quoting it here needs the single quotes this body bans.
+	if !strings.Contains(cmds[0], "--target @2") {
+		t.Errorf("command %q must target the remote window id", cmds[0])
+	}
+	if strings.Contains(cmds[0], "my proj") {
+		t.Errorf("command %q must not carry the remote session name", cmds[0])
+	}
+	if v.args != 0 || v.moves || v.layout || v.windows || v.needsView || v.probe {
+		t.Error("the poller takes no arguments, opens nothing and reports through a label row: no reconcile intent")
 	}
 }
 
