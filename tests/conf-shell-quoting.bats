@@ -25,7 +25,11 @@
 #   - `{ ... }` brace blocks, and any string that is itself a nested tmux
 #     command (e.g. set-hook's command argument, or an old-style if-shell
 #     command/else-command string), hold further run-shell/if-shell calls
-#     and are recursed into.
+#     and are recursed into. The recursion predicate treats a quote as a
+#     command boundary too, not just line-start/whitespace/;/{ -- a
+#     string-form `if-shell "..." "set-hook -g -B '@a::1' 'run-shell ...'"`
+#     nests run-shell behind a single quote, and without this the nested
+#     shell string is never scanned at all.
 #
 # KNOWN BLIND SPOT: tmux config macros (`name=value` at line start, used as
 # `$name`). tmux substitutes those at parse time, so a macro's body can BE a
@@ -324,7 +328,17 @@ walk_tokens() {
 			# Anywhere in the string, not just at its start: a command/else-command
 			# argument may chain with ';' ("set -g x y ; run-shell '...'"), and
 			# anchoring to ^ would let that bypass the guard entirely.
-			if [[ $tok =~ (^|[[:space:]\;{])(run-shell|if-shell)([[:space:]]|$) ]]; then
+			#
+			# The boundary set is exactly the bytes that can precede a nested
+			# command AND that tmux_tokenize strips on the next pass, which is
+			# what lets this recursion terminate. A quote qualifies: set-hook
+			# -g -B's command argument is single-quoted, so a nested run-shell
+			# sits behind one. '(' does NOT belong here -- tmux has no ( )
+			# grouping, so `(run-shell ...)` is parsed as a command named
+			# "(run-shell" and rejected outright ("unknown command"), making the
+			# construct unreachable; and since tmux_tokenize never strips '(',
+			# adding it made a matching token retokenize to itself forever.
+			if [[ $tok =~ (^|[[:space:]\;{\'\"])(run-shell|if-shell)([[:space:]]|$) ]]; then
 				tmux_tokenize "$tok"
 				walk_tokens "$lineno" "${TOKENS[@]}"
 			fi
@@ -480,6 +494,20 @@ EOF
 	# #{qs:} must not widen the predicate to every #{q*:} modifier
 	[[ $output == *'#{qe:@window_bridge_name}'* ]]
 	[ "$count" -eq 8 ]
+}
+
+@test "flags a bare format in a run-shell nested behind a quote in a string-form branch" {
+	# set-hook -g -B's command argument is single-quoted, so the byte before
+	# the nested run-shell is ' rather than whitespace/;/{ -- this is the
+	# recursion blind spot the predicate widening closes. Before the widening
+	# this fixture was NOT flagged at all.
+	cat >"$BATS_TEST_TMPDIR/quoted-nest.conf" <<'EOF'
+if-shell "true" "set-hook -g -B '@a::1' 'run-shell -b \"/bin/x #{session_name}\"'"
+EOF
+	run check_conf_quoting "$BATS_TEST_TMPDIR/quoted-nest.conf"
+	[ "$status" -eq 1 ]
+	[[ $output == *'#{session_name}'* ]]
+	[ "$(echo "$output" | grep -c .)" -eq 1 ]
 }
 
 @test "flags a %% or %N command-prompt placeholder inside a shell string" {

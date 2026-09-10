@@ -45,6 +45,12 @@ setup() {
 	# positive control are measuring the bind, not the shell lookup.
 	SHELL="$(command -v bash)"
 	export SHELL
+	# The poller and sweep monitor hooks fire inside this test server, and the
+	# sweep reaches two functions that delete files under these dirs — whose
+	# defaults are the developer's real /tmp trees (#603).
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
+	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
+	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
 
 	SOCK="$BATS_TEST_TMPDIR/d.sock"
 	REC_DIR="$BATS_TEST_TMPDIR/rec"

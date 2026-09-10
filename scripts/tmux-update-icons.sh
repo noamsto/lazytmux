@@ -53,13 +53,12 @@ under() {
 }
 
 # Arms `agent-detect` on agent panes that don't already have a live pipe,
-# stamps each agent pane's presence for lib-claude's dead-agent floor, and reaps
-# claude-status state for panes list-panes -a no longer reports (issue #341) —
-# a third job riding the same list-panes roundtrip. Using #{pane_pipe} as the
-# gate means a dead parser (pipe closes -> pane_pipe 0) self-heals on a later
-# tick. The three jobs gate independently — reaping runs whenever the
-# roundtrip happens at all, since (unlike arm/stamp) it must not depend on
-# agent-detect or the dead-agent floor being enabled.
+# stamps each agent pane's presence for lib-claude's dead-agent floor, and (for
+# the per-tick status-format caller only, see below) reaps claude-status state
+# for panes list-panes -a no longer reports (issue #341) — a third job riding
+# the same list-panes roundtrip. Using #{pane_pipe} as the gate means a dead
+# parser (pipe closes -> pane_pipe 0) self-heals on a later tick. Arm/stamp
+# gate independently of each other and of the reap.
 arm_agent_detect() {
 	local arm=1 stamp=0
 	[[ $AGENT_DETECT_BIN == @* ]] && arm=0
@@ -68,8 +67,13 @@ arm_agent_detect() {
 	# The sweep is a full-server list-panes — a second tmux roundtrip per tick,
 	# multiplied by attached sessions. Arming (new pane, dead pipe) only needs
 	# seconds-level latency, so run every 5th tick (CLAUDE_NOW = this tick's
-	# epoch second).
-	((CLAUDE_NOW % 5)) && return 0
+	# epoch second). The monitor hook that drives the sweep already fires on
+	# its own 5s cadence, so a non-empty $1 skips this throttle there — under
+	# that driver the modulo is a phase filter on a clock nobody aligns, not a
+	# rate limit, and it would silently stop arming on a drifted residue.
+	if [[ -z ${1:-} ]] && ((CLAUDE_NOW % 5)); then
+		return 0
+	fi
 
 	# Bail on a failed list-panes rather than reading an empty stream: an empty
 	# result is indistinguishable from "no agent panes", and stamping .sweep
@@ -77,7 +81,16 @@ arm_agent_detect() {
 	# would then read every live pane's lagging stamp as a dead agent.
 	local rows
 	rows=$(tmux list-panes -a -F '#{pane_id}|#{pane_current_command}|#{pane_pipe}' 2>/dev/null) || return 0
-	claude_reap_dead_panes "$rows"
+	# claude_reap_dead_panes deletes under CLAUDE_STATUS_DIR -- a bare /tmp path
+	# shared by every tmux server on the machine, which TMUX_TMPDIR/-L isolation
+	# does not touch -- by checking each pane id against THIS CALLER's own
+	# list-panes -a, so it cannot tell whose state it is deleting. The per-tick
+	# caller ($1 empty) runs only while this server has a real client drawing a
+	# status line; the sweep caller ($1 non-empty) runs on a client-independent
+	# timer on every wrapped-tmux server, so a second scratch server would
+	# continuously wipe the real server's live agent state. Arming below is
+	# non-destructive and stays unconditional.
+	[[ -n ${1:-} ]] || claude_reap_dead_panes "$rows"
 
 	((arm || stamp)) || return 0
 
@@ -105,6 +118,21 @@ arm_agent_detect() {
 }
 
 main() {
+	# Driven by the @lztmux-sweep-tick monitor hook, so a control-only host still
+	# arms. Dispatched on an environment variable rather than argv because
+	# #{qs:session_name} quotes a session name without changing its VALUE: a
+	# session literally named "--sweep" would make $1 that exact string and route
+	# itself into this branch forever, never rendering its own icons again. A
+	# session name cannot forge LZTMUX_TICK_SWEEP.
+	#
+	# Arming only -- no prune here, and arm_agent_detect skips its reap for this
+	# caller; see the reap's own comment for why a client-independent timer must
+	# not delete from CLAUDE_STATUS_DIR.
+	if [[ -n ${LZTMUX_TICK_SWEEP:-} ]]; then
+		arm_agent_detect force
+		return 0
+	fi
+
 	SESSION=${1:-$(tmux display-message -p '#{session_name}')}
 	# $2 is #{@resume_claude}, expanded by the status format — avoids a show-option
 	# fork per tick. "on" enables stamping each Claude pane's @remux_relaunch override

@@ -763,6 +763,234 @@
               touch $out
             '';
 
+          # Build-time guard for the #603 tick floor's wiring in
+          # config/tmux.conf.nix: four `-B` session monitors driving the
+          # former status-format[0] poller jobs. Modelled on
+          # default-size-conf-assertions above. The store-path setter strings
+          # are built from tmuxConfig.script so a future binary rename can't
+          # silently desync the check from the config.
+          tick-floor-conf-assertions = let
+            # \\\" (not \") -- the emitted conf wraps each run-shell command in
+            # BACKSLASH-escaped quotes (it's itself quoted by the outer
+            # if-shell body string), so the literal substring to match is
+            # backslash-quote, not a bare quote.
+            prSetter = "set-hook -g -B '@lztmux-pr-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
+            backfillSetter = "set-hook -g -B '@lztmux-backfill-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
+            usageSetter = "set-hook -g -B '@lztmux-usage-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
+            sweepSetter = "set-hook -g -B '@lztmux-sweep-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"LZTMUX_TICK_SWEEP=1 ${tmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
+          in
+            pkgs.runCommand "tick-floor-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep pkgs.gawk pkgs.gnused pkgs.coreutils];
+              CONF = tmuxConfig.tmuxConf;
+              TICK_OPT = "set -g @lztmux_tick '%s'";
+              PR_CLEAR_B = "set-hook -g -u -B '@lztmux-pr-tick'";
+              PR_CLEAR_OPT = "set -gu '@lztmux-pr-tick'";
+              BACKFILL_CLEAR_B = "set-hook -g -u -B '@lztmux-backfill-tick'";
+              BACKFILL_CLEAR_OPT = "set -gu '@lztmux-backfill-tick'";
+              USAGE_CLEAR_B = "set-hook -g -u -B '@lztmux-usage-tick'";
+              USAGE_CLEAR_OPT = "set -gu '@lztmux-usage-tick'";
+              SWEEP_CLEAR_B = "set-hook -g -u -B '@lztmux-sweep-tick'";
+              SWEEP_CLEAR_OPT = "set -gu '@lztmux-sweep-tick'";
+              PR_SETTER = prSetter;
+              BACKFILL_SETTER = backfillSetter;
+              USAGE_SETTER = usageSetter;
+              SWEEP_SETTER = sweepSetter;
+              # The guard's condition-close / string-branch-open join, which
+              # only exists when the hooks sit inside if-shell's STRING form
+              # ("..." "...") rather than a brace block -- tmux parses every
+              # branch of a { } block at source time, so -B would be rejected
+              # even on the untaken branch of a pre-3.8 server.
+              GUARD_JOIN = "grep -q -- -B\" \"set-hook -g -u -B '@lztmux-pr-tick'";
+            } ''
+              grep -qF "$TICK_OPT" "$CONF"
+
+              for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
+                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
+                       PR_SETTER BACKFILL_SETTER USAGE_SETTER SWEEP_SETTER GUARD_JOIN; do
+                pat="''${!v}"
+                grep -qF "$pat" "$CONF" || {
+                  echo "missing from conf ($v): $pat" >&2
+                  exit 1
+                }
+              done
+
+              # Highest-value line in this check (upstream 557967c3): the
+              # empty-target monitor spec ('@name::') is the only spelling
+              # that survives a flake.lock bump past that commit, and
+              # ':session:' must never appear anywhere in the emitted conf.
+              # Written as an explicit if/exit, not a bare `! grep ...`: bash's
+              # errexit never fires on a command whose status is inverted by
+              # `!`, so that form would silently never catch a regression.
+              if grep -qF ':session:' "$CONF"; then
+                echo "a -B monitor spec uses ':session:' -- only the empty target ('::') survives upstream 557967c3" >&2
+                exit 1
+              fi
+
+              # status-format[0] no longer smuggles the poller jobs through.
+              fmt0="$(grep -F 'set -g status-format[0]' "$CONF")"
+              case "$fmt0" in
+                *--tick*|*--backfill*)
+                  echo "status-format[0] still carries a --tick/--backfill job" >&2
+                  exit 1
+                  ;;
+              esac
+
+              # Every clear precedes every setter in the emitted text -- the
+              # ordering is what makes a disable (enrich.enable = false, etc.)
+              # actually take effect rather than leave a stale monitor firing
+              # at a store path GC will remove.
+              line="$(grep -F 'if-shell "tmux list-commands set-hook' "$CONF")"
+              [ -n "$line" ] || { echo "tick-floor guard line not found" >&2; exit 1; }
+
+              clear_max=-1
+              for v in "$PR_CLEAR_B" "$PR_CLEAR_OPT" "$BACKFILL_CLEAR_B" "$BACKFILL_CLEAR_OPT" \
+                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT"; do
+                prefix="''${line%%"$v"*}"
+                [ "$prefix" != "$line" ] || { echo "clear not found in guard line: $v" >&2; exit 1; }
+                [ "''${#prefix}" -gt "$clear_max" ] && clear_max="''${#prefix}"
+              done
+              setter_min=-1
+              for v in "$PR_SETTER" "$BACKFILL_SETTER" "$USAGE_SETTER" "$SWEEP_SETTER"; do
+                prefix="''${line%%"$v"*}"
+                [ "$prefix" != "$line" ] || { echo "setter not found in guard line: $v" >&2; exit 1; }
+                if [ "$setter_min" -eq -1 ] || [ "''${#prefix}" -lt "$setter_min" ]; then
+                  setter_min="''${#prefix}"
+                fi
+              done
+              [ "$clear_max" -lt "$setter_min" ] || {
+                echo "a clear (offset $clear_max) does not precede every setter (offset $setter_min)" >&2
+                exit 1
+              }
+
+              # A hook COMMAND (not the monitor spec, which is legitimately a
+              # bare #{T:...} format evaluated by hooks_monitor_add itself)
+              # must carry NO #{ at all, not merely a #{q: form. -B monitor
+              # hooks format-expand their action string and then re-lex the
+              # result with tmux's own command parser -- which strips the
+              # very backslashes #{q:} inserts -- before run-shell expands a
+              # second time; #{q:start_time} was inert only because a start
+              # time is pure digits, the kind of idiom someone copies next
+              # for a format that isn't. All four commands are pure store paths
+              # plus literal flags, so the invariant is enforceable as written.
+              cmds="$(echo "$line" | awk -F'\\\\"' '{for(i=2;i<NF;i+=2) print $i}')"
+              [ -n "$cmds" ] || { echo "no hook commands extracted from guard line" >&2; exit 1; }
+              n=0
+              while IFS= read -r cmd; do
+                n=$((n + 1))
+                case "$cmd" in
+                  *'#{'*)
+                    echo "bare #{ in hook command: $cmd" >&2
+                    exit 1
+                    ;;
+                esac
+              done <<<"$cmds"
+              [ "$n" -eq 4 ] || { echo "expected 4 hook commands, got $n" >&2; exit 1; }
+
+              touch $out
+            '';
+
+          # nix build .#default cannot verify the disabled path: enrichEnable
+          # and agentUsageEnable both default true there, so a regression that
+          # made the clears conditional on a feature flag (leaving a stale
+          # monitor pointed at a store path GC will remove) would pass every
+          # existing check. Modelled on sixel-conf-assertions above: import
+          # tmux.conf.nix directly with the flags off, the way
+          # nix build .#default never does.
+          tick-floor-disabled-conf-assertions = let
+            disabledTmuxConfig = import ./config/tmux.conf.nix {
+              inherit pkgs lib;
+              tmuxPkg = mkTmux pkgs;
+              carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+              carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
+              prdash = inputs.prdash.packages.${pkgs.system}.prdash;
+              enrichEnable = false;
+              agentUsageEnable = false;
+            };
+            disabledConf = disabledTmuxConfig.tmuxConf;
+            # The pr/backfill/usage setters are built off the DEFAULT
+            # tmuxConfig.script -- they must be absent regardless of exact
+            # store path, since the whole setHook line is omitted when its
+            # flag is off. The sweep setter is NOT optional, so it must be
+            # built off disabledTmuxConfig.script instead: tmux-update-icons's
+            # OWN @issue_stamp@ substitution differs with enrichEnable off,
+            # which changes its store path independently of this setter list.
+            prSetter = "set-hook -g -B '@lztmux-pr-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
+            backfillSetter = "set-hook -g -B '@lztmux-backfill-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
+            usageSetter = "set-hook -g -B '@lztmux-usage-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
+            sweepSetter = "set-hook -g -B '@lztmux-sweep-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"LZTMUX_TICK_SWEEP=1 ${disabledTmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
+          in
+            pkgs.runCommand "tick-floor-disabled-conf-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+              CONF = disabledConf;
+              PR_CLEAR_B = "set-hook -g -u -B '@lztmux-pr-tick'";
+              PR_CLEAR_OPT = "set -gu '@lztmux-pr-tick'";
+              BACKFILL_CLEAR_B = "set-hook -g -u -B '@lztmux-backfill-tick'";
+              BACKFILL_CLEAR_OPT = "set -gu '@lztmux-backfill-tick'";
+              USAGE_CLEAR_B = "set-hook -g -u -B '@lztmux-usage-tick'";
+              USAGE_CLEAR_OPT = "set -gu '@lztmux-usage-tick'";
+              SWEEP_CLEAR_B = "set-hook -g -u -B '@lztmux-sweep-tick'";
+              SWEEP_CLEAR_OPT = "set -gu '@lztmux-sweep-tick'";
+              PR_SETTER = prSetter;
+              BACKFILL_SETTER = backfillSetter;
+              USAGE_SETTER = usageSetter;
+              SWEEP_SETTER = sweepSetter;
+            } ''
+              # All eight clears survive a disabled feature -- they're keyed
+              # off the fixed hookNames list, never the enable flags, which is
+              # what makes disabling a feature actually drop its stale monitor
+              # on reload instead of leaving argv's previous generation armed.
+              for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
+                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT; do
+                pat="''${!v}"
+                grep -qF "$pat" "$CONF" || {
+                  echo "disabled conf is missing a clear ($v): $pat" >&2
+                  exit 1
+                }
+              done
+
+              grep -qF "$SWEEP_SETTER" "$CONF" || {
+                echo "disabled conf is missing the unconditional sweep setter" >&2
+                exit 1
+              }
+
+              for v in PR_SETTER BACKFILL_SETTER USAGE_SETTER; do
+                pat="''${!v}"
+                if grep -qF "$pat" "$CONF"; then
+                  echo "disabled conf still emits a gated setter ($v): $pat" >&2
+                  exit 1
+                fi
+              done
+
+              touch $out
+            '';
+
+          # The #603 tick floor's poller and sweep hooks fire inside any server
+          # started from tmuxConfig.tmux-wrapped and reach functions that delete
+          # files under CLAUDE_STATUS_DIR, LAZYTMUX_ENRICH_CACHE_DIR and
+          # LAZYTMUX_AGENT_USAGE_DIR — whose defaults are the developer's real
+          # /tmp trees. A bats suite that sets TMUX_BIN loads that config, so it
+          # must export all three in its own setup() or a future one added
+          # without isolation is destructive the moment it runs locally, while
+          # nix flake check stays green (the sandbox's /tmp/claude-status is
+          # empty).
+          wrapped-tmux-suite-isolation-assertions =
+            pkgs.runCommand "wrapped-tmux-suite-isolation-assertions" {
+              nativeBuildInputs = [pkgs.gnugrep];
+            } ''
+              fail=0
+              for f in ${./tests}/*.bats; do
+                grep -q 'TMUX_BIN' "$f" || continue
+                for var in CLAUDE_STATUS_DIR LAZYTMUX_ENRICH_CACHE_DIR LAZYTMUX_AGENT_USAGE_DIR; do
+                  grep -q "export $var=" "$f" || {
+                    echo "$(basename "$f") references TMUX_BIN but does not export $var" >&2
+                    fail=1
+                  }
+                done
+              done
+              [ "$fail" -eq 0 ]
+              touch $out
+            '';
+
           # A control byte is invisible in review and only misbehaves for clients
           # without a UTF-8 locale, so the delimiter rule needs a build-time gate
           # rather than vigilance (#373). Shell sources: scripts/, config/, modules/.
@@ -1128,6 +1356,36 @@
               touch $out
             '';
 
+          # Live proof for #603: the monitor-hook floor actually fires on the
+          # wrapped server's own clock, with zero clients and with only a
+          # control-mode client, which tick-floor-conf-assertions (a text
+          # check) cannot demonstrate by itself.
+          tick-floor-tests =
+            pkgs.runCommand "tick-floor-tests" {
+              # mkTmux (not pkgs.tmux) for the same reason as every other
+              # live-tmux check here, AND because case 5 runs a second,
+              # hand-written-config server directly on the bare `tmux` this
+              # provides (deliberately NOT the wrapped TMUX_BIN, to pin plain
+              # tmux's own status-line behaviour rather than anything this
+              # repo's config does). gnugrep is NOT optional the way it is in
+              # tmux-next38-readiness-tests: the -B guard in
+              # config/tmux.conf.nix shells out to
+              # `tmux list-commands set-hook | grep -- -B`, so a PATH with no
+              # grep makes that guard fail closed and the suite would pass or
+              # fail for the wrong reason. util-linux supplies `script`, which
+              # case 5 uses to give a real attach a pty.
+              nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.gnugrep pkgs.util-linux (mkTmux pkgs)];
+              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              LANG = "C.UTF-8";
+              LC_ALL = "C.UTF-8";
+            } ''
+              cp -r ${./tests} tests
+              export HOME=$TMPDIR/home
+              mkdir -p "$HOME"
+              bats tests/tick-floor.bats
+              touch $out
+            '';
+
           remote-tests =
             pkgs.runCommand "remote-tests" {
               # bash: the cold-start cases run the launcher through an explicit
@@ -1208,10 +1466,30 @@
           # already in the wrapper's PATH closure but is named here explicitly
           # because the test, not the wrapper, invokes it. CTL is the real binary,
           # which the harness self-test drives to prove the stub's ack satisfies it.
-          rename-bind-integration-tests =
+          #
+          # TMUX_BIN is built with enrich/agent-usage OFF (same knobs as
+          # tick-floor-disabled-conf-assertions above), not tmuxConfig.tmux-wrapped:
+          # since #603 the pr/backfill/usage monitor hooks fire on the server's own
+          # 5s clock with zero clients, so leaving them on had this test's server
+          # spawning three extra `run-shell -b` jobs every 5s for the run's whole
+          # duration, on top of the one keybind under test -- enough background
+          # contention on aarch64-darwin CI to push wait_for_frame's 10s poll past
+          # its deadline. The sweep hook stays on: it's unconditional by design and
+          # a single cheap list-panes -a, not a gh/curl-touching poller.
+          rename-bind-integration-tests = let
+            renameBindTmuxConfig = import ./config/tmux.conf.nix {
+              inherit pkgs lib;
+              tmuxPkg = mkTmux pkgs;
+              carousel-toggle = inputs.aeye.packages.${pkgs.system}.toggle;
+              carousel-aeye = inputs.aeye.packages.${pkgs.system}.default;
+              prdash = inputs.prdash.packages.${pkgs.system}.prdash;
+              enrichEnable = false;
+              agentUsageEnable = false;
+            };
+          in
             pkgs.runCommand "rename-bind-integration-tests" {
               nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.diffutils pkgs.gnugrep pkgs.socat];
-              TMUX_BIN = "${tmuxConfig.tmux-wrapped}/bin/tmux";
+              TMUX_BIN = "${renameBindTmuxConfig.tmux-wrapped}/bin/tmux";
               CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
               # A window name fixture is UTF-8, and so is the status line it is
               # read back from.

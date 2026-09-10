@@ -15,6 +15,12 @@ setup() {
 	export XDG_CONFIG_HOME="$TEST_HOME/.config"
 	export XDG_STATE_HOME="$TEST_HOME/.local/state"
 	export TERM=xterm-256color
+	# The poller and sweep monitor hooks fire inside this test server, and the
+	# sweep reaches two functions that delete files under these dirs — whose
+	# defaults are the developer's real /tmp trees (#603).
+	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
+	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
+	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
 
 	t new-session -d -s "$SESSION"
 

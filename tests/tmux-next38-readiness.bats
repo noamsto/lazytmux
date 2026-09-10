@@ -11,7 +11,12 @@ setup() {
 	export XDG_CONFIG_HOME="$TEST_HOME/.config"
 	export XDG_STATE_HOME="$TEST_HOME/.local/state"
 	export TERM=xterm-256color
+	# The poller and sweep monitor hooks fire inside this test server, and the
+	# sweep reaches two functions that delete files under these dirs — whose
+	# defaults are the developer's real /tmp trees (#603).
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
+	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
+	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
 
 	t new-session -d -s s -c "$PWD"
 	wait_for_nonempty_option @thm_bg
@@ -415,7 +420,10 @@ wait_for_client() {
 
 	local conf hooks name
 	conf="$(store_conf)"
-	hooks="$(grep -v -E '^\s*#' "$conf" | grep -oE 'set-hook -g ([A-Za-z-]+(\[[0-9]+\])?)' | awk '{print $3}' | sort -u)"
+	# Anchored to a leading letter: `set-hook -g -B '@…'` and `set-hook -g -u -B
+	# '@…'` otherwise feed the unanchored class its own flag tokens (-B, -u) as
+	# if they were hook names, which show-hooks -g then predictably never lists.
+	hooks="$(grep -v -E '^\s*#' "$conf" | grep -oE 'set-hook -g ([A-Za-z][A-Za-z-]*(\[[0-9]+\])?)' | awk '{print $3}' | sort -u)"
 	[ -n "$hooks" ]
 
 	while IFS= read -r name; do
@@ -425,6 +433,25 @@ wait_for_client() {
 			return 1
 		fi
 	done <<<"$hooks"
+
+	# The anchor above means a monitor hook (`set-hook -g -B '@name::…'`) is
+	# never extracted above -- its name sits behind the -B flag token, not
+	# after a bare `set-hook -g`. `show-hooks -g` wouldn't help either: it
+	# prints a monitor's command alone, with no indication it is a monitor at
+	# all. `show-hooks -g -B` is the one listing form that reports the
+	# subscription itself, so monitor hooks are checked against it separately.
+	# Each name is checked only if #603's tick floor has actually landed it in
+	# this config, so this assertion is correct whether or not it has yet.
+	run t show-hooks -g -B
+	[ "$status" -eq 0 ]
+	local stored_monitors="$output" monitor_name
+	for monitor_name in @lztmux-pr-tick @lztmux-backfill-tick @lztmux-usage-tick @lztmux-sweep-tick; do
+		grep -qF "'${monitor_name}::" "$conf" || continue
+		if [[ $stored_monitors != *"$monitor_name"* ]]; then
+			printf 'monitor hook %s registered in config but not stored by tmux (show-hooks -g -B)\n' "$monitor_name" >&2
+			return 1
+		fi
+	done
 }
 
 @test "single-row separator omits only after the last window (next_window_index-driven)" {
