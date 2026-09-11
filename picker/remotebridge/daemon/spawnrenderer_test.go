@@ -15,7 +15,7 @@ func TestRendererSpawnArgsIsCommandNotEnv(t *testing.T) {
 		t.Errorf("rendererSpawnArgs = %v, want %v", got, want)
 	}
 	for _, w := range got {
-		if strings.HasPrefix(w, "-e") || strings.Contains(w, "LZTMUX_RENDER") {
+		if strings.HasPrefix(w, "-e") || strings.Contains(w, "OG_RENDER") {
 			t.Errorf("env wiring in rendererSpawnArgs: %v", got)
 		}
 	}

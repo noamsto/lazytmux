@@ -32,7 +32,7 @@ func TestIsExcluded(t *testing.T) {
 		{"/tmp/zr-rank-test", true},                // glob child
 		{"/home/noams/Downloads", true},            // exact dir
 		{"/home/noams/Downloads/teamviewer", true}, // subtree
-		{"/home/noams/Data/git/lazytmux", false},
+		{"/home/noams/Data/git/tmux-og", false},
 		{"/home/noams/.config", false},
 	}
 	for _, c := range cases {
@@ -47,7 +47,7 @@ func TestIsExcluded(t *testing.T) {
 
 func TestSessionNameFromPath(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"/home/n/Data/git/lazytmux", "lazytmux"},
+		{"/home/n/Data/git/tmux-og", "tmux-og"},
 		{"/home/n/proj/foo.bar", "foo_bar"},    // tmux forbids '.' in names
 		{"/home/n/proj/a:b", "a_b"},            // tmux forbids ':' in names
 		{"/home/n/proj/trailing/", "trailing"}, // trailing slash trimmed
@@ -81,15 +81,15 @@ func TestNormalizePathResolvesSymlinks(t *testing.T) {
 
 func TestZoxideSuggestions(t *testing.T) {
 	paths := []string{
-		"/home/n/git/covered",  // dropped: session path match
-		"/home/n/git/lazytmux", // dropped: derived name collides with session "lazytmux"
+		"/home/n/git/covered", // dropped: session path match
+		"/home/n/git/tmux-og", // dropped: derived name collides with session "tmux-og"
 		"/home/n/git/alpha",
 		"/home/n/work/alpha", // dropped: name collides with earlier suggestion "alpha"
 		"/home/n/git/beta",
 		"/home/n/git/gamma",
 	}
 	sessionPaths := map[string]bool{"/home/n/git/covered": true}
-	sessionNames := map[string]bool{"lazytmux": true}
+	sessionNames := map[string]bool{"tmux-og": true}
 
 	got := zoxideSuggestions(paths, sessionPaths, sessionNames, 15)
 	want := []suggestion{
@@ -153,7 +153,7 @@ func TestSessionFilterMapsSkipsBridgePath(t *testing.T) {
 	dir := t.TempDir()
 	sessions := []sessionData{
 		{name: "real", path: dir},
-		{name: "otherhost-lazytmux", path: dir, bridgeHost: "otherhost"},
+		{name: "otherhost-tmux-og", path: dir, bridgeHost: "otherhost"},
 	}
 	paths, names := sessionFilterMaps(sessions)
 	if !paths[normalizePath(dir)] || !names["real"] {
@@ -161,7 +161,7 @@ func TestSessionFilterMapsSkipsBridgePath(t *testing.T) {
 	}
 	// The mirror's own name is a real tmux-namespace entry and must still
 	// suppress, even though its path (launcher-cwd artifact) must not.
-	if !names["otherhost-lazytmux"] {
+	if !names["otherhost-tmux-og"] {
 		t.Errorf("bridge session name dropped from name filter: %v", names)
 	}
 
@@ -191,7 +191,7 @@ func TestCollapseWorktree(t *testing.T) {
 	// The shared-root case is the anti-regression — the old string shortcut
 	// folded it to "/home/n/Data/git".
 	for _, in := range []string{
-		"/home/n/git/lazytmux",
+		"/home/n/git/tmux-og",
 		"/home/n/notes/.worktrees-backup/x",
 		"/home/n/Data/git/.worktrees/org/repo/feat-x",
 	} {

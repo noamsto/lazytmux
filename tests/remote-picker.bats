@@ -3,7 +3,7 @@
 # shellcheck disable=SC2016 # picker_eval snippets expand in the subshell, not here
 # The remote-side session picker wrapper (#356). Three roles in one file:
 # `--probe` and `--serve` run on the remote, and the bare `<host>` form drives
-# the three ssh legs locally and hands the pick to lztmux-remote-open.
+# the three ssh legs locally and hands the pick to og-remote-open.
 #
 # ssh, tmux, the picker binary and the launcher are all fakes on PATH; nothing
 # here touches a real host, a real tmux server, or a path outside the test tmpdir.
@@ -12,7 +12,7 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$FAKEBIN"
 
-	export SCRIPT="$PWD/scripts/lztmux-remote-picker.sh"
+	export SCRIPT="$PWD/scripts/og-remote-picker.sh"
 	export SSH_LOG="$BATS_TEST_TMPDIR/ssh.log"
 	export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"
 	export OPEN_LOG="$BATS_TEST_TMPDIR/open.log"
@@ -29,8 +29,8 @@ setup() {
 
 	# What leg 1's `--probe` reports by default: a well-formed triple. Cases that
 	# exercise the validation override it.
-	export FAKE_PROBE="script=/nix/store/fake/bin/lztmux-remote-picker
-emit_dir=/run/user/1000/lztmux-pick
+	export FAKE_PROBE="script=/nix/store/fake/bin/og-remote-picker
+emit_dir=/run/user/1000/og-pick
 tmpdir=/run/user/1000"
 	# Empty payload = the human pressed esc. Choice cases override it.
 	export FAKE_PAYLOAD=""
@@ -71,14 +71,14 @@ tmpdir=/run/user/1000"
 
 	# The handoff target. Logs argv one bracketed field per arg, so a name with a
 	# space is distinguishable from two names.
-	cat >"$FAKEBIN/lztmux-remote-open" <<-'EOF'
+	cat >"$FAKEBIN/og-remote-open" <<-'EOF'
 		#!/bin/sh
 		printf 'argv:' >>"$OPEN_LOG"
 		for a in "$@"; do printf ' [%s]' "$a" >>"$OPEN_LOG"; done
 		printf '\n' >>"$OPEN_LOG"
-		printf 'tmpdir: [%s]\n' "${LZTMUX_REMOTE_TMPDIR-}" >>"$OPEN_LOG"
-		if [ -n "${LZTMUX_REMOTE_NEW_DIR+set}" ]; then
-			printf 'newdir: [%s]\n' "$LZTMUX_REMOTE_NEW_DIR" >>"$OPEN_LOG"
+		printf 'tmpdir: [%s]\n' "${OG_REMOTE_TMPDIR-}" >>"$OPEN_LOG"
+		if [ -n "${OG_REMOTE_NEW_DIR+set}" ]; then
+			printf 'newdir: [%s]\n' "$OG_REMOTE_NEW_DIR" >>"$OPEN_LOG"
 		else
 			printf 'newdir: unset\n' >>"$OPEN_LOG"
 		fi
@@ -93,9 +93,9 @@ tmpdir=/run/user/1000"
 		printf 'argv:' >>"$PICKER_LOG"
 		for a in "$@"; do printf ' [%s]' "$a" >>"$PICKER_LOG"; done
 		printf '\n' >>"$PICKER_LOG"
-		printf 'emit: [%s]\n' "${LZTMUX_PICKER_EMIT-}" >>"$PICKER_LOG"
+		printf 'emit: [%s]\n' "${OG_PICKER_EMIT-}" >>"$PICKER_LOG"
 		printf 'tmux_tmpdir: [%s]\n' "${TMUX_TMPDIR-}" >>"$PICKER_LOG"
-		printf 'host: [%s]\n' "${LZTMUX_PICKER_HOST-}" >>"$PICKER_LOG"
+		printf 'host: [%s]\n' "${OG_PICKER_HOST-}" >>"$PICKER_LOG"
 		exit 0
 	EOF
 
@@ -133,12 +133,12 @@ file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 @test "kv_get: key order does not matter and unknown keys are ignored" {
 	local text="tmpdir=/run/user/1000
 noise=whatever
-emit_dir=/run/user/1000/lztmux-pick
-script=/usr/bin/lztmux-remote-picker"
+emit_dir=/run/user/1000/og-pick
+script=/usr/bin/og-remote-picker"
 
 	picker_eval 'kv_get "$1" script && printf "[%s]" "$KV_VALUE"' "$text"
 	[ "$status" -eq 0 ]
-	[ "$output" = "[/usr/bin/lztmux-remote-picker]" ]
+	[ "$output" = "[/usr/bin/og-remote-picker]" ]
 
 	picker_eval 'kv_get "$1" tmpdir && printf "[%s]" "$KV_VALUE"' "$text"
 	[ "$status" -eq 0 ]
@@ -149,13 +149,13 @@ script=/usr/bin/lztmux-remote-picker"
 	# `ssh host bash -s` against a fish login shell is really
 	# `fish -c 'bash -s'`, which sources config.fish first.
 	local text="Welcome to fish, the friendly interactive shell
-script=/usr/bin/lztmux-remote-picker
+script=/usr/bin/og-remote-picker
 --- some banner ---
 tmpdir=/run/user/1000"
 
 	picker_eval 'kv_get "$1" script && printf "[%s]" "$KV_VALUE"' "$text"
 	[ "$status" -eq 0 ]
-	[ "$output" = "[/usr/bin/lztmux-remote-picker]" ]
+	[ "$output" = "[/usr/bin/og-remote-picker]" ]
 }
 
 @test "kv_get: a value may contain '=', tabs and spaces" {
@@ -185,14 +185,14 @@ name=second"
 # --- Step 11a: leg-1 value validation ---------------------------------------
 
 @test "leg 1: a relative script path is refused by name" {
-	export FAKE_PROBE="script=bin/lztmux-remote-picker
-emit_dir=/run/user/1000/lztmux-pick
+	export FAKE_PROBE="script=bin/og-remote-picker
+emit_dir=/run/user/1000/og-pick
 tmpdir=/run/user/1000"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
 	[ "$status" -eq 1 ]
 	[[ $output == *"unusable script"* ]]
-	[[ $output == *"bin/lztmux-remote-picker"* ]]
+	[[ $output == *"bin/og-remote-picker"* ]]
 
 	# Refused before leg 2 ever runs.
 	run grep -c -- --serve "$SSH_LOG"
@@ -200,8 +200,8 @@ tmpdir=/run/user/1000"
 }
 
 @test "leg 1: an emit_dir carrying a shell metacharacter is refused by name" {
-	export FAKE_PROBE="script=/usr/bin/lztmux-remote-picker
-emit_dir=/run/user/1000/lztmux-pick;id
+	export FAKE_PROBE="script=/usr/bin/og-remote-picker
+emit_dir=/run/user/1000/og-pick;id
 tmpdir=/run/user/1000"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
@@ -212,18 +212,18 @@ tmpdir=/run/user/1000"
 }
 
 @test "leg 1: a tmpdir with whitespace or metacharacters is refused — it crosses unquoted" {
-	# LZTMUX_REMOTE_TMPDIR is interpolated *unquoted* into lztmux-remote-open's
+	# OG_REMOTE_TMPDIR is interpolated *unquoted* into og-remote-open's
 	# remote command strings, so this value is the injection seam.
-	export FAKE_PROBE="script=/usr/bin/lztmux-remote-picker
-emit_dir=/run/user/1000/lztmux-pick
+	export FAKE_PROBE="script=/usr/bin/og-remote-picker
+emit_dir=/run/user/1000/og-pick
 tmpdir=/run/user/1000 x"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
 	[ "$status" -eq 1 ]
 	[[ $output == *"unusable tmpdir"* ]]
 
-	export FAKE_PROBE='script=/usr/bin/lztmux-remote-picker
-emit_dir=/run/user/1000/lztmux-pick
+	export FAKE_PROBE='script=/usr/bin/og-remote-picker
+emit_dir=/run/user/1000/og-pick
 tmpdir=/run/user/$(id -u)'
 
 	run bash "$SCRIPT" tp-g6 </dev/null
@@ -234,7 +234,7 @@ tmpdir=/run/user/$(id -u)'
 }
 
 @test "leg 1: a probe missing a required key is refused by name" {
-	export FAKE_PROBE="script=/usr/bin/lztmux-remote-picker
+	export FAKE_PROBE="script=/usr/bin/og-remote-picker
 tmpdir=/run/user/1000"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
@@ -258,7 +258,7 @@ tmpdir=/run/user/1000"
 	[ "$status" -eq 0 ]
 
 	[[ $output == *"script=$SCRIPT"* ]]
-	[[ $output == *"emit_dir=$XDG_RUNTIME_DIR/lztmux-pick"* ]]
+	[[ $output == *"emit_dir=$XDG_RUNTIME_DIR/og-pick"* ]]
 	[[ $output == *"tmpdir=$expect_tmpdir"* ]]
 
 	# Resolution only: the emit dir is --serve's job, and a probe that created it
@@ -288,7 +288,7 @@ tmpdir=/run/user/1000"
 		[[ $output == *"invalid emit token"* ]]
 	done
 
-	[ ! -e "$XDG_RUNTIME_DIR/lztmux-pick" ]
+	[ ! -e "$XDG_RUNTIME_DIR/og-pick" ]
 	[ ! -s "$PICKER_LOG" ]
 }
 
@@ -297,8 +297,8 @@ tmpdir=/run/user/1000"
 	# checks its owner, so --serve asserts instead. A no-op chmod stands in for
 	# the mode correction failing (an existing dir of another uid, unreachable
 	# in a test that runs as one user).
-	mkdir -p "$XDG_RUNTIME_DIR/lztmux-pick"
-	chmod 755 "$XDG_RUNTIME_DIR/lztmux-pick"
+	mkdir -p "$XDG_RUNTIME_DIR/og-pick"
+	chmod 755 "$XDG_RUNTIME_DIR/og-pick"
 	local nochmod="$BATS_TEST_TMPDIR/nochmod"
 	mkdir -p "$nochmod"
 	printf '#!/bin/sh\nexit 0\n' >"$nochmod/chmod"
@@ -313,18 +313,18 @@ tmpdir=/run/user/1000"
 	[ ! -s "$PICKER_LOG" ]
 }
 
-@test "--serve execs the picker with LZTMUX_PICKER_EMIT and a pre-created emit file" {
+@test "--serve execs the picker with OG_PICKER_EMIT and a pre-created emit file" {
 	run bash "$SCRIPT" --serve deadbeef01 </dev/null
 	[ "$status" -eq 0 ]
 
-	local emit="$XDG_RUNTIME_DIR/lztmux-pick/deadbeef01"
-	# LZTMUX_PICKER_EMIT is the only thing that gives the picker an emit target;
+	local emit="$XDG_RUNTIME_DIR/og-pick/deadbeef01"
+	# OG_PICKER_EMIT is the only thing that gives the picker an emit target;
 	# without it every selection is silently dropped.
 	grep -qF "emit: [$emit]" "$PICKER_LOG"
 	grep -qF 'argv: [--tui] [--remote-pick]' "$PICKER_LOG"
 	grep -q 'tmux_tmpdir: \[/' "$PICKER_LOG"
 
-	[ "$(file_mode "$XDG_RUNTIME_DIR/lztmux-pick")" = 700 ]
+	[ "$(file_mode "$XDG_RUNTIME_DIR/og-pick")" = 700 ]
 	# Pre-created, so an unwritable target fails here rather than reading back as
 	# a cancel, and empty, so the local side's discriminator still works.
 	[ -f "$emit" ]
@@ -364,10 +364,10 @@ name=work"
 	[[ $token =~ ^[A-Za-z0-9]+$ ]]
 	# The host trails the token: the remote cannot derive the name we reached it
 	# by, and the header badge names it.
-	grep -qF -- "-t tp-g6 -- /nix/store/fake/bin/lztmux-remote-picker --serve $token tp-g6" "$SSH_LOG"
+	grep -qF -- "-t tp-g6 -- /nix/store/fake/bin/og-remote-picker --serve $token tp-g6" "$SSH_LOG"
 
 	# Leg 3 reads the probe's emit_dir joined with that same token.
-	grep -qF -- "-T tp-g6 bash -s -- '/run/user/1000/lztmux-pick/$token'" "$SSH_LOG"
+	grep -qF -- "-T tp-g6 bash -s -- '/run/user/1000/og-pick/$token'" "$SSH_LOG"
 }
 
 @test "leg 1: a timeout is reported as a timeout, not as a failure" {
@@ -393,7 +393,7 @@ name=work"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
 	[ "$status" -eq 1 ]
-	[[ $output == *"remote lazytmux too old — rebuild tp-g6"* ]]
+	[[ $output == *"remote tmux-og too old — rebuild tp-g6"* ]]
 
 	run grep -c -- --serve "$SSH_LOG"
 	[ "$status" -ne 0 ]
@@ -411,11 +411,11 @@ name=work"
 	export FAKE_PROBE_RC=7
 	export FAKE_PROBE_ERR="bash: line 1: warning
 
-bash: lztmux-remote-picker: Permission denied"
+bash: og-remote-picker: Permission denied"
 
 	run bash "$SCRIPT" tp-g6 </dev/null
 	[ "$status" -eq 1 ]
-	[[ $output == *"lztmux-remote-picker: Permission denied"* ]]
+	[[ $output == *"og-remote-picker: Permission denied"* ]]
 
 	# With no stderr at all the status still has to reach the human.
 	unset FAKE_PROBE_ERR
@@ -463,7 +463,7 @@ bash: lztmux-remote-picker: Permission denied"
 
 @test "leg 3: any other failure surfaces the last non-empty stderr line" {
 	export FAKE_COLLECT_RC=1
-	export FAKE_COLLECT_ERR="cat: /run/user/1000/lztmux-pick/x: Permission denied
+	export FAKE_COLLECT_ERR="cat: /run/user/1000/og-pick/x: Permission denied
 "
 
 	run bash "$SCRIPT" tp-g6 </dev/null
@@ -513,7 +513,7 @@ name=work"
 
 # --- Step 14: the handoff ---------------------------------------------------
 
-@test "handoff: kind=session runs the launcher as <host> <name>, no LZTMUX_REMOTE_NEW_DIR" {
+@test "handoff: kind=session runs the launcher as <host> <name>, no OG_REMOTE_NEW_DIR" {
 	pick "kind=session
 name=My Session"
 	[ "$status" -eq 0 ]
@@ -525,7 +525,7 @@ name=My Session"
 	grep -qF 'tmpdir: [/run/user/1000]' "$OPEN_LOG"
 }
 
-@test "handoff: kind=dir adds LZTMUX_REMOTE_NEW_DIR and keeps the session name" {
+@test "handoff: kind=dir adds OG_REMOTE_NEW_DIR and keeps the session name" {
 	pick "kind=dir
 path=/srv/my proj
 name=proj"
@@ -574,7 +574,7 @@ path="
 
 @test "handoff: the launcher's own failure surfaces its last non-empty stderr line" {
 	export FAKE_OPEN_RC=1
-	export FAKE_OPEN_ERR="lztmux-remote-open: session 'work' was not created on tp-g6"
+	export FAKE_OPEN_ERR="og-remote-open: session 'work' was not created on tp-g6"
 
 	pick "kind=session
 name=work"
@@ -589,13 +589,13 @@ name=work"
 	pick "kind=session
 name=work"
 	[ "$status" -eq 1 ]
-	[[ $output == *"lztmux-remote-open failed on tp-g6 (status 3)"* ]]
+	[[ $output == *"og-remote-open failed on tp-g6 (status 3)"* ]]
 }
 
 @test "AC3: an already-bridged session is the launcher's call — the wrapper hands off unchanged" {
 	# The wrapper owns no bridge state: it asks nothing about existing mirrors and
 	# passes the pick through verbatim, so focusing an existing mirror is decided
-	# once, in lztmux-remote-open (covered by tests/remote-cold-start.bats's
+	# once, in og-remote-open (covered by tests/remote-cold-start.bats's
 	# "a host that already has a session is never cold-started").
 	pick "kind=session
 name=workstation"

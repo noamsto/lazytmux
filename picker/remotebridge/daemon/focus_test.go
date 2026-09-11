@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // focusDriver runs the two halves of the echo-suppression machine against each
@@ -218,7 +218,7 @@ func TestSplitInvalidatesRemoteActiveBelief(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCtl: %v", err)
 	}
-	c.submit(req, func(string) bool { return true })
+	c.submit(req, func(...string) bool { return true })
 
 	if got := c.focus["@1"].remoteActivePane; got != "" {
 		t.Errorf("remoteActivePane = %q, want invalidated after a split", got)

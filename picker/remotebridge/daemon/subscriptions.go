@@ -3,7 +3,7 @@ package daemon
 import (
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // Both shippers carry state the remote holds in window or pane OPTIONS, whose
@@ -24,8 +24,8 @@ import (
 // formats begin with their object's id, which is why nothing here parses the
 // ids out of the notification.
 const (
-	labelSubName = "lztmux_labels"
-	agentSubName = "lztmux_agents"
+	labelSubName = "og_labels"
+	agentSubName = "og_agents"
 )
 
 // subscribeCmd builds the subscribe command for one format. Quoted as a single

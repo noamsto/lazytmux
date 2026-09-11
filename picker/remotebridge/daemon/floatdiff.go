@@ -3,7 +3,7 @@ package daemon
 import (
 	"sort"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // floatOps is the local float-pane surgery that turns a mirror window's

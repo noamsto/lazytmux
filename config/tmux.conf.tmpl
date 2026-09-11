@@ -191,7 +191,7 @@ bind C-Space display-popup -E -B -w 100% -h 100% '{{index .Paths.Bin "tmux-splas
 # for next/previous window and M-J / M-K for row-to-row movement, so
 # next-window on the prefix table is dead weight. With notifications off,
 # n reverts to next-window.
-bind-key n display-popup -E -w 80% -h 60% '{{index .Paths.Scripts "lztmux-notify-center"}}'
+bind-key n display-popup -E -w 80% -h 60% '{{index .Paths.Scripts "og-notify-center"}}'
 {{end}}
 
 # Floating panes (window-scoped; see the yazi comment below for why floats
@@ -204,7 +204,7 @@ bind-key n display-popup -E -w 80% -h 60% '{{index .Paths.Scripts "lztmux-notify
 # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
 {{.K9sBind}}
 {{.PrdashBind}}
-bind-key D run-shell '{{index .Paths.Scripts "lazytmux-debug"}} toggle'
+bind-key D run-shell '{{index .Paths.Scripts "og-debug"}} toggle'
 # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
 # full escape-sequence passthrough, so yazi's image preview / terminal
 # detection work. Scoped to the launching window (no window-line entry).
@@ -230,7 +230,7 @@ bind-key & if-shell -F '{{.BridgeGate}}' { confirm-before -p "kill remote window
 # -b is load-bearing, not just responsiveness: the script waits for the
 # daemon's teardown to kill the mirror session, and that teardown issues its
 # kill-session through the same command queue a foreground run-shell holds.
-bind-key d if-shell -F '{{.BridgeGate}}' { run-shell -b "{{index .Paths.Scripts "lztmux-remote-detach"}} #{qs:session_name}" } { detach-client }
+bind-key d if-shell -F '{{.BridgeGate}}' { run-shell -b "{{index .Paths.Scripts "og-remote-detach"}} #{qs:session_name}" } { detach-client }
 set -g detach-on-destroy off
 
 # Vim-tmux navigation (respects zoom)
@@ -271,7 +271,7 @@ set -g @window_split2 999
 set -g @window_split3 999
 
 # Read by the CC plugin's UserPromptSubmit hook to gate the window-naming
-# nudge (programs.lazytmux.aiNaming.enable).
+# nudge (programs.tmux-og.aiNaming.enable).
 set -g @ai_naming "{{.AINamingFlag}}"
 set -g @resume_claude "{{.ResumeClaudeFlag}}"
 set -g @resume_carousel "{{.ResumeCarouselFlag}}"
@@ -293,14 +293,14 @@ set -g @remote_bridge_hosts "{{.Config.Remote.Hosts}}"
 # popup on the tmux server, whose PATH is frozen until a server restart, so a
 # brand-new script would resolve to nothing until then. An option repoints on
 # a config reload alone (#336).
-set -g @remote_pick_bin "{{index .Paths.Scripts "lztmux-remote-picker"}}"
+set -g @remote_pick_bin "{{index .Paths.Scripts "og-remote-picker"}}"
 # Same, and these two are never on PATH at any point: of the remote scripts
-# only lztmux-remote-picker reaches home.packages (remote.exposePickOnPath).
-set -g @remote_open_bin "{{index .Paths.Scripts "lztmux-remote-open"}}"
+# only og-remote-picker reaches home.packages (remote.exposePickOnPath).
+set -g @remote_open_bin "{{index .Paths.Scripts "og-remote-open"}}"
 # The window picker's ^x on a mirror row sends the same ctl kill-window verb
 # prefix+& does, so it needs the binary by store path for the same reason.
-set -g @bridge_ctl_bin "{{index .Paths.Bin "lztmux-remote-bridge-ctl"}}"
-set -g @remote_auth_bin "{{index .Paths.Scripts "lztmux-remote-auth"}}"
+set -g @bridge_ctl_bin "{{index .Paths.Bin "og-remote-bridge-ctl"}}"
+set -g @remote_auth_bin "{{index .Paths.Scripts "og-remote-auth"}}"
 set -g @remote_auth_persist "{{.Config.Remote.AuthPersistSeconds}}"
 
 # Same reasoning, for outside consumers: an external tool that stamps
@@ -360,7 +360,7 @@ set -g status-format[4] ""
 # which is exactly the state of a control-only bridge host (its only client
 # is a control-mode daemon, which draws no status line), where the
 # status-format[0] `#()` jobs below never ran at all.
-set -g @lztmux_tick '%s'
+set -g @og_tick '%s'
 # -B needs tmux 3.8+, probed against the LIVE server (#407) since a
 # server predating a nix switch keeps its old binary resident. String
 # form, not a brace block: tmux parses every branch of `{ }` at source
@@ -535,7 +535,7 @@ run-shell "{{index .Paths.Scripts "tmux-apply-theme-colors"}}"
 # A toggle re-sources this config, which is the only signal a mirror gets
 # that the theme moved; the script itself is a no-op unless the flavor
 # actually changed, so `prefix + r` costs nothing.
-run-shell -b "{{index .Paths.Scripts "lztmux-remote-theme"}}"
+run-shell -b "{{index .Paths.Scripts "og-remote-theme"}}"
 
 run-shell {{index .Paths.Plugins "fingers"}}
 
@@ -549,7 +549,7 @@ run-shell "{{index .Paths.Scripts "tmux-reflow-windows"}} #{qs:session_name} #{q
 # hook_client is tty-derived (never ~-initial); tmux-splash-maybe defaults its final positional when empty.
 # #{q:} and NOT \"...\": the whole string is format-expanded before sh -c sees
 # it, so a quote in the name breaks out and executes — and a bridged session's
-# name comes from the remote host (lztmux-remote-open builds it from the
+# name comes from the remote host (og-remote-open builds it from the
 # remote's list). || true stops the gate's fail-closed exit from pushing the
 # hook's pane into view-mode.
 set-hook -g client-attached[50]        'run-shell -b "{{index .Paths.Scripts "tmux-splash-maybe"}} #{qs:hook_session_name} #{q:hook_client} || true"'
@@ -573,8 +573,8 @@ set-hook -g client-session-changed[50] 'run-shell -b "{{index .Paths.Scripts "tm
 # stays at its default off — turning it on would make every unfocused
 # window with output (i.e. every working Claude pane) an event — so the
 # activity hook ships wired but dormant.
-set-hook -g alert-bell[20]     'run-shell -b "{{index .Paths.Scripts "lztmux-notify"}} emit --source bell --level warn --window #{q:window_id} --title bell"'
-set-hook -g alert-activity[20] 'run-shell -b "{{index .Paths.Scripts "lztmux-notify"}} emit --source activity --level info --window #{q:window_id} --title activity"'
+set-hook -g alert-bell[20]     'run-shell -b "{{index .Paths.Scripts "og-notify"}} emit --source bell --level warn --window #{q:window_id} --title bell"'
+set-hook -g alert-activity[20] 'run-shell -b "{{index .Paths.Scripts "og-notify"}} emit --source activity --level info --window #{q:window_id} --title activity"'
 {{end}}
 
 {{.CarouselHooks}}

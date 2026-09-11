@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upsert lazytmux Cursor relaunch-stamp hooks into ~/.cursor/hooks.json.
+# Upsert tmux-og Cursor relaunch-stamp hooks into ~/.cursor/hooks.json.
 # Usage: cursor-relaunch-hooks-install <cursor-relaunch-stamp-path>
 # Strips prior entries whose command contains /bin/cursor-relaunch-stamp, then
 # appends the stamp command to sessionStart and beforeSubmitPrompt. Leaves

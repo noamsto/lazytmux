@@ -43,15 +43,15 @@ type listItem struct {
 	createPath           string // zoxide suggestion: dir to create a session at ("" = normal row)
 	createName           string // zoxide suggestion: derived session name
 	isRemoteRow          bool   // belongs to the Remote section (set even when unselectable)
-	remoteHost           string // remote bridge row: ssh host for lztmux-remote-open
+	remoteHost           string // remote bridge row: ssh host for og-remote-open
 	remoteSess           string // remote bridge row: optional remote session name
 	remoteContextOnly    bool   // host row: pulled in only as tree context for a matching child, not its own match — unselectable
 	displayEnd           string // remote session row: display with the closing tree glyph
 	plainEnd             string // remote session row: plain with the closing tree glyph
 	remoteRestore        bool   // remote bridge row: sourced from a tmux-remux snapshot, not a live probe — bridging must restore it first
-	remoteNeedsAuth      bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs lztmux-remote-auth
+	remoteNeedsAuth      bool   // remote host row: the probe hit an interactive ssh prompt; Enter runs og-remote-auth
 	remoteInert          bool   // remote host row: host key changed — Enter must refuse to act, never offer to connect
-	remoteTailscaleCheck bool   // remote host row: a Tailscale ACL "check" blocked the probe — Enter must refuse to act, like remoteInert; lztmux-remote-auth cannot clear this
+	remoteTailscaleCheck bool   // remote host row: a Tailscale ACL "check" blocked the probe — Enter must refuse to act, like remoteInert; og-remote-auth cannot clear this
 	remoteTailscaleURL   string // remote host row: the login URL captured from the probe's stdout, if any — supplementary only, may be stale
 }
 
@@ -128,7 +128,7 @@ type tuiModel struct {
 	// both-empty guard has to tell apart.
 	zoxideReady bool
 	// currentSession is the raw name of the session the invoking tmux client
-	// is attached to (LZTMUX_PICKER_CURRENT_SESSION), used to sink it below a
+	// is attached to (OG_PICKER_CURRENT_SESSION), used to sink it below a
 	// same-display-name peer on another host.
 	currentSession string
 }
@@ -255,9 +255,9 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 		if windowMode || wall {
 			return errors.New("--remote-pick is incompatible with --windows/--wall")
 		}
-		emitPath = os.Getenv("LZTMUX_PICKER_EMIT")
+		emitPath = os.Getenv("OG_PICKER_EMIT")
 		if emitPath == "" {
-			return errors.New("--remote-pick requires LZTMUX_PICKER_EMIT")
+			return errors.New("--remote-pick requires OG_PICKER_EMIT")
 		}
 	}
 
@@ -265,7 +265,7 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 	opts := readTmuxOpts()
 	snap := collectPanesSnapshot()
 	panes := collectAgentPanes(snap)
-	currentSession := os.Getenv("LZTMUX_PICKER_CURRENT_SESSION")
+	currentSession := os.Getenv("OG_PICKER_CURRENT_SESSION")
 
 	var items []listItem
 	if windowMode {
@@ -277,7 +277,7 @@ func runTUI(windowMode, agentOnly, wall, remotePick bool) error {
 	m := newPickerModel(windowMode, agentOnly, wall, opts, theme, items, emitPath)
 	m.currentSession = currentSession
 	if emitPath != "" {
-		m.emitHost = os.Getenv("LZTMUX_PICKER_HOST")
+		m.emitHost = os.Getenv("OG_PICKER_HOST")
 	}
 
 	p := tea.NewProgram(m)
@@ -752,7 +752,7 @@ func (m tuiModel) handleWallKey(key string) (tuiModel, tea.Cmd, bool) {
 		return m, m.captureWallCmd(), true
 	}
 	// A half-modal wall where 4 letters move and the other 22 filter cannot
-	// express a query like "lazytmux", so no printable falls through to the
+	// express a query like "tmux-og", so no printable falls through to the
 	// shared query branch — / opens the prompt instead.
 	return m, nil, printableKey(key) || key == "backspace"
 }
@@ -1226,7 +1226,7 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// A Tailscale ACL "check" re-arms on its own checkPeriod regardless of
-		// keys or multiplexing — lztmux-remote-auth's ssh-copy-id/ControlMaster
+		// keys or multiplexing — og-remote-auth's ssh-copy-id/ControlMaster
 		// flow can't clear it, so Enter must not pretend it can (#486).
 		if item.remoteTailscaleCheck {
 			m.statusMsg = "tailscale check required for " + item.remoteHost + " — run: ssh " + item.remoteHost
@@ -1237,7 +1237,7 @@ func (m tuiModel) activateCurrent() (tea.Model, tea.Cmd) {
 		// ssh prompts for itself and the secret never passes through this
 		// process.
 		if item.remoteNeedsAuth {
-			authBin := envOrMap("REMOTE_AUTH_BIN", m.tmuxOpts, "@remote_auth_bin", "lztmux-remote-auth")
+			authBin := envOrMap("REMOTE_AUTH_BIN", m.tmuxOpts, "@remote_auth_bin", "og-remote-auth")
 			cmd := exec.Command(authBin, item.remoteHost)
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return remoteAuthDoneMsg{err: err} })
 		}
@@ -1697,7 +1697,7 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 			case tailscaleCheck:
 				msg = "remote bridge → " + host +
 					"\n\nA Tailscale ACL check is blocking this host, not ssh auth —" +
-					"\nlztmux-remote-auth's remedy can't clear it. Enter does nothing" +
+					"\nog-remote-auth's remedy can't clear it. Enter does nothing" +
 					"\nhere.\n\nRun this yourself in a terminal:\n\n  ssh " + host
 				if tailscaleURL != "" {
 					msg += "\n\n(last-seen login URL, may be stale — the probe that" +
@@ -1705,7 +1705,7 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 				}
 			case needsAuth:
 				msg = "remote bridge → " + host +
-					"\n\nEnter runs lztmux-remote-auth: ssh takes this popup and asks for" +
+					"\n\nEnter runs og-remote-auth: ssh takes this popup and asks for" +
 					"\nitself. It opens one shared connection, so the bridge and every" +
 					"\nlater probe reuse it without asking again."
 			default:
@@ -1713,7 +1713,7 @@ func (m tuiModel) loadPreviewCmd() tea.Cmd {
 				if sess != "" {
 					msg += "/" + sess
 				}
-				msg += "\n\nEnter runs lztmux-remote-open (outbound ssh)."
+				msg += "\n\nEnter runs og-remote-open (outbound ssh)."
 			}
 			return previewMsg{content: msg, target: t, scrollTop: true}
 		}

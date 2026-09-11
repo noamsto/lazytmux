@@ -4,7 +4,7 @@
 # tmux-statusline. A failed fetch leaves the previous cache untouched.
 set -uo pipefail
 
-CACHE_DIR="${LAZYTMUX_AGENT_USAGE_DIR:-/tmp/lazytmux-agent-usage}"
+CACHE_DIR="${OG_AGENT_USAGE_DIR:-/tmp/og-agent-usage}"
 AUTH="${CODEX_AUTH:-$HOME/.codex/auth.json}"
 
 token=$(jq -r '.tokens.access_token // empty' "$AUTH" 2>/dev/null)

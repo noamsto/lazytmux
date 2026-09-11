@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // buildOutputStream synthesizes a tmux control-mode stream of n "%output %1

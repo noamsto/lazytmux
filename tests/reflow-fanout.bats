@@ -11,7 +11,7 @@
 # Run it through nix (`nix build .#checks.<system>.reflow-fanout-tests`, which
 # `nix flake check` covers), not a bare `bats tests/reflow-fanout.bats`. The
 # tests address the session's first window as S:0, which holds under the plain
-# tmux the check pins — but lazytmux's own wrapper bakes in `-f <conf>` ahead of
+# tmux the check pins — but tmux-og's own wrapper bakes in `-f <conf>` ahead of
 # the `-f /dev/null` below, and that conf sets base-index 1, so with the wrapper
 # on PATH the window is S:1 and half the file fails with "no such window: S:0".
 
@@ -116,7 +116,7 @@ run_update_icons() {
 @test "a held reflow lock defers a concurrent reflow's write (no lost update)" {
 	tmux new-window -d
 	tmux new-window -d # 3 windows -> reflow computes key 3:200:0 (no client height)
-	local lock="$TDIR/lazytmux-reflow.lock.S"
+	local lock="$TDIR/og-reflow.lock.S"
 	mkdir "$lock" # simulate an in-flight reflow holding the lock
 	tmux set -q @reflow_key "sentinel"
 
@@ -184,7 +184,7 @@ run_update_icons() {
 	# name, but the daemon-owned @window_bridge_name holds the remote name.
 	tmux set -wq -t S:0 @bridge_win 1
 	tmux set-window-option -t S:0 automatic-rename off
-	tmux rename-window -t S:0 lazytmux            # the wrong name
+	tmux rename-window -t S:0 tmux-og             # the wrong name
 	tmux set -wq -t S:0 @window_bridge_name shell # the remote name
 
 	bash "$REFLOW" S 200 --force >/dev/null 2>&1
@@ -224,7 +224,7 @@ stamp_mirror() {
 @test "a bare mirror renders the remote name and adds no badge or id column" {
 	tmux set -wq -t S:0 @bridge_win 1
 	tmux set-window-option -t S:0 automatic-rename off
-	tmux rename-window -t S:0 lazytmux
+	tmux rename-window -t S:0 tmux-og
 	tmux set -wq -t S:0 @window_bridge_name shell
 
 	bash "$REFLOW" S 200 --force >/dev/null 2>&1

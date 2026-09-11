@@ -58,7 +58,7 @@ fi
 # Each invocation stamps a token and waits out the burst; only the last one to
 # stamp (the final width) survives the token check and reflows — the rest bail.
 if ((DEBOUNCE)); then
-	stamp="/tmp/lazytmux-reflow-debounce.${SESSION//\//_}"
+	stamp="/tmp/og-reflow-debounce.${SESSION//\//_}"
 	token=$EPOCHREALTIME
 	printf '%s' "$token" >"$stamp" 2>/dev/null
 	sleep 0.12
@@ -99,7 +99,7 @@ fi
 # (flock is Linux-only); the burst-prone hooks run backgrounded (-b), so retry
 # briefly instead of racing. On pathological contention, proceed unlocked rather
 # than wedge — a later reflow still settles it.
-reflow_lock="${TMPDIR:-/tmp}/lazytmux-reflow.lock.${SESSION//\//_}"
+reflow_lock="${TMPDIR:-/tmp}/og-reflow.lock.${SESSION//\//_}"
 for ((i = 0; i < 40; i++)); do
 	acquire_lock "$reflow_lock" && break
 	sleep 0.05

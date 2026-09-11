@@ -22,8 +22,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/daemon"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
 )
 
 // How long the control connection may go unanswered before ssh gives up on it
@@ -70,7 +70,7 @@ func sshControlArgs(ctlSock, host, tmpdir, term, colorterm, termProgram, session
 	if term != "" {
 		args = append(args, "TERM="+shellQuote(term))
 	}
-	// COLORTERM/TERM_PROGRAM are in lazytmux's update-environment
+	// COLORTERM/TERM_PROGRAM are in tmux-og's update-environment
 	// (config/tmux.conf.nix) alongside TERM, so a bridged attach that carries
 	// none of them into the remote tmux gets both marked "explicitly removed"
 	// (#543) — every later program in that session loses truecolor detection.
@@ -138,8 +138,8 @@ func localCtlCmdEnv(view *daemon.Viewing) []string {
 // $1 is the extension, validated against pasteExtRe before it is ever
 // interpolated.
 const remoteStoreScript = `umask 077
-d=$(mktemp -d /tmp/lazytmux-paste-XXXXXXXX) || exit 1
-find /tmp -maxdepth 1 -name "lazytmux-paste-*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
+d=$(mktemp -d /tmp/og-paste-XXXXXXXX) || exit 1
+find /tmp -maxdepth 1 -name "og-paste-*" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null
 f="$d/img.$1"
 cat > "$f" || { rm -rf "$d"; exit 1; }
 printf "%s" "$f"`
@@ -159,33 +159,33 @@ func pasteUploadArgs(sshCmd, ctlSock, host, ext string) []string {
 }
 
 func main() {
-	// Flags default to LZTMUX_BRIDGE_*/LZTMUX_DAEMON_* env vars, mirroring
+	// Flags default to OG_BRIDGE_*/OG_DAEMON_* env vars, mirroring
 	// M1's remotebridge/main.go: the launcher passes untrusted, remote-derived
 	// values through tmux's environment rather than interpolating them into a
 	// /bin/sh command string.
-	host := flag.String("host", os.Getenv("LZTMUX_BRIDGE_HOST"), "ssh host")
-	session := flag.String("session", os.Getenv("LZTMUX_BRIDGE_SESSION"), "remote session")
-	window := flag.Int("window", envInt("LZTMUX_BRIDGE_WINDOW"), "initially-selected remote window index (all windows are mirrored)")
-	remoteTmux := flag.String("tmux", envDefault("LZTMUX_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
-	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
-	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
-	term := flag.String("term", os.Getenv("LZTMUX_BRIDGE_TERM"), "termname to advertise to the remote (steers the remote viewer's graphics backend)")
-	termfeatures := flag.String("termfeatures", os.Getenv("LZTMUX_BRIDGE_TERMFEATURES"), "raw #{client_termfeatures} of the client that will paint (gates the sixel relay)")
+	host := flag.String("host", os.Getenv("OG_BRIDGE_HOST"), "ssh host")
+	session := flag.String("session", os.Getenv("OG_BRIDGE_SESSION"), "remote session")
+	window := flag.Int("window", envInt("OG_BRIDGE_WINDOW"), "initially-selected remote window index (all windows are mirrored)")
+	remoteTmux := flag.String("tmux", envDefault("OG_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
+	tmpdir := flag.String("tmpdir", os.Getenv("OG_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
+	sshCmd := flag.String("ssh", envDefault("OG_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
+	term := flag.String("term", os.Getenv("OG_BRIDGE_TERM"), "termname to advertise to the remote (steers the remote viewer's graphics backend)")
+	termfeatures := flag.String("termfeatures", os.Getenv("OG_BRIDGE_TERMFEATURES"), "raw #{client_termfeatures} of the client that will paint (gates the sixel relay)")
 	// A genuinely empty value must stay empty (and be omitted by
 	// sshControlArgs' if-non-empty guard) rather than default to "truecolor",
 	// since that would be indistinguishable from a real client that has none.
-	colorterm := flag.String("colorterm", os.Getenv("LZTMUX_BRIDGE_COLORTERM"), "COLORTERM to advertise to the remote (#543)")
-	termProgram := flag.String("term-program", os.Getenv("LZTMUX_BRIDGE_TERM_PROGRAM"), "TERM_PROGRAM to advertise to the remote (#543)")
-	cacheDir := flag.String("gfx-cache", envDefault("LZTMUX_BRIDGE_GFX_CACHE", filepath.Join(os.TempDir(), "lztmux-gfx")), "local cache dir for images fetched from the remote")
+	colorterm := flag.String("colorterm", os.Getenv("OG_BRIDGE_COLORTERM"), "COLORTERM to advertise to the remote (#543)")
+	termProgram := flag.String("term-program", os.Getenv("OG_BRIDGE_TERM_PROGRAM"), "TERM_PROGRAM to advertise to the remote (#543)")
+	cacheDir := flag.String("gfx-cache", envDefault("OG_BRIDGE_GFX_CACHE", filepath.Join(os.TempDir(), "og-gfx")), "local cache dir for images fetched from the remote")
 	gfxMax := flag.Int64("gfx-max-bytes", 8<<20, "largest single image fetched from the remote; bigger stores are dropped")
 	gfxRelayMaxBytes := flag.Int64("gfx-relay-max-bytes", graphics.DefaultRasterHold, "byte budget for holding a partial sixel meant for relay; bigger holds are dropped")
-	localTmux := flag.String("local-tmux", envDefault("LZTMUX_DAEMON_LOCAL_TMUX", "tmux"), "local tmux binary (may carry args, e.g. \"tmux -L sock\")")
-	localSess := flag.String("local-sess", os.Getenv("LZTMUX_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
-	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "unix socket path for renderers")
-	rendererBin := flag.String("renderer", os.Getenv("LZTMUX_DAEMON_RENDERER"), "absolute path to the renderer binary")
-	reflowBin := flag.String("reflow", os.Getenv("LZTMUX_DAEMON_REFLOW"), "absolute path to tmux-reflow-windows (empty = never force a reflow)")
-	remoteOpenBin := flag.String("remote-open", os.Getenv("LZTMUX_DAEMON_REMOTE_OPEN"), "absolute path to lztmux-remote-open (empty = a remote switch-client is pinned back but never handed off)")
-	pauseAfter := flag.Int("pause-after", envIntDefault("LZTMUX_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
+	localTmux := flag.String("local-tmux", envDefault("OG_DAEMON_LOCAL_TMUX", "tmux"), "local tmux binary (may carry args, e.g. \"tmux -L sock\")")
+	localSess := flag.String("local-sess", os.Getenv("OG_DAEMON_LOCAL_SESS"), `local session name (default "<host>-<session>")`)
+	sock := flag.String("sock", os.Getenv("OG_DAEMON_SOCK"), "unix socket path for renderers")
+	rendererBin := flag.String("renderer", os.Getenv("OG_DAEMON_RENDERER"), "absolute path to the renderer binary")
+	reflowBin := flag.String("reflow", os.Getenv("OG_DAEMON_REFLOW"), "absolute path to tmux-reflow-windows (empty = never force a reflow)")
+	remoteOpenBin := flag.String("remote-open", os.Getenv("OG_DAEMON_REMOTE_OPEN"), "absolute path to og-remote-open (empty = a remote switch-client is pinned back but never handed off)")
+	pauseAfter := flag.Int("pause-after", envIntDefault("OG_DAEMON_PAUSE_AFTER", 1), "seconds of client-read stall before tmux pauses a pane's %output (0 disables); the daemon answers %pause with a %continue re-seed")
 	// --test-local is Task 9's offline seam: instead of ssh, both "remote" and
 	// "local" are separate local tmux servers on their own -L sockets, so the
 	// bats integration test never touches the network. --session/--window
@@ -200,7 +200,7 @@ func main() {
 		*localSess = fmt.Sprintf("%s-%s", *host, *session)
 	}
 	if *sock == "" {
-		*sock = fmt.Sprintf("%s/lztmux-daemon-%d.sock", os.TempDir(), os.Getpid())
+		*sock = fmt.Sprintf("%s/og-daemon-%d.sock", os.TempDir(), os.Getpid())
 	}
 
 	// view is the daemon's live view-identity cell (see Viewing),
@@ -247,11 +247,11 @@ func main() {
 			// ControlMaster=auto silently stop multiplexing — so both consumers
 			// read the live path through tr.currentPath instead (wired at their
 			// call sites below).
-			ctlSock = fmt.Sprintf("%s/lztmux-bridge-%d.sock", os.TempDir(), os.Getpid())
+			ctlSock = fmt.Sprintf("%s/og-bridge-%d.sock", os.TempDir(), os.Getpid())
 			var dialN int
 			newCtlCmd = func() (*exec.Cmd, string) {
 				dialN++
-				path := fmt.Sprintf("%s/lztmux-bridge-%d-%d.sock", os.TempDir(), os.Getpid(), dialN)
+				path := fmt.Sprintf("%s/og-bridge-%d-%d.sock", os.TempDir(), os.Getpid(), dialN)
 				return newSSHDialCmd(*sshCmd, *host, *tmpdir, path, *colorterm, *termProgram, *session, tmuxArgv, view), path
 			}
 		}
@@ -367,7 +367,7 @@ func main() {
 
 	// Seeded from the mirror session's own resolved clients when one is
 	// attached yet (R1/R3) — the launcher's -term/-termfeatures flags sample
-	// only the INVOKING client (lztmux-remote-open.sh:475), while this
+	// only the INVOKING client (og-remote-open.sh:475), while this
 	// resolves LocalSess's own AND'd capability and lexicographic termname,
 	// which is what makes acceptance 2's "never nacked" a property of the code
 	// rather than a coincidence. The flags remain the fallback for the startup
@@ -847,7 +847,7 @@ func (c *child) end() {
 }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "lztmux-remote-daemon: %v\n", err)
+	fmt.Fprintf(os.Stderr, "og-remote-daemon: %v\n", err)
 	os.Exit(1)
 }
 

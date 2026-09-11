@@ -90,7 +90,7 @@
   # update-icons each tick.
   resumeCarouselEnable ? false,
   # Coding-agent usage-limit stats on line 0 (threaded from the module).
-  # Polled by tmux-agent-usage into /tmp/lazytmux-agent-usage/<agent>.json with
+  # Polled by tmux-agent-usage into /tmp/og-agent-usage/<agent>.json with
   # each CLI's own stored token; rendered by tmux-statusline while any agent
   # pane exists. The monthly window shows only at/above the threshold percent.
   agentUsageEnable ? true,
@@ -124,7 +124,7 @@
 
   enrichProvidersStr = lib.concatStringsSep " " enrichProviders;
   # Nerd Font (Material Design) glyph defaults. Override per-icon with Nerd Font
-  # glyphs via programs.lazytmux.enrich.icons (see CLAUDE.md). Keys: linear,
+  # glyphs via programs.tmux-og.enrich.icons (see CLAUDE.md). Keys: linear,
   # github, pending, success, failure, merged, closed, conflict, draft.
   enrichIconDefaults = {
     linear = "󰰍"; # nerd: nf-md-alpha-l-circle (U+F0C0D)
@@ -237,7 +237,7 @@
   # Scripts that source only lib-log (gated event logging). Includes
   # claude-status-update, which is run RAW by tests/claude-issues.bats — its
   # source is guarded so the raw script defines no-op stubs.
-  scriptsWithLog = ["claude-status-update" "lazytmux-log-event" "lazytmux-debug"];
+  scriptsWithLog = ["claude-status-update" "og-log-event" "og-debug"];
 
   mkScriptWithLog = name: let
     raw = builtins.readFile ../scripts/${name}.sh;
@@ -263,9 +263,9 @@
   picker-splash-bin = "${picker-generate}/bin/tmux-splash";
   picker-statusline-bin = "${picker-generate}/bin/tmux-statusline";
   picker-card-bin = "${picker-generate}/bin/tmux-enrich-card";
-  picker-bridge-ctl-bin = "${picker-generate}/bin/lztmux-remote-bridge-ctl";
-  picker-bridge-daemon-bin = "${picker-generate}/bin/lztmux-remote-bridge-daemon";
-  picker-bridge-renderer-bin = "${picker-generate}/bin/lztmux-remote-bridge-renderer";
+  picker-bridge-ctl-bin = "${picker-generate}/bin/og-remote-bridge-ctl";
+  picker-bridge-daemon-bin = "${picker-generate}/bin/og-remote-bridge-daemon";
+  picker-bridge-renderer-bin = "${picker-generate}/bin/og-remote-bridge-renderer";
 
   picker-agent-detect-bin = "${picker-generate}/bin/agent-detect";
 
@@ -304,20 +304,20 @@
     "tmux-issue-stamp-github"
     "tmux-pr-enrich"
     "tmux-splash-maybe"
-    "lazytmux-log-event"
-    "lazytmux-debug"
+    "og-log-event"
+    "og-debug"
     "codex-relaunch-stamp"
     "cursor-status-hook"
     "cursor-hooks-install"
     "cursor-relaunch-stamp"
     "cursor-relaunch-hooks-install"
-    "lztmux-remote-open"
-    "lztmux-remote-picker"
-    "lztmux-remote-detach"
-    "lztmux-remote-auth"
-    "lztmux-remote-theme"
-    "lztmux-notify"
-    "lztmux-notify-center"
+    "og-remote-open"
+    "og-remote-picker"
+    "og-remote-detach"
+    "og-remote-auth"
+    "og-remote-theme"
+    "og-notify"
+    "og-notify-center"
     "tmux-agent-usage"
     "tmux-agent-usage-claude"
     "tmux-agent-usage-codex"
@@ -421,7 +421,7 @@
   # Scripts that source lib-remote get its store path substituted, plus the
   # bridge binaries the launcher probes and spawns — pinned for the same reason
   # as @reflow@ above, which the launcher spells out.
-  scriptsWithRemote = ["lztmux-remote-open" "lztmux-remote-auth" "lztmux-remote-theme"];
+  scriptsWithRemote = ["og-remote-open" "og-remote-auth" "og-remote-theme"];
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
@@ -442,14 +442,14 @@
   # removing it. @remote_open@ is pinned for the reason @reflow@ above spells out:
   # the local role is spawned by the tmux server, whose PATH is frozen until a
   # restart, so a bare name reaches a stale launcher — one that would silently
-  # ignore LZTMUX_REMOTE_NEW_DIR.
-  scriptsWithRemotePicker = ["lztmux-remote-picker"];
+  # ignore OG_REMOTE_NEW_DIR.
+  scriptsWithRemotePicker = ["og-remote-picker"];
   mkScriptRemotePicker = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
       ["@remote_open@" "@picker_generate@" "@zoxide@" "@coreutils@"]
       [
-        "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+        "${script.og-remote-open}/bin/og-remote-open"
         picker-generate-bin
         "${pkgs.zoxide}"
         "${pkgs.coreutils}"
@@ -459,7 +459,7 @@
 
   # The notification router + history center. Both source lib-notify; the router
   # also sources lib-log (acquire_lock / file_mtime, reached via notify_prune).
-  scriptsWithNotify = ["lztmux-notify" "lztmux-notify-center"];
+  scriptsWithNotify = ["og-notify" "og-notify-center"];
   mkScriptNotify = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings ["@lib_notify@" "@lib_log@"] ["${lib-notify}" "${lib-log}"]
@@ -471,7 +471,7 @@
   # call, so disabling is one mechanism rather than two.
   notifyBin =
     if notifyEnable
-    then "${script.lztmux-notify}/bin/lztmux-notify"
+    then "${script.og-notify}/bin/og-notify"
     else "@notify@";
 
   # tmux-update-icons's store path for the carousel-restore stamp. Same
@@ -581,23 +581,23 @@
       summary = "Write claude/agent state, issue, task and name self-reports";
     };
     "remote open" = {
-      script = "lztmux-remote-open";
+      script = "og-remote-open";
       summary = "Open a remote tmux session as local mirror windows";
     };
     "remote picker" = {
-      script = "lztmux-remote-picker";
+      script = "og-remote-picker";
       summary = "Browse a remote host's own tmux sessions";
     };
     "remote detach" = {
-      script = "lztmux-remote-detach";
+      script = "og-remote-detach";
       summary = "Detach the bridge for a mirrored session";
     };
     "remote auth" = {
-      script = "lztmux-remote-auth";
+      script = "og-remote-auth";
       summary = "Run one interactive ssh handshake for a bridge host";
     };
     "remote theme" = {
-      script = "lztmux-remote-theme";
+      script = "og-remote-theme";
       summary = "Fan a light/dark theme toggle out to mirrored hosts";
     };
     "pick session" = {
@@ -653,16 +653,16 @@
       summary = "Stamp Codex relaunch state";
     };
     "notify" = {
-      script = "lztmux-notify";
+      script = "og-notify";
       summary = "Send a notification through the configured routing";
     };
     "notify center" = {
-      script = "lztmux-notify-center";
+      script = "og-notify-center";
       summary = "Open the notification history";
     };
     "debug" = {
-      script = "lazytmux-debug";
-      summary = "Diagnose a lazytmux installation";
+      script = "og-debug";
+      summary = "Diagnose a tmux-og installation";
     };
     # The one verb whose target is a derivation of its own rather than a
     # scripts/ entry, hence `target` instead of `script`.
@@ -695,7 +695,7 @@
     "tmux-update-icons"
     "tmux-window-nav"
     "tmux-worktree-match"
-    "lazytmux-log-event"
+    "og-log-event"
   ];
 
   # Forced by the assert on the returned attrset below, never on `og` itself:
@@ -838,7 +838,7 @@
         tmux-splash = picker-splash-bin;
         tmux-statusline = picker-statusline-bin;
         tmux-enrich-card = picker-card-bin;
-        lztmux-remote-bridge-ctl = picker-bridge-ctl-bin;
+        og-remote-bridge-ctl = picker-bridge-ctl-bin;
       };
       # The .tmux entry file, never the package root — the template joins no
       # path segments.

@@ -53,7 +53,7 @@ POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
 # display-popup -E runs its argument through a shell, so both halves have to be
 # shell-quoted by us: the session name is remote-derived on a bridged session
-# (lztmux-remote-open names it from the remote's list), and a "'" in it would
+# (og-remote-open names it from the remote's list), and a "'" in it would
 # otherwise close the quoting and execute the rest.
 printf -v POPUP_CMD '%q --attach %q' "$SELF" "$SESSION"
 tmux display-popup "${POPUP_CLIENT[@]}" -E -w 80% -h 80% -b rounded \

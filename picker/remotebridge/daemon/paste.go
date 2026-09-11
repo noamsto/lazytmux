@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // Clipboard image paste (#361). A local ctrl+v reaches an agent as the single
@@ -61,7 +61,7 @@ var pasteAgentProcs = map[string]bool{"claude": true}
 // remote shell, so it is treated as untrusted. The directory carries a
 // per-invocation random suffix (mktemp -d) rather than a fixed shared path,
 // so nothing can be pre-created ahead of a paste.
-var pastePathRe = regexp.MustCompile(`^/tmp/lazytmux-paste-[A-Za-z0-9]+/img\.(png|jpe?g|gif|webp)$`)
+var pastePathRe = regexp.MustCompile(`^/tmp/og-paste-[A-Za-z0-9]+/img\.(png|jpe?g|gif|webp)$`)
 
 // pasteExtRe gates the extension before it is interpolated into the remote
 // mktemp template.
@@ -104,7 +104,7 @@ type pasteHandler struct {
 	// sendCtl injects a command and reports whether it was written, so a
 	// dropped injection (e.g. mid-reconnect) is a visible failure rather than
 	// a silently discarded ssh keystroke.
-	sendCtl func(cmd string) bool
+	sendCtl func(cmds ...string) bool
 
 	// mu serializes one pane's pastes against its own later input frames.
 	// handle locks it for every frame and, when a frame triggers a paste,
@@ -160,7 +160,7 @@ func (h *pasteHandler) handle(remotePane string, payload []byte) []byte {
 	probe, ok, err := h.probeClipboard()
 	switch {
 	case err != nil:
-		h.notify("lazytmux: clipboard image read failed: " + err.Error())
+		h.notify("tmux-og: clipboard image read failed: " + err.Error())
 		h.mu.Unlock()
 		return kept
 	case !ok:
@@ -168,7 +168,7 @@ func (h *pasteHandler) handle(remotePane string, payload []byte) []byte {
 		return payload
 	default:
 		if drops > 1 {
-			h.notify(fmt.Sprintf("lazytmux: ignored %d extra clipboard-paste keystroke(s) in one burst", drops-1))
+			h.notify(fmt.Sprintf("tmux-og: ignored %d extra clipboard-paste keystroke(s) in one burst", drops-1))
 		}
 		go h.paste(remotePane, kept, probe)
 		return nil
@@ -189,27 +189,27 @@ func (h *pasteHandler) paste(remotePane string, kept []byte, probe clipboardProb
 	// Claude Code's path-inlining regex excludes bmp, and no converter is
 	// guaranteed on either host — report rather than ship a dead path.
 	if !pasteExtRe.MatchString(probe.ext) {
-		h.notify("lazytmux: clipboard image format not pasteable (." + probe.ext + "; copy as png)")
+		h.notify("tmux-og: clipboard image format not pasteable (." + probe.ext + "; copy as png)")
 		return
 	}
 	data, err := probe.extract()
 	if err != nil {
-		h.notify("lazytmux: clipboard image read failed: " + err.Error())
+		h.notify("tmux-og: clipboard image read failed: " + err.Error())
 		return
 	}
 	if int64(len(data)) > pasteMaxBytes {
-		h.notify(fmt.Sprintf("lazytmux: clipboard image too large (cap %d MiB)", pasteMaxBytes>>20))
+		h.notify(fmt.Sprintf("tmux-og: clipboard image too large (cap %d MiB)", pasteMaxBytes>>20))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pasteTimeout)
 	defer cancel()
 	path, err := h.upload(ctx, probe.ext, data)
 	if err != nil {
-		h.notify("lazytmux: image upload to remote failed: " + err.Error())
+		h.notify("tmux-og: image upload to remote failed: " + err.Error())
 		return
 	}
 	if !pastePathRe.MatchString(path) {
-		h.notify("lazytmux: remote returned an unexpected paste path")
+		h.notify("tmux-og: remote returned an unexpected paste path")
 		return
 	}
 	// The trailing space keeps whatever the user types next from merging into
@@ -225,7 +225,7 @@ func (h *pasteHandler) paste(remotePane string, kept []byte, probe clipboardProb
 func (h *pasteHandler) sendChunks(remotePane string, payload []byte) {
 	for _, args := range controlmode.SendKeysArgs(remotePane, payload, controlmode.InputChunkBytes) {
 		if !h.sendCtl(strings.Join(args, " ")) {
-			h.notify("lazytmux: input to the mirror pane was dropped (bridge reconnecting?)")
+			h.notify("tmux-og: input to the mirror pane was dropped (bridge reconnecting?)")
 			return
 		}
 	}
@@ -400,7 +400,7 @@ func bridgeProc(cfg Config, remotePane string) string {
 // whether one was found to show it on. A detached session has no client to
 // show it on, and the paste's async context has no better channel — the
 // message is best-effort by construction. msg is escaped and passed after --
-// per this repo's display-message convention (scripts/lztmux-notify.sh): the
+// per this repo's display-message convention (scripts/og-notify.sh): the
 // argument is format-expanded and strftime-run, and a leading "-" would
 // otherwise be read as a flag.
 func notifyLocal(cfg Config, msg string) bool {

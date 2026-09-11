@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // scriptedRT drives a roundTrip against a canned reply stream, capturing every

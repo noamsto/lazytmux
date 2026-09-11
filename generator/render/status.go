@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // pickerIcons are the status-line and session-picker column glyphs. The four
@@ -104,8 +104,25 @@ func agentUsageArgs(cfg *config.Config) string {
 		cfg.AgentUsage.MonthlyThreshold)
 }
 
-// tickHookNames is the fixed emission order of the four -B session monitors.
+// tickHookNames is the CLEAR list, not the set list — the four setters below
+// carry their names inline, so the two lists are deliberately different lengths.
+// This one also carries the four legacy @lztmux-*-tick names: a rename reloads
+// the config but does not restart the tmux server, and hooks_monitor_add keys on
+// the name, so without their clears four orphaned monitors keep firing every
+// five seconds at garbage-collected store paths for the life of the server. A
+// clear removes a monitor and never keeps one working, so this is migration
+// cleanup, not an alias.
+//
+// Emission order is load-bearing — new names first, legacy last, so every clear
+// still precedes the first setter, which tick-floor-conf-assertions measures.
+//
+// Removal condition: drop the four legacy entries once every host's tmux server
+// has restarted past the flip.
 var tickHookNames = []string{
+	"@og-pr-tick",
+	"@og-backfill-tick",
+	"@og-usage-tick",
+	"@og-sweep-tick",
 	"@lztmux-pr-tick",
 	"@lztmux-backfill-tick",
 	"@lztmux-usage-tick",
@@ -127,7 +144,7 @@ func tickHookIfShell(cfg *config.Config, p *paths.Paths) string {
 	// '::' is the one spelling both the pinned tmux and a later bump accept.
 	// Divisor 5 matches arm_agent_detect's own every-5th-tick cadence.
 	tick := func(name string) string {
-		return name + "::#{e|/|:#{T:@lztmux_tick},5}"
+		return name + "::#{e|/|:#{T:@og_tick},5}"
 	}
 	setHook := func(name, cmd string) string {
 		return fmt.Sprintf(`set-hook -g -B '%s' 'run-shell -b "%s"'`, tick(name), cmd)
@@ -141,17 +158,17 @@ func tickHookIfShell(cfg *config.Config, p *paths.Paths) string {
 	}
 	if cfg.Enrich.Enable {
 		parts = append(parts,
-			setHook("@lztmux-pr-tick", p.Scripts["tmux-pr-enrich"]+" --tick"),
-			setHook("@lztmux-backfill-tick", p.Scripts["tmux-issue-stamp"]+" --backfill"))
+			setHook("@og-pr-tick", p.Scripts["tmux-pr-enrich"]+" --tick"),
+			setHook("@og-backfill-tick", p.Scripts["tmux-issue-stamp"]+" --backfill"))
 	}
 	if cfg.AgentUsage.Enable {
-		parts = append(parts, setHook("@lztmux-usage-tick", p.Scripts["tmux-agent-usage"]+" --tick"))
+		parts = append(parts, setHook("@og-usage-tick", p.Scripts["tmux-agent-usage"]+" --tick"))
 	}
-	// Unconditional, and arming only. LZTMUX_TICK_SWEEP=1 rather than a --sweep
+	// Unconditional, and arming only. OG_TICK_SWEEP=1 rather than a --sweep
 	// argv flag: $1 is a session name at every other callsite, so a session
 	// literally named "--sweep" would misroute itself forever.
-	parts = append(parts, setHook("@lztmux-sweep-tick", "LZTMUX_TICK_SWEEP=1 "+p.Scripts["tmux-update-icons"]))
+	parts = append(parts, setHook("@og-sweep-tick", "OG_TICK_SWEEP=1 "+p.Scripts["tmux-update-icons"]))
 
 	body := strings.ReplaceAll(strings.Join(parts, " \\; "), `"`, `\"`)
-	return fmt.Sprintf(`if-shell "tmux list-commands set-hook | grep -q -- -B" "%s" "display-message 'lazytmux: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"`, body)
+	return fmt.Sprintf(`if-shell "tmux list-commands set-hook | grep -q -- -B" "%s" "display-message 'tmux-og: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"`, body)
 }

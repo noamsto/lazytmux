@@ -39,7 +39,7 @@ var remoteListSessionsBody = remoteTmuxCmd(`list-sessions -F '#{session_name}'`)
 const remoteTmuxBin = `$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux)`
 
 // remoteTmuxCmd runs one tmux argument string under the same TMUX_TMPDIR /
-// binary resolution as lztmux-remote-open. Both legs name the PARENT of the
+// binary resolution as og-remote-open. Both legs name the PARENT of the
 // socket dir — tmux appends tmux-<uid> to $TMUX_TMPDIR itself — so
 // /run/user/<uid> on Linux and /tmp on macOS, which has no $XDG_RUNTIME_DIR
 // and keeps its server at tmux's own /tmp/tmux-<uid> default. It tries Linux
@@ -59,7 +59,7 @@ var remoteListSessionsCmd = remoteIdentityPreamble + `; ` + remoteListSessionsBo
 
 // remoteSelfCacheDir holds alias→self verdicts so pendingRemoteItems can omit
 // known-self hosts on the first paint without another ssh probe.
-var remoteSelfCacheDir = "/tmp/lazytmux-remote-self"
+var remoteSelfCacheDir = "/tmp/og-remote-self"
 
 // remoteRestorableCmd emits the remote host's own hostname (line 1, used to
 // verify a fetched snapshot really belongs to this host) followed by
@@ -458,10 +458,10 @@ func tailscaleCheckURL(err error) string {
 }
 
 // remoteAuthStartFailure classifies the tea.ExecProcess callback error for the
-// auth handshake popup. *exec.ExitError means lztmux-remote-auth ran and
+// auth handshake popup. *exec.ExitError means og-remote-auth ran and
 // already explained itself — it pauses on any failure it prints before
 // returning the pty — so only a *exec.Error (the process never started at
-// all, most often a stale PATH after a lazytmux bump until the server
+// all, most often a stale PATH after a tmux-og bump until the server
 // restarts) has nothing on screen to explain, and that is the only case worth
 // surfacing into the status line.
 func remoteAuthStartFailure(err error) (string, bool) {
@@ -473,7 +473,7 @@ func remoteAuthStartFailure(err error) (string, bool) {
 }
 
 // sshListRemoteSessions runs the same path/tmpdir resolution as
-// lztmux-remote-open so a remote without tmux on the non-interactive PATH still
+// og-remote-open so a remote without tmux on the non-interactive PATH still
 // lists. Returns session names, or an error wrapping errRemoteUnreachable /
 // errRemoteNoServer.
 func sshListRemoteSessions(host string) (remoteProbeResult, error) {
@@ -648,7 +648,7 @@ func sshListRestorableSessions(host string) (remuxManifest, error) {
 // reconcile sees the remote lose it, never by a local kill.
 func bridgeCtlKillWindow(tmuxOpts map[string]string, sock, pane string) error {
 	// An option, not a PATH lookup — see @bridge_ctl_bin in the config.
-	bin := envOrMap("BRIDGE_CTL_BIN", tmuxOpts, "@bridge_ctl_bin", "lztmux-remote-bridge-ctl")
+	bin := envOrMap("BRIDGE_CTL_BIN", tmuxOpts, "@bridge_ctl_bin", "og-remote-bridge-ctl")
 	cmd := exec.Command(bin, "--sock="+sock, "kill-window", pane)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -661,7 +661,7 @@ func bridgeCtlKillWindow(tmuxOpts map[string]string, sock, pane string) error {
 	return nil
 }
 
-// openRemoteBridge launches lztmux-remote-open for host[/sess] and returns any
+// openRemoteBridge launches og-remote-open for host[/sess] and returns any
 // start error (the script switches the client itself on success). restore
 // signals a row built from a tmux-remux snapshot rather than a live probe
 // (#268): the session doesn't exist on the remote yet, so the launcher must
@@ -672,10 +672,10 @@ func openRemoteBridge(tmuxOpts map[string]string, host, sess string, restore boo
 		args = append(args, sess)
 	}
 	// An option, not a PATH lookup — see @remote_open_bin in the config.
-	bin := envOrMap("REMOTE_OPEN_BIN", tmuxOpts, "@remote_open_bin", "lztmux-remote-open")
+	bin := envOrMap("REMOTE_OPEN_BIN", tmuxOpts, "@remote_open_bin", "og-remote-open")
 	cmd := exec.Command(bin, args...)
 	if restore {
-		cmd.Env = append(os.Environ(), "LZTMUX_REMOTE_RESTORE=1")
+		cmd.Env = append(os.Environ(), "OG_REMOTE_RESTORE=1")
 	}
 	cmd.Stdout = os.Stderr
 	// Captured, not inherited: the picker owns the screen, so a failure has to
@@ -792,7 +792,7 @@ func hostColorFunc(tmuxOpts map[string]string) func(string) string {
 	}
 }
 
-// sessionDisplayName trims the "${host}-" prefix lztmux-remote-open bakes into
+// sessionDisplayName trims the "${host}-" prefix og-remote-open bakes into
 // a mirror session's name. Session-picker rows only, where the Host column
 // carries the host: window mode and everything outside the picker have no host
 // of their own to read, which is why the session itself is never renamed and
@@ -949,7 +949,7 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 			note = "(host key changed — verify manually)"
 		case remoteProbeTailscaleCheck:
 			// Not ssh auth — tailscaled intercepts and blocks on the remote's ACL
-			// check, which lztmux-remote-auth's ssh-copy-id/ControlMaster flow
+			// check, which og-remote-auth's ssh-copy-id/ControlMaster flow
 			// can't clear regardless of keys or multiplexing (#486). The one
 			// remedy that reliably works is running ssh interactively yourself.
 			note = "(tailscale check — run: ssh " + r.host + ")"
@@ -1031,7 +1031,7 @@ func bridgePIDFromFile(raw string) (pid int, ok bool) {
 // stopBridgeDaemon best-effort SIGTERMs the remote-bridge daemon mirroring
 // sess, found via the @bridge_sock session option the daemon stamps on
 // itself. All failures are swallowed: this is opportunistic cleanup, not a
-// required step — lztmux-remote-open.sh's stale-daemon check self-heals on
+// required step — og-remote-open.sh's stale-daemon check self-heals on
 // the next reopen regardless of whether this signal lands. The daemon's own
 // SIGTERM handler already tears itself down (removes its socket/pidfile,
 // exits), so this only needs to deliver the signal.

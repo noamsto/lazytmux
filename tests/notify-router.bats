@@ -13,7 +13,7 @@
 load helper
 
 setup() {
-	export LZTMUX_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
+	export OG_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
 	export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$FAKEBIN"
@@ -41,7 +41,7 @@ setup() {
 only_event() {
 	# Not named `f`: callers assign the result to a scalar `f`, and a local array
 	# of the same name makes shellcheck read those scalars as arrays (SC2178).
-	local ev=("$LZTMUX_NOTIFY_DIR"/events/*)
+	local ev=("$OG_NOTIFY_DIR"/events/*)
 	[ "${#ev[@]}" -eq 1 ]
 	[ -f "${ev[0]}" ]
 	printf '%s' "${ev[0]}"
@@ -213,7 +213,7 @@ routed" ]
 	export FAKE_INFO="$background_info"
 	bash "$NOTIFY_ROUTER" emit --source pr --level info --window @9 --title first
 	bash "$NOTIFY_ROUTER" emit --source pr --level info --window @9 --title second
-	cd "$LZTMUX_NOTIFY_DIR/events"
+	cd "$OG_NOTIFY_DIR/events"
 	names=(*)
 	[ "${#names[@]}" -eq 2 ]
 	grep -qx 'title=first' "${names[0]}"
@@ -226,13 +226,13 @@ routed" ]
 	export FAKE_INFO="$active_info"
 	while read -r args; do
 		[ -n "$args" ] || continue
-		rm -rf "$LZTMUX_NOTIFY_DIR"
+		rm -rf "$OG_NOTIFY_DIR"
 		# timeout catches a `shift 2` spin loudly instead of hanging the suite.
 		# shellcheck disable=SC2086 # unquoted on purpose: each line is an argv
 		run timeout 5 bash "$NOTIFY_ROUTER" $args
 		[ "$status" -eq 0 ]
-		[ ! -d "$LZTMUX_NOTIFY_DIR/events" ] ||
-			[ -z "$(ls -A "$LZTMUX_NOTIFY_DIR/events")" ]
+		[ ! -d "$OG_NOTIFY_DIR/events" ] ||
+			[ -z "$(ls -A "$OG_NOTIFY_DIR/events")" ]
 	done <<-'EOF'
 		emit --source toast --level info --pane %5 --title t
 		emit --source claude --level debug --pane %5 --title t
@@ -250,7 +250,7 @@ routed" ]
 	export FAKE_INFO=""
 	run bash "$NOTIFY_ROUTER" emit --source claude --level info --pane %99 --title t
 	[ "$status" -eq 0 ]
-	[ ! -d "$LZTMUX_NOTIFY_DIR/events" ] || [ -z "$(ls -A "$LZTMUX_NOTIFY_DIR/events")" ]
+	[ ! -d "$OG_NOTIFY_DIR/events" ] || [ -z "$(ls -A "$OG_NOTIFY_DIR/events")" ]
 }
 
 # --- pruning. Mirrors tests/prune-stale-state.bats, backdated `stamp`

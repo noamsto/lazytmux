@@ -1,5 +1,5 @@
 {
-  "name": "lazytmux",
+  "name": "tmux-og",
   "version": "0.1.0",
-  "description": "Claude Code integration for lazytmux: status-bar state hooks and issue self-report skill"
+  "description": "Claude Code integration for tmux-og: status-bar state hooks and issue self-report skill"
 }

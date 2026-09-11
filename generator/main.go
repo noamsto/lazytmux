@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
-	"github.com/noamsto/lazytmux/generator/render"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
+	"github.com/noamsto/tmux-og/generator/render"
 )
 
 func main() {

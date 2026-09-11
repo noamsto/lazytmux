@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // #447: the appended pane is created on the remote's own axis and already
@@ -73,7 +73,7 @@ func TestApplyPaneOpsSplitsOnTheRemoteAxis(t *testing.T) {
 	if !strings.HasPrefix(splitCmd, "split-window -v ") {
 		t.Errorf("split = %q, want the remote's -v axis", splitCmd)
 	}
-	if strings.Contains(splitCmd, "LZTMUX_RENDER") || strings.Contains(splitCmd, " -e ") {
+	if strings.Contains(splitCmd, "OG_RENDER") || strings.Contains(splitCmd, " -e ") {
 		t.Errorf("split %q still wires the renderer by env", splitCmd)
 	}
 	bin := "/nix/store/x-renderer/bin/renderer"

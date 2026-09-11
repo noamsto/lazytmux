@@ -1,4 +1,4 @@
-module github.com/noamsto/lazytmux/generator
+module github.com/noamsto/tmux-og/generator
 
 go 1.26.3
 

@@ -62,7 +62,7 @@ setup() {
 
 @test "the mirror dedup reads session options with a bare target, never '=' (#474)" {
 	# show-options answers "no such session" for a "=" target, and -q hides it.
-	run grep -n 'show-options -t "=' "${BATS_TEST_DIRNAME}/../scripts/lztmux-remote-open.sh"
+	run grep -n 'show-options -t "=' "${BATS_TEST_DIRNAME}/../scripts/og-remote-open.sh"
 	[ "$status" -ne 0 ]
 }
 

@@ -78,7 +78,7 @@ func TestResolveNonMirrorUnchanged(t *testing.T) {
 		mirror: false,
 		local: winState{
 			issueProvider: "linear", issueID: "ENG-1", branch: "feat/local",
-			worktree: "/home/noams/Data/git/noamsto/lazytmux", task: "local task", claudeAgo: "4m",
+			worktree: "/home/noams/Data/git/noamsto/tmux-og", task: "local task", claudeAgo: "4m",
 		},
 		bridge: winState{issueProvider: "github", issueID: "999"}, // must be ignored
 	}

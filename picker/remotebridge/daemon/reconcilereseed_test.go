@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // TestStructuralReconcileReseedsTheSurvivor is #417: closing one pane of a

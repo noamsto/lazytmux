@@ -12,7 +12,7 @@ import (
 // command THIS control client sent produced: tmux writes
 // !!(state->flags & CMDQ_STATE_CONTROL) there (cmdq_fire_command). A hook on the
 // remote runs its commands in our own command queue and so emits blocks flagged
-// 0 — with lazytmux on the far side, one per after-new-window hook follows every
+// 0 — with tmux-og on the far side, one per after-new-window hook follows every
 // new-window. Matching replies without this flag takes a hook's empty block as
 // our reply and desynchronises every later round-trip (#276).
 const ClientCommandFlag = 1

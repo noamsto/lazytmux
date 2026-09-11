@@ -4,19 +4,19 @@ load helper
 
 setup() {
 	export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
-	export LAZYTMUX_DEBUG_SENTINEL="$BATS_TEST_TMPDIR/debug.on"
+	export OG_DEBUG_SENTINEL="$BATS_TEST_TMPDIR/debug.on"
 	setup_lib_log
 }
 
 @test "log_event is a no-op when the sentinel is absent" {
 	log_event claude event transition from idle to processing
-	[ ! -f "$LAZYTMUX_LOG_FILE" ]
+	[ ! -f "$OG_LOG_FILE" ]
 }
 
 @test "log_event writes a JSON line when armed" {
-	: >"$LAZYTMUX_DEBUG_SENTINEL"
+	: >"$OG_DEBUG_SENTINEL"
 	log_event claude event transition from idle to processing
-	run cat "$LAZYTMUX_LOG_FILE"
+	run cat "$OG_LOG_FILE"
 	[[ $output == *'"cat":"claude"'* ]]
 	[[ $output == *'"event":"transition"'* ]]
 	[[ $output == *'"from":"idle"'* ]]
@@ -24,9 +24,9 @@ setup() {
 }
 
 @test "all values are quoted (numeric-looking session names stay strings)" {
-	: >"$LAZYTMUX_DEBUG_SENTINEL"
+	: >"$OG_DEBUG_SENTINEL"
 	log_event claude sess 10 win 2
-	run cat "$LAZYTMUX_LOG_FILE"
+	run cat "$OG_LOG_FILE"
 	[[ $output == *'"sess":"10"'* ]]
 	[[ $output == *'"win":"2"'* ]]
 }
@@ -37,10 +37,10 @@ setup() {
 }
 
 @test "rotation moves the log to .1 at the cap" {
-	: >"$LAZYTMUX_DEBUG_SENTINEL"
-	export LAZYTMUX_LOG_MAX_BYTES=200
+	: >"$OG_DEBUG_SENTINEL"
+	export OG_LOG_MAX_BYTES=200
 	for i in $(seq 1 20); do log_event t k "value-$i-padding-padding-padding-padding"; done
-	[ -f "$LAZYTMUX_LOG_FILE.1" ]
+	[ -f "$OG_LOG_FILE.1" ]
 }
 
 @test "acquire_lock creates the lock dir" {
@@ -61,7 +61,7 @@ setup() {
 @test "acquire_lock steals a stale lock dir" {
 	local lock="$BATS_TEST_TMPDIR/stale.lock"
 	mkdir "$lock"
-	export LAZYTMUX_LOCK_STALE_SECONDS=0
+	export OG_LOCK_STALE_SECONDS=0
 	run acquire_lock "$lock"
 	[ "$status" -eq 0 ]
 }

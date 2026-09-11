@@ -14,7 +14,7 @@ func TestRenderHintsRemoteRow(t *testing.T) {
 }
 
 func TestRenderHintsNonRemoteRow(t *testing.T) {
-	m := tuiModel{width: 200, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{width: 200, visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 	hints := stripANSI(m.renderHints())
 	if strings.Contains(hints, "^o") {
 		t.Errorf("hints = %q, must not advertise ^o off a remote row", hints)
@@ -35,7 +35,7 @@ func TestRenderHintsMirrorWindowRow(t *testing.T) {
 }
 
 func TestRenderHintsEmitMode(t *testing.T) {
-	m := tuiModel{width: 200, emitPath: "/tmp/emit", visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{width: 200, emitPath: "/tmp/emit", visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 	hints := stripANSI(m.renderHints())
 	if !strings.Contains(hints, "enter:pick") {
 		t.Errorf("hints = %q, want enter:pick in emit mode", hints)
@@ -46,7 +46,7 @@ func TestRenderHintsEmitMode(t *testing.T) {
 }
 
 func TestRenderHintsNonEmitMode(t *testing.T) {
-	m := tuiModel{width: 200, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{width: 200, visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 	hints := stripANSI(m.renderHints())
 	if !strings.Contains(hints, "enter:open") {
 		t.Errorf("hints = %q, want enter:open outside emit mode", hints)
@@ -101,7 +101,7 @@ func TestHintsNameTheRemoteKill(t *testing.T) {
 // New session section — the shape renderList's pinned line has to cope with.
 func stickyItems() []listItem {
 	items := []listItem{{display: "COLHDR", plain: "COLHDR", isColumnHeader: true}}
-	for _, n := range []string{"lazytmux", "tp-g6-money", "nix-config", "aeye", "agent-smith"} {
+	for _, n := range []string{"tmux-og", "tp-g6-money", "nix-config", "aeye", "agent-smith"} {
 		items = append(items, listItem{target: n, display: n, plain: n, session: n})
 	}
 	items = append(items, listItem{
@@ -172,7 +172,7 @@ func TestRenderListPinsColumnHeaderWithoutRepeatingIt(t *testing.T) {
 	if n != 1 {
 		t.Errorf("column header appears %d times, want 1:\n%s", n, strings.Join(lines, "\n"))
 	}
-	if !strings.Contains(lines[1], "lazytmux") {
+	if !strings.Contains(lines[1], "tmux-og") {
 		t.Errorf("line 1 = %q, want the first session row", lines[1])
 	}
 }

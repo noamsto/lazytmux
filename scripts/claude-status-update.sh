@@ -49,7 +49,7 @@ fi
 # never substituted — the raw script under bats, or a build with notifications
 # disabled — and is the single "notifications off" mechanism. Never empty: an
 # empty value would run `detach "" emit …`.
-NOTIFY_BIN="${LZTMUX_NOTIFY_BIN:-@notify@}"
+NOTIFY_BIN="${OG_NOTIFY_BIN:-@notify@}"
 
 # bridge_stamp OPTION VALUE
 # Mirrors a status write into a pane option, then refreshes — one tmux call for
@@ -352,7 +352,7 @@ fi
 # Issue/PR re-stamp (#137): run right after creating an issue/PR mid-session
 # (a session started on main, or a worktree made before the issue existed) so
 # @issue_* catches up without waiting for the next branch transition. Silent
-# no-op outside a lazytmux tmux — there is no window to stamp. Delegates the
+# no-op outside a tmux-og tmux — there is no window to stamp. Delegates the
 # actual write to tmux-issue-stamp (on PATH via the tmux wrapper), which
 # serializes through its own per-window lock alongside post-switch and the
 # auto branch-transition trigger.

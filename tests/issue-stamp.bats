@@ -8,7 +8,7 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STATE" "$FAKEBIN"
 	export FAKE_TMUX_STATE="$STATE"
-	export LAZYTMUX_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
 
 	# Fake tmux: answers display-message (#{window_id}/#{session_name}) and
 	# show-options from state; records every set-option (both -w OPT VAL and
@@ -191,8 +191,8 @@ wait_for() {
 }
 
 @test "lock: a held lock makes a concurrent fire a clean no-op" {
-	mkdir -p "$LAZYTMUX_ENRICH_LOCK_DIR"
-	mkdir "$LAZYTMUX_ENRICH_LOCK_DIR/1.lock"
+	mkdir -p "$OG_ENRICH_LOCK_DIR"
+	mkdir "$OG_ENRICH_LOCK_DIR/1.lock"
 	run bash "$STAMP" sess:1 /repo feat/eng-1957-x
 	[ "$status" -eq 0 ]
 	[ ! -f "$STATE/setlog" ]
@@ -201,19 +201,19 @@ wait_for() {
 
 @test "lock: a held lock is logged, not a silent drop, when debug is armed" {
 	export XDG_STATE_HOME="$BATS_TEST_TMPDIR/xdg-state"
-	export LAZYTMUX_DEBUG_SENTINEL="$BATS_TEST_TMPDIR/debug.on"
-	: >"$LAZYTMUX_DEBUG_SENTINEL"
-	mkdir -p "$LAZYTMUX_ENRICH_LOCK_DIR"
-	mkdir "$LAZYTMUX_ENRICH_LOCK_DIR/1.lock"
+	export OG_DEBUG_SENTINEL="$BATS_TEST_TMPDIR/debug.on"
+	: >"$OG_DEBUG_SENTINEL"
+	mkdir -p "$OG_ENRICH_LOCK_DIR"
+	mkdir "$OG_ENRICH_LOCK_DIR/1.lock"
 	run bash "$STAMP" sess:1 /repo feat/eng-1957-x
 	[ "$status" -eq 0 ]
-	grep -q 'stamp_skip_locked' "$XDG_STATE_HOME/lazytmux/events.log"
+	grep -q 'stamp_skip_locked' "$XDG_STATE_HOME/og/events.log"
 }
 
 @test "lock: released after a run, so a later fire proceeds normally" {
 	run bash "$STAMP" sess:1 /repo feat/eng-1957-x
 	[ "$status" -eq 0 ]
-	[ ! -d "$LAZYTMUX_ENRICH_LOCK_DIR/1.lock" ]
+	[ ! -d "$OG_ENRICH_LOCK_DIR/1.lock" ]
 	run bash "$STAMP" sess:1 /repo feat/eng-1957-x
 	[ "$status" -eq 0 ]
 	[ "$(cat "$STATE/opt_@issue_id")" = "ENG-1957" ]

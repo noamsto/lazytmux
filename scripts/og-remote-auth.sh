@@ -3,7 +3,7 @@
 #
 # Creates a ControlMaster: `ControlMaster no` (the Host * default) still REUSES
 # an existing master, so once this succeeds the picker probe and
-# lztmux-remote-open's ssh calls ride it unprompted. The bridge daemon and the
+# og-remote-open's ssh calls ride it unprompted. The bridge daemon and the
 # graphics fetcher do NOT — the daemon passes its own `-o ControlPath` on the
 # command line, which overrides the config, so those two always authenticate
 # independently.
@@ -17,7 +17,7 @@ set -euo pipefail
 # shellcheck source=/dev/null
 [[ -f "@lib_remote@" ]] && source "@lib_remote@"
 
-host="${1:?usage: lztmux-remote-auth <host>}"
+host="${1:?usage: og-remote-auth <host>}"
 
 persist="$(tmux show -gv @remote_auth_persist 2>/dev/null || true)"
 # 0 tells ssh to persist forever, not "off" — a hand-set tmux option can carry

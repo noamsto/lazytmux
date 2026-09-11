@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // #448: a mirror pane can leave by a route this daemon never saw — a renderer

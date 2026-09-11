@@ -27,7 +27,7 @@ setup() {
 	# The remote pane id the gate carries. One constant: setup() stamps it and
 	# write_argv() builds the expected wire payload from it, so they cannot drift.
 	BRIDGE_PANE='%42'
-	CTL="${CTL:?set CTL to the built lztmux-remote-bridge-ctl}"
+	CTL="${CTL:?set CTL to the built og-remote-bridge-ctl}"
 	# argv[0] of every ctl frame. Read from wire.CtlProtocolVersion by the check
 	# derivation rather than pinned here: the assertions below are about the
 	# EncodeArgv shape, and a protocol bump is not a regression in it.
@@ -49,8 +49,9 @@ setup() {
 	# sweep reaches two functions that delete files under these dirs — whose
 	# defaults are the developer's real /tmp trees (#603).
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
-	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/og-pr"
+	export OG_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/og-agent-usage"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/og-enrich-lock"
 
 	SOCK="$BATS_TEST_TMPDIR/d.sock"
 	REC_DIR="$BATS_TEST_TMPDIR/rec"

@@ -25,7 +25,7 @@ const (
 
 // CtlProtocolVersion is argv[0] of every FrameCtl. The daemon is launched from
 // the caller's PATH and is long-lived, while ctl's path is baked into the tmux
-// config and swaps on `prefix + r` — so a config reload or a lazytmux bump can
+// config and swaps on `prefix + r` — so a config reload or a tmux-og bump can
 // point a new ctl at an already-running old daemon. Bump this whenever the verb
 // table changes at all — a new verb included, since an old daemon answers one
 // with "unknown verb" and the new keybind looks broken rather than stale — so

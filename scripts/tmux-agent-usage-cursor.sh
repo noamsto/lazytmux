@@ -10,7 +10,7 @@
 # at 0% and stay hidden below the monthly threshold.
 set -uo pipefail
 
-CACHE_DIR="${LAZYTMUX_AGENT_USAGE_DIR:-/tmp/lazytmux-agent-usage}"
+CACHE_DIR="${OG_AGENT_USAGE_DIR:-/tmp/og-agent-usage}"
 AUTH="${CURSOR_AUTH:-$HOME/.config/cursor/auth.json}"
 API="https://api2.cursor.sh/aiserver.v1.DashboardService"
 

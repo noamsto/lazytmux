@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // mirrorWindow is one remote window's local mirror: the remote window id it

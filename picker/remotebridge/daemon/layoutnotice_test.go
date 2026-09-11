@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 func TestParseLayoutNotice(t *testing.T) {

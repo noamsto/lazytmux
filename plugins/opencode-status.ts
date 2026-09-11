@@ -1,10 +1,10 @@
 import type { Plugin } from "@opencode-ai/plugin";
 
-// OpenCode plugin: bridges lifecycle events to lazytmux's claude-status-update.
+// OpenCode plugin: bridges lifecycle events to tmux-og's claude-status-update.
 // Install: symlink/copy to ~/.config/opencode/plugin/ or .opencode/plugin/
-// Requires: claude-status-update on PATH (provided by the lazytmux tmux wrapper)
+// Requires: claude-status-update on PATH (provided by the tmux-og tmux wrapper)
 
-export const LazytmuxStatus: Plugin = async ({ $ }) => {
+export const TmuxOgStatus: Plugin = async ({ $ }) => {
 	const update = async (state: string) => {
 		try {
 			await $`claude-status-update ${state}`.quiet().nothrow();

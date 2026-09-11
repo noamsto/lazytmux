@@ -6,7 +6,7 @@ bats_require_minimum_version 1.5.0 # run !
 
 setup() {
 	TMUX_BIN="${TMUX_BIN:?set TMUX_BIN to the built wrapper}"
-	SOCKET="lztmux-shell-quoting-${BATS_TEST_NUMBER}-$$"
+	SOCKET="og-shell-quoting-${BATS_TEST_NUMBER}-$$"
 	SESSION="shell-quoting"
 	TEST_HOME="$BATS_TEST_TMPDIR/home"
 	mkdir -p "$TEST_HOME"
@@ -19,15 +19,16 @@ setup() {
 	# sweep reaches two functions that delete files under these dirs — whose
 	# defaults are the developer's real /tmp trees (#603).
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
-	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/og-pr"
+	export OG_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/og-agent-usage"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/og-enrich-lock"
 
 	t new-session -d -s "$SESSION"
 
 	# tmux 3.7 accepts qs: but silently returns the raw value. This must fail
 	# before any behavioural assertion can report a hollow green result.
-	t set-option -g @qs_probe lztmux
-	[ "$(t display-message -p -t "$SESSION" '#{qs:@qs_probe}')" = "'lztmux'" ]
+	t set-option -g @qs_probe og
+	[ "$(t display-message -p -t "$SESSION" '#{qs:@qs_probe}')" = "'og'" ]
 }
 
 teardown() {

@@ -3,7 +3,7 @@ package daemon
 import (
 	"strconv"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // FitWindowCmd returns the tmux argv that pins target to L's exact geometry.

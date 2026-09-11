@@ -149,11 +149,11 @@ func TestReaderNextNoBufferAliasingRenamedName(t *testing.T) {
 func TestParseSubscriptionChanged(t *testing.T) {
 	// Window scope: the pane field is '-', and the value holds a ':' of its own
 	// (an issue title does), which must not be mistaken for the separator.
-	l := ParseLine("%subscription-changed lztmux_labels $0 @3 2 - : @3|nova|#89b4fa|fix: a:b")
+	l := ParseLine("%subscription-changed og_labels $0 @3 2 - : @3|nova|#89b4fa|fix: a:b")
 	if l.Kind != SubscriptionChanged {
 		t.Fatalf("kind = %v, want SubscriptionChanged", l.Kind)
 	}
-	if got, want := l.Args[0], "lztmux_labels"; got != want {
+	if got, want := l.Args[0], "og_labels"; got != want {
 		t.Errorf("name = %q, want %q", got, want)
 	}
 	if got, want := string(l.Data), "@3|nova|#89b4fa|fix: a:b"; got != want {
@@ -162,7 +162,7 @@ func TestParseSubscriptionChanged(t *testing.T) {
 
 	// Pane scope carries the pane id in the ids, though the subscribed format
 	// repeats it in the value — which is what consumers read.
-	l = ParseLine("%subscription-changed lztmux_agents $0 @3 2 %9 : %9|claude|waiting 1700000000 1||")
+	l = ParseLine("%subscription-changed og_agents $0 @3 2 %9 : %9|claude|waiting 1700000000 1||")
 	if l.Kind != SubscriptionChanged || l.Args[4] != "%9" {
 		t.Errorf("pane form = %v args %v", l.Kind, l.Args)
 	}
@@ -170,7 +170,7 @@ func TestParseSubscriptionChanged(t *testing.T) {
 	// An emptied value still reports, because tmux writes the separator
 	// unconditionally: that line is how "the option was unset" arrives, and
 	// dropping it would leave the last non-empty value stamped forever.
-	l = ParseLine("%subscription-changed lztmux_labels $0 @3 2 - : ")
+	l = ParseLine("%subscription-changed og_labels $0 @3 2 - : ")
 	if l.Kind != SubscriptionChanged || string(l.Data) != "" {
 		t.Errorf("empty value = %v, data %q", l.Kind, l.Data)
 	}

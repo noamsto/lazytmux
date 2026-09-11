@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // signalSink is a router sink that says when it has been written to, so a test

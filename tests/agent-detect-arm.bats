@@ -73,7 +73,7 @@ setup() {
 }
 
 @test "throttle: a non-empty first argument bypasses the non-multiple-of-5 gate" {
-	# The @lztmux-sweep-tick monitor hook drives this on its own 5s cadence
+	# The @og-sweep-tick monitor hook drives this on its own 5s cadence
 	# (main passes "force"), so the modulo must not also gate it -- it would
 	# silently stop arming whenever the hook's clock drifts off a multiple of
 	# 5. Same CLAUDE_NOW as the throttled case above; only the argument differs.
@@ -82,13 +82,13 @@ setup() {
 	grep -q 'pipe-pane.*%3.*agent-detect 3' "$BATS_TEST_TMPDIR/pipe.log"
 }
 
-@test "sweep dispatch: fires on LZTMUX_TICK_SWEEP with no arguments (the real hook shape)" {
+@test "sweep dispatch: fires on OG_TICK_SWEEP with no arguments (the real hook shape)" {
 	# main's sweep branch calls arm_agent_detect force, which bypasses the
 	# throttle above -- so CLAUDE_NOW=101 (non-multiple-of-5) still arms here,
 	# proving the env var (not argv) drove the dispatch. No arguments at all:
 	# with no claude_prune_stale_state on this path, there is no server start
 	# time to pass, so the hook command (config/tmux.conf.nix) carries none.
-	run bash -c 'export CLAUDE_NOW=101 LZTMUX_TICK_SWEEP=1; source scripts/tmux-update-icons.sh; main'
+	run bash -c 'export CLAUDE_NOW=101 OG_TICK_SWEEP=1; source scripts/tmux-update-icons.sh; main'
 	[ "$status" -eq 0 ]
 	grep -q 'pipe-pane.*%3.*agent-detect 3' "$BATS_TEST_TMPDIR/pipe.log"
 }
@@ -97,7 +97,7 @@ setup() {
 	# Regression case for the exact bug this dispatch was rewritten to avoid:
 	# #{qs:session_name} quotes a session name for the shell but does not
 	# change its VALUE, so a session named "--sweep" makes $1 that literal
-	# string on every ordinary invocation. With no LZTMUX_TICK_SWEEP set, main
+	# string on every ordinary invocation. With no OG_TICK_SWEEP set, main
 	# must treat "--sweep" as $SESSION and call the NORMAL unguarded
 	# arm_agent_detect (no argument) -- which, at a non-multiple-of-5
 	# CLAUDE_NOW, is throttled and arms nothing. A misrouted dispatch would
@@ -107,6 +107,6 @@ setup() {
 	# @MAX_ICONS@ placeholder), which is irrelevant to the dispatch decision
 	# and happens well after arm_agent_detect has already run -- hence the
 	# output redirect rather than asserting on $status.
-	run bash -c 'export CLAUDE_NOW=101; unset LZTMUX_TICK_SWEEP; source scripts/tmux-update-icons.sh; main --sweep >/dev/null 2>&1'
+	run bash -c 'export CLAUDE_NOW=101; unset OG_TICK_SWEEP; source scripts/tmux-update-icons.sh; main --sweep >/dev/null 2>&1'
 	[ ! -s "$BATS_TEST_TMPDIR/pipe.log" ]
 }

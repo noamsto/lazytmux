@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Notification router (#164): `lztmux-notify emit …`.
+# Notification router (#164): `og-notify emit …`.
 #
 # One tmux read resolves the event's window and hands back everything else the
 # emit needs — routing inputs, the session id the renderer targets, the server

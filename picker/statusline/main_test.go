@@ -363,14 +363,14 @@ func TestRenderLineUsageAdjacentToPaneSlot(t *testing.T) {
 // TestReflowRunShellArgsSurvivesFormatInjection for the tmux-presence check,
 // including its fail-not-skip branch: picker/default.nix's plain `picker`
 // derivation (built by `nix build .#default`, no tmux, no
-// LAZYTMUX_REQUIRE_TMUX) also runs `go test ./statusline`, so a missing tmux
-// under LAZYTMUX_REQUIRE_TMUX (set by pickerChecked's checkPhase in
+// OG_REQUIRE_TMUX) also runs `go test ./statusline`, so a missing tmux
+// under OG_REQUIRE_TMUX (set by pickerChecked's checkPhase in
 // flake.nix, which also adds pkgs.tmux) means that input was pruned, not
 // that this is a dev machine.
 func TestPaneSlotPadDirectionLiveTmux(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
-		if os.Getenv("LAZYTMUX_REQUIRE_TMUX") != "" {
-			t.Fatal("tmux is required (LAZYTMUX_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
+		if os.Getenv("OG_REQUIRE_TMUX") != "" {
+			t.Fatal("tmux is required (OG_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
 		}
 		t.Skip("tmux is not available")
 	}
@@ -447,8 +447,8 @@ func TestPaneCmdDisplayPrefersBridgeProc(t *testing.T) {
 		name, cmd, bridgeProc, want string
 	}{
 		{"no bridge", ".nvim-wrapped", "", "nvim"},
-		{"mirror", "lztmux-remote-bridge-renderer", "claude", "claude"},
-		{"mirror unwraps too", "lztmux-remote-bridge-renderer", ".nvim-wrapped", "nvim"},
+		{"mirror", "og-remote-bridge-renderer", "claude", "claude"},
+		{"mirror unwraps too", "og-remote-bridge-renderer", ".nvim-wrapped", "nvim"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := paneCmdDisplay(tc.cmd, tc.bridgeProc); got != tc.want {

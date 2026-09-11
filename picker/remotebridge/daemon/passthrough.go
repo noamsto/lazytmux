@@ -9,7 +9,7 @@ import "fmt"
 // one keeps a store from being dropped on its way to the terminal, this one
 // keeps it from being dropped before it ever reaches the control stream.
 //
-// Every remote window inherits lazytmux's global `allow-passthrough on`, and
+// Every remote window inherits tmux-og's global `allow-passthrough on`, and
 // `on` releases a passthrough sequence only for a pane a client can see. The
 // bridge holds one *control* client on the mirrored session, which satisfies no
 // such test, so a kitty image store written by a program on the remote never

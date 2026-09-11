@@ -10,7 +10,7 @@
   prdash ? null,
   ...
 }: let
-  cfg = config.programs.lazytmux;
+  cfg = config.programs.tmux-og;
 
   # Per-emulator defaults. terminfoPath uses an if-expression (not lib.optionalString)
   # because Nix evaluates function arguments strictly — the string interpolation would
@@ -85,7 +85,7 @@
   # predating a nix switch keeps its old binary resident (#407), and a store
   # rebuild only changes the tmux -V a *new* process would report. Piped
   # straight through source-file, its `set-hook -g <event>` lines land on the
-  # default index (0), which would clobber lazytmux's own index-0 hooks on the
+  # default index (0), which would clobber tmux-og's own index-0 hooks on the
   # same events (e.g. tmux-reflow-windows on window-unlinked) — rewrite them
   # onto [99], same as the hand-written snippet this replaces. The `-B` named
   # monitor hook has no event-name index to collide on, so it's left alone.
@@ -221,33 +221,33 @@
 in {
   imports = [
     (lib.mkRenamedOptionModule
-      ["programs" "lazytmux" "claudeIntegration" "enable"]
-      ["programs" "lazytmux" "agentIntegration" "enable"])
+      ["programs" "tmux-og" "claudeIntegration" "enable"]
+      ["programs" "tmux-og" "agentIntegration" "enable"])
     # zoxideExclude moved from the session-only sessionPicker.* namespace to
     # picker.* alongside layout/listRatio, which apply to both pickers (#286).
     (lib.mkRenamedOptionModule
-      ["programs" "lazytmux" "sessionPicker" "zoxideExclude"]
-      ["programs" "lazytmux" "picker" "zoxideExclude"])
+      ["programs" "tmux-og" "sessionPicker" "zoxideExclude"]
+      ["programs" "tmux-og" "picker" "zoxideExclude"])
     (lib.mkRemovedOptionModule
-      ["programs" "lazytmux" "remote" "enable"]
-      "The arch-C reverse-socket promotion was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
+      ["programs" "tmux-og" "remote" "enable"]
+      "The arch-C reverse-socket promotion was retired (#167). Use programs.tmux-og.remote.hosts for the control-mode bridge picker.")
     (lib.mkRemovedOptionModule
-      ["programs" "lazytmux" "remote" "trustedHosts"]
-      "The arch-C RemoteForward block was retired (#167). Use programs.lazytmux.remote.hosts for the control-mode bridge picker.")
+      ["programs" "tmux-og" "remote" "trustedHosts"]
+      "The arch-C RemoteForward block was retired (#167). Use programs.tmux-og.remote.hosts for the control-mode bridge picker.")
     (lib.mkRemovedOptionModule
-      ["programs" "lazytmux" "persist" "saveInterval"]
-      "The lazytmux-remux-save timer was dropped in favour of tmux-remux's own tmux 3.8 monitor hook (#344), which fires on the session's own clock rather than a configurable cadence.")
+      ["programs" "tmux-og" "persist" "saveInterval"]
+      "The periodic remux-save timer unit was dropped in favour of tmux-remux's own tmux 3.8 monitor hook (#344), which fires on the session's own clock rather than a configurable cadence.")
   ];
 
-  options.programs.lazytmux = {
-    enable = lib.mkEnableOption "lazytmux - opinionated tmux configuration";
+  options.programs.tmux-og = {
+    enable = lib.mkEnableOption "tmux-og - opinionated tmux configuration";
 
     tmuxPackage = lib.mkOption {
       type = lib.types.package;
       default = tmux-pkg;
       defaultText = lib.literalExpression "inputs.nixpkgs-tmux36.legacyPackages.\${system}.tmux";
       description = ''
-        The tmux package lazytmux wraps and installs. Defaults to the flake's
+        The tmux package tmux-og wraps and installs. Defaults to the flake's
         pinned tmux 3.6a: tmux 3.7 no longer freezes background panes under a
         popup (tmux/tmux#4920), so a popup flickers whenever a full-screen TUI
         redraws behind it. Override with pkgs.tmux to track unstable once
@@ -283,7 +283,7 @@ in {
       description = ''
         Extra verbatim lines appended to the generated tmux.conf after all
         built-in settings (including persist hooks). Use for one-off tmux
-        options that lazytmux does not expose as structured options.
+        options that tmux-og does not expose as structured options.
       '';
     };
 
@@ -326,7 +326,7 @@ in {
       default = "off";
       description = ''
         tmux copy-mode-line-numbers mode (tmux 3.7+): line-number display in
-        copy mode. "off" preserves lazytmux's previous behavior.
+        copy mode. "off" preserves tmux-og's previous behavior.
       '';
     };
 
@@ -358,7 +358,7 @@ in {
         example = ["tp-g6" "lab"];
         description = ''
           ssh Host aliases the session picker (`prefix + s`) probes for remote
-          tmux sessions. Enter on a row runs `lztmux-remote-open` (control-mode
+          tmux sessions. Enter on a row runs `og-remote-open` (control-mode
           bridge). Empty list hides the remote section.
         '';
       };
@@ -367,7 +367,7 @@ in {
         type = lib.types.bool;
         default = true;
         description = ''
-          Expose `lztmux-remote-picker` on PATH via home.packages, so this host
+          Expose `og-remote-picker` on PATH via home.packages, so this host
           can serve `prefix + s` → `^o` (the asking host opens *this* host's own
           session picker in a floating pane).
 
@@ -375,7 +375,7 @@ in {
           machine reaches *out* to, while this script is needed on the machine
           being reached — which typically sets no `remote.hosts` at all. The
           asking side probes for it over a non-interactive ssh, where only the
-          per-user profile is on PATH, and treats its absence as "remote lazytmux
+          per-user profile is on PATH, and treats its absence as "remote tmux-og
           too old".
 
           Set false on a host that should never be a bridge target.
@@ -386,7 +386,7 @@ in {
         type = lib.types.ints.between 60 86400;
         default = 14400;
         description = ''
-          How long an ssh ControlMaster lazytmux creates survives idle, in
+          How long an ssh ControlMaster tmux-og creates survives idle, in
           seconds (clamped 60–86400, default 4h). Passed straight to ssh's
           `ControlPersist`. Two things build one: the picker's auth handshake,
           and the remote-side picker's own probe leg (so its three legs share a
@@ -744,7 +744,7 @@ in {
           full conversation context) to name such a window once via
           `claude-status-update name set`, and again if the focus clearly
           shifts. No separate API call — the running session does it. Requires
-          the lazytmux Claude Code plugin (or `skills.enable`) to be installed.
+          the tmux-og Claude Code plugin (or `skills.enable`) to be installed.
         '';
       };
     };
@@ -753,7 +753,7 @@ in {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Whether to install Claude Code skills into ~/.claude/skills (lazytmux skills and agent-carousel skills). Disable when the lazytmux Claude Code plugin is installed (marketplace or --plugin-dir) — the plugin ships the same skills.";
+        description = "Whether to install Claude Code skills into ~/.claude/skills (tmux-og skills and agent-carousel skills). Disable when the tmux-og Claude Code plugin is installed (marketplace or --plugin-dir) — the plugin ships the same skills.";
       };
     };
 
@@ -782,7 +782,7 @@ in {
           hook payload is parsed. Requires agentIntegration.enable (asserted):
           the hooks reference
           claude-status-update by its rebuild-stable profile path so codex's hook
-          trust survives lazytmux bumps.
+          trust survives tmux-og bumps.
 
           Defaults to false, like `persist.resumeCodex` and for the same reasons:
           it mutates an EXTERNAL tool's config file, and codex requires a
@@ -1018,7 +1018,7 @@ in {
         ) {
           assertion = false;
           message = ''
-            programs.lazytmux.startupSession.terminal.emulator = "${cfg.startupSession.terminal.emulator}"
+            programs.tmux-og.startupSession.terminal.emulator = "${cfg.startupSession.terminal.emulator}"
             but pkgs.${cfg.startupSession.terminal.emulator} is not available.
             Add it to your packages or set terminal.emulator = null and configure manually.
           '';
@@ -1026,7 +1026,7 @@ in {
         ++ lib.optional (cfg.codexStatus.enable && !cfg.agentIntegration.enable) {
           assertion = false;
           message = ''
-            programs.lazytmux.codexStatus.enable requires agentIntegration.enable:
+            programs.tmux-og.codexStatus.enable requires agentIntegration.enable:
             the codex hooks call claude-status-update by its rebuild-stable profile
             path, which agentIntegration installs. Without it the binary isn't on
             the profile and codex would re-prompt for hook trust on every bump.
@@ -1035,7 +1035,7 @@ in {
         ++ lib.optional (cfg.cursorStatus.enable && !cfg.agentIntegration.enable) {
           assertion = false;
           message = ''
-            programs.lazytmux.cursorStatus.enable requires agentIntegration.enable:
+            programs.tmux-og.cursorStatus.enable requires agentIntegration.enable:
             the Cursor hooks call cursor-status-hook (sibling of claude-status-update)
             on the rebuild-stable profile path, which agentIntegration installs.
           '';
@@ -1064,7 +1064,7 @@ in {
             tmuxConfig.script.tmux-pr-enrich
           ]
           ++ lib.optionals cfg.remote.exposePickOnPath [
-            tmuxConfig.script.lztmux-remote-picker
+            tmuxConfig.script.og-remote-picker
           ]
           ++ lib.optionals (carousel-toggle != null) cfg.carouselDiagramTools
           ++ cfg.popupTools;
@@ -1105,12 +1105,12 @@ in {
               then ''
                 if ! ${lib.getExe' pkgs.systemd "loginctl"} show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
                   ${lib.getExe' pkgs.systemd "loginctl"} enable-linger "$USER" \
-                    || echo "lazytmux: could not enable lingering for $USER; the startup tmux server will not survive logout" >&2
+                    || echo "tmux-og: could not enable lingering for $USER; the startup tmux server will not survive logout" >&2
                 fi
               ''
               else ''
                 if ! ${lib.getExe' pkgs.systemd "loginctl"} show-user "$USER" -p Linger --value 2>/dev/null | grep -qx yes; then
-                  echo "lazytmux: startupSession.enable is on but startupSession.linger is off and $USER is not lingering — the tmux server will die at logout. Enable it declaratively with 'users.users.$USER.linger = true' or set programs.lazytmux.startupSession.linger = true." >&2
+                  echo "tmux-og: startupSession.enable is on but startupSession.linger is off and $USER is not lingering — the tmux server will die at logout. Enable it declaratively with 'users.users.$USER.linger = true' or set programs.tmux-og.startupSession.linger = true." >&2
                 fi
               ''
             )
@@ -1132,9 +1132,9 @@ in {
                   [ -n "$sess" ] && "$REFLOW" "$sess" "$WIDTH" || true
                 done < <($TMUX list-sessions -F '#{session_name}' 2>/dev/null)
               else
-                echo "lazytmux: tmux rejected the new config during home-manager switch:" >&2
+                echo "tmux-og: tmux rejected the new config during home-manager switch:" >&2
                 echo "$SOURCE_ERR" >&2
-                echo "lazytmux: restart the tmux server to pick up this generation." >&2
+                echo "tmux-og: restart the tmux server to pick up this generation." >&2
               fi
             fi
           '';
@@ -1145,7 +1145,7 @@ in {
           # no drop-in dir, no CODEX_HOME layered profile without `-p`); a real
           # config.toml can carry substantial hand-edited content (model,
           # mcp_servers, per-project trust), so home.file would clobber it.
-          # Existing lazytmux blocks are updated in place so the command stays on
+          # Existing tmux-og blocks are updated in place so the command stays on
           # the rebuild-stable profile path after a Nix package update. Trust for
           # the hook itself still requires a one-time manual `/hooks` -> "Trust
           # all" per machine (see the resumeCodex option doc).
@@ -1155,11 +1155,22 @@ in {
                 resumeBinary = "${config.home.profileDirectory}/bin/codex-relaunch-stamp";
               in ''
                 CONFIG="$HOME/.codex/config.toml"
-                MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
+                MARKER='# tmux-og-managed: codex resume-on-restore SessionStart hook'
+                # Pre-rename spelling, matched so an existing block is found and
+                # reused as the sed anchor rather than duplicated. Never rewritten
+                # to the new spelling: this is the user's file. Drop this once no
+                # machine carries a `lazytmux-managed:` block.
+                LEGACY_MARKER='# lazytmux-managed: codex resume-on-restore SessionStart hook'
                 mkdir -p "$(dirname "$CONFIG")"
                 touch "$CONFIG"
+                FOUND_MARKER=""
                 if grep -qF "$MARKER" "$CONFIG"; then
-                  run sed -i "/^$MARKER$/,/^timeout = 30$/ s#^command = .*codex-relaunch-stamp.*#command = \"${resumeBinary}\"#" "$CONFIG"
+                  FOUND_MARKER="$MARKER"
+                elif grep -qF "$LEGACY_MARKER" "$CONFIG"; then
+                  FOUND_MARKER="$LEGACY_MARKER"
+                fi
+                if [ -n "$FOUND_MARKER" ]; then
+                  run sed -i "/^$FOUND_MARKER$/,/^timeout = 30$/ s#^command = .*codex-relaunch-stamp.*#command = \"${resumeBinary}\"#" "$CONFIG"
                 else
                   {
                     echo ""
@@ -1203,12 +1214,12 @@ in {
               let
                 # Stable profile path, NOT a /nix/store path: codex records hook
                 # trust as a content hash over the config, so a store path that
-                # changes every lazytmux rebuild would force a fresh `/hooks` trust
+                # changes every tmux-og rebuild would force a fresh `/hooks` trust
                 # each bump. The profile path is rebuild-stable. Requires
                 # agentIntegration.enable (asserted below) to put the binary there.
                 csu = "${config.home.profileDirectory}/bin/claude-status-update";
                 hookBlock = ''
-                  # lazytmux-managed: codex status-line hooks
+                  # tmux-og-managed: codex status-line hooks
                   [[hooks.SessionStart]]
                   matcher = "startup|resume"
 
@@ -1273,21 +1284,34 @@ in {
                 '';
               in ''
                 CONFIG="$HOME/.codex/config.toml"
-                MARKER='# lazytmux-managed: codex status-line hooks'
+                MARKER='# tmux-og-managed: codex status-line hooks'
+                # Pre-rename spelling, matched so an existing block counts as
+                # present and is not appended a second time (duplicate hooks fire
+                # twice, and the content change re-prompts /hooks trust). Never
+                # rewritten to the new spelling, for the same reason the stale
+                # Notification block below is left alone. Drop this once no machine
+                # carries a `lazytmux-managed:` block.
+                LEGACY_MARKER='# lazytmux-managed: codex status-line hooks'
                 mkdir -p "$(dirname "$CONFIG")"
                 touch "$CONFIG"
-                if ! grep -qF "$MARKER" "$CONFIG"; then
+                FOUND_MARKER=""
+                if grep -qF "$MARKER" "$CONFIG"; then
+                  FOUND_MARKER="$MARKER"
+                elif grep -qF "$LEGACY_MARKER" "$CONFIG"; then
+                  FOUND_MARKER="$LEGACY_MARKER"
+                fi
+                if [ -z "$FOUND_MARKER" ]; then
                   printf '\n%s' ${lib.escapeShellArg hookBlock} >>"$CONFIG"
                 elif grep -qF '[[hooks.Notification]]' "$CONFIG"; then
                   # Append-once by design (codex hashes the config for hook trust,
                   # so rewriting it would re-prompt), so a block written before the
                   # Notification→PermissionRequest fix can't be corrected in place.
-                  # Removing it stays the user's call — lazytmux does not own this file.
-                  echo "lazytmux: ~/.codex/config.toml has a stale lazytmux hook block ([[hooks.Notification]] is not a codex event, so 'waiting' never fires)." >&2
-                  echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch to get the corrected one." >&2
+                  # Removing it stays the user's call — tmux-og does not own this file.
+                  echo "tmux-og: ~/.codex/config.toml has a stale tmux-og hook block ([[hooks.Notification]] is not a codex event, so 'waiting' never fires)." >&2
+                  echo "tmux-og: delete the block under '$FOUND_MARKER' and re-run home-manager switch to get the corrected one." >&2
                 elif ! grep -qF ${lib.escapeShellArg csu} "$CONFIG"; then
-                  echo "lazytmux: ~/.codex/config.toml status hooks don't reference ${csu}." >&2
-                  echo "lazytmux: delete the block under '$MARKER' and re-run home-manager switch (then re-trust /hooks), or sed the command paths in place." >&2
+                  echo "tmux-og: ~/.codex/config.toml status hooks don't reference ${csu}." >&2
+                  echo "tmux-og: delete the block under '$FOUND_MARKER' and re-run home-manager switch (then re-trust /hooks), or sed the command paths in place." >&2
                 fi
               ''
             )
@@ -1506,7 +1530,7 @@ in {
           # was already pruned). Cheap to run; safe to skip on missed firings.
           # Periodic snapshot saves now come from tmux-remux's own tmux 3.8
           # monitor hook (see tmuxRemuxWireScript above), not a timer unit.
-          lazytmux-remux-gc = lib.mkIf persistEnabled {
+          tmux-og-remux-gc = lib.mkIf persistEnabled {
             Unit.Description = "tmux-remux garbage collection";
             Service = {
               Type = "oneshot";
@@ -1516,11 +1540,11 @@ in {
         };
 
         timers = {
-          lazytmux-remux-gc = lib.mkIf persistEnabled {
+          tmux-og-remux-gc = lib.mkIf persistEnabled {
             Unit.Description = "tmux-remux GC (orphan scrollback files)";
             Timer = {
               OnCalendar = "weekly";
-              Unit = "lazytmux-remux-gc.service";
+              Unit = "tmux-og-remux-gc.service";
             };
             Install.WantedBy = ["timers.target"];
           };
@@ -1549,15 +1573,15 @@ in {
                 // lib.optionalAttrs (effectiveTerminfoPath != null) {
                   TERMINFO = effectiveTerminfoPath;
                 };
-              StandardOutPath = "/tmp/lazytmux-startup.log";
-              StandardErrorPath = "/tmp/lazytmux-startup.log";
+              StandardOutPath = "/tmp/og-startup.log";
+              StandardErrorPath = "/tmp/og-startup.log";
             };
           };
         }
         // lib.optionalAttrs persistEnabled {
           # Weekly GC of orphaned scrollback files. The periodic save agent is
           # gone (#344) — see the systemd block above for why.
-          lazytmux-remux-gc = {
+          tmux-og-remux-gc = {
             enable = true;
             config = {
               ProgramArguments = ["${cfg.persist.package}/bin/tmux-remux" "gc"];

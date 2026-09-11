@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/keyneg"
+	"github.com/noamsto/tmux-og/picker/remotebridge/keyneg"
 )
 
 func TestProxyRewritesAndWrapsInOnePass(t *testing.T) {

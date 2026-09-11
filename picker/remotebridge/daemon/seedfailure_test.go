@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 func twoPaneAppendHarness(t *testing.T, send func(string)) (cfg Config, w *mirrorWindow, router *Router, newConn, newPeer net.Conn, rt roundTrip, localTrace *[]string) {

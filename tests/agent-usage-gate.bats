@@ -15,7 +15,7 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$FAKEBIN"
 	export USAGE_LOG="$BATS_TEST_TMPDIR/usage.log"
-	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/cache"
+	export OG_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/cache"
 	unset TMUX TMUX_PANE
 
 	cat >"$FAKEBIN/tmux" <<-'EOF'
@@ -36,7 +36,7 @@ setup() {
 	make_agent_usage
 }
 
-last_tick() { echo "$LAZYTMUX_AGENT_USAGE_DIR/.last-tick"; }
+last_tick() { echo "$OG_AGENT_USAGE_DIR/.last-tick"; }
 
 @test "tick: no agent pane leaves .last-tick unstamped" {
 	export FAKE_PANES='bash
@@ -63,7 +63,7 @@ claude'
 
 @test "tick: a fresh stamp short-circuits before the gate forks tmux" {
 	export FAKE_PANES='claude'
-	mkdir -p "$LAZYTMUX_AGENT_USAGE_DIR"
+	mkdir -p "$OG_AGENT_USAGE_DIR"
 	touch "$(last_tick)"
 	# A tmux that fails the test if called at all: inside the refresh window the
 	# tick must return on the mtime check alone.

@@ -3,7 +3,7 @@ package daemon
 import (
 	"strings"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // layoutFlagAlphabet is window_printable_flags' output alphabet

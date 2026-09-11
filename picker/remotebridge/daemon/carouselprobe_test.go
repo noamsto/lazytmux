@@ -47,9 +47,9 @@ func (p *carouselProbe) pendingCount() int {
 	return len(p.pending)
 }
 
-func sinkSend(sent *[]string) func(string) bool {
-	return func(cmd string) bool {
-		*sent = append(*sent, cmd)
+func sinkSend(sent *[]string) func(...string) bool {
+	return func(cmds ...string) bool {
+		*sent = append(*sent, cmds...)
 		return true
 	}
 }
@@ -198,9 +198,9 @@ func TestCarouselProbeDropsPressOnReadError(t *testing.T) {
 
 func TestCarouselVerdictCmdShapes(t *testing.T) {
 	for _, tc := range []struct{ got, want string }{
-		{carouselVerdictCmd("%7"), "show-options -pqv -t %7 @lztmux_carousel"},
-		{carouselStampCmd("%7", carouselVerdictNoImages), "set-option -p -t %7 @lztmux_carousel noimages"},
-		{carouselClearCmd("%7"), "set-option -pu -t %7 @lztmux_carousel"},
+		{carouselVerdictCmd("%7"), "show-options -pqv -t %7 @og_carousel"},
+		{carouselStampCmd("%7", carouselVerdictNoImages), "set-option -p -t %7 @og_carousel noimages"},
+		{carouselClearCmd("%7"), "set-option -pu -t %7 @og_carousel"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("got %q, want %q", tc.got, tc.want)
@@ -214,7 +214,7 @@ func TestHandleCtlDoesNotArmWhenTheSendFails(t *testing.T) {
 	cst, rep, _, _ := handlerFixture(t, "foot", "foot")
 	p := newCarouselProbe()
 
-	err := handleCtl(cst, rep, p, carouselPress(), "rem", func(string) bool { return false })
+	err := handleCtl(cst, rep, p, carouselPress(), "rem", func(...string) bool { return false })
 	if err == nil {
 		t.Fatal("want an error when the command could not be written")
 	}

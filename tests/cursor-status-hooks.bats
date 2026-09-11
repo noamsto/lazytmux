@@ -90,7 +90,7 @@ EOF
 	[ "$status" -eq 0 ]
 	[[ $output == *'default = false;'* ]]
 
-	run grep -F 'programs.lazytmux.cursorStatus.enable requires agentIntegration.enable' "$MODULE"
+	run grep -F 'programs.tmux-og.cursorStatus.enable requires agentIntegration.enable' "$MODULE"
 	[ "$status" -eq 0 ]
 
 	run grep -F 'provisionCursorStatusHooks' "$MODULE"

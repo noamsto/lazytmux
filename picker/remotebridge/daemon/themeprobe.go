@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // themeProbeRetries and themeProbeInterval bound themeToggleAvailable's wait
@@ -69,7 +69,7 @@ func themeToggleAvailableRetry(rt roundTrip, sess string, retries int, interval 
 }
 
 // themeMissingRetries and themeMissingRetryInterval bound notifyThemeMissing's
-// wait for a client to attach. scripts/lztmux-remote-open.sh backgrounds the
+// wait for a client to attach. scripts/og-remote-open.sh backgrounds the
 // daemon and only then runs switch-client, so the very first thing Run() might
 // report can race a mirror session that has no client yet; by the time the
 // probe's round-trip returns that's usually already resolved, but this is the

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
 )
 
 func TestGraphicsEndToEndThroughASink(t *testing.T) {

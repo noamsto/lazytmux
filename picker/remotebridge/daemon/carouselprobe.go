@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // The carousel verb's outcome has to travel from the remote back to this
@@ -17,7 +17,7 @@ import (
 // stamps its verdict on the ctl pane as carouselVerdictOpt, and this seam is
 // what reads it back and turns it into the one-line notifyLocal message the
 // purely-local prefix+I bind shows (#593).
-const carouselVerdictOpt = "@lztmux_carousel"
+const carouselVerdictOpt = "@og_carousel"
 
 // The closed set of verdicts. Whitelisted rather than sanitized: the value is
 // remote-derived, and notifyLocal's escaping is the second line of defence,
@@ -121,7 +121,7 @@ func (p *carouselProbe) rearm() {
 // answered. Runs on the main-loop goroutine, the only place a round-trip may
 // run; one() per pane, sequentially, so no reply block is read while another
 // batch is in flight.
-func (p *carouselProbe) poll(cfg Config, rt roundTrip, send func(string) bool) {
+func (p *carouselProbe) poll(cfg Config, rt roundTrip, send func(...string) bool) {
 	for _, pane := range p.due() {
 		verdict, ok := readCarouselVerdict(rt, pane)
 		if !ok {

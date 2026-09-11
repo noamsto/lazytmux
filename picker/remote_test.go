@@ -390,7 +390,7 @@ func TestRemoteAuthStartFailure(t *testing.T) {
 	}{
 		{"nil: normal exit, nothing to surface", nil, false},
 		{"ExitError: the script already explained and paused", exec.Command("sh", "-c", "exit 1").Run(), false},
-		{"exec.Error: PATH stale, the process never started", exec.Command("lztmux-remote-auth-does-not-exist").Run(), true},
+		{"exec.Error: PATH stale, the process never started", exec.Command("og-remote-auth-does-not-exist").Run(), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -827,7 +827,7 @@ func TestCollectRemoteItemsDropsSelfHost(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
 	probe := func(host string) (remoteProbeResult, error) {
@@ -867,7 +867,7 @@ func TestCollectRemoteItemsKeepsSameMachineDifferentUser(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	opts := map[string]string{"@remote_bridge_hosts": "root-local"}
 	probe := func(string) (remoteProbeResult, error) {
@@ -895,7 +895,7 @@ func TestCollectRemoteItemsDropsSelfOnNoServer(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	opts := map[string]string{"@remote_bridge_hosts": "localhost"}
 	probe := func(string) (remoteProbeResult, error) {
@@ -911,7 +911,7 @@ func TestCollectRemoteItemsDropsSelfOnNoServer(t *testing.T) {
 func TestPendingRemoteItemsSkipsCachedSelfAlias(t *testing.T) {
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	markCachedRemoteSelfAlias("localhost")
 	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
@@ -928,7 +928,7 @@ func TestPendingRemoteItemsSkipsCachedSelfAlias(t *testing.T) {
 func TestCollectRemoteItemsRevalidatesCachedSelfAlias(t *testing.T) {
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	markCachedRemoteSelfAlias("localhost")
 	if !isCachedRemoteSelfAlias("localhost") {
@@ -984,7 +984,7 @@ func TestCollectRemoteItemsRevalidatesCachedSelfAlias(t *testing.T) {
 func TestCollectRemoteItemsKeepsCachedSelfAliasWhenProbeFails(t *testing.T) {
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	markCachedRemoteSelfAlias("localhost")
 
@@ -1005,7 +1005,7 @@ func TestCollectRemoteItemsKeepsCachedSelfAliasWhenProbeFails(t *testing.T) {
 func TestIsCachedRemoteSelfAliasRejectsUntrustedMarker(t *testing.T) {
 	cacheDir := t.TempDir()
 	remoteSelfCacheDir = cacheDir
-	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/lazytmux-remote-self" })
+	t.Cleanup(func() { remoteSelfCacheDir = "/tmp/og-remote-self" })
 
 	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
 		t.Fatal(err)

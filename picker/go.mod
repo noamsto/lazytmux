@@ -1,4 +1,4 @@
-module github.com/noamsto/lazytmux/picker
+module github.com/noamsto/tmux-og/picker
 
 go 1.26.3
 

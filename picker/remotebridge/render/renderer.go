@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"io"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // Run drives one renderer over conn: sends Hello(paneID), then paints Seed/Output

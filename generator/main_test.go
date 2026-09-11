@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 type fixture struct {

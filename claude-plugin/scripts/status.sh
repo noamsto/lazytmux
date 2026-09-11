@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Degrade gracefully: lazytmux not installed, or CC running outside a lazytmux
+# Degrade gracefully: tmux-og not installed, or CC running outside a tmux-og
 # tmux pane → silently no-op instead of erroring on every hook event.
 command -v claude-status-update >/dev/null 2>&1 || exit 0
 
@@ -30,7 +30,7 @@ if [[ ${1:-} == task ]]; then
 	# Crucially the seed populates @window_ai_name, which flips the `-z $ai_name`
 	# gate below for every later prompt — so the nudge fires exactly once instead
 	# of taxing every turn. Gated by the @ai_naming global (set from
-	# programs.lazytmux.aiNaming.enable); enriched/worktree windows name themselves
+	# programs.tmux-og.aiNaming.enable); enriched/worktree windows name themselves
 	# from issue+branch and are skipped here.
 	[[ -n ${TMUX_PANE:-} ]] || exit 0
 	command -v tmux >/dev/null 2>&1 || exit 0

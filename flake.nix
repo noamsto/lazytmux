@@ -121,7 +121,7 @@
             # rather than skip if tmux is somehow still missing, so pruning the
             # nativeBuildInputs entry above breaks loudly instead of silently
             # dropping the regression check.
-            LAZYTMUX_REQUIRE_TMUX = "1";
+            OG_REQUIRE_TMUX = "1";
             checkPhase = ''
               runHook preCheck
               export GOFLAGS=''${GOFLAGS//-trimpath/}
@@ -402,7 +402,7 @@
           #     so a setter above it is erased on every load. Presence greps pass
           #     either way; only the line-number comparison catches it.
           #   * @notify@ SUBSTITUTION — both bats suites override the seam via
-          #     LZTMUX_NOTIFY_BIN, so a placeholder-name drift would build clean,
+          #     OG_NOTIFY_BIN, so a placeholder-name drift would build clean,
           #     test green, and never notify in production. The store paths are
           #     bound straight out of tmuxConfig, so nothing is globbed or guessed.
           notify-conf-assertions =
@@ -416,9 +416,9 @@
               grep -q 'set-hook -g alert-activity\[20\]' "$CONF"
               grep -q 'set-hook -gu alert-bell' "$CONF"
               grep -q 'set-hook -gu alert-activity' "$CONF"
-              grep -E 'alert-bell\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{q:window_id\}' "$CONF"
-              grep -E 'alert-activity\[20\].*/nix/store/[^ ]*/bin/lztmux-notify .*--window #\{q:window_id\}' "$CONF"
-              grep -E 'bind-key n display-popup -E .*/nix/store/[^ ]*/bin/lztmux-notify-center' "$CONF"
+              grep -E 'alert-bell\[20\].*/nix/store/[^ ]*/bin/og-notify .*--window #\{q:window_id\}' "$CONF"
+              grep -E 'alert-activity\[20\].*/nix/store/[^ ]*/bin/og-notify .*--window #\{q:window_id\}' "$CONF"
+              grep -E 'bind-key n display-popup -E .*/nix/store/[^ ]*/bin/og-notify-center' "$CONF"
 
               # ORDER, not just presence: the clear must precede the setter, or
               # every config load (fresh server AND prefix+r) erases the hook.
@@ -430,8 +430,8 @@
               [ "$act_clear" -lt "$act_set" ]
 
               # The producer seam actually resolved to the router's store path.
-              grep -qE '/nix/store/[^ ]*/bin/lztmux-notify' "$CSU"
-              grep -qE '/nix/store/[^ ]*/bin/lztmux-notify' "$PRE"
+              grep -qE '/nix/store/[^ ]*/bin/og-notify' "$CSU"
+              grep -qE '/nix/store/[^ ]*/bin/og-notify' "$PRE"
               ! grep -q '@notify@' "$CSU"
               ! grep -q '@notify@' "$PRE"
 
@@ -660,7 +660,7 @@
                 # each other, so a transcription error shared by both passes
                 # the diff; only a literal written here catches it.
                 extra = ''
-                  marker='# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ==='
+                  marker='# === tmux-remux (Phase 2a, opt-in via programs.tmux-og.persist) ==='
                   # Exactly one, not merely at least one: a doubled block makes
                   # $n multi-line and the arithmetic below dies with a generic
                   # error instead of naming the regression it just found.
@@ -846,13 +846,13 @@
                 # regression read as a clean pass.
                 echo "=== --prefix smoke"
                 mkdir -p prefixout
-                "$OG_GENERATE" --config "$SMOKE_CONFIG" --prefix /opt/lazytmux \
+                "$OG_GENERATE" --config "$SMOKE_CONFIG" --prefix /opt/tmux-og \
                   --template "$TEMPLATE" --out prefixout
                 if ! grep -q '^set -g ' prefixout/tmux.conf; then
                   echo "--prefix render carries no 'set -g' line" >&2
                   exit 1
                 fi
-                if ! grep -Fq /opt/lazytmux/bin/ prefixout/tmux.conf; then
+                if ! grep -Fq /opt/tmux-og/bin/ prefixout/tmux.conf; then
                   echo "--prefix render carries no path under the given prefix" >&2
                   exit 1
                 fi
@@ -909,7 +909,7 @@
               OG_STUB = ogStub;
               CONF = tmuxConfig.tmuxConf;
               TMUX_WRAPPED = tmuxConfig.tmux-wrapped;
-              REMOTE_PICKER = "${tmuxConfig.script.lztmux-remote-picker}/bin/lztmux-remote-picker";
+              REMOTE_PICKER = "${tmuxConfig.script.og-remote-picker}/bin/og-remote-picker";
               # Derived from ogVerbSpec itself (not retyped here) so a verb
               # added there is asserted on automatically instead of silently
               # skipping coverage.
@@ -966,7 +966,7 @@
               esac
               nc_target=$("$OG_BIN" notify center --help | tail -1)
               case "$nc_target" in
-                */bin/lztmux-notify-center) ;;
+                */bin/og-notify-center) ;;
                 *)
                   echo "og notify center resolved to $nc_target" >&2
                   exit 1
@@ -1115,23 +1115,36 @@
             # BACKSLASH-escaped quotes (it's itself quoted by the outer
             # if-shell body string), so the literal substring to match is
             # backslash-quote, not a bare quote.
-            prSetter = "set-hook -g -B '@lztmux-pr-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
-            backfillSetter = "set-hook -g -B '@lztmux-backfill-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
-            usageSetter = "set-hook -g -B '@lztmux-usage-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
-            sweepSetter = "set-hook -g -B '@lztmux-sweep-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"LZTMUX_TICK_SWEEP=1 ${tmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
+            prSetter = "set-hook -g -B '@og-pr-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
+            backfillSetter = "set-hook -g -B '@og-backfill-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
+            usageSetter = "set-hook -g -B '@og-usage-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
+            sweepSetter = "set-hook -g -B '@og-sweep-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"OG_TICK_SWEEP=1 ${tmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
           in
             pkgs.runCommand "tick-floor-conf-assertions" {
               nativeBuildInputs = [pkgs.gnugrep pkgs.gawk pkgs.gnused pkgs.coreutils];
               CONF = tmuxConfig.tmuxConf;
-              TICK_OPT = "set -g @lztmux_tick '%s'";
-              PR_CLEAR_B = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT = "set -gu '@lztmux-sweep-tick'";
+              TICK_OPT = "set -g @og_tick '%s'";
+              PR_CLEAR_B = "set-hook -g -u -B '@og-pr-tick'";
+              PR_CLEAR_OPT = "set -gu '@og-pr-tick'";
+              BACKFILL_CLEAR_B = "set-hook -g -u -B '@og-backfill-tick'";
+              BACKFILL_CLEAR_OPT = "set -gu '@og-backfill-tick'";
+              USAGE_CLEAR_B = "set-hook -g -u -B '@og-usage-tick'";
+              USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
+              SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
+              SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
+              # The four legacy names, cleared but never set: a rename reloads
+              # the config without restarting the server, so without these four
+              # the old monitors keep firing every 5s at a store path the next
+              # GC removes. Emitted last, so every clear still precedes every
+              # setter (the clear_max < setter_min check below).
+              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
+              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
+              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
+              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
+              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
+              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
+              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
+              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
@@ -1141,12 +1154,16 @@
               # ("..." "...") rather than a brace block -- tmux parses every
               # branch of a { } block at source time, so -B would be rejected
               # even on the untaken branch of a pre-3.8 server.
-              GUARD_JOIN = "grep -q -- -B\" \"set-hook -g -u -B '@lztmux-pr-tick'";
+              GUARD_JOIN = "grep -q -- -B\" \"set-hook -g -u -B '@og-pr-tick'";
             } ''
               grep -qF "$TICK_OPT" "$CONF"
 
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
                        USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
+                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
+                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
+                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
+                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY \
                        PR_SETTER BACKFILL_SETTER USAGE_SETTER SWEEP_SETTER GUARD_JOIN; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
@@ -1185,7 +1202,11 @@
 
               clear_max=-1
               for v in "$PR_CLEAR_B" "$PR_CLEAR_OPT" "$BACKFILL_CLEAR_B" "$BACKFILL_CLEAR_OPT" \
-                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT"; do
+                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT" \
+                       "$PR_CLEAR_B_LEGACY" "$PR_CLEAR_OPT_LEGACY" \
+                       "$BACKFILL_CLEAR_B_LEGACY" "$BACKFILL_CLEAR_OPT_LEGACY" \
+                       "$USAGE_CLEAR_B_LEGACY" "$USAGE_CLEAR_OPT_LEGACY" \
+                       "$SWEEP_CLEAR_B_LEGACY" "$SWEEP_CLEAR_OPT_LEGACY"; do
                 prefix="''${line%%"$v"*}"
                 [ "$prefix" != "$line" ] || { echo "clear not found in guard line: $v" >&2; exit 1; }
                 [ "''${#prefix}" -gt "$clear_max" ] && clear_max="''${#prefix}"
@@ -1225,6 +1246,9 @@
                     ;;
                 esac
               done <<<"$cmds"
+              # Still 4, not 8, with sixteen clear literals above: n counts the
+              # \"-wrapped run-shell payloads (awk's odd fields), and a clear
+              # carries no command payload at all.
               [ "$n" -eq 4 ] || { echo "expected 4 hook commands, got $n" >&2; exit 1; }
 
               touch $out
@@ -1255,33 +1279,49 @@
             # built off disabledTmuxConfig.script instead: tmux-update-icons's
             # OWN @issue_stamp@ substitution differs with enrichEnable off,
             # which changes its store path independently of this setter list.
-            prSetter = "set-hook -g -B '@lztmux-pr-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
-            backfillSetter = "set-hook -g -B '@lztmux-backfill-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
-            usageSetter = "set-hook -g -B '@lztmux-usage-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
-            sweepSetter = "set-hook -g -B '@lztmux-sweep-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \\\"LZTMUX_TICK_SWEEP=1 ${disabledTmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
+            prSetter = "set-hook -g -B '@og-pr-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick\\\"'";
+            backfillSetter = "set-hook -g -B '@og-backfill-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill\\\"'";
+            usageSetter = "set-hook -g -B '@og-usage-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"${tmuxConfig.script.tmux-agent-usage}/bin/tmux-agent-usage --tick\\\"'";
+            sweepSetter = "set-hook -g -B '@og-sweep-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \\\"OG_TICK_SWEEP=1 ${disabledTmuxConfig.script.tmux-update-icons}/bin/tmux-update-icons\\\"'";
           in
             pkgs.runCommand "tick-floor-disabled-conf-assertions" {
               nativeBuildInputs = [pkgs.gnugrep];
               CONF = disabledConf;
-              PR_CLEAR_B = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT = "set -gu '@lztmux-sweep-tick'";
+              PR_CLEAR_B = "set-hook -g -u -B '@og-pr-tick'";
+              PR_CLEAR_OPT = "set -gu '@og-pr-tick'";
+              BACKFILL_CLEAR_B = "set-hook -g -u -B '@og-backfill-tick'";
+              BACKFILL_CLEAR_OPT = "set -gu '@og-backfill-tick'";
+              USAGE_CLEAR_B = "set-hook -g -u -B '@og-usage-tick'";
+              USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
+              SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
+              SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
+              # The four legacy names, cleared but never set -- the migration
+              # cleanup described in the enabled check above.
+              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
+              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
+              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
+              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
+              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
+              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
+              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
+              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
               SWEEP_SETTER = sweepSetter;
             } ''
-              # All eight clears survive a disabled feature -- they're keyed
-              # off the fixed hookNames list, never the enable flags, which is
-              # what makes disabling a feature actually drop its stale monitor
-              # on reload instead of leaving argv's previous generation armed.
+              # All sixteen clears survive a disabled feature -- eight names
+              # (four live, four legacy) times the -B and option forms. They're
+              # keyed off the fixed hookNames list, never the enable flags,
+              # which is what makes disabling a feature actually drop its stale
+              # monitor on reload instead of leaving argv's previous generation
+              # armed.
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
-                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT; do
+                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
+                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
+                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
+                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
+                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
                   echo "disabled conf is missing a clear ($v): $pat" >&2
@@ -1307,13 +1347,13 @@
 
           # The #603 tick floor's poller and sweep hooks fire inside any server
           # started from tmuxConfig.tmux-wrapped and reach functions that delete
-          # files under CLAUDE_STATUS_DIR, LAZYTMUX_ENRICH_CACHE_DIR and
-          # LAZYTMUX_AGENT_USAGE_DIR — whose defaults are the developer's real
-          # /tmp trees. A bats suite that sets TMUX_BIN loads that config, so it
-          # must export all three in its own setup() or a future one added
-          # without isolation is destructive the moment it runs locally, while
-          # nix flake check stays green (the sandbox's /tmp/claude-status is
-          # empty).
+          # files under CLAUDE_STATUS_DIR, OG_ENRICH_CACHE_DIR,
+          # OG_AGENT_USAGE_DIR and OG_ENRICH_LOCK_DIR — whose defaults are the
+          # developer's real /tmp trees. A bats suite that sets TMUX_BIN loads
+          # that config, so it must export all four in its own setup() or a
+          # future one added without isolation is destructive the moment it runs
+          # locally, while nix flake check stays green (the sandbox's
+          # /tmp/claude-status is empty).
           wrapped-tmux-suite-isolation-assertions =
             pkgs.runCommand "wrapped-tmux-suite-isolation-assertions" {
               nativeBuildInputs = [pkgs.gnugrep];
@@ -1321,7 +1361,7 @@
               fail=0
               for f in ${./tests}/*.bats; do
                 grep -q 'TMUX_BIN' "$f" || continue
-                for var in CLAUDE_STATUS_DIR LAZYTMUX_ENRICH_CACHE_DIR LAZYTMUX_AGENT_USAGE_DIR; do
+                for var in CLAUDE_STATUS_DIR OG_ENRICH_CACHE_DIR OG_AGENT_USAGE_DIR OG_ENRICH_LOCK_DIR; do
                   grep -q "export $var=" "$f" || {
                     echo "$(basename "$f") references TMUX_BIN but does not export $var" >&2
                     fail=1
@@ -1755,7 +1795,7 @@
               # util-linux provides `script`, which the real-tty case uses to
               # give the bridge a pty (so refresh-client + real cursor fire).
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.tmux pkgs.util-linux];
-              BRIDGE = "${pickerChecked}/bin/lztmux-remote-bridge";
+              BRIDGE = "${pickerChecked}/bin/og-remote-bridge";
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
@@ -1783,16 +1823,16 @@
               # unixtools' shim — ps/sysctl/top/watch, no pgrep — which is why
               # transport_child reads the process table rather than pgrepping.
               nativeBuildInputs = [pkgs.bats pkgs.coreutils pkgs.gnused pkgs.gnugrep pkgs.procps (mkTmux pkgs)];
-              DAEMON = "${pickerChecked}/bin/lztmux-remote-bridge-daemon";
-              RENDERER = "${pickerChecked}/bin/lztmux-remote-bridge-renderer";
+              DAEMON = "${pickerChecked}/bin/og-remote-bridge-daemon";
+              RENDERER = "${pickerChecked}/bin/og-remote-bridge-renderer";
               # M2.3 structural input: the tests drive ctl straight at the
               # daemon's socket, since these vanilla -L servers carry no
-              # lazytmux keybindings for a gate to intercept.
-              CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
+              # tmux-og keybindings for a gate to intercept.
+              CTL = "${pickerChecked}/bin/og-remote-bridge-ctl";
               # Only tests/ is copied in, so a ../scripts path would not resolve.
               # The raw source file is what ships: this script carries no
               # build-time placeholder substitution.
-              DETACH = ./scripts/lztmux-remote-detach.sh;
+              DETACH = ./scripts/og-remote-detach.sh;
             } ''
               cp -r ${./tests} tests
               export HOME=$TMPDIR
@@ -1831,7 +1871,7 @@
             pkgs.runCommand "rename-bind-integration-tests" {
               nativeBuildInputs = [pkgs.bash pkgs.bats pkgs.coreutils pkgs.diffutils pkgs.gnugrep pkgs.socat];
               TMUX_BIN = "${renameBindTmuxConfig.tmux-wrapped}/bin/tmux";
-              CTL = "${pickerChecked}/bin/lztmux-remote-bridge-ctl";
+              CTL = "${pickerChecked}/bin/og-remote-bridge-ctl";
               # A window name fixture is UTF-8, and so is the status line it is
               # read back from.
               LANG = "C.UTF-8";
@@ -1867,7 +1907,7 @@
             '';
 
           # The gate itself, not a keypress: remote-m2-integration-tests above
-          # drives vanilla -L servers with no lazytmux keybindings for a gate to
+          # drives vanilla -L servers with no tmux-og keybindings for a gate to
           # intercept (comment on that check), so it can only exercise the
           # `carousel` ctl verb directly. Proving both bind I branches exist in
           # the REAL generated config is what actually covers carouselBind.
@@ -1906,7 +1946,7 @@
           default = tmuxConfig.tmux-wrapped;
           # Runs every pre-commit hook over the tree (see pre-commit.check above).
           lint = config.pre-commit.settings.run;
-          # Stable store path for the Codex managed-hook config (lazytmux#140
+          # Stable store path for the Codex managed-hook config (tmux-og#140
           # Task 3) to point its `command` at, independent of the tmux wrapper.
           codex-relaunch-stamp = tmuxConfig.script.codex-relaunch-stamp;
           # The og dispatcher (docs/superpowers/specs/2026-09-10-og-dispatcher-design.md).

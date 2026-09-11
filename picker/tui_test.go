@@ -31,7 +31,7 @@ func TestAnsiFgTmux(t *testing.T) {
 func TestWithFilterZoxideHeader(t *testing.T) {
 	allItems := []listItem{
 		{plain: "hdr"}, // column-label row: isHeader false, must not be picked as divider
-		{target: "lazytmux", searchText: "lazytmux", session: "lazytmux"},
+		{target: "tmux-og", searchText: "tmux-og", session: "tmux-og"},
 		{display: "── New session ──", isHeader: true, isZoxideHeader: true},
 		{target: "/git/alpha", createPath: "/git/alpha", createName: "alpha", searchText: "alpha /git/alpha"},
 	}
@@ -43,9 +43,11 @@ func TestWithFilterZoxideHeader(t *testing.T) {
 		wantHeader bool // a zoxide header present in the result
 		headerIdx  int  // expected position of header when present
 	}{
-		{"sessions only", allItems, "lazytmux", false, 0},
-		{"mixed match", allItems, "a", true, 1},
-		{"no header item", allItems[:2], "a", false, 0},
+		{"sessions only", allItems, "tmux-og", false, 0},
+		// "g" is in both the session name and "/git/alpha": the divider branch
+		// only runs when a session row and a suggestion row both survive.
+		{"mixed match", allItems, "g", true, 1},
+		{"no header item", allItems[:2], "g", false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -75,7 +77,7 @@ func TestWithFilterZoxideHeader(t *testing.T) {
 // host row, that host's session rows, then an unselectable no-server host.
 func remoteFixture() []listItem {
 	return []listItem{
-		{target: "lazytmux", searchText: "lazytmux", session: "lazytmux"},
+		{target: "tmux-og", searchText: "tmux-og", session: "tmux-og"},
 		{display: "── Remote ──", isHeader: true, isRemoteHeader: true},
 		{isRemoteRow: true, target: "remote:lab", remoteHost: "lab", searchText: "lab", plain: "lab"},
 		{
@@ -150,10 +152,10 @@ func TestWithFilterRemoteTree(t *testing.T) {
 // character gets. This alone would pass before the fix too; it's a
 // mechanism-documentation test, not acceptance evidence for the fix.
 func TestFuzzyScoreBareNameBeatsHostPrefixedMirror(t *testing.T) {
-	local := fuzzyScore("lazytmux", "lazytmux")
-	mirror := fuzzyScore("g6-lazytmux", "lazytmux")
+	local := fuzzyScore("tmux-og", "tmux-og")
+	mirror := fuzzyScore("g6-tmux-og", "tmux-og")
 	if local <= mirror {
-		t.Fatalf("fuzzyScore(lazytmux, lazytmux)=%d, fuzzyScore(g6-lazytmux, lazytmux)=%d — want local > mirror", local, mirror)
+		t.Fatalf("fuzzyScore(tmux-og, tmux-og)=%d, fuzzyScore(g6-tmux-og, tmux-og)=%d — want local > mirror", local, mirror)
 	}
 }
 
@@ -190,28 +192,28 @@ func TestWithFilterSinksCurrentBelowPeer(t *testing.T) {
 		{
 			name: "local is current: sinks below the mirror",
 			items: []listItem{
-				{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
-				{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux"},
+				{target: "local", session: "tmux-og", searchText: "tmux-og", current: true},
+				{target: "mirror", session: "g6-tmux-og", bridgeHost: "g6", searchText: "g6-tmux-og"},
 			},
-			query:   "lazytmux",
+			query:   "tmux-og",
 			wantIdx: map[string]int{"mirror": 0, "local": 1},
 		},
 		{
 			name: "mirror is current: already sorts below local by score, unaffected",
 			items: []listItem{
-				{target: "local", session: "lazytmux", searchText: "lazytmux"},
-				{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux", current: true},
+				{target: "local", session: "tmux-og", searchText: "tmux-og"},
+				{target: "mirror", session: "g6-tmux-og", bridgeHost: "g6", searchText: "g6-tmux-og", current: true},
 			},
-			query:   "lazytmux",
+			query:   "tmux-og",
 			wantIdx: map[string]int{"local": 0, "mirror": 1},
 		},
 		{
 			name: "query matches only the current session: peer never enters matches, no-op",
 			items: []listItem{
-				{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
+				{target: "local", session: "tmux-og", searchText: "tmux-og", current: true},
 				{target: "mirror", session: "g6-other", bridgeHost: "g6", searchText: "totallydifferent"},
 			},
-			query:   "lazytmux",
+			query:   "tmux-og",
 			wantIdx: map[string]int{"local": 0},
 		},
 	}
@@ -239,8 +241,8 @@ func TestWithFilterSinksCurrentBelowPeer(t *testing.T) {
 // the fuzzy ranking it corrects, and must not move rows here.
 func TestWithFilterEmptyQueryKeepsOrder(t *testing.T) {
 	items := []listItem{
-		{target: "local", session: "lazytmux", searchText: "lazytmux", current: true},
-		{target: "mirror", session: "g6-lazytmux", bridgeHost: "g6", searchText: "g6-lazytmux"},
+		{target: "local", session: "tmux-og", searchText: "tmux-og", current: true},
+		{target: "mirror", session: "g6-tmux-og", bridgeHost: "g6", searchText: "g6-tmux-og"},
 	}
 	out := tuiModel{allItems: items, query: ""}.withFilter().visible
 	if len(out) != 2 || out[0].target != "local" || out[1].target != "mirror" {
@@ -367,18 +369,21 @@ func TestWithFilterStateGroupedKeepsGrouping(t *testing.T) {
 	}
 }
 
+// The haystack is a neutral word rather than a session name: the queries are
+// drawn from its letters, so a haystack tied to anything renameable takes the
+// four relationships below with it.
 func TestFuzzyScore(t *testing.T) {
-	if got := fuzzyScore("lazytmux", ""); got != 0 {
+	if got := fuzzyScore("workspace", ""); got != 0 {
 		t.Errorf("empty pattern = %d, want 0", got)
 	}
-	if got := fuzzyScore("lazytmux", "ltx"); got < 0 {
-		t.Errorf("subsequence ltx should match, got %d", got)
+	if got := fuzzyScore("workspace", "wkp"); got < 0 {
+		t.Errorf("subsequence wkp should match, got %d", got)
 	}
-	if got := fuzzyScore("lazytmux", "xyz"); got != -1 {
+	if got := fuzzyScore("workspace", "xyz"); got != -1 {
 		t.Errorf("non-subsequence = %d, want -1", got)
 	}
 	// Consecutive prefix beats a scattered match
-	if fuzzyScore("lazytmux", "lazy") <= fuzzyScore("lazytmux", "lzyu") {
+	if fuzzyScore("workspace", "work") <= fuzzyScore("workspace", "wrsc") {
 		t.Error("consecutive prefix should outscore scattered match")
 	}
 }
@@ -816,7 +821,7 @@ func TestLayoutShowsPreview(t *testing.T) {
 // hand-assembled stand-in for it.
 func TestFirstPaintIncludesRemoteRows(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
-	items := []listItem{{target: "lazytmux", searchText: "lazytmux"}}
+	items := []listItem{{target: "tmux-og", searchText: "tmux-og"}}
 	m := newPickerModel(false, false, false, opts, "dark", items, "")
 
 	var sawHeader, sawLab, sawDead bool
@@ -843,7 +848,7 @@ func TestFirstPaintIncludesRemoteRows(t *testing.T) {
 func TestRemoteMsgPreservesCursor(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	m := tuiModel{
-		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
 		remoteItems:  pendingRemoteItems(opts),
 	}
 	m = m.recombine().withFilter()
@@ -929,7 +934,7 @@ func TestRefreshMsgMovesCursorOffNewlyUnselectableRow(t *testing.T) {
 func TestRemoteMsgPreservesQuery(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	m := tuiModel{
-		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
 		remoteItems:  pendingRemoteItems(opts),
 		query:        "laz",
 	}
@@ -954,9 +959,9 @@ func TestRemoteMsgPreservesQuery(t *testing.T) {
 func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	m := tuiModel{
-		sessionItems: []listItem{{target: "lazytmux", searchText: "lazytmux"}},
+		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
 		remoteItems:  pendingRemoteItems(opts),
-		query:        "lazytmux",
+		query:        "tmux-og",
 	}
 	m = m.recombine().withFilter()
 
@@ -1233,7 +1238,7 @@ func TestToggleStateGroupedNoopInWallMode(t *testing.T) {
 // not attached to — spec D8 drops it entirely in emit mode.
 func TestEmitModeBuildsNoRemoteSection(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
-	items := []listItem{{target: "lazytmux", searchText: "lazytmux"}}
+	items := []listItem{{target: "tmux-og", searchText: "tmux-og"}}
 	m := newPickerModel(false, false, false, opts, "dark", items, "/tmp/emit")
 
 	if m.remoteItems != nil {
@@ -1271,7 +1276,7 @@ func TestEmitModeInitSkipsRemoteCmd(t *testing.T) {
 // Inherited unchanged, ctrl+x would kill-session / zoxideForget against the
 // *remote* server and db (spec D8).
 func TestCtrlXInertInEmitMode(t *testing.T) {
-	m := tuiModel{emitPath: "/tmp/emit", visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{emitPath: "/tmp/emit", visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Error("ctrl+x should be a no-op in emit mode")
@@ -1280,7 +1285,7 @@ func TestCtrlXInertInEmitMode(t *testing.T) {
 	if mm.statusMsg != "" {
 		t.Errorf("ctrl+x set statusMsg in emit mode: %q", mm.statusMsg)
 	}
-	if len(mm.visible) != 1 || mm.visible[0].target != "lazytmux" {
+	if len(mm.visible) != 1 || mm.visible[0].target != "tmux-og" {
 		t.Errorf("ctrl+x mutated visible rows in emit mode: %+v", mm.visible)
 	}
 }
@@ -1290,7 +1295,7 @@ func TestActivateCurrentEmitModeWritesSessionPayload(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("pre-create: %v", err)
 	}
-	m := tuiModel{emitPath: path, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{emitPath: path, visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 
 	_, cmd := m.activateCurrent()
 	if cmd == nil {
@@ -1315,7 +1320,7 @@ func TestEmitModeCancelWritesNothing(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("pre-create: %v", err)
 	}
-	m := tuiModel{emitPath: path, visible: []listItem{{target: "lazytmux"}}, cursor: 0}
+	m := tuiModel{emitPath: path, visible: []listItem{{target: "tmux-og"}}, cursor: 0}
 
 	for _, key := range []tea.KeyPressMsg{
 		{Code: 'q'},
@@ -1420,7 +1425,7 @@ func TestActivateHostKeyChangedRowRefuses(t *testing.T) {
 	}
 }
 
-// Enter on a Tailscale-check row must not act either. lztmux-remote-auth's
+// Enter on a Tailscale-check row must not act either. og-remote-auth's
 // ssh-copy-id/ControlMaster remedy can't clear a Tailscale ACL check, so the
 // only real remedy is running ssh interactively — Enter must say so, not try.
 func TestActivateTailscaleCheckRowRefuses(t *testing.T) {

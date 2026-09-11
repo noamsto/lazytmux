@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // setupWindowRT drives a roundTrip against a canned reply stream, discarding

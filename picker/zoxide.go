@@ -126,7 +126,7 @@ func zoxideSuggestions(paths []string, sessionPaths, sessionNames map[string]boo
 // for the dir they happen to live in.
 //
 // A bridge/mirror session's path is likewise not a real suppression signal:
-// lztmux-remote-open creates it with no "-c", so session_path is whatever cwd
+// og-remote-open creates it with no "-c", so session_path is whatever cwd
 // the launching client happened to have, not a workspace the user is "in" —
 // its windows get their real (remote) cwds from the daemon separately. Its
 // name still suppresses, though: mirror names are real tmux-namespace

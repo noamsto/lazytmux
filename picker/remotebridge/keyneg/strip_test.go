@@ -232,7 +232,7 @@ func TestFeedOverlongOSCReleasedOnceThenReArms(t *testing.T) {
 // delivers: drainOutput coalesces many %output frames into one Feed, so a
 // prompt's window title and fzf's startup queries arrive together.
 func TestFeedLongOSCThenQueryInOneFeed(t *testing.T) {
-	title := "\x1b]0;fish /home/noams/Data/git/lazytmux\x07"
+	title := "\x1b]0;fish /home/noams/Data/git/tmux-og\x07"
 	got := NewFilter().Feed([]byte(title + "\x1b[6n"))
 	if string(got) != title {
 		t.Fatalf("Feed() = %q, want %q", got, title)

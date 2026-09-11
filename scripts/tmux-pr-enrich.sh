@@ -36,7 +36,7 @@ TTL_TERMINAL=3600
 # never substituted (raw script under bats, or notifications disabled at build
 # time) — the single "off" mechanism. Assignment only; no fork, so the --tick
 # gate stays exactly as cheap as it is today.
-NOTIFY_BIN="${LZTMUX_NOTIFY_BIN:-@notify@}"
+NOTIFY_BIN="${OG_NOTIFY_BIN:-@notify@}"
 
 # --- arg parse ---
 mode="tick"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Notification event store + routing decision (#164). Sourced, not executed, by
-# lztmux-notify (the writer) and lztmux-notify-center (the reader).
+# og-notify (the writer) and og-notify-center (the reader).
 #
 # This library does NOT source lib-log.sh. notify_prune needs acquire_lock and
 # file_mtime, so a consumer that calls it must source lib-log.sh first — the
@@ -9,10 +9,10 @@
 
 # Derived at source time so a test can relocate the whole store with one
 # exported variable (same shape as CLAUDE_STATUS_DIR in lib-claude.sh).
-LZTMUX_NOTIFY_DIR="${LZTMUX_NOTIFY_DIR:-/tmp/lazytmux-notify}"
-NOTIFY_EVENTS_DIR="$LZTMUX_NOTIFY_DIR/events"
-NOTIFY_MARKER="$LZTMUX_NOTIFY_DIR/.server_start"
-NOTIFY_PRUNE_LOCK="$LZTMUX_NOTIFY_DIR/.prune.lock"
+OG_NOTIFY_DIR="${OG_NOTIFY_DIR:-/tmp/og-notify}"
+NOTIFY_EVENTS_DIR="$OG_NOTIFY_DIR/events"
+NOTIFY_MARKER="$OG_NOTIFY_DIR/.server_start"
+NOTIFY_PRUNE_LOCK="$OG_NOTIFY_DIR/.prune.lock"
 
 # Cap for title/body. They become a tmux message line and a popup row.
 NOTIFY_VALUE_MAX=200
@@ -50,7 +50,7 @@ notify_icon() {
 	esac
 }
 
-# notify_locator SESSION WINDOW -> REPLY, e.g. "lazytmux:@7". The only locator
+# notify_locator SESSION WINDOW -> REPLY, e.g. "tmux-og:@7". The only locator
 # format: the renderer and the center call this on the same two stored fields,
 # so they agree by construction.
 notify_locator() {
@@ -129,7 +129,7 @@ notify_prune() {
 	[[ -r $NOTIFY_MARKER && $(<"$NOTIFY_MARKER") == "$server_start" ]] && return 0
 	# The lock is a mkdir inside this dir, so the dir must exist first or every
 	# acquire fails and the prune never runs.
-	mkdir -p "$LZTMUX_NOTIFY_DIR" 2>/dev/null || return 0
+	mkdir -p "$OG_NOTIFY_DIR" 2>/dev/null || return 0
 	(
 		# Called inside the subshell whose exit releases it: acquire_lock arms an
 		# EXIT trap that rmdir's the lock.

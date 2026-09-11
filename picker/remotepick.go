@@ -7,7 +7,7 @@ import (
 )
 
 // emitPayload is the picker's only output in --remote-pick mode: a typed
-// key=value block the wrapper (scripts/lztmux-remote-picker.sh's kv_get)
+// key=value block the wrapper (scripts/og-remote-picker.sh's kv_get)
 // reads back over the same ssh session. See spec "The emit payload" — the
 // value is everything after the first '=', so spaces and tabs round-trip.
 type emitPayload struct {
@@ -107,7 +107,7 @@ func shellQuote(s string) string {
 }
 
 // remotePickNewPaneArgs builds the `new-pane` argv that floats
-// lztmux-remote-pick over host, in the house float form shared by the
+// og-remote-pick over host, in the house float form shared by the
 // bind-key y/p sites (config/tmux.conf.nix). bin is @remote_pick_bin's store
 // path — reached by option rather than bare name, since the tmux server's
 // PATH is frozen until a restart (#336) and a fresh script is absent from it

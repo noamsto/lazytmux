@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/render"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/render"
 )
 
 // replies yields a batch's reply blocks in issue order, one per call. ok is

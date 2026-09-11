@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // testRoundTrip wires PaneSeed the way Run does — one stream numbering the

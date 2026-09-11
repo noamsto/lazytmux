@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // capBuf is a tiny io.Writer that captures what it's given, for asserting
@@ -541,7 +541,7 @@ func TestWatchLocalClientReconvergesOnChange(t *testing.T) {
 	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
-	send := func(s string) bool { sent = append(sent, s); return true }
+	send := func(s ...string) bool { sent = append(sent, s...); return true }
 
 	done := make(chan struct{})
 	go func() {
@@ -612,7 +612,7 @@ func TestWatchLocalClientConvergesActiveWindowFirst(t *testing.T) {
 	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
-	send := func(s string) bool { sent = append(sent, s); return true }
+	send := func(s ...string) bool { sent = append(sent, s...); return true }
 
 	done := make(chan struct{})
 	go func() {
@@ -656,7 +656,7 @@ func TestWatchLocalClientDoesNotRecordAWriteThatDidNotHappen(t *testing.T) {
 	view := &Viewing{Relay: graphics.NewRelaySource(graphics.Relay{})}
 
 	var sent []string
-	send := func(s string) bool { sent = append(sent, s); return false }
+	send := func(s ...string) bool { sent = append(sent, s...); return false }
 
 	done := make(chan struct{})
 	go func() {
@@ -712,7 +712,7 @@ func runWatchLocalClientView(t *testing.T, seedRelay graphics.Relay, seedTerm st
 	view.SetDesired(seedTerm)
 
 	var sent []string
-	send := func(s string) bool { sent = append(sent, s); return true }
+	send := func(s ...string) bool { sent = append(sent, s...); return true }
 
 	done := make(chan struct{})
 	go func() {
@@ -734,12 +734,13 @@ func runWatchLocalClientView(t *testing.T, seedRelay graphics.Relay, seedTerm st
 
 // TestWatchLocalClientPublishesOnCapabilityChange is R5: a resolve whose
 // capability differs from what is currently stored publishes exactly one
-// RelayEnvCmd carrying the new value, and the new capability is stored.
+// RelayEnvCmd carrying the new value, and the new capability is stored. One
+// publish is two commands since D7 — the batch carries both spellings.
 func TestWatchLocalClientPublishesOnCapabilityChange(t *testing.T) {
 	sent, view := runWatchLocalClientView(t, graphics.Relay{}, "foot",
 		ViewIdentity{Term: "foot", Relay: graphics.RelayFromTermFeatures("sixel")}, true)
 
-	want := []string{RelayEnvCmd("sess", "sixel")}
+	want := RelayEnvCmd("sess", "sixel")
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)
 	}

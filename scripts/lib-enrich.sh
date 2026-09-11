@@ -8,10 +8,10 @@
 
 # PR-state cache dir; consumed by the PR enrichment poller. Overridable for the
 # same reason as the stamp lock below — a test must not touch the real cache.
-ENRICH_CACHE_DIR="${LAZYTMUX_ENRICH_CACHE_DIR:-/tmp/lazytmux-pr}"
+ENRICH_CACHE_DIR="${OG_ENRICH_CACHE_DIR:-/tmp/og-pr}"
 # Per-window stamp lock (#137 conflict safety). Overridable so tests don't share
 # a real machine's /tmp dir across concurrent bats runs.
-ENRICH_STAMP_LOCK_DIR="${LAZYTMUX_ENRICH_LOCK_DIR:-/tmp/lazytmux-enrich-lock}"
+ENRICH_STAMP_LOCK_DIR="${OG_ENRICH_LOCK_DIR:-/tmp/og-enrich-lock}"
 
 # Enrich glyphs (substituted at Nix build time from enrichIconSetRaw). Text-only;
 # the status template applies color and appends process/claude icons separately.
@@ -149,7 +149,7 @@ pr_cache_decision() {
 # provider_priority_list
 # Returns the configured issue-tracker providers in priority order.
 # The @providers@ placeholder is substituted at Nix build time from
-# programs.lazytmux.enrich.providers. Sets REPLY to a space-separated list.
+# programs.tmux-og.enrich.providers. Sets REPLY to a space-separated list.
 provider_priority_list() {
 	REPLY="@providers@"
 }

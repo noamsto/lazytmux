@@ -32,14 +32,14 @@ type Paths struct {
 // RequiredScripts are the ${script.<name>} sites the template has.
 var RequiredScripts = []string{
 	"claude-status-update",
-	"lazytmux-debug",
-	"lztmux-notify",
-	"lztmux-notify-center",
-	"lztmux-remote-auth",
-	"lztmux-remote-detach",
-	"lztmux-remote-open",
-	"lztmux-remote-picker",
-	"lztmux-remote-theme",
+	"og-debug",
+	"og-notify",
+	"og-notify-center",
+	"og-remote-auth",
+	"og-remote-detach",
+	"og-remote-open",
+	"og-remote-picker",
+	"og-remote-theme",
 	"tmux-agent-usage",
 	"tmux-apply-theme-colors",
 	"tmux-default-size",
@@ -60,7 +60,7 @@ var RequiredScripts = []string{
 
 // RequiredBin are the Go binaries the template names directly.
 var RequiredBin = []string{
-	"lztmux-remote-bridge-ctl",
+	"og-remote-bridge-ctl",
 	"tmux-enrich-card",
 	"tmux-splash",
 	"tmux-statusline",

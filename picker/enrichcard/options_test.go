@@ -11,7 +11,7 @@ func TestParseWindowOptions(t *testing.T) {
 @pr_check_state success
 @pr_mergeable mergeable
 @branch feat/103-kitty-nav
-@git_root /home/noams/Data/git/noamsto/lazytmux
+@git_root /home/noams/Data/git/noamsto/tmux-og
 @window_claude_ago 4m
 @unrelated_option ignored
 `

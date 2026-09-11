@@ -58,7 +58,7 @@ func TestCaptureTargetsBatch(t *testing.T) {
 	if seps != 3 {
 		t.Errorf("argv has %d %q separators, want 3: %q", seps, ";", f.argv)
 	}
-	wantMarker := fmt.Sprintf("@@lztmux-wall-%d-", os.Getpid())
+	wantMarker := fmt.Sprintf("@@og-wall-%d-", os.Getpid())
 	if !strings.HasPrefix(f.marker, wantMarker) {
 		t.Errorf("marker %q, want prefix %q", f.marker, wantMarker)
 	}
@@ -92,9 +92,9 @@ func TestCaptureTargetsContent(t *testing.T) {
 		{
 			name:    "marker lookalikes stay content",
 			targets: []string{"%1"},
-			stdout:  "@@lztmux-wall- is not a marker\nlog: %M trailing\n%M\n",
+			stdout:  "@@og-wall- is not a marker\nlog: %M trailing\n%M\n",
 			want: map[string]string{
-				"%1": "@@lztmux-wall- is not a marker" + captureBGReset + "\n" +
+				"%1": "@@og-wall- is not a marker" + captureBGReset + "\n" +
 					"log: %M trailing" + captureBGReset,
 			},
 		},

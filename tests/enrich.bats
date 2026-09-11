@@ -329,32 +329,32 @@ setup() {
 }
 
 @test "build_window_label: default branch with no issue falls back to dir basename (long)" {
-	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux
-	[ "$REPLY" = "lazytmux" ]
+	build_window_label long "" "" "" "" "" "" main /home/noams/tmux-og
+	[ "$REPLY" = "tmux-og" ]
 	[ "$REPLY_ID" = "" ]
-	[ "$REPLY_REST" = "lazytmux" ]
+	[ "$REPLY_REST" = "tmux-og" ]
 }
 
 @test "build_window_label: master branch with no issue falls back to dir basename (short)" {
-	build_window_label short "" "" "" "" "" "" master /home/noams/lazytmux
-	[ "$REPLY" = "lazytmux" ]
-	[ "$REPLY_REST" = "lazytmux" ]
+	build_window_label short "" "" "" "" "" "" master /home/noams/tmux-og
+	[ "$REPLY" = "tmux-og" ]
+	[ "$REPLY_REST" = "tmux-og" ]
 }
 
 @test "build_window_label: default branch with stamped issue keeps issue label, not basename" {
-	build_window_label long linear ENG-1 "fix thing" "" "" "" main /home/noams/lazytmux
+	build_window_label long linear ENG-1 "fix thing" "" "" "" main /home/noams/tmux-og
 	[ "$REPLY" = "L ENG-1 fix thing" ]
 	[ "$REPLY_ID" = "L ENG-1" ]
 }
 
 @test "build_window_label: default branch with PR keeps basename, PR separate" {
-	build_window_label long "" "" "" 42 open success main /home/noams/lazytmux
-	[ "$REPLY" = "lazytmux" ]
+	build_window_label long "" "" "" 42 open success main /home/noams/tmux-og
+	[ "$REPLY" = "tmux-og" ]
 	[ "$REPLY_PR" = " S #42" ]
 }
 
 @test "build_window_label: default branch with task shows the task, not basename" {
-	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "fix the reflow"
+	build_window_label long "" "" "" "" "" "" main /home/noams/tmux-og "" "fix the reflow"
 	[ "$REPLY" = "fix the reflow" ]
 	[ "$REPLY_ID" = "" ]
 	[ "$REPLY_REST" = "fix the reflow" ]
@@ -366,8 +366,8 @@ setup() {
 }
 
 @test "build_window_label: empty task on default branch still falls back to basename" {
-	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" ""
-	[ "$REPLY" = "lazytmux" ]
+	build_window_label long "" "" "" "" "" "" main /home/noams/tmux-og "" ""
+	[ "$REPLY" = "tmux-og" ]
 }
 
 @test "build_window_label: feature branch wins over task" {
@@ -381,7 +381,7 @@ setup() {
 }
 
 @test "build_window_label: ai_name wins over raw task on default branch" {
-	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "fix the reflow logic again" "reflow-fix"
+	build_window_label long "" "" "" "" "" "" main /home/noams/tmux-og "" "fix the reflow logic again" "reflow-fix"
 	[ "$REPLY" = "reflow-fix" ]
 	[ "$REPLY_ID" = "" ]
 	[ "$REPLY_REST" = "reflow-fix" ]
@@ -403,7 +403,7 @@ setup() {
 }
 
 @test "build_window_label: empty ai_name falls through to task" {
-	build_window_label long "" "" "" "" "" "" main /home/noams/lazytmux "" "do the thing" ""
+	build_window_label long "" "" "" "" "" "" main /home/noams/tmux-og "" "do the thing" ""
 	[ "$REPLY" = "do the thing" ]
 }
 

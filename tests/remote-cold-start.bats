@@ -25,7 +25,7 @@ setup() {
 	: >"$CTL_LOG"
 
 	# Skips the launcher's `ssh host id -u` round-trip.
-	export LZTMUX_REMOTE_TMPDIR="/run/user/1000"
+	export OG_REMOTE_TMPDIR="/run/user/1000"
 	# Keeps the daemon socket + log inside the test tmpdir.
 	export TMUX_TMPDIR="$BATS_TEST_TMPDIR"
 
@@ -49,7 +49,7 @@ setup() {
 		# resolve here only when the caller didn't already name them (embedded as
 		# *_lit literals).
 		case "$cmd" in
-		*": lztmux-probe;"*)
+		*": og-probe;"*)
 			os="${FAKE_UNAME:-Linux}"
 			uid=1000
 			# Read the launcher's own resolution out of the probe script it
@@ -170,10 +170,10 @@ setup() {
 
 	# The launcher's PATH fallback for an unsubstituted placeholder. The shipped
 	# script takes the pinned store paths instead — see the pinning case below.
-	for stub in lztmux-remote-bridge-renderer tmux-reflow-windows lztmux-remote-bridge-daemon; do
+	for stub in og-remote-bridge-renderer tmux-reflow-windows og-remote-bridge-daemon; do
 		printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/$stub"
 	done
-	cat >"$FAKEBIN/lztmux-remote-bridge-ctl" <<-'EOF'
+	cat >"$FAKEBIN/og-remote-bridge-ctl" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>"$CTL_LOG"
 		if [ -n "${FAKE_CTL_ERROR:-}" ]; then
@@ -186,10 +186,10 @@ setup() {
 	export PATH="$FAKEBIN:$PATH"
 
 	# Same @lib_remote@ substitution Nix does at build time.
-	LAUNCHER="$BATS_TEST_TMPDIR/lztmux-remote-open"
+	LAUNCHER="$BATS_TEST_TMPDIR/og-remote-open"
 	# Both placeholders sit on one line (`[[ -f … ]] && source …`), so /g matters.
 	sed "s|@lib_remote@|$PWD/scripts/lib-remote.sh|g" \
-		scripts/lztmux-remote-open.sh >"$LAUNCHER"
+		scripts/og-remote-open.sh >"$LAUNCHER"
 	export LAUNCHER
 }
 
@@ -234,7 +234,7 @@ teardown() {
 	# Without -x/-y the remote gives it default-size (80x24) and anything the
 	# shell autostarts sees 80 columns until the daemon's converge lands.
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_NEW_DIR=/srv/proj
 	export FAKE_CLIENT_SIZE='200 50 off'
 
 	run bash "$LAUNCHER" tp-g6 proj
@@ -245,7 +245,7 @@ teardown() {
 
 @test "new dir: an unmeasurable client leaves the remote size to tmux" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_NEW_DIR=/srv/proj
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 0 ]
@@ -291,7 +291,7 @@ teardown() {
 	export FAKE_DAEMON_SESSION=tp-g6-workstation FAKE_BRIDGE_HOST=tp-g6
 	sleep 30 &
 	DAEMON_PID=$!
-	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
 	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
 
 	run bash "$LAUNCHER" tp-g6
@@ -309,7 +309,7 @@ teardown() {
 	export FAKE_SESSION_GONE=1
 	sleep 30 &
 	DAEMON_PID=$!
-	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
 	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
 
 	run bash "$LAUNCHER" tp-g6
@@ -324,10 +324,10 @@ teardown() {
 
 @test "live incompatible daemon is terminated and replaced" {
 	touch "$REMOTE_SERVER"
-	export FAKE_CTL_ERROR='lztmux-remote-bridge-ctl: ctl protocol version "2", this daemon speaks "1" — reopen the bridge'
+	export FAKE_CTL_ERROR='og-remote-bridge-ctl: ctl protocol version "2", this daemon speaks "1" — reopen the bridge'
 	sleep 30 &
 	DAEMON_PID=$!
-	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
 	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
 
 	run bash "$LAUNCHER" tp-g6
@@ -355,26 +355,26 @@ teardown() {
 	EOF
 	cat >"$pinned/daemon" <<-'EOF'
 		#!/bin/sh
-		printf '%s\n%s\n' "$LZTMUX_DAEMON_RENDERER" "$LZTMUX_DAEMON_REFLOW" >"$PINNED_DAEMON_ENV"
+		printf '%s\n%s\n' "$OG_DAEMON_RENDERER" "$OG_DAEMON_REFLOW" >"$PINNED_DAEMON_ENV"
 	EOF
 	printf '#!/bin/sh\nexit 0\n' >"$pinned/renderer"
 	printf '#!/bin/sh\nexit 0\n' >"$pinned/reflow"
 	chmod +x "$pinned"/*
 
 	# Same substitution Nix does at build time, for all five placeholders.
-	local launcher="$BATS_TEST_TMPDIR/lztmux-remote-open-pinned"
+	local launcher="$BATS_TEST_TMPDIR/og-remote-open-pinned"
 	sed -e "s|@lib_remote@|$PWD/scripts/lib-remote.sh|g" \
 		-e "s|@bridge_ctl@|$pinned/ctl|g" \
 		-e "s|@bridge_daemon@|$pinned/daemon|g" \
 		-e "s|@bridge_renderer@|$pinned/renderer|g" \
 		-e "s|@reflow@|$pinned/reflow|g" \
-		scripts/lztmux-remote-open.sh >"$launcher"
+		scripts/og-remote-open.sh >"$launcher"
 
 	# A live pid forces the probe; the pinned ctl fails it, so the launcher also
 	# has to reach the recreate path with the pinned daemon.
 	sleep 30 &
 	DAEMON_PID=$!
-	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
 	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
 
 	run bash "$launcher" tp-g6
@@ -397,10 +397,10 @@ teardown() {
 
 @test "unreachable bridge socket never signals a recycled live pid" {
 	touch "$REMOTE_SERVER"
-	export FAKE_CTL_ERROR='lztmux-remote-bridge-ctl: bridge daemon unreachable: connect: connection refused'
+	export FAKE_CTL_ERROR='og-remote-bridge-ctl: bridge daemon unreachable: connect: connection refused'
 	sleep 30 &
 	DAEMON_PID=$!
-	local sock="$TMUX_TMPDIR/lztmux-daemon-tp-g6-workstation.sock"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
 	printf '%s\n' "$DAEMON_PID" >"${sock}.pid"
 
 	run bash "$LAUNCHER" tp-g6
@@ -421,7 +421,7 @@ teardown() {
 
 @test "darwin cold start: kickstarts the launchd agent, re-probes, bridges" {
 	export FAKE_UNAME=Darwin
-	unset LZTMUX_REMOTE_TMPDIR
+	unset OG_REMOTE_TMPDIR
 
 	run bash "$LAUNCHER" mbp
 	[ "$status" -eq 0 ]
@@ -443,7 +443,7 @@ teardown() {
 
 @test "darwin cold start: a missing launchd agent fails by name and bridges nothing" {
 	export FAKE_UNAME=Darwin FAKE_AGENT_MISSING=1
-	unset LZTMUX_REMOTE_TMPDIR
+	unset OG_REMOTE_TMPDIR
 
 	run bash "$LAUNCHER" mbp
 	[ "$status" -eq 1 ]
@@ -466,7 +466,7 @@ teardown() {
 }
 
 @test "restore: requested session isn't live -> cold starts, restores, bridges" {
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_RESTORE=1
 
 	run bash "$LAUNCHER" tp-g6 work
 	[ "$status" -eq 0 ]
@@ -484,7 +484,7 @@ teardown() {
 
 @test "restore: server already running but session missing -> restores without a cold start" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_RESTORE=1
 
 	run bash "$LAUNCHER" tp-g6 work
 	[ "$status" -eq 0 ]
@@ -498,7 +498,7 @@ teardown() {
 
 @test "restore: tmux-remux restore failing surfaces an error and bridges nothing" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_RESTORE=1
 	export FAKE_RESTORE_FAILS=1
 
 	run bash "$LAUNCHER" tp-g6 work
@@ -511,7 +511,7 @@ teardown() {
 
 @test "restore: session absent even after a successful restore fails loudly" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_RESTORE=1
 	export RESTORE_TARGET_MISMATCH=1
 
 	run bash "$LAUNCHER" tp-g6 work
@@ -523,7 +523,7 @@ teardown() {
 }
 
 @test "new dir: session absent and no server -> cold starts, then creates it" {
-	export LZTMUX_REMOTE_NEW_DIR="/srv/my proj"
+	export OG_REMOTE_NEW_DIR="/srv/my proj"
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 0 ]
@@ -537,7 +537,7 @@ teardown() {
 
 @test "new dir: server already running -> creates without a cold start" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_NEW_DIR=/srv/proj
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 0 ]
@@ -550,7 +550,7 @@ teardown() {
 
 @test "new dir: a session that already exists is bridged, not recreated" {
 	touch "$REMOTE_SERVER" "$NEWDIR_MARKER"
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_NEW_DIR=/srv/proj
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 0 ]
@@ -562,7 +562,7 @@ teardown() {
 
 @test "new dir: session absent even after a successful create fails loudly" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_NEW_DIR=/srv/proj
 	export NEWDIR_TARGET_MISMATCH=1
 
 	run bash "$LAUNCHER" tp-g6 proj
@@ -574,8 +574,8 @@ teardown() {
 }
 
 @test "new dir: combined with a restore is rejected before any round trip" {
-	export LZTMUX_REMOTE_NEW_DIR=/srv/proj
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_NEW_DIR=/srv/proj
+	export OG_REMOTE_RESTORE=1
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 1 ]
@@ -600,7 +600,7 @@ teardown() {
 
 @test "restore: a live session attach with the flag unset is unaffected" {
 	touch "$REMOTE_SERVER"
-	# LZTMUX_REMOTE_RESTORE intentionally unset.
+	# OG_REMOTE_RESTORE intentionally unset.
 
 	run bash "$LAUNCHER" tp-g6 workstation
 	[ "$status" -eq 0 ]
@@ -610,8 +610,8 @@ teardown() {
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }
 
-@test "bad LZTMUX_REMOTE_TMPDIR is rejected before bridging" {
-	export LZTMUX_REMOTE_TMPDIR="/run/user/1000 x"
+@test "bad OG_REMOTE_TMPDIR is rejected before bridging" {
+	export OG_REMOTE_TMPDIR="/run/user/1000 x"
 
 	run bash "$LAUNCHER" tp-g6
 	[ "$status" -eq 1 ]
@@ -623,7 +623,7 @@ teardown() {
 	# before the daemon launches.
 	[ ! -s "$SSH_LOG" ]
 
-	export LZTMUX_REMOTE_TMPDIR='/run/user/$(id -u)'
+	export OG_REMOTE_TMPDIR='/run/user/$(id -u)'
 
 	run bash "$LAUNCHER" tp-g6
 	[ "$status" -eq 1 ]
@@ -634,8 +634,8 @@ teardown() {
 	[ ! -s "$SSH_LOG" ]
 }
 
-@test "LZTMUX_REMOTE_NEW_DIR containing a backslash is rejected before any round trip" {
-	export LZTMUX_REMOTE_NEW_DIR='/srv/pro\ject'
+@test "OG_REMOTE_NEW_DIR containing a backslash is rejected before any round trip" {
+	export OG_REMOTE_NEW_DIR='/srv/pro\ject'
 
 	run bash "$LAUNCHER" tp-g6 proj
 	[ "$status" -eq 1 ]
@@ -658,7 +658,7 @@ teardown() {
 
 @test "a session name containing a backslash is rejected before the restore path's has-session ever runs" {
 	touch "$REMOTE_SERVER"
-	export LZTMUX_REMOTE_RESTORE=1
+	export OG_REMOTE_RESTORE=1
 
 	run bash "$LAUNCHER" tp-g6 'wor\kstation'
 	[ "$status" -eq 1 ]
@@ -720,7 +720,7 @@ teardown() {
 	argv="$(sed -n '2p' "$SSH_LOG")"
 	script="$(sed -n '3,$p' "$SSH_LOG")"
 	[[ $argv == *"-T tp-g6 bash -s" ]]
-	[[ $script == ": lztmux-probe;"* ]]
+	[[ $script == ": og-probe;"* ]]
 
 	# fish is absent from `nix flake check`'s sandbox (see flake.nix's
 	# remote-tests nativeBuildInputs), so this leg only strengthens local runs;
@@ -737,7 +737,7 @@ teardown() {
 	[ "$status" -eq 0 ]
 
 	[ "$(grep -c '===SSH-CALL===' "$SSH_LOG")" -eq 1 ]
-	grep -q ': lztmux-probe;' "$SSH_LOG"
+	grep -q ': og-probe;' "$SSH_LOG"
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }
 
@@ -762,8 +762,8 @@ teardown() {
 	grep -q 'switch-client -t =tp-g6-workstation' "$TMUX_LOG"
 }
 
-@test "combined probe: LZTMUX_REMOTE_TMPDIR unset still resolves in one ssh call" {
-	unset LZTMUX_REMOTE_TMPDIR
+@test "combined probe: OG_REMOTE_TMPDIR unset still resolves in one ssh call" {
+	unset OG_REMOTE_TMPDIR
 	touch "$REMOTE_SERVER"
 
 	run bash "$LAUNCHER" tp-g6

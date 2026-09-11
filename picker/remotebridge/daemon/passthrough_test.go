@@ -20,7 +20,7 @@ func TestPassthroughAllCmd(t *testing.T) {
 	if !strings.Contains(PassthroughAllCmd("@3"), " -w ") {
 		t.Error("the opt-in must be window-scoped so later panes inherit it")
 	}
-	// `all`, not `on`: `on` is what the remote already inherits from lazytmux's
+	// `all`, not `on`: `on` is what the remote already inherits from tmux-og's
 	// global, and is the setting that drops the store.
 	if strings.HasSuffix(PassthroughAllCmd("@3"), " on") {
 		t.Error("`on` is the broken setting, not the fix")

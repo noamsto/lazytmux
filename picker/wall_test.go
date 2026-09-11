@@ -193,7 +193,7 @@ func TestRenderWallFallbackFillsBody(t *testing.T) {
 func TestStripTreePrefix(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"├─ ▸ 1:  #286 feat(picker): live preview", "▸ 1:  #286 feat(picker): live preview"},
-		{"╰─  14: lazytmux", "14: lazytmux"},
+		{"╰─  14: tmux-og", "14: tmux-og"},
 		{"2: beta", "2: beta"},
 		{"", ""},
 	}

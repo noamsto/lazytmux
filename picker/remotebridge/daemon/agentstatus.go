@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // agentStatusPollInterval is the floor between two polls while this shipper is

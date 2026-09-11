@@ -13,7 +13,7 @@ set -euo pipefail
 # under any POSIX shell or fish for every character except a literal
 # backslash (see shell_quotable() in lib-remote.sh for why). Callers must
 # clear a value through shell_quotable() before it reaches here; $sess and
-# LZTMUX_REMOTE_NEW_DIR are the two that do.
+# OG_REMOTE_NEW_DIR are the two that do.
 shell_quote() {
 	local s="$1"
 	s="${s//\'/\'\\\'\'}"
@@ -71,7 +71,7 @@ sess="${2:-}"
 win="${3:-}"
 
 if [[ -n $win && ! $win =~ ^[0-9]+$ ]]; then
-	echo "lztmux-remote-open: window index must be numeric, got: $win" >&2
+	echo "og-remote-open: window index must be numeric, got: $win" >&2
 	exit 1
 fi
 
@@ -79,13 +79,13 @@ fi
 # them together would restore and then create over the result. Checked here
 # rather than left to callers: this is a public entry point (the README hands it
 # out), so the picker never setting both is not an invariant to rely on.
-if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n ${LZTMUX_REMOTE_RESTORE:-} ]]; then
-	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR and LZTMUX_REMOTE_RESTORE are mutually exclusive" >&2
+if [[ -n ${OG_REMOTE_NEW_DIR:-} && -n ${OG_REMOTE_RESTORE:-} ]]; then
+	echo "og-remote-open: OG_REMOTE_NEW_DIR and OG_REMOTE_RESTORE are mutually exclusive" >&2
 	exit 1
 fi
 
-if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} ]] && ! shell_quotable "$LZTMUX_REMOTE_NEW_DIR"; then
-	echo "lztmux-remote-open: LZTMUX_REMOTE_NEW_DIR contains a backslash, which no remote shell dialect can quote safely: $LZTMUX_REMOTE_NEW_DIR" >&2
+if [[ -n ${OG_REMOTE_NEW_DIR:-} ]] && ! shell_quotable "$OG_REMOTE_NEW_DIR"; then
+	echo "og-remote-open: OG_REMOTE_NEW_DIR contains a backslash, which no remote shell dialect can quote safely: $OG_REMOTE_NEW_DIR" >&2
 	exit 1
 fi
 
@@ -93,15 +93,15 @@ fi
 # containing a backslash) applies here too: check before a caller-given $sess
 # rides into the probe below, not only after a remote-derived one comes back.
 if [[ -n $sess ]] && ! shell_quotable "$sess"; then
-	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+	echo "og-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
 	exit 1
 fi
 
 # Validated here, before it ever rides into probe_script below — not after the
 # probe has already shipped it to the remote. valid_remote_path's charset also
 # rejects a backslash, so this doubles as this value's shell_quotable check.
-if [[ -n ${LZTMUX_REMOTE_TMPDIR:-} ]] && ! valid_remote_path "$LZTMUX_REMOTE_TMPDIR"; then
-	echo "lztmux-remote-open: unusable remote tmpdir: $LZTMUX_REMOTE_TMPDIR" >&2
+if [[ -n ${OG_REMOTE_TMPDIR:-} ]] && ! valid_remote_path "$OG_REMOTE_TMPDIR"; then
+	echo "og-remote-open: unusable remote tmpdir: $OG_REMOTE_TMPDIR" >&2
 	exit 1
 fi
 
@@ -123,14 +123,14 @@ first_remote_session() {
 # single-quoted probe_script segment below is intentional: it's the
 # remote-evaluated half of the command and must not expand locally.
 # shellcheck disable=SC2016
-probe_script=': lztmux-probe;
+probe_script=': og-probe;
 os=$(uname -s)
 uid=$(id -u)
 tmux_bin=$(command -v tmux 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/tmux)'
 
-if [[ -n ${LZTMUX_REMOTE_TMPDIR:-} ]]; then
+if [[ -n ${OG_REMOTE_TMPDIR:-} ]]; then
 	probe_script+="
-tmpdir_lit=$(shell_quote "$LZTMUX_REMOTE_TMPDIR")
+tmpdir_lit=$(shell_quote "$OG_REMOTE_TMPDIR")
 tmpdir=\"\$tmpdir_lit\""
 else
 	# tmux appends tmux-<uid> to $TMUX_TMPDIR itself, so both arms name the
@@ -176,7 +176,7 @@ printf '"'"'os=%s\nuid=%s\ntmux=%s\ntmpdir=%s\nsess=%s\nwin=%s\n'"'"' "$os" "$ui
 # ssh hands its command to the remote user's LOGIN shell, which here is fish:
 # it rejects the `var=value` lines above outright, so the probe comes back empty
 # behind a fish parse error on stderr. Feed the script to an explicit bash on
-# stdin instead, the same way lztmux-remote-picker already does. A fish login
+# stdin instead, the same way og-remote-picker already does. A fish login
 # greeting can still land on stdout, which the key=value parse below ignores.
 probe_out="$(ssh -T "$host" bash -s <<<"$probe_script")"
 
@@ -198,12 +198,12 @@ done <<<"$probe_out"
 # the probe above, not by the caller — so it hasn't run the backslash check
 # above yet.
 if [[ -n $sess ]] && ! shell_quotable "$sess"; then
-	echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+	echo "og-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
 	exit 1
 fi
 
 if ! valid_remote_path "$remote_tmpdir"; then
-	echo "lztmux-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
+	echo "og-remote-open: unusable remote tmpdir: $remote_tmpdir" >&2
 	exit 1
 fi
 
@@ -231,7 +231,7 @@ start_remote_server() {
 		start_desc="tmux-startup.service"
 	fi
 	if ! ssh "$host" -- "${start_cmd[@]}"; then
-		echo "lztmux-remote-open: $host has no tmux server, and no $start_desc to start one" >&2
+		echo "og-remote-open: $host has no tmux server, and no $start_desc to start one" >&2
 		exit 1
 	fi
 }
@@ -240,13 +240,13 @@ if [[ -z $sess ]]; then
 	start_remote_server
 	sess="$(first_remote_session)"
 	if [[ -z $sess ]]; then
-		echo "lztmux-remote-open: started $start_desc on $host but no session appeared" >&2
+		echo "og-remote-open: started $start_desc on $host but no session appeared" >&2
 		exit 1
 	fi
 	# A remote-derived name gets the same backslash check the caller-given path
 	# already ran above — this is the only route it could have skipped it.
 	if ! shell_quotable "$sess"; then
-		echo "lztmux-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
+		echo "og-remote-open: session name contains a backslash, which no remote shell dialect can quote safely: $sess — pass an explicit session name instead" >&2
 		exit 1
 	fi
 fi
@@ -255,7 +255,7 @@ fi
 # the named session may not exist on the remote yet. Only entered when the
 # caller explicitly asked for a restore — a plain live-session attach (the
 # common case) takes none of these extra round trips.
-if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
+if [[ -n ${OG_REMOTE_RESTORE:-} && -n $sess ]]; then
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
 		if [[ -z "$(first_remote_session)" ]]; then
@@ -272,7 +272,7 @@ if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
 		# Same login-shell problem as the probe: fish expands the unquoted $PATH
 		# into one argument per element, leaving `env` a PATH of one directory.
 		if ! ssh -T "$host" bash -s <<<"env TMUX_TMPDIR=$remote_tmpdir PATH=$(dirname "$remote_tmux"):\$PATH $remote_remux restore"; then
-			echo "lztmux-remote-open: tmux-remux restore failed on $host" >&2
+			echo "og-remote-open: tmux-remux restore failed on $host" >&2
 			exit 1
 		fi
 		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
@@ -282,7 +282,7 @@ if [[ -n ${LZTMUX_REMOTE_RESTORE:-} && -n $sess ]]; then
 			# past its age ceiling) runs regardless of what the picker listed
 			# (see the design doc's "Restore filter mismatch" section) — name
 			# that as the likely cause instead of a bare "not found".
-			echo "lztmux-remote-open: session '$sess' was not restored on $host — tmux-remux's restore filter may have skipped it (idle shells / stale age)" >&2
+			echo "og-remote-open: session '$sess' was not restored on $host — tmux-remux's restore filter may have skipped it (idle shells / stale age)" >&2
 			exit 1
 		fi
 	fi
@@ -303,7 +303,7 @@ fi
 # remote-side picker so there is one creator resolving one socket dir, and so the
 # session is made moments before the daemon attaches instead of having to survive
 # the whole interactive pick.
-if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n $sess ]]; then
+if [[ -n ${OG_REMOTE_NEW_DIR:-} && -n $sess ]]; then
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
 		# Both cold-start gates above are `[[ -z $sess ]]`, and we hold a name —
@@ -317,20 +317,20 @@ if [[ -n ${LZTMUX_REMOTE_NEW_DIR:-} && -n $sess ]]; then
 			remote_size=" -x $initial_width -y $initial_height"
 		fi
 		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
-		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux new-session -d -s $(shell_quote "$sess") -c $(shell_quote "$LZTMUX_REMOTE_NEW_DIR")$remote_size"; then
-			echo "lztmux-remote-open: could not create session '$sess' in '$LZTMUX_REMOTE_NEW_DIR' on $host" >&2
+		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux new-session -d -s $(shell_quote "$sess") -c $(shell_quote "$OG_REMOTE_NEW_DIR")$remote_size"; then
+			echo "og-remote-open: could not create session '$sess' in '$OG_REMOTE_NEW_DIR' on $host" >&2
 			exit 1
 		fi
 		# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 		if ! ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux has-session -t $(shell_quote "=$sess")" 2>/dev/null; then
-			echo "lztmux-remote-open: session '$sess' was not created on $host" >&2
+			echo "og-remote-open: session '$sess' was not created on $host" >&2
 			exit 1
 		fi
 	fi
 fi
 
 if [[ -z $win ]]; then
-	# base-index is non-zero under lazytmux (windows start at 1), so target the
+	# base-index is non-zero under tmux-og (windows start at 1), so target the
 	# session's active window rather than assuming index 0.
 	# shellcheck disable=SC2029 # intentional: expand client-side, resolved values ride in the remote command
 	win="$(ssh "$host" "env TMUX_TMPDIR=$remote_tmpdir $remote_tmux list-windows -t $(shell_quote "$sess") -F '#{window_index} #{window_active}' | awk '\$2==1{print \$1; exit}'")"
@@ -339,7 +339,7 @@ if [[ -z $win ]]; then
 	# none of our pipefail. So empty means the session isn't there, and bridging
 	# on would launch the daemon at a blank window index.
 	if [[ -z $win ]]; then
-		echo "lztmux-remote-open: session '$sess' has no window on $host — it is gone or was never there" >&2
+		echo "og-remote-open: session '$sess' has no window on $host — it is gone or was never there" >&2
 		exit 1
 	fi
 fi
@@ -376,7 +376,7 @@ done
 
 sock_dir="${TMUX_TMPDIR:-${XDG_RUNTIME_DIR:-/tmp}}"
 sock_name="${local_sess//[^A-Za-z0-9._-]/_}"
-sock="${sock_dir}/lztmux-daemon-${sock_name}.sock"
+sock="${sock_dir}/og-daemon-${sock_name}.sock"
 # Store paths, substituted at build time. This script runs from the tmux server,
 # whose PATH is frozen until a server restart, while the keybinds that reach the
 # daemon repoint on a config reload alone — a bare name straddles the two, so
@@ -386,9 +386,9 @@ ctl="@bridge_ctl@"
 daemon="@bridge_daemon@"
 renderer="@bridge_renderer@"
 reflow="@reflow@"
-[[ $ctl == @* ]] && ctl="$(command -v lztmux-remote-bridge-ctl)"
-[[ $daemon == @* ]] && daemon="$(command -v lztmux-remote-bridge-daemon)"
-[[ $renderer == @* ]] && renderer="$(command -v lztmux-remote-bridge-renderer)"
+[[ $ctl == @* ]] && ctl="$(command -v og-remote-bridge-ctl)"
+[[ $daemon == @* ]] && daemon="$(command -v og-remote-bridge-daemon)"
+[[ $renderer == @* ]] && renderer="$(command -v og-remote-bridge-renderer)"
 [[ $reflow == @* ]] && reflow="$(command -v tmux-reflow-windows)"
 
 # Dedup: a live pid alone is not enough. A config reload can leave a daemon
@@ -444,19 +444,19 @@ tmux set-option -t "$local_sess" @bridge_session "$sess"
 # Pass the (remote-derived, untrusted) params through the environment instead
 # of interpolating them into a shell/command string tmux/ssh would re-parse,
 # so a crafted remote session name can't break out into local shell execution.
-export LZTMUX_BRIDGE_HOST="$host"
-export LZTMUX_BRIDGE_SESSION="$sess"
-export LZTMUX_BRIDGE_WINDOW="$win"
-export LZTMUX_BRIDGE_TMUX="$remote_tmux"
-export LZTMUX_BRIDGE_TMPDIR="$remote_tmpdir"
-export LZTMUX_DAEMON_LOCAL_SESS="$local_sess"
-export LZTMUX_DAEMON_SOCK="$sock"
-export LZTMUX_DAEMON_RENDERER="$renderer"
-export LZTMUX_DAEMON_REFLOW="$reflow"
+export OG_BRIDGE_HOST="$host"
+export OG_BRIDGE_SESSION="$sess"
+export OG_BRIDGE_WINDOW="$win"
+export OG_BRIDGE_TMUX="$remote_tmux"
+export OG_BRIDGE_TMPDIR="$remote_tmpdir"
+export OG_DAEMON_LOCAL_SESS="$local_sess"
+export OG_DAEMON_SOCK="$sock"
+export OG_DAEMON_RENDERER="$renderer"
+export OG_DAEMON_REFLOW="$reflow"
 # This very script, so a hand-off (a remote switch-client the daemon pinned back)
 # re-enters the launcher at the revision the daemon itself came from, never
 # whatever a later home-manager switch left on PATH (#336).
-export LZTMUX_DAEMON_REMOTE_OPEN="${BASH_SOURCE[0]}"
+export OG_DAEMON_REMOTE_OPEN="${BASH_SOURCE[0]}"
 
 # The remote viewer picks its graphics backend from #{client_termname} and
 # #{client_termfeatures}, which are whatever the daemon's ssh advertises — so
@@ -475,8 +475,8 @@ term_target=()
 term_raw="$(tmux display-message -p "${term_target[@]}" '#{client_termname}|#{client_termfeatures}' 2>/dev/null || true)"
 term="${term_raw%%|*}"
 termfeatures="${term_raw#*|}"
-export LZTMUX_BRIDGE_TERM="$term"
-export LZTMUX_BRIDGE_TERMFEATURES="$termfeatures"
+export OG_BRIDGE_TERM="$term"
+export OG_BRIDGE_TERMFEATURES="$termfeatures"
 
 # COLORTERM/TERM_PROGRAM (#543) ride into the INVOKING client's session via
 # update-environment on attach (config/tmux.conf.nix), the same channel
@@ -500,8 +500,8 @@ cur_sess="$(tmux display-message -p "${cur_target[@]}" '#{session_name}' 2>/dev/
 colorterm="" term_program=""
 read_session_env "$cur_sess" COLORTERM && colorterm="$REPLY" || true
 read_session_env "$cur_sess" TERM_PROGRAM && term_program="$REPLY" || true
-export LZTMUX_BRIDGE_COLORTERM="$colorterm"
-export LZTMUX_BRIDGE_TERM_PROGRAM="$term_program"
+export OG_BRIDGE_COLORTERM="$colorterm"
+export OG_BRIDGE_TERM_PROGRAM="$term_program"
 
 # Launch the daemon DETACHED, outside the panes it manages (I4): it is not the
 # window's command — it respawns the local panes into renderers. setsid is

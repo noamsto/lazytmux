@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // The trailing "\n    " is invisible in a diff and is what indents the line the

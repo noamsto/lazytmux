@@ -17,10 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
-	"github.com/noamsto/lazytmux/picker/remotebridge/keyneg"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/keyneg"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // Config is the injectable seam for Run: everything that talks to a real
@@ -54,9 +54,9 @@ type Config struct {
 	// threading a parameter through the whole reconcile call chain. Unset in
 	// every test Config that builds a pasteHandler directly rather than
 	// through Run.
-	SendCtl func(cmd string) bool
+	SendCtl func(cmds ...string) bool
 	// HandOff opens a remote session this bridge was switched to as a mirror of
-	// its own (injected; prod = lztmux-remote-open, nil = off). See sessionPin.
+	// its own (injected; prod = og-remote-open, nil = off). See sessionPin.
 	HandOff func(remoteSession string)
 	// Dial opens a fresh control-mode connection. Called for the first attach
 	// and again after every drop; nil is single-shot over Ctl — a drop is
@@ -66,7 +66,7 @@ type Config struct {
 	// A pending reconnect selects on it, because SIGTERM works by dropping the
 	// transport and that is indistinguishable from a link failure — and during
 	// a backoff sleep there is no transport for the signal to reach at all.
-	// lztmux-remote-detach falls back to kill-session after 2s, so a daemon
+	// og-remote-detach falls back to kill-session after 2s, so a daemon
 	// that waits out its backoff is a daemon stranded. nil never cancels.
 	Shutdown <-chan struct{}
 	// Retry bounds the reconnect schedule; nil takes DefaultBackoff. A pointer
@@ -299,7 +299,7 @@ const resizeFallbackInterval = 30 * time.Second
 // resolve would read as already-published and never retry. This watcher must
 // NEVER write Advertised — only a publish site does that (see Viewing's State
 // model).
-func watchLocalClient(area func() (int, int), nudged func() (time.Time, bool), activeWin func() string, resolveView func() (ViewIdentity, bool), view *Viewing, remoteSession string, reg *registry, cv *converger, send func(string) bool, stop <-chan struct{}, tick <-chan time.Time) {
+func watchLocalClient(area func() (int, int), nudged func() (time.Time, bool), activeWin func() string, resolveView func() (ViewIdentity, bool), view *Viewing, remoteSession string, reg *registry, cv *converger, send func(...string) bool, stop <-chan struct{}, tick <-chan time.Time) {
 	var lastNudge time.Time
 	lastCheck := time.Now()
 	for {
@@ -338,7 +338,7 @@ func watchLocalClient(area func() (int, int), nudged func() (time.Time, bool), a
 				view.SetDesired(id.Term)
 				prev := view.Relay.Load()
 				view.Relay.Store(id.Relay)
-				if id.Relay.Sixel() != prev.Sixel() && !send(RelayEnvCmd(remoteSession, id.Relay.String())) {
+				if id.Relay.Sixel() != prev.Sixel() && !send(RelayEnvCmd(remoteSession, id.Relay.String())...) {
 					view.Relay.Store(prev)
 				}
 			}
@@ -485,9 +485,11 @@ func (s *stream) stampAll(cmds ...string) (seqs []uint64, ok bool) {
 	return seqs, true
 }
 
-// send writes cmd for callers that don't read the reply.
-func (s *stream) send(cmd string) bool {
-	_, ok := s.stampAll(cmd)
+// send writes cmds for callers that don't read the reply. Variadic so a
+// caller needing two commands to land together gets one stampAll batch, which
+// fails as a unit.
+func (s *stream) send(cmds ...string) bool {
+	_, ok := s.stampAll(cmds...)
 	return ok
 }
 
@@ -632,7 +634,7 @@ func Run(cfg Config) error {
 	// "sixel" in this same session's table, and skipping the write when this
 	// one has nothing to say would leave that stale value standing and make
 	// the remote emit graphics this proxy only drops.
-	send(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
+	sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String())...)
 
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
@@ -673,7 +675,7 @@ func Run(cfg Config) error {
 	// must carry a non-empty error or the keybind claims a gesture landed that
 	// never did; `ping` is exempt by construction, since parseCtl returns an
 	// empty request for it and submit therefore sends nothing — which is what
-	// keeps lztmux-remote-open reusing this bridge instead of stacking a second
+	// keeps og-remote-open reusing this bridge instead of stacking a second
 	// daemon on the same socket.
 	go acceptConns(listener, connCh, func(argv []string) error {
 		return handleCtl(cst, replacer, carousel, argv, cfg.RemoteSession, sendCtl)
@@ -779,7 +781,7 @@ func Run(cfg Config) error {
 		// SIGKILL or a lost race is corrected by the next bridge's
 		// unconditional RelayEnvCmd write above; a direct attach in that gap
 		// can still read the stale value.
-		send(RelayEnvUnsetCmd(cfg.RemoteSession))
+		sendCtl(RelayEnvUnsetCmd(cfg.RemoteSession)...)
 		// Whichever connection is current, which after a reconnect is no longer
 		// the one cfg.Ctl named.
 		hold.close()
@@ -832,7 +834,7 @@ func Run(cfg Config) error {
 	// window and reads its replies with the plain skip reader — so every
 	// %window-renamed the remote emits in that interval is discarded (B3). A
 	// remote whose windows rename as their shells settle (or, on a real
-	// lazytmux host, on every automatic-rename tick) would otherwise keep the
+	// tmux-og host, on every automatic-rename tick) would otherwise keep the
 	// name it happened to have at attach for the life of the mirror. Reconcile
 	// re-asserts each name from ground truth, and ends in a reflow.
 	reconcileWindows(cfg, send, router, waitHellosFn, cst, reg, cv, rt)
@@ -1147,7 +1149,7 @@ func Run(cfg Config) error {
 		// — watchLocalClient's own immediate publish had no live connection to
 		// send it on. Re-sent unconditionally, same as the one-shot at Run()'s
 		// own startup and for the same reason: a stale value must not stand.
-		send(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
+		sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String())...)
 		return true
 	}
 

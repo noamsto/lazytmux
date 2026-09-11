@@ -56,7 +56,7 @@ is_remote_attach() {
 	esac
 }
 
-# Baked in at build time from programs.lazytmux.splash.remote (skip|static|full).
+# Baked in at build time from programs.tmux-og.splash.remote (skip|static|full).
 if is_remote_attach; then
 	# shellcheck disable=SC2194 # @splash_remote@ is a Nix build-time placeholder
 	case "@splash_remote@" in

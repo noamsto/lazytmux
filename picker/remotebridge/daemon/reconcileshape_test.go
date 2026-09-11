@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // Pins the ordering #408 fixed: the appended pane's geometry is applied before

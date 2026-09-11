@@ -13,7 +13,7 @@ bats_require_minimum_version 1.5.0 # run --separate-stderr
 load helper
 
 setup() {
-	export LZTMUX_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
+	export OG_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
 	unset TMUX TMUX_PANE
 	make_notify_center
 	NOW=$(date +%s)
@@ -22,19 +22,19 @@ setup() {
 
 # seed NAME TS SOURCE LEVEL WINDOW SESSION TITLE [BODY]
 seed() {
-	mkdir -p "$LZTMUX_NOTIFY_DIR/events"
+	mkdir -p "$OG_NOTIFY_DIR/events"
 	{
 		printf 'ts=%s\nsource=%s\nlevel=%s\nwindow=%s\nsession=%s\ntitle=%s\n' \
 			"$2" "$3" "$4" "$5" "$6" "$7"
 		[ -n "${8:-}" ] && printf 'body=%s\n' "$8"
 		printf 'routed=history\n'
-	} >"$LZTMUX_NOTIFY_DIR/events/$1"
+	} >"$OG_NOTIFY_DIR/events/$1"
 }
 
 # Everything in the store, names and contents, for the never-writes assertion.
 snapshot() {
 	local f
-	for f in "$LZTMUX_NOTIFY_DIR"/.server_start "$LZTMUX_NOTIFY_DIR"/events/*; do
+	for f in "$OG_NOTIFY_DIR"/.server_start "$OG_NOTIFY_DIR"/events/*; do
 		[ -e "$f" ] || continue
 		printf '%s\n' "$f"
 		cat "$f"
@@ -87,7 +87,7 @@ snapshot() {
 }
 
 @test "center: an empty events dir shows the empty state and exits 0" {
-	mkdir -p "$LZTMUX_NOTIFY_DIR/events"
+	mkdir -p "$OG_NOTIFY_DIR/events"
 	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	[ "$output" = "no notifications" ]
@@ -104,11 +104,11 @@ snapshot() {
 	# seeded files' mtimes: a center that grew a prune would delete them.
 	seed "1900000000-100-3" "$NOW" claude error @3 s1 boom
 	seed "1900000001-100-4" "$NOW" pr info @4 s1 merged
-	printf '1500000000\n' >"$LZTMUX_NOTIFY_DIR/.server_start"
+	printf '1500000000\n' >"$OG_NOTIFY_DIR/.server_start"
 	before="$(snapshot)"
 	run --separate-stderr bash "$NOTIFY_CENTER" </dev/null
 	[ "$status" -eq 0 ]
 	after="$(snapshot)"
 	[ "$before" = "$after" ]
-	[ ! -d "$LZTMUX_NOTIFY_DIR/.prune.lock" ]
+	[ ! -d "$OG_NOTIFY_DIR/.prune.lock" ]
 }

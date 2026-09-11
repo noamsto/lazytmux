@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // A local structural keybind inside a @bridge_win window does not act on the
@@ -376,7 +376,7 @@ func themeProbeCmd(sess string) string {
 // [a-z-] and needs no quoting of its own.
 //
 // The PATH restore is what makes the bare name resolvable at all. tmux hands a
-// new pane its global environ, which carries every store path lazytmux's wrapper
+// new pane its global environ, which carries every store path tmux-og's wrapper
 // prepended — but split-window spawns through default-shell, and fish on NixOS
 // rebuilds PATH from the login profile instead of inheriting it (measured on the
 // remote: 67 entries in, 10 out). A tool that reaches the remote tmux only
@@ -399,7 +399,7 @@ func toolResolveScript(tool string) string {
 		"p=$(tmux show-environment -g PATH 2>/dev/null); "+
 			"case $p in PATH=?*) PATH=${p#*=}:$PATH; export PATH;; esac; "+
 			"command -v %s >/dev/null 2>&1 && exec %s; "+
-			"echo lazytmux: %s is not on PATH on this host; sleep 5",
+			"echo tmux-og: %s is not on PATH on this host; sleep 5",
 		tool, tool, tool)
 }
 
@@ -468,7 +468,7 @@ func carouselResolveScript(pane string) string {
 // tmuxQuote only wraps, and it restores PATH from the global environment for
 // toolResolveScript's measured reason — run-shell spawns through the remote's
 // default-shell, which on NixOS rebuilds PATH from the login profile, and
-// tmux-pr-enrich reaches the remote tmux only through lazytmux's wrapper.
+// tmux-pr-enrich reaches the remote tmux only through tmux-og's wrapper.
 // Parameter expansion is spelled ${p#*=} for that same reason: run-shell
 // format-expands the whole string first, where #P would become the pane index.
 // That is the body's ONLY literal #, and it survives because #* is not one of
@@ -575,7 +575,7 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 // once the daemon is tearing down, and a request that loses that race must not be
 // acked as accepted — the keybind would report success for a gesture that never
 // happened.
-func (c *ctlState) submit(req ctlRequest, send func(string) bool) bool {
+func (c *ctlState) submit(req ctlRequest, send func(...string) bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -632,7 +632,7 @@ func pressAgainErr(term string) error {
 // is returned when the replacement is RAISED, not when it completes: a message
 // arriving after a multi-second dial reads as a timeout rather than an
 // instruction.
-func handleCtl(cst *ctlState, rep *viewReplacer, probe *carouselProbe, argv []string, sess string, send func(string) bool) error {
+func handleCtl(cst *ctlState, rep *viewReplacer, probe *carouselProbe, argv []string, sess string, send func(...string) bool) error {
 	req, err := cst.parseCtl(argv, sess)
 	if err != nil {
 		return err

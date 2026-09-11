@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
 )
 
 // viewClientFormat lists the mirror session's own clients for
