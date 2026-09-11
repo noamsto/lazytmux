@@ -46,6 +46,16 @@ nix profile install github:noamsto/lazytmux
 This installs a `tmux` wrapper that automatically loads the configuration. Your existing
 `~/.tmux.conf` is ignored — the config is baked into the wrapper.
 
+### The `og` CLI
+
+Nix generates `tmux.conf` for you, but the same generator is also exposed as a
+plain `og` command for a non-Nix install: `og init` writes a commented
+`config.toml` with detected defaults, `og generate` renders it (plus a store
+prefix or install dir) into `tmux.conf`, and `og doctor` reports what's
+missing on `PATH` — locally and on each configured remote. A Homebrew tap and
+shell installer that call these on your behalf are landing in a follow-up PR;
+for now they're reachable through the Nix-built `og` wrapper.
+
 ## Binary cache
 
 Prebuilt artifacts are pushed to a [Cachix](https://cachix.org) cache, so you can pull the

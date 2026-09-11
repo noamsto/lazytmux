@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -251,3 +252,49 @@ claude = "x"
 }
 
 func ptr(s string) *string { return &s }
+
+func TestDefaults(t *testing.T) {
+	c, err := Defaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Platform != runtime.GOOS {
+		t.Errorf("platform = %q, want %q", c.Platform, runtime.GOOS)
+	}
+	if c.Tmux.CopyModeLineNumbers != "off" {
+		t.Errorf("copy_mode_line_numbers = %q, want off", c.Tmux.CopyModeLineNumbers)
+	}
+	if c.Picker.Layout != "preview" {
+		t.Errorf("picker.layout = %q, want preview", c.Picker.Layout)
+	}
+	if c.Splash.Remote != "full" {
+		t.Errorf("splash.remote = %q, want full", c.Splash.Remote)
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	t.Run("xdg set", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "/xdg-home")
+		p, err := DefaultPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join("/xdg-home", "tmux-og", "config.toml"); p != want {
+			t.Errorf("path = %q, want %q", p, want)
+		}
+	})
+	t.Run("xdg unset", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := DefaultPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(home, ".config", "tmux-og", "config.toml"); p != want {
+			t.Errorf("path = %q, want %q", p, want)
+		}
+	})
+}

@@ -832,6 +832,7 @@
               # Same derivation packages.og-generate builds; identical inputs, one
               # store path, so this costs nothing extra.
               OG_GENERATE = "${pkgs.callPackage ./generator {}}/bin/og-generate";
+              OG_INIT = "${pkgs.callPackage ./generator {}}/bin/og-init";
               SMOKE_CONFIG = smokeEntry.configToml;
               SMOKE_REFERENCE = smokeEntry.referenceConf;
               TEMPLATE = ./config/tmux.conf.tmpl;
@@ -869,6 +870,26 @@
                 fi
 
                 no_store_path "--prefix render" prefixout/tmux.conf
+
+                # og init's own output, fed straight into og generate --prefix:
+                # the one place the pair is proven to work end to end, since a
+                # Go-level test can't reach the real template (generator/'s
+                # buildGoModule src is scoped to generator/ alone, so
+                # config/tmux.conf.tmpl sits outside its sandbox).
+                echo "=== og init -> og generate --prefix"
+                "$OG_INIT" --out init.toml
+                mkdir -p initout
+                "$OG_GENERATE" --config init.toml --prefix /opt/tmux-og \
+                  --template "$TEMPLATE" --out initout
+                if ! grep -q '^set -g ' initout/tmux.conf; then
+                  echo "og init render carries no 'set -g' line" >&2
+                  exit 1
+                fi
+                if ! grep -Fq /opt/tmux-og/bin/ initout/tmux.conf; then
+                  echo "og init render carries no path under the given prefix" >&2
+                  exit 1
+                fi
+                no_store_path "og init render" initout/tmux.conf
 
                 touch $out
               '');

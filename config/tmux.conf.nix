@@ -662,10 +662,19 @@
     };
     "debug" = {
       script = "og-debug";
-      summary = "Diagnose a tmux-og installation";
+      summary = "Toggle or inspect event-logging debug mode";
     };
-    # The one verb whose target is a derivation of its own rather than a
-    # scripts/ entry, hence `target` instead of `script`.
+    # Neither is a scripts/ entry -- "init"/"doctor" are two more of the
+    # generator's own binaries, the same target-shaped verb "generate" already
+    # is -- so ogPartitionOk (which only ever looks at v.script) is untouched.
+    "init" = {
+      target = "${og-generate}/bin/og-init";
+      summary = "Write a commented config.toml with detected defaults";
+    };
+    "doctor" = {
+      target = "${og-doctor-wrapped}/bin/og-doctor";
+      summary = "Diagnose what is missing on PATH, here and on each configured remote";
+    };
     "generate" = {
       target = "${og-generate}/bin/og-generate";
       summary = "Render tmux.conf from a config and a path map";
@@ -807,6 +816,20 @@
     };
     process_icons = processIcons;
   };
+
+  # og doctor's own --config default (generator/config's DefaultPath, an
+  # off-Nix $XDG_CONFIG_HOME/tmux-og/config.toml) is where a Homebrew/curl
+  # install's `og init` writes -- not this store path. Left unwrapped, a Nix
+  # install's `og doctor` would report on a file that doesn't exist. This
+  # bakes the real configToml in, the same "baked default, flag.Parse takes
+  # the last occurrence so an explicit override still wins" contract
+  # generator/default.nix's own --template wrapProgram already relies on.
+  # (nix run .#og -- doctor bakes the flake's own default-args configToml,
+  # not a user's -- home.packages' install, which is what ships, always
+  # carries the user's real options, so that path is unaffected.)
+  og-doctor-wrapped = pkgs.writeShellScriptBin "og-doctor" ''
+    exec ${og-generate}/bin/og-doctor --config ${configToml} "$@"
+  '';
 
   # Same pin as the reference's own copy of this plugin. Identical inputs give
   # one store path, so a drift between the two shows up as an extraction-check
