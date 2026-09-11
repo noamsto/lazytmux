@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/noamsto/lazytmux/picker/enrichstate"
+	"github.com/noamsto/tmux-og/picker/enrichstate"
 )
 
 // cfg holds the launch-time flags: target, the PR-poller and issue-stamp
@@ -231,11 +231,11 @@ type refreshDoneMsg struct{}
 type bridgeRefreshDoneMsg struct{ errText string } // errText == "" is success
 
 const (
-	// ctlErrorPrefix matches lztmux-remote-bridge-ctl's own errorPrefix
+	// ctlErrorPrefix matches og-remote-bridge-ctl's own errorPrefix
 	// (remotebridge/cmd/ctl/main.go) and is stripped from a captured failure
 	// so the flash shows the ctl's message alone, not the binary name
 	// repeated next to a footer already labeled [r].
-	ctlErrorPrefix = "lztmux-remote-bridge-ctl: "
+	ctlErrorPrefix = "og-remote-bridge-ctl: "
 
 	// Flash lifetimes follow house precedent rather than an invented number:
 	// 5s matches the ctl's own `display-message -d 5000` on its failure path

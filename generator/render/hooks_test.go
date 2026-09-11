@@ -3,8 +3,8 @@ package render
 import (
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // I7's bytes, pinned literally. The reference and the generator are otherwise
@@ -12,7 +12,7 @@ import (
 // pass the extraction diff.
 func TestPersistBlockBytes(t *testing.T) {
 	wire := "/nix/store/aaaa-persist-wire-stub"
-	want := "\n# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===\n" +
+	want := "\n# === tmux-remux (Phase 2a, opt-in via programs.tmux-og.persist) ===\n" +
 		"run-shell \"/nix/store/aaaa-persist-wire-stub #{q:version}\"\n"
 
 	got := Build(&config.Config{}, &paths.Paths{PersistWireScript: &wire}).PersistBlock

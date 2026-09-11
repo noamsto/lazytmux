@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/agentdetect/debounce"
-	"github.com/noamsto/lazytmux/picker/agentdetect/drainbuf"
-	"github.com/noamsto/lazytmux/picker/agentdetect/manifest"
-	"github.com/noamsto/lazytmux/picker/agentdetect/screen"
-	"github.com/noamsto/lazytmux/picker/agentdetect/statefile"
+	"github.com/noamsto/tmux-og/picker/agentdetect/debounce"
+	"github.com/noamsto/tmux-og/picker/agentdetect/drainbuf"
+	"github.com/noamsto/tmux-og/picker/agentdetect/manifest"
+	"github.com/noamsto/tmux-og/picker/agentdetect/screen"
+	"github.com/noamsto/tmux-og/picker/agentdetect/statefile"
 )
 
 const (

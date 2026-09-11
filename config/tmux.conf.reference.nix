@@ -1,10 +1,13 @@
 # Frozen reference copy of the tmux.conf text, lifted verbatim out of
 # config/tmux.conf.nix so that file no longer carries the config it generates.
 # It is the oracle the extraction check diffs `og generate`'s output against, so
-# while both exist THE TWO FILES MUST BE EDITED TOGETHER: a tmux.conf change
-# lands here and in config/tmux.conf.tmpl, or the check goes red on a difference
-# that is not a bug. Deleted when step 3 (the lazytmux -> tmux-og rename) lands
-# and the generator is the only producer.
+# THE TWO FILES MUST BE EDITED TOGETHER: a tmux.conf change lands here and in
+# config/tmux.conf.tmpl, or the check goes red on a difference that is not a bug.
+#
+# An earlier version of this header said the file would be deleted once the
+# tmux-og rename landed. It was not: this is the only byte-identity oracle the
+# render has, and removing the check is expressly not wanted. The file survives,
+# and the two-file edit-together rule above survives with it.
 #
 # `sections` is the ordered cut the check's hybrid render and the template lift
 # work through; its four boundaries are the ones the freeze was verified at.
@@ -256,7 +259,7 @@
     then ""
     else ''
 
-      # === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===
+      # === tmux-remux (Phase 2a, opt-in via programs.tmux-og.persist) ===
       run-shell "${persistWireScript} #{q:version}"
     '';
 
@@ -483,7 +486,7 @@
       # for next/previous window and M-J / M-K for row-to-row movement, so
       # next-window on the prefix table is dead weight. With notifications off,
       # n reverts to next-window.
-      bind-key n display-popup -E -w 80% -h 60% '${script.lztmux-notify-center}/bin/lztmux-notify-center'
+      bind-key n display-popup -E -w 80% -h 60% '${script.og-notify-center}/bin/og-notify-center'
     ''}
 
     # Floating panes (window-scoped; see the yazi comment below for why floats
@@ -494,9 +497,9 @@
     # PATH only, unlike the binds above: falling back to a pkgs.k9s store path
     # dragged k9s + kubectl into every closure — 237 MB, its largest single
     # item — for a bind only k8s users press. Add pkgs.k9s to popupTools.
-    ${floatBind "k" floatFull "" ''"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s''}
+    ${floatBind "k" floatFull "" ''"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.tmux-og.popupTools'; read -r; }" \; set -p @pane_label k9s''}
     ${prdashBind}
-    bind-key D run-shell '${script.lazytmux-debug}/bin/lazytmux-debug toggle'
+    bind-key D run-shell '${script.og-debug}/bin/og-debug toggle'
     # yazi in a tmux 3.7 floating pane: unlike display-popup, floating panes have
     # full escape-sequence passthrough, so yazi's image preview / terminal
     # detection work. Scoped to the launching window (no window-line entry).
@@ -522,7 +525,7 @@
     # -b is load-bearing, not just responsiveness: the script waits for the
     # daemon's teardown to kill the mirror session, and that teardown issues its
     # kill-session through the same command queue a foreground run-shell holds.
-    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.lztmux-remote-detach}/bin/lztmux-remote-detach #{qs:session_name}" } { detach-client }
+    bind-key d if-shell -F '${bridgeGate}' { run-shell -b "${script.og-remote-detach}/bin/og-remote-detach #{qs:session_name}" } { detach-client }
     set -g detach-on-destroy off
 
     # Vim-tmux navigation (respects zoom)
@@ -566,7 +569,7 @@
     set -g @window_split3 999
 
     # Read by the CC plugin's UserPromptSubmit hook to gate the window-naming
-    # nudge (programs.lazytmux.aiNaming.enable).
+    # nudge (programs.tmux-og.aiNaming.enable).
     set -g @ai_naming "${aiNamingFlag}"
     set -g @resume_claude "${resumeClaudeFlag}"
     set -g @resume_carousel "${resumeCarouselFlag}"
@@ -588,14 +591,14 @@
     # popup on the tmux server, whose PATH is frozen until a server restart, so a
     # brand-new script would resolve to nothing until then. An option repoints on
     # a config reload alone (#336).
-    set -g @remote_pick_bin "${script.lztmux-remote-picker}/bin/lztmux-remote-picker"
+    set -g @remote_pick_bin "${script.og-remote-picker}/bin/og-remote-picker"
     # Same, and these two are never on PATH at any point: of the remote scripts
-    # only lztmux-remote-picker reaches home.packages (remote.exposePickOnPath).
-    set -g @remote_open_bin "${script.lztmux-remote-open}/bin/lztmux-remote-open"
+    # only og-remote-picker reaches home.packages (remote.exposePickOnPath).
+    set -g @remote_open_bin "${script.og-remote-open}/bin/og-remote-open"
     # The window picker's ^x on a mirror row sends the same ctl kill-window verb
     # prefix+& does, so it needs the binary by store path for the same reason.
     set -g @bridge_ctl_bin "${picker-bridge-ctl-bin}"
-    set -g @remote_auth_bin "${script.lztmux-remote-auth}/bin/lztmux-remote-auth"
+    set -g @remote_auth_bin "${script.og-remote-auth}/bin/og-remote-auth"
     set -g @remote_auth_persist "${toString remoteAuthPersistSeconds}"
 
     # Same reasoning, for outside consumers: an external tool that stamps
@@ -656,7 +659,7 @@
     # which is exactly the state of a control-only bridge host (its only client
     # is a control-mode daemon, which draws no status line), where the
     # status-format[0] `#()` jobs below never ran at all.
-    set -g @lztmux_tick '%s'
+    set -g @og_tick '%s'
     ${
       let
         esc = builtins.replaceStrings ["\""] ["\\\""];
@@ -666,8 +669,20 @@
         # the flake's pinned tmux and a post-557967c3 bump accept.
         # Divisor 5 matches arm_agent_detect's own every-5th-tick cadence, so the
         # floor cannot make a new agent pane wait longer to be armed than today.
-        tick = name: "${name}::#{e|/|:#{T:@lztmux_tick},5}";
-        hookNames = ["@lztmux-pr-tick" "@lztmux-backfill-tick" "@lztmux-usage-tick" "@lztmux-sweep-tick"];
+        tick = name: "${name}::#{e|/|:#{T:@og_tick},5}";
+        # The CLEAR list, not the set list, and its order is load-bearing. Mirror
+        # of tickHookNames in generator/render/status.go, which carries the why:
+        # the legacy entries, the ordering constraint, and the removal condition.
+        hookNames = [
+          "@og-pr-tick"
+          "@og-backfill-tick"
+          "@og-usage-tick"
+          "@og-sweep-tick"
+          "@lztmux-pr-tick"
+          "@lztmux-backfill-tick"
+          "@lztmux-usage-tick"
+          "@lztmux-sweep-tick"
+        ];
         # `-g` leaves the monitor's session NULL (cmd-set-option.c), which keeps
         # the hook alive for the server's whole life instead of dying with the
         # session that loaded this config.
@@ -684,9 +699,9 @@
         clears = lib.concatMap (n: ["set-hook -g -u -B '${n}'" "set -gu '${n}'"]) hookNames;
         setHook = name: cmd: "set-hook -g -B '${tick name}' 'run-shell -b \"${cmd}\"'";
         setters =
-          (lib.optional enrichEnable (setHook "@lztmux-pr-tick" "${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick"))
-          ++ (lib.optional enrichEnable (setHook "@lztmux-backfill-tick" "${script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill"))
-          ++ (lib.optional agentUsageEnable (setHook "@lztmux-usage-tick" "${script.tmux-agent-usage}/bin/tmux-agent-usage --tick"))
+          (lib.optional enrichEnable (setHook "@og-pr-tick" "${script.tmux-pr-enrich}/bin/tmux-pr-enrich --tick"))
+          ++ (lib.optional enrichEnable (setHook "@og-backfill-tick" "${script.tmux-issue-stamp}/bin/tmux-issue-stamp --backfill"))
+          ++ (lib.optional agentUsageEnable (setHook "@og-usage-tick" "${script.tmux-agent-usage}/bin/tmux-agent-usage --tick"))
           # Unconditional, and arming only -- tmux-update-icons skips the reap
           # and the prune for this caller; its own comments carry why.
           #
@@ -696,7 +711,7 @@
           # session literally named "--sweep" would misroute itself forever.
           # That also leaves this command free of any tmux format, which
           # tick-floor-conf-assertions enforces for all four.
-          ++ [(setHook "@lztmux-sweep-tick" "LZTMUX_TICK_SWEEP=1 ${script.tmux-update-icons}/bin/tmux-update-icons")];
+          ++ [(setHook "@og-sweep-tick" "OG_TICK_SWEEP=1 ${script.tmux-update-icons}/bin/tmux-update-icons")];
         body = esc (lib.concatStringsSep " \\; " (clears ++ setters));
       in ''
         # -B needs tmux 3.8+, probed against the LIVE server (#407) since a
@@ -706,7 +721,7 @@
         # string is format-expanded before it is parsed (hooks_parse via
         # hooks_monitor_hook_cb), which is safe here only because Nix store
         # paths never contain '#'.
-        if-shell "tmux list-commands set-hook | grep -q -- -B" "${body}" "display-message 'lazytmux: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"
+        if-shell "tmux list-commands set-hook | grep -q -- -B" "${body}" "display-message 'tmux-og: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"
       ''
     }
 
@@ -877,7 +892,7 @@
     # A toggle re-sources this config, which is the only signal a mirror gets
     # that the theme moved; the script itself is a no-op unless the flavor
     # actually changed, so `prefix + r` costs nothing.
-    run-shell -b "${script.lztmux-remote-theme}/bin/lztmux-remote-theme"
+    run-shell -b "${script.og-remote-theme}/bin/og-remote-theme"
 
     run-shell ${tmuxPlugins.fingers}/share/tmux-plugins/tmux-fingers/tmux-fingers.tmux
 
@@ -892,7 +907,7 @@
       # hook_client is tty-derived (never ~-initial); tmux-splash-maybe defaults its final positional when empty.
       # #{q:} and NOT \"...\": the whole string is format-expanded before sh -c sees
       # it, so a quote in the name breaks out and executes — and a bridged session's
-      # name comes from the remote host (lztmux-remote-open builds it from the
+      # name comes from the remote host (og-remote-open builds it from the
       # remote's list). || true stops the gate's fail-closed exit from pushing the
       # hook's pane into view-mode.
       set-hook -g client-attached[50]        'run-shell -b "${script.tmux-splash-maybe}/bin/tmux-splash-maybe #{qs:hook_session_name} #{q:hook_client} || true"'
@@ -917,8 +932,8 @@
       # stays at its default off — turning it on would make every unfocused
       # window with output (i.e. every working Claude pane) an event — so the
       # activity hook ships wired but dormant.
-      set-hook -g alert-bell[20]     'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source bell --level warn --window #{q:window_id} --title bell"'
-      set-hook -g alert-activity[20] 'run-shell -b "${script.lztmux-notify}/bin/lztmux-notify emit --source activity --level info --window #{q:window_id} --title activity"'
+      set-hook -g alert-bell[20]     'run-shell -b "${script.og-notify}/bin/og-notify emit --source bell --level warn --window #{q:window_id} --title bell"'
+      set-hook -g alert-activity[20] 'run-shell -b "${script.og-notify}/bin/og-notify emit --source activity --level info --window #{q:window_id} --title activity"'
     ''}
 
     ${carouselHooks}

@@ -1,6 +1,6 @@
 <div align="center">
 
-# lazytmux
+# tmux-og
 
 **Opinionated tmux configuration with Claude Code & OpenCode integration.**
 
@@ -95,7 +95,7 @@ cachix use lazytmux
 
 ## Keybindings
 
-The prefix defaults to <kbd>`</kbd> (backtick); set it via `programs.lazytmux.prefix`.
+The prefix defaults to <kbd>`</kbd> (backtick); set it via `programs.tmux-og.prefix`.
 Press <kbd>prefix</kbd> then <kbd>C-Space</kbd> for the in-terminal cheatsheet.
 
 ### Prefix bindings
@@ -152,12 +152,12 @@ Press <kbd>prefix</kbd> then <kbd>C-Space</kbd> for the in-terminal cheatsheet.
 
 ## Git Worktree Integration
 
-Lazytmux integrates with [worktrunk](https://worktrunk.dev/) (`wt`) so
+tmux-og integrates with [worktrunk](https://worktrunk.dev/) (`wt`) so
 each git worktree maps to its own tmux window, and each repository to a session. Enable
 it and the `post-switch` navigation hook via the home-manager module:
 
 ```nix
-programs.lazytmux.worktrunk.enable = true;
+programs.tmux-og.worktrunk.enable = true;
 ```
 
 ```bash
@@ -180,12 +180,12 @@ Open a remote host's tmux session as **native local windows** (one per remote
 window) over outbound SSH — no reverse socket, no nested status bar.
 
 ```nix
-programs.lazytmux.remote.hosts = [ "tp-g6" "lab" ];
+programs.tmux-og.remote.hosts = [ "tp-g6" "lab" ];
 ```
 
 `prefix + s` then shows a **Remote** section: one row per host, with its
-not-yet-open sessions listed under it as a tree. Enter runs `lztmux-remote-open`
-(or call it directly: `lztmux-remote-open <host> [<sess>]`) — on a host row it
+not-yet-open sessions listed under it as a tree. Enter runs `og-remote-open`
+(or call it directly: `og-remote-open <host> [<sess>]`) — on a host row it
 opens that host's most-recent session. A bridged session moves up into the
 session list, tagged with its host in the **Host** column. Live window
 add/close/rename sync through the control-mode daemon; structural keybinds
@@ -201,10 +201,10 @@ A host that answers SSH but has **no tmux server** shows as
 `<host>  (no server — Enter starts one)`. Enter starts the remote's own
 `tmux-startup.service`, then re-probes and bridges whatever session that
 produced — so the session name and directory come from the remote's
-`programs.lazytmux.startupSession`, never guessed locally. Two host
+`programs.tmux-og.startupSession`, never guessed locally. Two host
 requirements for this to work:
 
-- `programs.lazytmux.startupSession.enable` on the remote, with
+- `programs.tmux-og.startupSession.enable` on the remote, with
   `startupSession.headless = true` if the host has no graphical session (the
   unit is otherwise gated on `graphical-session.target`, so a host sitting at
   the login greeter never starts one).
@@ -218,7 +218,7 @@ requirements for this to work:
 A host that needs an answer ssh can only get from a terminal — an unknown host
 key, a password, a 2FA code — shows as
 `<host>  (auth needed — Enter to connect)`. Enter hands the picker's popup to
-ssh, which prompts for itself; lazytmux never sees the secret. That one
+ssh, which prompts for itself; tmux-og never sees the secret. That one
 handshake opens a shared connection (`ControlMaster`), and the picker's probe
 and the launcher reuse it without asking again — for `remote.authPersistSeconds`
 of idle time (default 4h). If your ssh config has no `ControlPath` set (the
@@ -259,7 +259,7 @@ alive across SSH sessions.
 
 Agent status crosses the bridge too: a Claude running on the remote shows its
 state icon, task and issue ids on the mirror window, in the session tint and in
-both pickers, exactly as a local one does. It needs lazytmux on the remote as
+both pickers, exactly as a local one does. It needs tmux-og on the remote as
 well — that side stamps the state on the pane, since a control-mode client
 renders no status line for the usual pollers to run in.
 
@@ -270,7 +270,7 @@ probe saw: sessions not already bridged, and nothing at all from a host that
 answered slowly. `^o` on a Remote row is the escape hatch. It opens a local
 **floating pane** running that host's *own* session picker over SSH — the
 remote's live sessions **and** its top zoxide directories — and hands the pick
-back to `lztmux-remote-open`, so the result is an ordinary mirror. Enter picks,
+back to `og-remote-open`, so the result is an ordinary mirror. Enter picks,
 `esc`/`q` cancels and opens nothing. The hint appears only while the cursor is
 on a Remote row.
 
@@ -279,11 +279,11 @@ first, in that directory, and then bridges it — which needs the same
 **lingering** precondition as a cold start above, or the new session dies with
 the SSH connection that made it.
 
-The remote host needs `lztmux-remote-picker` on its per-user profile PATH —
+The remote host needs `og-remote-picker` on its per-user profile PATH —
 i.e. a remote rebuilt from this revision, the same requirement as
 `tmux-claude-images`/`resvg` for bridge graphics. `remote.exposePickOnPath` is
 on by default and puts it there; a host that answers SSH without it reports
-`remote lazytmux too old — rebuild <host>` rather than hanging.
+`remote tmux-og too old — rebuild <host>` rather than hanging.
 
 Two honest limitations of this view, both consequences of it being the *remote's*
 picker rather than the local one:
@@ -373,17 +373,17 @@ the canonical definitions in
 Enable native Codex status hooks alongside the agent-integration binaries:
 
 ```nix
-programs.lazytmux = {
+programs.tmux-og = {
   agentIntegration.enable = true;
   codexStatus.enable = true;
 };
 ```
 
-Home Manager appends lazytmux hook definitions to `~/.codex/config.toml`.
+Home Manager appends tmux-og hook definitions to `~/.codex/config.toml`.
 They write processing, waiting, done, compacting, and idle state for the current
 `$TMUX_PANE`; the screen scraper remains a fallback when a hook state is absent
 or stale. The hook commands use the stable profile path to
-`claude-status-update`, so ordinary lazytmux rebuilds do not change the hook
+`claude-status-update`, so ordinary tmux-og rebuilds do not change the hook
 definition and re-trigger Codex's trust review.
 
 Codex requires a one-time local approval before these non-managed hooks run:
@@ -396,13 +396,13 @@ not parse prompt payloads for task labels or AI window names.
 Enable Cursor Agent CLI status hooks alongside the agent-integration binaries:
 
 ```nix
-programs.lazytmux = {
+programs.tmux-og = {
   agentIntegration.enable = true;
   cursorStatus.enable = true;
 };
 ```
 
-Home Manager upserts lazytmux entries into `~/.cursor/hooks.json` on every
+Home Manager upserts tmux-og entries into `~/.cursor/hooks.json` on every
 switch (strips prior `/bin/cursor-status-hook` commands; leaves other entries
 alone). They write processing, done, compacting, idle, and error state for the
 current `$TMUX_PANE` via a silent `cursor-status-hook` wrapper around
@@ -412,11 +412,11 @@ source of `waiting`, since Cursor has no clean permission-prompt hook.
 ### OpenCode Plugin
 
 OpenCode uses a [plugin system](https://opencode.ai/docs/plugins/) instead of JSON hooks.
-Lazytmux ships a plugin at `plugins/opencode-status.ts` that maps OpenCode events to
+tmux-og ships a plugin at `plugins/opencode-status.ts` that maps OpenCode events to
 `claude-status-update` calls.
 
 **With home-manager** (automatic): the plugin is installed to `~/.config/opencode/plugin/`
-by default. Disable with `programs.lazytmux.opencode.enable = false`.
+by default. Disable with `programs.tmux-og.opencode.enable = false`.
 
 **Manual install**: symlink or copy the plugin file:
 
@@ -456,14 +456,14 @@ Nix (recommended — pins plugin and tmux scripts to the same revision):
 
 ```nix
 # in your claude wrapper
-claude --plugin-dir "${inputs.lazytmux}/claude-plugin"
+claude --plugin-dir "${inputs.tmux-og}/claude-plugin"
 ```
 
 Marketplace:
 
 ```bash
 claude plugin marketplace add noamsto/lazytmux
-claude plugin install lazytmux@lazytmux
+claude plugin install tmux-og@tmux-og
 ```
 
 With the plugin installed, the tmux status bar tracks Claude state with zero

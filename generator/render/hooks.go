@@ -3,7 +3,7 @@ package render
 import (
 	"fmt"
 
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // carouselHooks keeps the per-pane carousels in step with focus: stash the
@@ -29,6 +29,6 @@ func persistBlock(p *paths.Paths) string {
 	if p.PersistWireScript == nil {
 		return ""
 	}
-	return "\n# === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===\n" +
+	return "\n# === tmux-remux (Phase 2a, opt-in via programs.tmux-og.persist) ===\n" +
 		fmt.Sprintf("run-shell \"%s #{q:version}\"\n", *p.PersistWireScript)
 }

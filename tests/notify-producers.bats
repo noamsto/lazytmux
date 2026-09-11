@@ -4,7 +4,7 @@
 # this file is that `done` does NOT notify: it is every turn's terminal state,
 # and notifying on it would train the user to ignore notifications.
 #
-# The router is faked via LZTMUX_NOTIFY_BIN — a capture script that appends its
+# The router is faked via OG_NOTIFY_BIN — a capture script that appends its
 # argv to one log. Everything the producers reach through tmux is a fake tmux on
 # PATH; nothing here may touch a real server.
 
@@ -43,7 +43,7 @@ setup() {
 	chmod +x "$FAKEBIN/fake-notify"
 
 	export PATH="$FAKEBIN:$PATH"
-	export LZTMUX_NOTIFY_BIN="$FAKEBIN/fake-notify"
+	export OG_NOTIFY_BIN="$FAKEBIN/fake-notify"
 	make_pr_enrich
 }
 
@@ -147,7 +147,7 @@ unseen" ]
 }
 
 @test "claude: an unsubstituted @notify@ disables the call and does not break the write" {
-	run env -u LZTMUX_NOTIFY_BIN bash "$CSU" waiting --pane %5 --session s1
+	run env -u OG_NOTIFY_BIN bash "$CSU" waiting --pane %5 --session s1
 	[ "$status" -eq 0 ]
 	assert_silent
 	grep -qx 'state=waiting' "$CLAUDE_STATUS_DIR/panes/5"
@@ -208,7 +208,7 @@ pr_mock() {
 
 @test "pr: an unsubstituted @notify@ disables the call" {
 	rm -f "$NOTIFY_LOG"
-	FAKE_PREV='12|open|success||' env -u LZTMUX_NOTIFY_BIN bash "$PR_ENRICH_SCRIPT" \
+	FAKE_PREV='12|open|success||' env -u OG_NOTIFY_BIN bash "$PR_ENRICH_SCRIPT" \
 		--target '$3:@7' --branch feat/x --mock-pr-number 12 \
 		--mock-pr-state merged --mock-check-state success --mock-pr-title T
 	assert_silent

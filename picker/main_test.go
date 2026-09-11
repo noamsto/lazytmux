@@ -69,7 +69,7 @@ func TestDecodeBridgeName(t *testing.T) {
 
 func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",
+		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1|",
 		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1|",
 	}
 	items := buildSessionItems(nil, snap, nil, "dark", false, "")
@@ -117,7 +117,7 @@ func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 // when non-empty (#513).
 func TestSessionsBridgeProcOverride(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|mirror-sess|0|/home/noams/git/lazytmux|1900000300|tp-g6|fish|1|claude",
+		"%1|mirror-sess|0|/home/noams/git/tmux-og|1900000300|tp-g6|fish|1|claude",
 		"%2|local-sess|0|/home/noams/src|1900000200||bash|2|",
 	}
 	sessions := snap.sessions()
@@ -177,18 +177,18 @@ func TestSortSessionsForDisplay(t *testing.T) {
 		{
 			name: "same-name different-host, local is current: keeps its activity rank",
 			sessions: []sessionData{
-				{name: "lazytmux", bridgeHost: "", activity: 100, current: true},
-				{name: "g6-lazytmux", bridgeHost: "g6", activity: 50},
+				{name: "tmux-og", bridgeHost: "", activity: 100, current: true},
+				{name: "g6-tmux-og", bridgeHost: "g6", activity: 50},
 			},
-			want: []string{"lazytmux", "g6-lazytmux"},
+			want: []string{"tmux-og", "g6-tmux-og"},
 		},
 		{
 			name: "same-name different-host, mirror is current: keeps its activity rank",
 			sessions: []sessionData{
-				{name: "g6-lazytmux", bridgeHost: "g6", activity: 100, current: true},
-				{name: "lazytmux", bridgeHost: "", activity: 50},
+				{name: "g6-tmux-og", bridgeHost: "g6", activity: 100, current: true},
+				{name: "tmux-og", bridgeHost: "", activity: 50},
 			},
-			want: []string{"g6-lazytmux", "lazytmux"},
+			want: []string{"g6-tmux-og", "tmux-og"},
 		},
 	}
 	for _, c := range cases {
@@ -205,19 +205,19 @@ func TestSortSessionsForDisplay(t *testing.T) {
 // the flag sinkCurrentMatchBelowPeer reads once a query is typed.
 func TestBuildSessionItemsMarksCurrent(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|lazytmux|0|/home/noams/git/lazytmux|1900000300||fish|1|",
-		"%2|g6-lazytmux|0|/home/noams/src|1900000100|g6|fish|2|",
+		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1|",
+		"%2|g6-tmux-og|0|/home/noams/src|1900000100|g6|fish|2|",
 	}
-	items := buildSessionItems(nil, snap, nil, "dark", false, "lazytmux")
+	items := buildSessionItems(nil, snap, nil, "dark", false, "tmux-og")
 	// items[0] is the column-header row.
 	if len(items) != 3 {
 		t.Fatalf("got %d items, want 3 (header + 2 sessions)", len(items))
 	}
-	if items[1].target != "lazytmux" || !items[1].current {
-		t.Errorf("items[1] = %q current=%v, want lazytmux current=true (most recent activity, unsunk)", items[1].target, items[1].current)
+	if items[1].target != "tmux-og" || !items[1].current {
+		t.Errorf("items[1] = %q current=%v, want tmux-og current=true (most recent activity, unsunk)", items[1].target, items[1].current)
 	}
-	if items[2].target != "g6-lazytmux" || items[2].current {
-		t.Errorf("items[2] = %q current=%v, want g6-lazytmux current=false", items[2].target, items[2].current)
+	if items[2].target != "g6-tmux-og" || items[2].current {
+		t.Errorf("items[2] = %q current=%v, want g6-tmux-og current=false", items[2].target, items[2].current)
 	}
 }
 

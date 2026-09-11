@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // bridgeGate is the format that says "this is a live mirror pane": @bridge_win
@@ -16,7 +16,7 @@ const bridgeGate = "#{&&:#{@bridge_win},#{@bridge_pane}}"
 // bridgeCtl is the ctl invocation every gated bind's remote branch runs.
 // @bridge_sock is always in --sock= form, never word-initial.
 func bridgeCtl(p *paths.Paths) string {
-	return p.Bin["lztmux-remote-bridge-ctl"] + " --display-error=#{q:client_name} --sock=#{q:@bridge_sock}"
+	return p.Bin["og-remote-bridge-ctl"] + " --display-error=#{q:client_name} --sock=#{q:@bridge_sock}"
 }
 
 // floatShape is one float geometry in the three forms the binds need. tmux
@@ -113,7 +113,7 @@ func btopBind() string {
 // press.
 func k9sBind() string {
 	return floatBind("k", floatFull, "",
-		`"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.lazytmux.popupTools'; read -r; }" \; set -p @pane_label k9s`)
+		`"command -v k9s >/dev/null 2>&1 && exec k9s || { echo 'k9s not found in PATH — add pkgs.k9s to programs.tmux-og.popupTools'; read -r; }" \; set -p @pane_label k9s`)
 }
 
 // enrichIconDefaults are the Nerd Font (Material Design) glyph defaults;
@@ -166,7 +166,7 @@ func enrichCardBind(cfg *config.Config, p *paths.Paths) string {
         --icon-draft '%s'" \; set -p @pane_label enrich`,
 		p.Bin["tmux-enrich-card"],
 		p.Scripts["tmux-pr-enrich"],
-		p.Bin["lztmux-remote-bridge-ctl"],
+		p.Bin["og-remote-bridge-ctl"],
 		p.Scripts["tmux-issue-stamp"],
 		i["linear"], i["github"],
 		i["pending"], i["success"],

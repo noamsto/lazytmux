@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // The three flags are hand-transcribed bool->string maps in two dialects, and
@@ -56,15 +56,19 @@ func TestTickHookIfShellJoinAndEscaping(t *testing.T) {
 	}, tickPaths())
 
 	want := `if-shell "tmux list-commands set-hook | grep -q -- -B" ` +
-		`"set-hook -g -u -B '@lztmux-pr-tick' \; set -gu '@lztmux-pr-tick' \; ` +
+		`"set-hook -g -u -B '@og-pr-tick' \; set -gu '@og-pr-tick' \; ` +
+		`set-hook -g -u -B '@og-backfill-tick' \; set -gu '@og-backfill-tick' \; ` +
+		`set-hook -g -u -B '@og-usage-tick' \; set -gu '@og-usage-tick' \; ` +
+		`set-hook -g -u -B '@og-sweep-tick' \; set -gu '@og-sweep-tick' \; ` +
+		`set-hook -g -u -B '@lztmux-pr-tick' \; set -gu '@lztmux-pr-tick' \; ` +
 		`set-hook -g -u -B '@lztmux-backfill-tick' \; set -gu '@lztmux-backfill-tick' \; ` +
 		`set-hook -g -u -B '@lztmux-usage-tick' \; set -gu '@lztmux-usage-tick' \; ` +
 		`set-hook -g -u -B '@lztmux-sweep-tick' \; set -gu '@lztmux-sweep-tick' \; ` +
-		`set-hook -g -B '@lztmux-pr-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \"/store/pr/bin/tmux-pr-enrich --tick\"' \; ` +
-		`set-hook -g -B '@lztmux-backfill-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \"/store/is/bin/tmux-issue-stamp --backfill\"' \; ` +
-		`set-hook -g -B '@lztmux-usage-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \"/store/au/bin/tmux-agent-usage --tick\"' \; ` +
-		`set-hook -g -B '@lztmux-sweep-tick::#{e|/|:#{T:@lztmux_tick},5}' 'run-shell -b \"LZTMUX_TICK_SWEEP=1 /store/ui/bin/tmux-update-icons\"'" ` +
-		`"display-message 'lazytmux: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"`
+		`set-hook -g -B '@og-pr-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/pr/bin/tmux-pr-enrich --tick\"' \; ` +
+		`set-hook -g -B '@og-backfill-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/is/bin/tmux-issue-stamp --backfill\"' \; ` +
+		`set-hook -g -B '@og-usage-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/au/bin/tmux-agent-usage --tick\"' \; ` +
+		`set-hook -g -B '@og-sweep-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"OG_TICK_SWEEP=1 /store/ui/bin/tmux-update-icons\"'" ` +
+		`"display-message 'tmux-og: tmux predates 3.8 -B session monitors -- PR/backfill/usage polling and the agent sweep only run while a real client has this session attached'"`
 	if got != want {
 		t.Fatalf("tickHookIfShell =\n%s\nwant\n%s", got, want)
 	}
@@ -89,7 +93,7 @@ func TestTickHookIfShellClearsSurviveFeaturesOff(t *testing.T) {
 			t.Errorf("%s armed with its feature off", absent)
 		}
 	}
-	if !strings.Contains(got, "LZTMUX_TICK_SWEEP=1 /store/ui/bin/tmux-update-icons") {
+	if !strings.Contains(got, "OG_TICK_SWEEP=1 /store/ui/bin/tmux-update-icons") {
 		t.Error("the sweep hook is unconditional")
 	}
 }

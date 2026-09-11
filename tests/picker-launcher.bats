@@ -97,20 +97,20 @@ width_of() { sed -n 's/.*-w \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 @test "session picker: --current bar sets the popup's env" {
 	launcher="$(mk_launcher tmux-session-picker.sh)"
 	bash "$launcher" --current bar
-	grep -Eq -- '(^| )-e LZTMUX_PICKER_CURRENT_SESSION=bar( |$)' "$ARGS_LOG"
+	grep -Eq -- '(^| )-e OG_PICKER_CURRENT_SESSION=bar( |$)' "$ARGS_LOG"
 }
 
 @test "session picker: --client foo --current bar sets both" {
 	launcher="$(mk_launcher tmux-session-picker.sh)"
 	bash "$launcher" --client foo --current bar
 	grep -Eq -- '(^| )-c foo( |$)' "$ARGS_LOG"
-	grep -Eq -- '(^| )-e LZTMUX_PICKER_CURRENT_SESSION=bar( |$)' "$ARGS_LOG"
+	grep -Eq -- '(^| )-e OG_PICKER_CURRENT_SESSION=bar( |$)' "$ARGS_LOG"
 }
 
-@test "session picker: no --current logs no -e LZTMUX_PICKER_CURRENT_SESSION" {
+@test "session picker: no --current logs no -e OG_PICKER_CURRENT_SESSION" {
 	launcher="$(mk_launcher tmux-session-picker.sh)"
 	bash "$launcher"
-	run ! grep -Eq -- '(^| )-e LZTMUX_PICKER_CURRENT_SESSION' "$ARGS_LOG"
+	run ! grep -Eq -- '(^| )-e OG_PICKER_CURRENT_SESSION' "$ARGS_LOG"
 }
 
 @test "window picker: --client foo --agent pins the client and still reaches --agent" {

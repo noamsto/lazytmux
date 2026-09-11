@@ -75,9 +75,9 @@ setup() {
 	touch "$HOME/.ssh/id_ed25519.pub"
 
 	# Same @lib_remote@ substitution Nix does at build time.
-	SCRIPT="$BATS_TEST_TMPDIR/lztmux-remote-auth"
+	SCRIPT="$BATS_TEST_TMPDIR/og-remote-auth"
 	sed "s|@lib_remote@|$PWD/scripts/lib-remote.sh|g" \
-		scripts/lztmux-remote-auth.sh >"$SCRIPT"
+		scripts/og-remote-auth.sh >"$SCRIPT"
 	export SCRIPT
 }
 

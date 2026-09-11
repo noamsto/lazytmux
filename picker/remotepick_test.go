@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// testKVGet mirrors scripts/lztmux-remote-picker.sh's kv_get: the value is
+// testKVGet mirrors scripts/og-remote-picker.sh's kv_get: the value is
 // everything after the first '=' on the last matching line. There's no Go
 // binding to the shell parser, so round-trip tests reimplement its contract
 // here rather than skip it.
@@ -27,7 +27,7 @@ func testKVGet(text, want string) (string, bool) {
 }
 
 func TestEmitPayloadEncodeSession(t *testing.T) {
-	p := emitPayload{kind: "session", name: "lazytmux"}
+	p := emitPayload{kind: "session", name: "tmux-og"}
 	out, err := p.encode()
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -35,8 +35,8 @@ func TestEmitPayloadEncodeSession(t *testing.T) {
 	if kind, _ := testKVGet(out, "kind"); kind != "session" {
 		t.Errorf("kind = %q, want session", kind)
 	}
-	if name, _ := testKVGet(out, "name"); name != "lazytmux" {
-		t.Errorf("name = %q, want lazytmux", name)
+	if name, _ := testKVGet(out, "name"); name != "tmux-og" {
+		t.Errorf("name = %q, want tmux-og", name)
 	}
 	if _, ok := testKVGet(out, "path"); ok {
 		t.Errorf("session payload carried a path field: %q", out)
@@ -107,13 +107,13 @@ func TestEmitPayloadEncodeRejectsOverlong(t *testing.T) {
 // no exec.Command call anywhere in its body, unlike the ordinary
 // activateCurrent path (switch-client / createAndSwitch) this mode replaces.
 func TestResolveEmitPickSessionRow(t *testing.T) {
-	item := listItem{target: "lazytmux"}
+	item := listItem{target: "tmux-og"}
 	p, ok := resolveEmitPick(item)
 	if !ok {
 		t.Fatal("resolveEmitPick(session row) = false, want true")
 	}
-	if p.kind != "session" || p.name != "lazytmux" {
-		t.Errorf("got %+v, want kind=session name=lazytmux", p)
+	if p.kind != "session" || p.name != "tmux-og" {
+		t.Errorf("got %+v, want kind=session name=tmux-og", p)
 	}
 }
 
@@ -140,15 +140,15 @@ func TestWriteEmitPayload(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("pre-create: %v", err)
 	}
-	if err := writeEmitPayload(path, emitPayload{kind: "session", name: "lazytmux"}); err != nil {
+	if err := writeEmitPayload(path, emitPayload{kind: "session", name: "tmux-og"}); err != nil {
 		t.Fatalf("writeEmitPayload: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if name, _ := testKVGet(string(data), "name"); name != "lazytmux" {
-		t.Errorf("name = %q, want lazytmux", name)
+	if name, _ := testKVGet(string(data), "name"); name != "tmux-og" {
+		t.Errorf("name = %q, want tmux-og", name)
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestNoSessionRows(t *testing.T) {
 	if !noSessionRows(headerOnly) {
 		t.Error("noSessionRows(header only) = false, want true")
 	}
-	withSession := []listItem{{isHeader: true}, {target: "lazytmux"}}
+	withSession := []listItem{{isHeader: true}, {target: "tmux-og"}}
 	if noSessionRows(withSession) {
 		t.Error("noSessionRows(with a session) = true, want false")
 	}
@@ -197,7 +197,7 @@ func TestRemotePickHost(t *testing.T) {
 		{"session remote row in window mode", listItem{remoteHost: "tp-g6"}, true, "tp-g6", true},
 		{"mirror window row", listItem{target: "g6-main:1", bridgeHost: "tp-g6"}, true, "tp-g6", true},
 		{"mirror row ignored in session mode", listItem{bridgeHost: "tp-g6"}, false, "", false},
-		{"local window row", listItem{target: "lazytmux:1"}, true, "", false},
+		{"local window row", listItem{target: "tmux-og:1"}, true, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -210,11 +210,11 @@ func TestRemotePickHost(t *testing.T) {
 }
 
 func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
-	args := remotePickNewPaneArgs("/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick", "tp-g6")
+	args := remotePickNewPaneArgs("/nix/store/xxx-og-remote-pick/bin/og-remote-pick", "tp-g6")
 	want := []string{
 		"new-pane",
 		"-x", "90%", "-y", "85%", "-X", "5%", "-Y", "8%", "-B", "heavy", "-A",
-		"/nix/store/xxx-lztmux-remote-pick/bin/lztmux-remote-pick 'tp-g6'",
+		"/nix/store/xxx-og-remote-pick/bin/og-remote-pick 'tp-g6'",
 		";",
 		"set", "-p", "@pane_label", "remote tp-g6",
 		";",
@@ -240,9 +240,9 @@ func TestRemotePickNewPaneArgsHostWithoutQuotes(t *testing.T) {
 // A host with an embedded quote must not break out of the shell-command
 // string tmux hands to the pane's own shell.
 func TestRemotePickNewPaneArgsHostWithEmbeddedQuote(t *testing.T) {
-	args := remotePickNewPaneArgs("/bin/lztmux-remote-pick", "o'brien")
+	args := remotePickNewPaneArgs("/bin/og-remote-pick", "o'brien")
 	cmdStr := args[12]
-	want := `/bin/lztmux-remote-pick 'o'\''brien'`
+	want := `/bin/og-remote-pick 'o'\''brien'`
 	if cmdStr != want {
 		t.Errorf("command string = %q, want %q", cmdStr, want)
 	}

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // TestSeedFlowTTYAlignsRepliesWithCommands is the regression guard for the

@@ -1,4 +1,4 @@
-# Which lazytmux issues are upstream tmux bugs
+# Which tmux-og issues are upstream tmux bugs
 
 Investigation for [#488](https://github.com/noamsto/lazytmux/issues/488). Design
 spec: `docs/superpowers/specs/2026-09-03-upstream-tmux-investigation-design.md`.
@@ -8,7 +8,7 @@ below is a draft only; whether it is filed is the maintainer's call.
 
 ## Verdicts at a glance
 
-| Claim | lazytmux issue | Verdict | Why, in one line |
+| Claim | tmux-og issue | Verdict | Why, in one line |
 |---|---|---|---|
 | **1a** `set-hook` accepts a non-hook | [#341](https://github.com/noamsto/lazytmux/issues/341) | **do not report** | Premise false — the hook is stored *and* fires; only `show-hooks -g`'s enumeration omits it. |
 | **1b** `show-options -t '=name'` | [#474](https://github.com/noamsto/lazytmux/issues/474), [#476](https://github.com/noamsto/lazytmux/issues/476) | **already reported upstream** | [tmux/tmux#4594](https://github.com/tmux/tmux/issues/4594) — closed without a fix; still reproduces at the pin. |
@@ -65,12 +65,12 @@ exec -a "$0" ".../.tmux-wrapped"  -f /nix/store/zv5h4w21rws18gw6mf5rb5zz4z76wiqv
 
 The baked `-f` comes **before** the user's arguments, and tmux's `-f` handling
 makes the first `-f` clear the defaults while later ones *append*. So a repro's
-own `-f /dev/null` does not displace the lazytmux config. Verified:
+own `-f /dev/null` does not displace the tmux-og config. Verified:
 
 ```console
 $ ./result/bin/tmux -L wrapcheck -f /dev/null new-session -d
 $ ./result/bin/tmux -L wrapcheck show -g aggressive-resize
-aggressive-resize on          # lazytmux's setting, not a tmux default
+aggressive-resize on          # tmux-og's setting, not a tmux default
 
 $ /nix/store/8b8s74...-tmux-next-3.8/bin/tmux -L unwrapcheck -f /dev/null new-session -d
 $ /nix/store/8b8s74...-tmux-next-3.8/bin/tmux -L unwrapcheck show -g aggressive-resize
@@ -93,7 +93,7 @@ $ readlink -f $(which tmux)
 /nix/store/ikl1vrhrqkx7d2yl4217vjnwlb0dxsl0-tmux-wrapped/bin/tmux
 ```
 
-The system `tmux` is itself a **lazytmux wrapper** (an older lazytmux
+The system `tmux` is itself a **tmux-og wrapper** (an older tmux-og
 generation — a different baked `tmux.conf` store path), and the binary it wraps
 is `/nix/store/8b8s74j9cf64fb6snq5qn4jd4237sndg-tmux-next-3.8` — **byte-identical
 to the one the freshly built `result` wraps.**
@@ -104,7 +104,7 @@ Two consequences:
    binary. The contract asked for a divergence finding; the finding is that there
    is none.
 2. **The system tmux is wrapper-contaminated too.** Any observation taken through
-   bare `tmux` on this host carries lazytmux's config. This matters for the
+   bare `tmux` on this host carries tmux-og's config. This matters for the
    contract's own claim-1a table (see claim 1a).
 
 ### The flake/lock question: not drift
@@ -144,7 +144,7 @@ $ nix eval --impure --raw --expr '(builtins.getFlake (toString ./.)).inputs.tmux
 
 **Worth its own issue?** No. Nothing is wrong. The only cost is that the lock is
 momentarily confusing to read, and `d5afb67a` is a rev `tmux-remux` chose, which
-lazytmux does not control and does not build. Not fixed here; nothing to fix.
+tmux-og does not control and does not build. Not fixed here; nothing to fix.
 
 ---
 
@@ -361,7 +361,7 @@ disproved above**, on this exact tmux build. The prior worker on this branch
 flagged this, and the flag is correct.
 
 Per the spec's non-goals this PR does not edit that document. Recorded as a
-follow-up: the #341 note needs revising, and the question of whether lazytmux
+follow-up: the #341 note needs revising, and the question of whether tmux-og
 should simply register `pane-exited` at window scope (where it demonstrably
 fires) should be reopened on its own merits.
 
@@ -736,7 +736,7 @@ rc=1 and `not a control client`. There is no silence for ordinary clients.
 	}
 ```
 
-This narrows the claim considerably — but it narrows it *onto* lazytmux, because
+This narrows the claim considerably — but it narrows it *onto* tmux-og, because
 the remote-bridge daemon's client is exactly a control-mode client. The repro
 therefore requires a real `-CC` client, not a pty-attached normal one.
 
@@ -1081,7 +1081,7 @@ Stack trace of thread 2677655:
 
 Frame for frame the stack in #346. `-E` is irrelevant (attempt 3), and `-b
 <lines>` is as lethal as `-B` (attempt 2) — both satisfy `lines !=
-BOX_LINES_DEFAULT` at `popup.c:541`. That matters for lazytmux specifically:
+BOX_LINES_DEFAULT` at `popup.c:541`. That matters for tmux-og specifically:
 every wrapper-script launcher carries `-b rounded`, not `-B`.
 
 **Negative control — the border flag on the *second* call is the
@@ -1125,7 +1125,7 @@ those paths remain untested.
 
 ### Mitigation coverage
 
-Two mitigations shipped, and together they close every path lazytmux itself
+Two mitigations shipped, and together they close every path tmux-og itself
 creates.
 
 **1. `-c` client pinning on the wrapper-script popups.** All four launchers
@@ -1361,8 +1361,8 @@ tmux-remux's own trigger source (`~/git/noamsto/tmux-remux`,
 'run-shell -b "@BIN@ capture-event pane-died ..."'` — so the hook is still
 live at runtime, just generated rather than hand-written. It is **registered
 with `-g`** (routes to window scope per the mechanism above, same as
-lazytmux's own removed hook), and index `[99]` is cosmetic (collision
-avoidance with lazytmux's own `[20]`/`[98]` indices on other hooks) — it
+tmux-og's own removed hook), and index `[99]` is cosmetic (collision
+avoidance with tmux-og's own `[20]`/`[98]` indices on other hooks) — it
 plays no role in whether the hook stores or fires.
 
 Given `pane-exited` demonstrably fires at window scope (established fact,
@@ -1594,7 +1594,7 @@ catch a genuine window-scoped no-op. It is only its comment's example that is
 wrong, plus the fact that it has nothing to check now that `pane-exited` was
 removed from the generated config.
 
-**The reopened question:** lazytmux dropped `pane-exited` and fell back to
+**The reopened question:** tmux-og dropped `pane-exited` and fell back to
 `tmux-update-icons`' every-5th-tick sweep. Since the hook demonstrably fires,
 whether to register it again — and retire the sweep's pane-reaping role —
 should be reconsidered on its own merits.
@@ -1636,7 +1636,7 @@ options.
 
 Upstream fixed it in `af3e4d2e` (2026-08-31); our `tmux-upstream` pin
 `40381bdc` is 2026-08-28 and does not carry the guard. The crash reproduces
-3/3 at the pin. lazytmux is protected only by its own mitigations, and one of
+3/3 at the pin. tmux-og is protected only by its own mitigations, and one of
 them (`#{?client_name,--client …,}`) is fail-*open*.
 
 Bumping `tmux-upstream` past `af3e4d2e` closes it in tmux itself and makes the
@@ -1693,7 +1693,7 @@ material below (that `show-options` is affected identically, and that `-q`
 collapses the two outcomes) would be better as a **comment on #4594** if
 anything, and best of all as nothing, given the `=name:` workaround exists.
 
-Draft follows. Runs on a stock tmux build — no nix, no lazytmux.
+Draft follows. Runs on a stock tmux build — no nix, no tmux-og.
 
 ---
 

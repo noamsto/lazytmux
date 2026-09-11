@@ -24,15 +24,15 @@ setup() {
 		echo "$*" >>"$TMUX_LOG"
 		case "$*" in
 		"show-options -gv @catppuccin_flavor") echo "${FAKE_FLAVOR:-}" ;;
-		"show-options -gv @lztmux_theme_applied") cat "$STAMP" ;;
-		"set-option -g @lztmux_theme_applied "*) printf '%s' "$4" >"$STAMP" ;;
+		"show-options -gv @og_theme_applied") cat "$STAMP" ;;
+		"set-option -g @og_theme_applied "*) printf '%s' "$4" >"$STAMP" ;;
 		list-sessions*) printf '%s\n' "${FAKE_SESSIONS:-}" ;;
 		list-panes*) printf '%s\n' "${FAKE_PANE:-}" ;;
 		esac
 		exit 0
 	EOF
 
-	cat >"$FAKEBIN/lztmux-remote-bridge-ctl" <<-'EOF'
+	cat >"$FAKEBIN/og-remote-bridge-ctl" <<-'EOF'
 		#!/bin/sh
 		echo "$*" >>"$CTL_LOG"
 		exit "${FAKE_CTL_RC:-0}"
@@ -44,7 +44,7 @@ setup() {
 	# The unsubstituted @bridge_ctl@ placeholder falls back to PATH, which is
 	# what puts the fake ctl in play; the shipped script takes a pinned store
 	# path instead.
-	FANOUT="scripts/lztmux-remote-theme.sh"
+	FANOUT="scripts/og-remote-theme.sh"
 }
 
 @test "mocha fans out dark to every mirrored session" {

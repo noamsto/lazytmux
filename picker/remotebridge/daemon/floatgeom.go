@@ -3,7 +3,7 @@ package daemon
 import (
 	"strconv"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // floatBorder is the border style every mirrored float is created with.

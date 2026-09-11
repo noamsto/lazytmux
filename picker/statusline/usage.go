@@ -25,7 +25,7 @@ type usageWindow struct {
 	ResetAt int64   `json:"reset_at,omitempty"`
 }
 
-const usageCacheDir = "/tmp/lazytmux-agent-usage"
+const usageCacheDir = "/tmp/og-agent-usage"
 
 // usageAgentOrder fixes the left-to-right agent order in the segment.
 var usageAgentOrder = []string{"claude", "codex", "cursor"}

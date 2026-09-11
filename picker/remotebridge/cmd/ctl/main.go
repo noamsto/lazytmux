@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // Deadlines exist so a dead or wedged daemon can never hold tmux's command
@@ -28,7 +28,7 @@ import (
 const (
 	dialTimeout    = 250 * time.Millisecond
 	overallTimeout = 2 * time.Second
-	errorPrefix    = "lztmux-remote-bridge-ctl: "
+	errorPrefix    = "og-remote-bridge-ctl: "
 )
 
 var runTmux = func(args ...string) error {
@@ -36,7 +36,7 @@ var runTmux = func(args ...string) error {
 }
 
 func main() {
-	sock := flag.String("sock", os.Getenv("LZTMUX_DAEMON_SOCK"), "bridge daemon unix socket")
+	sock := flag.String("sock", os.Getenv("OG_DAEMON_SOCK"), "bridge daemon unix socket")
 	displayError := flag.String("display-error", "", "tmux client to show request failures in")
 	flag.Parse()
 

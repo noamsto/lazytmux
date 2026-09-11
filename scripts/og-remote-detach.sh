@@ -14,7 +14,7 @@ sess="${1:-$(tmux display-message -p '#{session_name}')}"
 # when its name is numeric (CLAUDE.md, "Session Targeting Gotcha").
 sock="$(tmux display-message -p -t "$sess:" '#{@bridge_sock}')"
 if [[ -z $sock ]]; then
-	tmux display-message "lztmux-remote-detach: $sess is not a bridged session"
+	tmux display-message "og-remote-detach: $sess is not a bridged session"
 	exit 0
 fi
 

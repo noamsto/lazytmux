@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests claude-status-update.sh's `enrich [<ID>]` subcommand (#137): resolves
 # the invoking pane's window/worktree/branch and re-fires tmux-issue-stamp,
-# silently, outside a lazytmux tmux.
+# silently, outside a tmux-og tmux.
 
 CSU="scripts/claude-status-update.sh"
 

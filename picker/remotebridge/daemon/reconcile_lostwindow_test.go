@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // #487: a mirror's local window can go away by a route this daemon never saw —

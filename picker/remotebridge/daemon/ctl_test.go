@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // newCtlStateWith returns a state that already mirrors one window's panes, as
@@ -193,7 +193,7 @@ func TestParseCtlPingProbesCompatibilityBeforePaneLookup(t *testing.T) {
 // TestPingSubmitAcksWithNoLiveConnection: parseCtl returns a request with no
 // commands for ping, so submit's loop never calls send and acks even against
 // a send that always refuses — which is what connHolder.send does with an
-// empty slot mid-outage. Without that, lztmux-remote-open's dedup would read a
+// empty slot mid-outage. Without that, og-remote-open's dedup would read a
 // disconnected bridge as dead and stack a second daemon on the same socket.
 func TestPingSubmitAcksWithNoLiveConnection(t *testing.T) {
 	c := newCtlState()
@@ -201,7 +201,7 @@ func TestPingSubmitAcksWithNoLiveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCtl ping: %v", err)
 	}
-	if !c.submit(req, func(string) bool { return false }) {
+	if !c.submit(req, func(...string) bool { return false }) {
 		t.Error("submit reported ping unwritten with no live connection, want ack")
 	}
 }
@@ -232,7 +232,7 @@ func TestSubmitRegistersIntentBeforeSending(t *testing.T) {
 	}
 
 	sawIntent := false
-	ok := c.submit(req, func(string) bool {
+	ok := c.submit(req, func(...string) bool {
 		// Read the field directly: takeIntents would deadlock on the held mutex,
 		// which is itself the property under test.
 		sawIntent = c.wantLayout["@1"]
@@ -250,7 +250,7 @@ func TestSubmitRegistersIntentBeforeSending(t *testing.T) {
 func TestSubmitReportsUnwritten(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
 	req, _ := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem")
-	if c.submit(req, func(string) bool { return false }) {
+	if c.submit(req, func(...string) bool { return false }) {
 		t.Error("submit reported written when send refused")
 	}
 }
@@ -268,7 +268,7 @@ func TestTakeIntentsCoalescesAndDrains(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parseCtl(%q): %v", argv, err)
 		}
-		c.submit(req, func(string) bool { return true })
+		c.submit(req, func(...string) bool { return true })
 	}
 
 	windows, layouts := c.takeIntents()
@@ -289,7 +289,7 @@ func TestTakeIntentsCoalescesAndDrains(t *testing.T) {
 func TestForgetWindowDropsState(t *testing.T) {
 	c := newCtlStateWith("@1", "%3")
 	req, _ := c.parseCtl([]string{wire.CtlProtocolVersion, "split-h", "%3"}, "rem")
-	c.submit(req, func(string) bool { return true })
+	c.submit(req, func(...string) bool { return true })
 
 	c.forgetWindow("@1")
 
@@ -1047,9 +1047,9 @@ func handlerFixture(t *testing.T, adv, viewer string) (*ctlState, *viewReplacer,
 	return cst, rep, view, &sent
 }
 
-func sender(sent *[]string) func(string) bool {
-	return func(cmd string) bool {
-		*sent = append(*sent, cmd)
+func sender(sent *[]string) func(...string) bool {
+	return func(cmds ...string) bool {
+		*sent = append(*sent, cmds...)
 		return true
 	}
 }

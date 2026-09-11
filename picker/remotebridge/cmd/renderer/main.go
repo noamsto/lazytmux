@@ -5,7 +5,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/render"
+	"github.com/noamsto/tmux-og/picker/remotebridge/render"
 )
 
 func sockAndPane(args []string) (sock, pane string, ok bool) {

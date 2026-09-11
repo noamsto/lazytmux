@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // sessionIDRe matches a tmux session id. The id is interpolated into a command

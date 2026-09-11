@@ -15,24 +15,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/render"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/render"
 )
 
 var paneIDRe = regexp.MustCompile(`^%[0-9]+$`)
 
 func main() {
-	// Flags default to LZTMUX_BRIDGE_* env vars: lztmux-remote-open passes
+	// Flags default to OG_BRIDGE_* env vars: og-remote-open passes
 	// the (untrusted, remote-derived) host/session/window into tmux's
 	// environment rather than interpolating them into the /bin/sh command
 	// string, so a crafted remote session name can't break out into local
 	// shell execution.
-	host := flag.String("host", os.Getenv("LZTMUX_BRIDGE_HOST"), "ssh host")
-	session := flag.String("session", os.Getenv("LZTMUX_BRIDGE_SESSION"), "remote session")
-	window := flag.Int("window", envInt("LZTMUX_BRIDGE_WINDOW"), "remote window index")
-	remoteTmux := flag.String("tmux", envDefault("LZTMUX_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
-	tmpdir := flag.String("tmpdir", os.Getenv("LZTMUX_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
-	sshCmd := flag.String("ssh", envDefault("LZTMUX_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
+	host := flag.String("host", os.Getenv("OG_BRIDGE_HOST"), "ssh host")
+	session := flag.String("session", os.Getenv("OG_BRIDGE_SESSION"), "remote session")
+	window := flag.Int("window", envInt("OG_BRIDGE_WINDOW"), "remote window index")
+	remoteTmux := flag.String("tmux", envDefault("OG_BRIDGE_TMUX", "tmux"), "absolute remote tmux path")
+	tmpdir := flag.String("tmpdir", os.Getenv("OG_BRIDGE_TMPDIR"), "remote TMUX_TMPDIR")
+	sshCmd := flag.String("ssh", envDefault("OG_BRIDGE_SSH", "ssh"), "control transport command (empty = run tmux locally)")
 	flag.Parse()
 
 	// remoteTmux may carry args (e.g. "tmux -S <sock>" for tests), so split
@@ -52,12 +52,12 @@ func main() {
 	}
 	stdin, err := ctl.StdinPipe()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: %v\r\n", err)
+		fmt.Fprintf(os.Stderr, "og-remote-bridge: %v\r\n", err)
 		os.Exit(1)
 	}
 	stdout, err := ctl.StdoutPipe()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: %v\r\n", err)
+		fmt.Fprintf(os.Stderr, "og-remote-bridge: %v\r\n", err)
 		os.Exit(1)
 	}
 	cmds := bufio.NewWriter(stdin)
@@ -78,7 +78,7 @@ func main() {
 	}
 
 	if err := ctl.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: %v\r\n", err)
+		fmt.Fprintf(os.Stderr, "og-remote-bridge: %v\r\n", err)
 		os.Exit(1)
 	}
 	reader := controlmode.NewReader(stdout)
@@ -88,7 +88,7 @@ func main() {
 
 	s, err := seedFlow(reader, send, *session, *window, hasTTY, w, h)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lztmux-remote-bridge: %v\r\n", err)
+		fmt.Fprintf(os.Stderr, "og-remote-bridge: %v\r\n", err)
 		os.Exit(1)
 	}
 	pane := s.pane

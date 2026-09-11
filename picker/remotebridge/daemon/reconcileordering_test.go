@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // scriptedRTRouter is scriptedRT (sessionpin_test.go), except router is the

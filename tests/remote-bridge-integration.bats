@@ -2,7 +2,7 @@
 
 setup() {
 	SOCK="$BATS_TEST_TMPDIR/t.sock"
-	# BRIDGE points at the prebuilt lztmux-remote-bridge binary; the nix check
+	# BRIDGE points at the prebuilt og-remote-bridge binary; the nix check
 	# sets it to a store path, fall back to building from source for local runs.
 	if [[ -z ${BRIDGE:-} ]]; then
 		BRIDGE="$BATS_TEST_TMPDIR/bridge"

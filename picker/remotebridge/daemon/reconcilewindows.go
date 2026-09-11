@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // reconcileWindows re-reads the bridged session's whole window set and makes the

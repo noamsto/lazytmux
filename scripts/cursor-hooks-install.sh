@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upsert lazytmux Cursor status hooks into ~/.cursor/hooks.json.
+# Upsert tmux-og Cursor status hooks into ~/.cursor/hooks.json.
 # Usage: cursor-hooks-install <wrapper-absolute-path>
 # Strips prior entries whose command contains /bin/cursor-status-hook, then
 # appends the template. Leaves aeye/user entries alone. Fails on malformed JSON.

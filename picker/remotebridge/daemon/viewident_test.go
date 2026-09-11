@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
 )
 
 func TestResolveViewIdentity(t *testing.T) {

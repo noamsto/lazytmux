@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // replyRT answers each command in a batch with one canned line, recording what
@@ -30,7 +30,7 @@ func body(s string) controlmode.Line {
 
 func TestSubscribeCmdIsOneQuotedToken(t *testing.T) {
 	got := subscribeCmd(labelSubName, "@*", windowLabelFormat)
-	want := `refresh-client -B 'lztmux_labels:@*:` + windowLabelFormat + `'`
+	want := `refresh-client -B 'og_labels:@*:` + windowLabelFormat + `'`
 	if got != want {
 		t.Errorf("cmd = %q, want %q", got, want)
 	}

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // noticeUnchangedLayout is a one-pane window, matching reconcilededup_test.go's

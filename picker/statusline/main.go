@@ -79,7 +79,7 @@ func (a *args) fetchVolatile() (prefixActive, ok bool) {
 
 // statuslineCacheDir holds the per-session last-good rendered line so a failed
 // fetchVolatile re-paints the previous frame rather than a degraded one.
-const statuslineCacheDir = "/tmp/lazytmux-statusline"
+const statuslineCacheDir = "/tmp/og-statusline"
 
 // cacheFileName maps a session name to a filesystem-safe file name; distinct
 // names stay distinct (any non-safe byte becomes its 2-hex escape).
@@ -406,7 +406,7 @@ func main() {
 	// there's actual data to display.
 	usage := ""
 	if a.usageMonthlyThreshold > 0 {
-		usageDir := os.Getenv("LAZYTMUX_AGENT_USAGE_DIR")
+		usageDir := os.Getenv("OG_AGENT_USAGE_DIR")
 		if usageDir == "" {
 			usageDir = usageCacheDir
 		}

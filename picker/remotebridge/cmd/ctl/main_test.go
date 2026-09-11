@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 func TestRunReportsUnreachableDaemon(t *testing.T) {

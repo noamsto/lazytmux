@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // TestSinkDirtyOnlyOnceDrained pins the gate: a drop is remembered, but not

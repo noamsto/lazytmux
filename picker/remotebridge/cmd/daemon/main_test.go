@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/daemon"
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/daemon"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
 )
 
 // TestReflowRunShellArgsSurvivesFormatInjection exercises a #(...)-bearing
@@ -28,12 +28,12 @@ import (
 // its own.
 func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
-		// LAZYTMUX_REQUIRE_TMUX is set by pickerChecked's checkPhase in flake.nix,
+		// OG_REQUIRE_TMUX is set by pickerChecked's checkPhase in flake.nix,
 		// which also adds pkgs.tmux to nativeBuildInputs — so under `nix flake
 		// check` a missing tmux means that input was pruned, not that this is a
 		// dev machine. Fail instead of silently skipping this regression check.
-		if os.Getenv("LAZYTMUX_REQUIRE_TMUX") != "" {
-			t.Fatal("tmux is required (LAZYTMUX_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
+		if os.Getenv("OG_REQUIRE_TMUX") != "" {
+			t.Fatal("tmux is required (OG_REQUIRE_TMUX set) but not on PATH — check pickerChecked's nativeBuildInputs in flake.nix")
 		}
 		t.Skip("tmux is not available")
 	}
@@ -115,7 +115,7 @@ func TestReflowRunShellArgsSurvivesFormatInjection(t *testing.T) {
 // else in the suite would fail if they were dropped, hence this test.
 func TestSSHControlArgsCarryKeepalives(t *testing.T) {
 	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "xterm-kitty", "truecolor", "iTerm.app",
-		"lazytmux", []string{"tmux"})
+		"tmux-og", []string{"tmux"})
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -172,7 +172,7 @@ func TestSSHControlArgsCarryKeepalives(t *testing.T) {
 	}
 
 	// The session is the attach target and must stay one token even with spaces.
-	if got := args[len(args)-1]; got != shellQuote("lazytmux") {
+	if got := args[len(args)-1]; got != shellQuote("tmux-og") {
 		t.Errorf("last arg = %q, want the shell-quoted session", got)
 	}
 }
@@ -181,7 +181,7 @@ func TestSSHControlArgsCarryKeepalives(t *testing.T) {
 // (no client, or a terminal that never set it) must not ship a bogus/empty
 // env assignment to the remote.
 func TestSSHControlArgsOmitsEmptyColortermAndTermProgram(t *testing.T) {
-	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "", "", "", "lazytmux", []string{"tmux"})
+	args := sshControlArgs("/tmp/ctl.sock", "tp-g6", "/run/user/1000", "", "", "", "tmux-og", []string{"tmux"})
 	joined := strings.Join(args, " ")
 	for _, unwanted := range []string{"TERM=", "COLORTERM=", "TERM_PROGRAM="} {
 		if strings.Contains(joined, unwanted) {
@@ -199,14 +199,14 @@ func TestNewSSHDialCmdReadsDesiredAtDialTime(t *testing.T) {
 	view := &daemon.Viewing{}
 	view.Seed("xterm-kitty")
 
-	cmd := newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-1.sock", "truecolor", "iTerm.app", "lazytmux", []string{"tmux"}, view)
+	cmd := newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-1.sock", "truecolor", "iTerm.app", "tmux-og", []string{"tmux"}, view)
 	want := "TERM=" + shellQuote("xterm-kitty")
 	if slices.Index(cmd.Args, want) < 0 {
 		t.Fatalf("first dial argv %v missing %q", cmd.Args, want)
 	}
 
 	view.SetDesired("foot")
-	cmd = newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-2.sock", "truecolor", "iTerm.app", "lazytmux", []string{"tmux"}, view)
+	cmd = newSSHDialCmd("ssh", "tp-g6", "/run/user/1000", "/tmp/ctl-2.sock", "truecolor", "iTerm.app", "tmux-og", []string{"tmux"}, view)
 	want = "TERM=" + shellQuote("foot")
 	if slices.Index(cmd.Args, want) < 0 {
 		t.Fatalf("dial after SetDesired argv %v missing %q — still carrying the old termname", cmd.Args, want)
@@ -478,7 +478,7 @@ func TestHelperWedgedChild(t *testing.T) {
 	time.Sleep(time.Minute)
 }
 
-const wedgedChildEnv = "LZTMUX_TEST_WEDGED_CHILD"
+const wedgedChildEnv = "OG_TEST_WEDGED_CHILD"
 
 func requireSleep(t *testing.T) {
 	t.Helper()

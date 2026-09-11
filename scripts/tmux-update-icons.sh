@@ -44,7 +44,7 @@ normalize_wrapped_cmd() {
 # True when PATH is BASE itself, or nested under it — mirrors the awk under()
 # in tmux-worktree-match.sh. A nested .worktrees/ checkout belongs to a
 # different branch, and a plain prefix match would also read
-# "/x/lazytmux-old" as inside "/x/lazytmux". False when either is empty.
+# "/x/tmux-og-old" as inside "/x/tmux-og". False when either is empty.
 under() {
 	local p="$1" base="$2"
 	[[ -z $p || -z $base ]] && return 1
@@ -118,17 +118,17 @@ arm_agent_detect() {
 }
 
 main() {
-	# Driven by the @lztmux-sweep-tick monitor hook, so a control-only host still
+	# Driven by the @og-sweep-tick monitor hook, so a control-only host still
 	# arms. Dispatched on an environment variable rather than argv because
 	# #{qs:session_name} quotes a session name without changing its VALUE: a
 	# session literally named "--sweep" would make $1 that exact string and route
 	# itself into this branch forever, never rendering its own icons again. A
-	# session name cannot forge LZTMUX_TICK_SWEEP.
+	# session name cannot forge OG_TICK_SWEEP.
 	#
 	# Arming only -- no prune here, and arm_agent_detect skips its reap for this
 	# caller; see the reap's own comment for why a client-independent timer must
 	# not delete from CLAUDE_STATUS_DIR.
-	if [[ -n ${LZTMUX_TICK_SWEEP:-} ]]; then
+	if [[ -n ${OG_TICK_SWEEP:-} ]]; then
 		arm_agent_detect force
 		return 0
 	fi

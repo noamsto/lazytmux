@@ -15,7 +15,7 @@ setup() {
 	mkdir -p "$FAKEBIN"
 	export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
 	export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
 	unset TMUX TMUX_PANE
 
 	cat >"$FAKEBIN/gh" <<-'EOF'

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 func keysPaths() *paths.Paths {
@@ -15,8 +15,8 @@ func keysPaths() *paths.Paths {
 			"tmux-issue-stamp": "/store/tmux-issue-stamp",
 		},
 		Bin: map[string]string{
-			"lztmux-remote-bridge-ctl": "/store/ctl",
-			"tmux-enrich-card":         "/store/card",
+			"og-remote-bridge-ctl": "/store/ctl",
+			"tmux-enrich-card":     "/store/card",
 		},
 	}
 }

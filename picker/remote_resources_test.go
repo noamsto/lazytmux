@@ -93,7 +93,7 @@ func TestParseRemoteResourcesSessionNameWithPipe(t *testing.T) {
 
 func TestParseBridgeSessionNames(t *testing.T) {
 	got := parseBridgeSessionNames(strings.Join([]string{
-		"lazytmux||",
+		"tmux-og||",
 		"tp-g6-work|tp-g6|work",
 		"lab-main|lab|main",
 	}, "\n"))
@@ -156,7 +156,7 @@ func TestMergeRemoteResourcesOverridesRendererFigures(t *testing.T) {
 	})
 
 	sessions := []sessionData{
-		{name: "lazytmux", cpuPct: 3, memMB: 100},
+		{name: "tmux-og", cpuPct: 3, memMB: 100},
 		{name: "tp-g6-work", bridgeHost: "tp-g6", cpuPct: 1, memMB: 40},
 		{name: "lab-main", bridgeHost: "lab", cpuPct: 2, memMB: 50},
 	}

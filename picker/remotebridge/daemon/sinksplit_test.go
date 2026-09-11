@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // TestOutputSinkResizeUnsplit pins the corruption guard (C5's trap): a

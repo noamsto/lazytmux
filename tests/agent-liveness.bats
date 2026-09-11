@@ -266,7 +266,7 @@ setup_sweep() {
 	# wrapped-tmux server on the machine, which shares that same /tmp
 	# directory regardless of TMUX_TMPDIR/-L isolation. A non-empty first
 	# argument is exactly how main() marks that caller (see its
-	# LZTMUX_TICK_SWEEP dispatch), so arm_agent_detect must not reap on it.
+	# OG_TICK_SWEEP dispatch), so arm_agent_detect must not reap on it.
 	setup_sweep
 	run bash -c '
 		claude_reap_dead_panes() { printf "%s" "$1" >"'"$BATS_TEST_TMPDIR"'/reap.log"; }

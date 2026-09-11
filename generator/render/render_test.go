@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 func writeTemplate(t *testing.T, body string) string {

@@ -10,7 +10,7 @@ bats_require_minimum_version 1.5.0 # run !
 # -L resolves to "$TMUX_TMPDIR/tmux-<uid>/<name>", and a long bats tmpdir
 # path pushes that past the unix socket 108-char limit ("File name too
 # long"). DST_CONF sets base-index 1 and renumber-windows on (the real
-# lazytmux host convention, and what makes an index-keyed mirror go stale —
+# tmux-og host convention, and what makes an index-keyed mirror go stale —
 # #411) plus remain-on-exit on:
 # once the daemon exits (timeout/kill), every renderer's socket connection
 # drops and its pane's command exits, and without remain-on-exit the pane —
@@ -18,7 +18,7 @@ bats_require_minimum_version 1.5.0 # run !
 # before the assertions below get to read pane dims.
 
 setup() {
-	export TMUX_TMPDIR="/tmp/lztmux-m2-bats-$$"
+	export TMUX_TMPDIR="/tmp/og-m2-bats-$$"
 	rm -rf "$TMUX_TMPDIR"
 	mkdir -p "$TMUX_TMPDIR"
 	# DST sets global pane-base-index 1, matching the real host's render
@@ -50,7 +50,7 @@ setup() {
 	# pane_current_command truncates a long comm to macOS's MAXCOMLEN (15
 	# usable chars) but not Linux's (which reads the full cmdline) — the nix
 	# build's RENDERER is the long store binary name
-	# "lztmux-remote-bridge-renderer", so grepping the literal "renderer"
+	# "og-remote-bridge-renderer", so grepping the literal "renderer"
 	# substring never matches once macOS cuts the pane's reported command
 	# short of it. A prefix this short survives that truncation everywhere.
 	RENDERER_PROBE="$(basename "$RENDERER" | cut -c1-15)"
@@ -958,8 +958,10 @@ wait_bridge_disconnected() {
 # A sixel crossing the bridge is either dropped (no client sixel capability to
 # paint it, the default) or relayed bare, gated by Relay.Sixel() — a value
 # computed once from the daemon's own --termfeatures flag (R6) and published
-# to the remote SESSION as LZTMUX_RELAY_GRAPHICS (R5), so a program there can
-# tell whether handing the terminal a sixel directly will actually reach it.
+# to the remote SESSION as OG_RELAY_GRAPHICS — and beside it under the legacy
+# LZTMUX_RELAY_GRAPHICS the pinned aeye input still reads (R5) — so a program
+# there can tell whether handing the terminal a sixel directly will actually
+# reach it.
 #
 # capture-pane cannot see any of this: tmux's own DCS parser eats a sixel, so
 # it reads as green whether or not the bytes crossed. pipe-pane on the mirror
@@ -1017,6 +1019,24 @@ expected_sixel_bytes() {
 	printf '~~~\033\134' >>"$1"
 }
 
+# relay_env_both echoes the remote session's copy of the canonical relay
+# variable, and fails if the legacy spelling beside it carries a different
+# value. Both are asserted because the daemon publishes both (the legacy name is
+# what the pinned aeye input reads), so pinning either alone lets the other go
+# stale unnoticed. The prefixes are stripped rather than the values extracted,
+# so a variable that is absent entirely cannot read as agreeing with one that
+# is set.
+relay_env_both() {
+	local new legacy
+	new="$($SRC show-environment -t rem OG_RELAY_GRAPHICS 2>/dev/null || true)"
+	legacy="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+	if [ "${new#OG_RELAY_GRAPHICS}" != "${legacy#LZTMUX_RELAY_GRAPHICS}" ]; then
+		printf 'relay env spellings disagree: [%s] vs [%s]\n' "$new" "$legacy" >&2
+		return 1
+	fi
+	printf '%s\n' "$new"
+}
+
 # (a) — relay off, the RED-first assertion (spec R8): an oversized sixel must
 # not reach the mirror pane's pty at all, not the introducer and not any of
 # the body. This is a teeth-check, not just a positive case: swapping this
@@ -1053,13 +1073,13 @@ expected_sixel_bytes() {
 	# daemon.go's comment on the send(RelayEnvCmd(...)) call) — so the remote
 	# session's copy is SET, not unset, and reads back empty rather than
 	# absent.
-	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+	relay_env="$(relay_env_both)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$seen" = yes ]
-	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
+	[ "$relay_env" = "OG_RELAY_GRAPHICS=" ]
 	# Not the DCS introducer...
 	run ! grep -F -- $'\033Pq' "$f"
 	# ...and not a run of its body either (a lone '~' is just the typed
@@ -1093,7 +1113,7 @@ expected_sixel_bytes() {
 		sleep 0.15
 	done
 
-	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+	relay_env="$(relay_env_both)"
 
 	exp="$BATS_TEST_TMPDIR/gxon.expected"
 	expected_sixel_bytes "$exp"
@@ -1102,7 +1122,7 @@ expected_sixel_bytes() {
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$seen" = yes ]
-	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ]
+	[ "$relay_env" = "OG_RELAY_GRAPHICS=sixel" ]
 	expected="$(cat "$exp")"
 	grep -qF -- "$expected" "$f"
 }
@@ -1151,8 +1171,8 @@ expected_sixel_bytes() {
 		sleep 0.15
 	done
 	[ "$seen1" = yes ]
-	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
-	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
+	relay_env="$(relay_env_both)"
+	[ "$relay_env" = "OG_RELAY_GRAPHICS=" ]
 	run ! grep -F -- $'\033Pq' "$f1"
 
 	# Switch the viewer to a sixel-capable terminal. Kill the old pty host's
@@ -1185,8 +1205,8 @@ expected_sixel_bytes() {
 	[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -eq 1 ]
 
 	for _ in $(seq 1 40); do
-		relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
-		[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ] && break
+		relay_env="$(relay_env_both || true)"
+		[ "$relay_env" = "OG_RELAY_GRAPHICS=sixel" ] && break
 		sleep 0.15
 	done
 
@@ -1208,7 +1228,7 @@ expected_sixel_bytes() {
 	$OBS kill-server 2>/dev/null || true
 
 	# The capability flipped...
-	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=sixel" ]
+	[ "$relay_env" = "OG_RELAY_GRAPHICS=sixel" ]
 	# ...and the drop policy actually followed it: the sixel bytes now reach
 	# the mirror pane's pty, byte-identical, not just the env var.
 	[ "$seen2" = yes ]
@@ -1223,7 +1243,7 @@ expected_sixel_bytes() {
 # === M2.3: structural input (ctl -> daemon -> remote -> mirror) ===
 #
 # These drive the ctl binary directly against the daemon's socket, which is the
-# right seam here: the bats servers run vanilla configs with no lazytmux
+# right seam here: the bats servers run vanilla configs with no tmux-og
 # keybindings, so there is nothing for a gate to intercept. The tmux-config half
 # of M2.3 (the if-shell gates on @bridge_win/@bridge_pane) is therefore NOT
 # covered by these tests — see tests/tmux-next38-readiness.bats for the parts of
@@ -1832,7 +1852,7 @@ $pane 1" ]; then
 	$SRC set -w -t rem:1 @issue_provider linear
 	$SRC set -w -t rem:1 @issue_id ENG-460
 	$SRC set -w -t rem:1 @issue_url 'https://linear.app/factify/issue/ENG-460'
-	$SRC set -w -t rem:1 @pr_url 'https://github.com/noamsto/lazytmux/pull/460'
+	$SRC set -w -t rem:1 @pr_url 'https://github.com/noamsto/tmux-og/pull/460'
 	$SRC set -w -t rem:1 @pr_draft 1
 	$SRC set -w -t rem:1 @branch feat/460-card
 	$SRC set -w -t rem:1 @worktree /home/rem/wt/460
@@ -1892,7 +1912,7 @@ $pane 1" ]; then
 	[ "$issue_provider" = "linear" ]
 	[ "$issue_id" = "ENG-460" ]
 	[ "$issue_url" = "https://linear.app/factify/issue/ENG-460" ]
-	[ "$pr_url" = "https://github.com/noamsto/lazytmux/pull/460" ]
+	[ "$pr_url" = "https://github.com/noamsto/tmux-og/pull/460" ]
 	[ "$pr_draft" = "1" ]
 	[ "$branch" = "feat/460-card" ]
 	[ "$dir" = "/home/rem/wt/460" ]
@@ -1972,7 +1992,7 @@ $pane 1" ]; then
 	[[ $body == *"state=error"* ]]
 }
 
-# run_detach runs lztmux-remote-detach against $1 under a `tmux` that is pinned
+# run_detach runs og-remote-detach against $1 under a `tmux` that is pinned
 # to the DST server: the script calls a bare `tmux` (correct in production), and
 # the absolute path inside the stub keeps it from re-entering itself. DETACH is
 # the store path of the script; only tests/ exists in the check sandbox.
@@ -1983,7 +2003,7 @@ run_detach() {
 	mkdir -p "$stub"
 	printf '#!/bin/sh\nexec %s -L m2dst "$@"\n' "$real_tmux" >"$stub/tmux"
 	chmod +x "$stub/tmux"
-	detach="${DETACH:-$BATS_TEST_DIRNAME/../scripts/lztmux-remote-detach.sh}"
+	detach="${DETACH:-$BATS_TEST_DIRNAME/../scripts/og-remote-detach.sh}"
 	run env PATH="$stub:$PATH" bash "$detach" "$1"
 }
 
@@ -2058,7 +2078,7 @@ run_detach() {
 	$SRC new-session -d -s other -x 100 -y 30 # what `sesh connect` would land on
 	$DST new-session -d -s host-sess -x 100 -y 30
 
-	# Stub stands in for lztmux-remote-open: records the hand-off argv instead
+	# Stub stands in for og-remote-open: records the hand-off argv instead
 	# of starting a second daemon. /bin/sh, not /usr/bin/env: the nix build
 	# sandbox has no /usr/bin, so an env shebang never execs.
 	open_stub="$BATS_TEST_TMPDIR/remote-open-stub"
@@ -2124,7 +2144,7 @@ m2_pane_gate_failed() {
 	tail -60 "$log" >&3 2>/dev/null || true
 }
 
-# Regression for #478: lazytmux sets `aggressive-resize on`
+# Regression for #478: tmux-og sets `aggressive-resize on`
 # (config/tmux.conf.nix), so every remote window inherits it, and tmux then
 # sizes a window only from clients whose session currently has that window
 # selected. The bridge holds ONE control client on the mirrored session, so
@@ -2443,13 +2463,13 @@ transport_child() {
 	# R5's second half: repair() re-asserts the capability unconditionally on
 	# every reconnect, since the outage is the one stretch in which a change
 	# had no live connection to publish on.
-	relay_env="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
+	relay_env="$(relay_env_both)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
 
 	[ "$painted" = yes ]
-	[ "$relay_env" = "LZTMUX_RELAY_GRAPHICS=" ]
+	[ "$relay_env" = "OG_RELAY_GRAPHICS=" ]
 }
 
 @test "a control-connection drop into a different tmux server tears the mirror down" {
@@ -2931,7 +2951,7 @@ transport_child() {
 # client_control_mode=1 on this session — which is what TERM= on its dial argv
 # (--test-local: localCtlCmdEnv; ssh: sshControlArgs) actually landed on. This
 # is the "the remote genuinely sees the viewer's identity" proof acceptance 1
-# asks for, as opposed to a local-only assertion on LZTMUX_RELAY_GRAPHICS.
+# asks for, as opposed to a local-only assertion on OG_RELAY_GRAPHICS.
 control_termname() {
 	$SRC list-clients -t rem -F '#{client_control_mode}|#{client_termname}' 2>/dev/null |
 		awk -F'|' '$1 == "1" { print $2; exit }'

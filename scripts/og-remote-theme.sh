@@ -11,10 +11,10 @@
 # from the last fan-out, making `prefix + r` and an activation reload no-ops.
 set -uo pipefail
 
-# Pinned at build time for the reason lztmux-remote-open spells out: the tmux
+# Pinned at build time for the reason og-remote-open spells out: the tmux
 # server's PATH is frozen until a restart, so a bare name can reach a stale ctl.
 ctl="@bridge_ctl@"
-[[ $ctl == @* ]] && ctl="$(command -v lztmux-remote-bridge-ctl)"
+[[ $ctl == @* ]] && ctl="$(command -v og-remote-bridge-ctl)"
 
 flavor="$(tmux show-options -gv @catppuccin_flavor 2>/dev/null)"
 if [[ $flavor == "latte" ]]; then
@@ -23,8 +23,8 @@ else
 	theme="dark"
 fi
 
-[[ $(tmux show-options -gv @lztmux_theme_applied 2>/dev/null) == "$theme" ]] && exit 0
-tmux set-option -g @lztmux_theme_applied "$theme"
+[[ $(tmux show-options -gv @og_theme_applied 2>/dev/null) == "$theme" ]] && exit 0
+tmux set-option -g @og_theme_applied "$theme"
 
 # The socket leads so a session name holding the delimiter cannot shift it: read
 # gives everything after the first | to the last variable.

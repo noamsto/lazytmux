@@ -18,7 +18,7 @@ load helper
 
 setup() {
 	command -v tmux >/dev/null || skip "tmux not on PATH"
-	export TMUX_TMPDIR="/tmp/lztmux-notify-$$-${BATS_TEST_NUMBER}"
+	export TMUX_TMPDIR="/tmp/og-notify-$$-${BATS_TEST_NUMBER}"
 	rm -rf "$TMUX_TMPDIR"
 	mkdir -p "$TMUX_TMPDIR"
 	unset TMUX TMUX_PANE
@@ -41,7 +41,7 @@ setup() {
 	export PATH="$SHIM:$PATH"
 
 	# Export before the first tmux command: the server snapshots this env.
-	export LZTMUX_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
+	export OG_NOTIFY_DIR="$BATS_TEST_TMPDIR/notify"
 	make_notify_router
 }
 
@@ -62,7 +62,7 @@ teardown() {
 
 	found=""
 	for _ in $(seq 1 80); do
-		for f in "$LZTMUX_NOTIFY_DIR"/events/*; do
+		for f in "$OG_NOTIFY_DIR"/events/*; do
 			[ -f "$f" ] && found="$f" && break
 		done
 		[ -n "$found" ] && break

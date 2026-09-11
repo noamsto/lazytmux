@@ -11,7 +11,7 @@ func main() {
 	var c cfg
 	flag.StringVar(&c.target, "target", "", "session_id:window_id to inspect")
 	flag.StringVar(&c.prEnrichBin, "pr-enrich-bin", "tmux-pr-enrich", "path to the PR poller binary")
-	flag.StringVar(&c.bridgeCtlBin, "bridge-ctl-bin", "", "path to lztmux-remote-bridge-ctl, for [r] in a mirror")
+	flag.StringVar(&c.bridgeCtlBin, "bridge-ctl-bin", "", "path to og-remote-bridge-ctl, for [r] in a mirror")
 	flag.StringVar(&c.bridgeSock, "bridge-sock", "", "bridge daemon socket, for [r] in a mirror")
 	flag.StringVar(&c.bridgePane, "bridge-pane", "", "remote pane id, for [r] in a mirror")
 	flag.StringVar(&c.issueStampBin, "issue-stamp-bin", "tmux-issue-stamp", "path to the issue-identity stamp binary")

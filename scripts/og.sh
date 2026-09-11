@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dispatcher over lazytmux's curated public scripts: resolves <noun> [<verb>]
+# Dispatcher over tmux-og's curated public scripts: resolves <noun> [<verb>]
 # to an absolute store path and execs it with the remaining arguments
 # untouched. See docs/superpowers/specs/2026-09-10-og-dispatcher-design.md.
 set -euo pipefail

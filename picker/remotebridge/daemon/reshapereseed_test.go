@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // TestSinkReshapedIsDueOnlyOnALaterPass is the whole point of the mark: the

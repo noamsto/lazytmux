@@ -8,8 +8,8 @@ import (
 	"os"
 	"text/template"
 
-	"github.com/noamsto/lazytmux/generator/config"
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/config"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // Data is every name the template may reference. Derived values arrive one

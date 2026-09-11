@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Opens a remote host's OWN session picker in a local floating pane (#356), and
-# hands the pick to lztmux-remote-open — the only supported bridging path.
+# hands the pick to og-remote-open — the only supported bridging path.
 #
 # Dual-role, one file, so the capability probe target and the thing it probes
 # for can never be different builds:
 #
-#   lztmux-remote-picker <host>        local  — drives three ssh legs, then the
-#                                              handoff
-#   lztmux-remote-picker --probe       remote — reports resolved paths, mutates
-#                                              nothing
-#   lztmux-remote-picker --serve <tok> remote — prepares the emit file, execs
-#                                              the picker in emit mode
+#   og-remote-picker <host>        local  — drives three ssh legs, then the
+#                                           handoff
+#   og-remote-picker --probe       remote — reports resolved paths, mutates
+#                                           nothing
+#   og-remote-picker --serve <tok> remote — prepares the emit file, execs
+#                                           the picker in emit mode
 set -euo pipefail
 
 # Store paths, substituted at Nix build time. This script is spawned by the tmux
@@ -36,7 +36,7 @@ fi
 #
 # ControlMaster=auto so the probe leg's connection carries the interactive and
 # collect legs too, instead of each paying its own handshake (0.22s vs 0.06s on
-# a LAN host, and the gap only widens with distance). lztmux-remote-auth builds
+# a LAN host, and the gap only widens with distance). og-remote-auth builds
 # the same master, but only a host that fails key auth ever offers that row —
 # a working host would never get one. ControlPath stays the user's config's:
 # `none` there (OpenSSH's own default) makes this a silent no-op, which is the
@@ -49,7 +49,7 @@ fi
 SSH_OPTS=()
 
 # shell_quote single-quotes $1 for a POSIX shell (escaping embedded quotes),
-# mirroring lztmux-remote-open — remote-derived paths must not break out.
+# mirroring og-remote-open — remote-derived paths must not break out.
 shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
 # Parses `key=value` out of $1; the value is everything after the first `=`, so
@@ -78,7 +78,7 @@ last_non_empty_line() {
 	printf '%s\n' "$last"
 }
 
-# Mirrors lztmux-remote-open's client-side resolver, run here on the host that
+# Mirrors og-remote-open's client-side resolver, run here on the host that
 # owns the answer: the OS decides the tmux socket dir. Both arms name the
 # PARENT of that dir — tmux appends tmux-<uid> itself (#531).
 resolve_tmpdir() {
@@ -95,14 +95,14 @@ resolve_tmux() {
 	command -v tmux 2>/dev/null || printf '/etc/profiles/per-user/%s/bin/tmux\n' "$(id -un)"
 }
 
-emit_dir_path() { printf '%s\n' "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/lztmux-pick"; }
+emit_dir_path() { printf '%s\n' "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/og-pick"; }
 
 # A floating pane is destroyed when its command exits and nothing sets
 # remain-on-exit, so pane output at exit is unobservable: the message has to
 # reach the status line, and the pane has to be held so it can be read.
 fatal() {
-	printf 'lztmux-remote-picker: %s\n' "$1" >&2
-	tmux display-message "lztmux-remote-picker: $1" 2>/dev/null || true
+	printf 'og-remote-picker: %s\n' "$1" >&2
+	tmux display-message "og-remote-picker: $1" 2>/dev/null || true
 	printf 'Press any key to close.\n'
 	[[ -t 0 ]] && read -r -n 1 -s
 	exit 1
@@ -116,7 +116,7 @@ leg_fatal() {
 	case "$rc" in
 	124) fatal "$host: timed out" ;; # timeout(1) fired
 	255) fatal "$host: unreachable" ;;
-	3) fatal "remote lazytmux too old — rebuild $host" ;;
+	3) fatal "remote tmux-og too old — rebuild $host" ;;
 	4) fatal "$host: emit dir unusable" ;;
 	esac
 	msg="$(last_non_empty_line "$errfile")"
@@ -124,8 +124,8 @@ leg_fatal() {
 }
 
 # Absolute, and free of whitespace and shell metacharacters: `script` crosses to
-# the remote's login shell (fish) as bare argv, and lztmux-remote-open
-# interpolates LZTMUX_REMOTE_TMPDIR *unquoted* into its remote command strings.
+# the remote's login shell (fish) as bare argv, and og-remote-open
+# interpolates OG_REMOTE_TMPDIR *unquoted* into its remote command strings.
 valid_remote_path() { [[ $1 =~ ^/[A-Za-z0-9._/@+:-]*$ ]]; }
 
 remote_probe() {
@@ -140,7 +140,7 @@ remote_serve() {
 	local token="$1" label="${2:-}" emit_dir emit mode found
 	# Validated before it is joined onto a path, so it can never escape it.
 	if [[ ! $token =~ ^[A-Za-z0-9]+$ ]]; then
-		echo "lztmux-remote-picker: invalid emit token" >&2
+		echo "og-remote-picker: invalid emit token" >&2
 		exit 1
 	fi
 	# Carried rather than derived: the remote cannot know which name the local
@@ -152,7 +152,7 @@ remote_serve() {
 	# -m applies only when mkdir creates; -p calls an existing directory success
 	# and checks neither its mode nor its owner. XDG_RUNTIME_DIR is absent on
 	# macOS, so this can land in a shared /tmp, where another uid's
-	# lztmux-pick would fail EACCES inside the picker — long past the point
+	# og-pick would fail EACCES inside the picker — long past the point
 	# where it could be reported. Assert instead of trusting.
 	mkdir -p "$emit_dir"
 	# chmod separately rather than via `mkdir -m`: -m applies only on create, so a
@@ -161,7 +161,7 @@ remote_serve() {
 	[[ -O $emit_dir ]] && chmod 700 "$emit_dir"
 	mode="$(stat -c '%a' "$emit_dir" 2>/dev/null || stat -f '%Lp' "$emit_dir")"
 	if [[ ! -O $emit_dir || $mode != 700 ]]; then
-		echo "lztmux-remote-picker: $emit_dir is not a private directory of ours" >&2
+		echo "og-remote-picker: $emit_dir is not a private directory of ours" >&2
 		exit 4
 	fi
 	# The only owner of token-file cleanup: a local trap cannot reach the remote,
@@ -174,7 +174,7 @@ remote_serve() {
 	: >"$emit"
 	chmod 600 "$emit"
 	if [[ ! -w $emit ]]; then
-		echo "lztmux-remote-picker: cannot write $emit" >&2
+		echo "og-remote-picker: cannot write $emit" >&2
 		exit 1
 	fi
 
@@ -184,10 +184,10 @@ remote_serve() {
 		zoxide_bin="$(dirname "${found:-/nonexistent/zoxide}")"
 	fi
 	# The picker calls `tmux` and `zoxide` by bare name and an ssh session has no
-	# lazytmux PATH. @zoxide@ ships from the same store path as this script, so
+	# tmux-og PATH. @zoxide@ ships from the same store path as this script, so
 	# the two cannot drift.
-	exec env TMUX_TMPDIR="$(resolve_tmpdir)" LZTMUX_PICKER_EMIT="$emit" \
-		LZTMUX_PICKER_HOST="$label" \
+	exec env TMUX_TMPDIR="$(resolve_tmpdir)" OG_PICKER_EMIT="$emit" \
+		OG_PICKER_HOST="$label" \
 		PATH="$zoxide_bin:$(dirname "$(resolve_tmux)"):$PATH" \
 		"$picker_generate" --tui --remote-pick
 }
@@ -203,7 +203,7 @@ local_pick() {
 	local probe_out payload rc key script emit_dir tmpdir token kind name msg persist
 	local open_env=()
 
-	# Same reading as lztmux-remote-auth's: 0 tells ssh to persist forever, not
+	# Same reading as og-remote-auth's: 0 tells ssh to persist forever, not
 	# "off", so a hand-set tmux option carrying it is rejected like any other
 	# non-positive value rather than passed through.
 	persist="$(tmux show -gv @remote_auth_persist 2>/dev/null || true)"
@@ -212,7 +212,7 @@ local_pick() {
 		-o ControlMaster=auto -o ControlPersist="$persist"
 		-o ServerAliveInterval=15)
 
-	work="$(mktemp -d "${TMPDIR:-/tmp}/lztmux-remote-picker.XXXXXX")"
+	work="$(mktemp -d "${TMPDIR:-/tmp}/og-remote-picker.XXXXXX")"
 	trap 'rm -rf "$work"' EXIT
 
 	# 16 hex chars: matches --serve's ^[A-Za-z0-9]+$, and od reads a fixed count
@@ -224,7 +224,7 @@ local_pick() {
 			# Resolve, never execute, until [ -x ] proves the capability: an older
 			# picker binary ignores unknown flags and would start its TUI instead
 			# of answering, which over ssh is a hang.
-			script="$(command -v lztmux-remote-picker 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/lztmux-remote-picker)"
+			script="$(command -v og-remote-picker 2>/dev/null || echo /etc/profiles/per-user/$(id -un)/bin/og-remote-picker)"
 			[ -x "$script" ] || exit 3
 			exec "$script" --probe
 		PROBE
@@ -267,18 +267,18 @@ local_pick() {
 	name="$KV_VALUE"
 	[[ -n $name ]] || fatal "$host: pick carried an empty session name"
 
-	open_env=("LZTMUX_REMOTE_TMPDIR=$tmpdir")
+	open_env=("OG_REMOTE_TMPDIR=$tmpdir")
 	case "$kind" in
 	session) ;;
 	dir)
 		kv_get "$payload" path || fatal "$host: dir pick carried no path"
 		[[ -n $KV_VALUE ]] || fatal "$host: dir pick carried an empty path"
-		open_env+=("LZTMUX_REMOTE_NEW_DIR=$KV_VALUE")
+		open_env+=("OG_REMOTE_NEW_DIR=$KV_VALUE")
 		;;
 	*) fatal "$host: unrecognised pick kind '$kind'" ;;
 	esac
 
-	[[ $remote_open == @* ]] && remote_open="$(command -v lztmux-remote-open)"
+	[[ $remote_open == @* ]] && remote_open="$(command -v og-remote-open)"
 	# The launcher makes three more round trips before switch-client; without a
 	# note the floating pane just sits blank.
 	printf 'Opening %s on %s…\n' "$name" "$host"
@@ -288,7 +288,7 @@ local_pick() {
 	env "${open_env[@]}" "$remote_open" "$host" "$name" 2>"$work/open.err" && rc=0 || rc=$?
 	if ((rc != 0)); then
 		msg="$(last_non_empty_line "$work/open.err")"
-		fatal "${msg:-lztmux-remote-open failed on $host (status $rc)}"
+		fatal "${msg:-og-remote-open failed on $host (status $rc)}"
 	fi
 }
 
@@ -296,7 +296,7 @@ case "${1:-}" in
 --probe) remote_probe ;;
 --serve) remote_serve "${2:-}" "${3:-}" ;;
 "" | -*)
-	echo "usage: lztmux-remote-picker <host> | --probe | --serve <token> [label]" >&2
+	echo "usage: og-remote-picker <host> | --probe | --serve <token> [label]" >&2
 	exit 1
 	;;
 *) local_pick "$1" ;;

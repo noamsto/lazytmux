@@ -3,7 +3,7 @@
 
 setup() {
 	TMUX_BIN="${TMUX_BIN:?set TMUX_BIN to the built wrapper}"
-	SOCKET="lztmux-next38-${BATS_TEST_NUMBER}-$$"
+	SOCKET="og-next38-${BATS_TEST_NUMBER}-$$"
 	TEST_HOME="$BATS_TEST_TMPDIR/home"
 	mkdir -p "$TEST_HOME"
 	export HOME="$TEST_HOME"
@@ -15,8 +15,9 @@ setup() {
 	# sweep reaches two functions that delete files under these dirs — whose
 	# defaults are the developer's real /tmp trees (#603).
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
-	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/og-pr"
+	export OG_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/og-agent-usage"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/og-enrich-lock"
 
 	t new-session -d -s s -c "$PWD"
 	wait_for_nonempty_option @thm_bg
@@ -170,7 +171,7 @@ wait_for_client() {
 	[[ $keys == *"display-popup"* && $keys == *"tmux-enrich-card"* ]]
 
 	session_picker="$(store_path '/nix/store/[[:alnum:]]*-tmux-session-picker/bin/tmux-session-picker')"
-	picker="$(embedded_path "$session_picker" '/nix/store/[[:alnum:]]*-lazytmux-go-tools-[^[:space:]]*/bin/tmux-picker-generate')"
+	picker="$(embedded_path "$session_picker" '/nix/store/[[:alnum:]]*-tmux-og-go-tools-[^[:space:]]*/bin/tmux-picker-generate')"
 	[[ -x $picker ]]
 
 	make_tmux_shim
@@ -212,7 +213,7 @@ wait_for_client() {
 # === Remote bridge structural-input gate (M2.3) ===
 #
 # The bridge daemon's own integration tests run on vanilla `tmux -L` servers with
-# no lazytmux keybindings, so they cannot see the gate at all. These cases run
+# no tmux-og keybindings, so they cannot see the gate at all. These cases run
 # against the WRAPPED tmux — the real generated config — which is the only place
 # in CI where the gate and the rebound defaults exist.
 
@@ -376,7 +377,7 @@ wait_for_client() {
 	run t show-hooks -g
 	[ "$status" -eq 0 ]
 	[[ $output == *'after-select-pane[20]'* ]]
-	[[ $output == *'lztmux-remote-bridge-ctl'* ]]
+	[[ $output == *'og-remote-bridge-ctl'* ]]
 
 	# prefix + r re-sources the generated config, so re-sourcing must not stack a
 	# second hook. Source the wrapper's own config rather than a user symlink,
@@ -445,7 +446,7 @@ wait_for_client() {
 	run t show-hooks -g -B
 	[ "$status" -eq 0 ]
 	local stored_monitors="$output" monitor_name
-	for monitor_name in @lztmux-pr-tick @lztmux-backfill-tick @lztmux-usage-tick @lztmux-sweep-tick; do
+	for monitor_name in @og-pr-tick @og-backfill-tick @og-usage-tick @og-sweep-tick; do
 		grep -qF "'${monitor_name}::" "$conf" || continue
 		if [[ $stored_monitors != *"$monitor_name"* ]]; then
 			printf 'monitor hook %s registered in config but not stored by tmux (show-hooks -g -B)\n' "$monitor_name" >&2
@@ -527,7 +528,7 @@ wait_for_client() {
 }
 
 @test "session user options read back with a bare -t target, not the = exact-match prefix" {
-	# Pins the targeting asymmetry lztmux-remote-open's mirror dedup relies on:
+	# Pins the targeting asymmetry og-remote-open's mirror dedup relies on:
 	# show-options rejects the "=" prefix has-session accepts, and -q hides that
 	# failure as an empty string that reads as "unset" (#474).
 	t new-session -d -s mirror -c "$PWD"

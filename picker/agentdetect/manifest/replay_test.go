@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/noamsto/lazytmux/picker/agentdetect/screen"
+	"github.com/noamsto/tmux-og/picker/agentdetect/screen"
 )
 
 // replayMatch feeds raw capture-pane bytes through the VT emulator (same path as

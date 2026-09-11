@@ -5,7 +5,7 @@
 # token, non-JSON) leaves the previous cache untouched.
 set -uo pipefail
 
-CACHE_DIR="${LAZYTMUX_AGENT_USAGE_DIR:-/tmp/lazytmux-agent-usage}"
+CACHE_DIR="${OG_AGENT_USAGE_DIR:-/tmp/og-agent-usage}"
 CREDS="${CLAUDE_CREDENTIALS:-$HOME/.claude/.credentials.json}"
 
 token=$(jq -r '.claudeAiOauth.accessToken // empty' "$CREDS" 2>/dev/null)

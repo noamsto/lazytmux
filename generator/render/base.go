@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/noamsto/lazytmux/generator/paths"
+	"github.com/noamsto/tmux-og/generator/paths"
 )
 
 // pluginConfigs is the catppuccin option block, which tmux must see before the

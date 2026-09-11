@@ -2,7 +2,7 @@
 # Coding-agent usage-limit poller. Two entry modes:
 #   --tick      cheap gate from status-format[0]; daemonizes a pass when stale
 #   --tick-run  one pass: refresh every authed agent's cache concurrently
-# Always exits 0. Cache: /tmp/lazytmux-agent-usage/<agent>.json, rendered by
+# Always exits 0. Cache: /tmp/og-agent-usage/<agent>.json, rendered by
 # tmux-statusline (Go). Providers curl the usage endpoints with the CLIs' own
 # stored tokens — no extra API keys.
 #
@@ -17,7 +17,7 @@ set -uo pipefail
 # shellcheck source=/dev/null
 source @lib_log@
 
-CACHE_DIR="${LAZYTMUX_AGENT_USAGE_DIR:-/tmp/lazytmux-agent-usage}"
+CACHE_DIR="${OG_AGENT_USAGE_DIR:-/tmp/og-agent-usage}"
 REFRESH_SECONDS="@refresh_seconds@"
 # Space-separated pane-command basenames from the agentdetect manifests
 # (claude codex cursor-agent) — same source as the update-icons sweep.

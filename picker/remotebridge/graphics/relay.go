@@ -67,7 +67,7 @@ const DefaultRasterHold = 16 << 20
 // local-client watcher and the ctl handler that raises a viewer-change both
 // write it, every Proxy reads it once per Filter call on its own sink pump,
 // and the RelayEnvCmd publish site reads the same cell — so the drop policy
-// and the published LZTMUX_RELAY_GRAPHICS value can never disagree (R6).
+// and the published OG_RELAY_GRAPHICS value can never disagree (R6).
 // atomic.Pointer, not a mutex: Proxy documents itself as lock-free and
 // confined to its pump goroutine (R11), so a read here must never contend
 // with a writer or with another pump's read.

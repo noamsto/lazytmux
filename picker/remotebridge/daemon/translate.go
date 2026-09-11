@@ -1,6 +1,6 @@
 package daemon
 
-import "github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+import "github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 
 // translateWindowNotification maps a parsed remote window notification to a
 // single local tmux argv, filtered to the bridged session's registry (B2): a

@@ -5,7 +5,7 @@ description: Use when working on a Linear/GitHub issue or PR whose branch is NOT
 
 # Issue Tracking
 
-lazytmux shows which issues this Claude Code pane is working on in the
+tmux-og shows which issues this Claude Code pane is working on in the
 tmux status bar (line 0) and in the session/window pickers.
 
 ## When to stamp
@@ -46,5 +46,5 @@ Same convention for `issue add`/`done` and `enrich`. Ids must match
 - Linear: the key verbatim — `ENG-123`
 - GitHub: `GH-<number>` — `GH-42` (never `#42`). PRs share the issue number space: a PR with no linked issue is stamped by its PR number, e.g. `GH-57`.
 
-If `claude-status-update` is not on PATH (not inside a lazytmux tmux), skip
+If `claude-status-update` is not on PATH (not inside a tmux-og tmux), skip
 silently — do not report an error to the user.

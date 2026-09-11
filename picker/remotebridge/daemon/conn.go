@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
 )
 
 // ctlConn is everything scoped to one control connection: the transport itself
@@ -110,12 +110,12 @@ func (h *connHolder) close() {
 // on a closed stream, which every caller already handles (a ctl request is
 // nacked, a keystroke is dropped). It must never block: a renderer's input pump
 // waiting out a reconnect would wedge the pane it serves.
-func (h *connHolder) send(cmd string) bool {
+func (h *connHolder) send(cmds ...string) bool {
 	c := h.get()
 	if c == nil {
 		return false
 	}
-	return c.st.send(cmd)
+	return c.st.send(cmds...)
 }
 
 // roundTrip is the stable roundTrip the mirror paths hold. With no connection
@@ -239,7 +239,7 @@ func reattach(cfg Config, router *Router, hold *connHolder, want remoteIdentity,
 		// A detach raised while the dial was in flight must not be overtaken by
 		// it: the check at the top of the iteration predates the dial, and
 		// without this one Run re-enters runConn on a connection the user has
-		// already asked to go away. lztmux-remote-detach then waits out its 2s,
+		// already asked to go away. og-remote-detach then waits out its 2s,
 		// kills the mirror session itself, and leaves this daemon holding a live
 		// transport child.
 		if stopped(cfg.Shutdown) {

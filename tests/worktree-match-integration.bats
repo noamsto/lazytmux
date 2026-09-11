@@ -14,7 +14,7 @@
 
 setup() {
 	command -v tmux >/dev/null || skip "tmux not on PATH"
-	export TMUX_TMPDIR="/tmp/lztmux-wtm-$$-${BATS_TEST_NUMBER}"
+	export TMUX_TMPDIR="/tmp/og-wtm-$$-${BATS_TEST_NUMBER}"
 	rm -rf "$TMUX_TMPDIR"
 	mkdir -p "$TMUX_TMPDIR"
 	unset TMUX

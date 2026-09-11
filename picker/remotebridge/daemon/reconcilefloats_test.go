@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/graphics"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/graphics"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // newPaneReply is one canned answer to the Add path's create, which is the only
@@ -148,7 +148,7 @@ func TestReconcileFloatsAddMirrorsARemoteFloat(t *testing.T) {
 	}
 	if got := f.find("respawn-pane"); got != nil {
 		for _, w := range got {
-			if strings.HasPrefix(w, "-e") || strings.Contains(w, "LZTMUX_RENDER") {
+			if strings.HasPrefix(w, "-e") || strings.Contains(w, "OG_RENDER") {
 				t.Errorf("respawn-pane still wires by env: %v", got)
 			}
 		}

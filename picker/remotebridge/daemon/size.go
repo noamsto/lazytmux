@@ -20,7 +20,7 @@ func ConvergeCmd(remoteID string, w, h int) string {
 
 // AggressiveResizeOffCmd returns the control-mode command that opts one remote
 // window out of aggressive-resize, which every remote window inherits from
-// lazytmux's own global config.
+// tmux-og's own global config.
 //
 // With that option on, tmux sizes a window only from clients whose session
 // currently has it selected (resize.c, clients_calculate_size_skip_client's

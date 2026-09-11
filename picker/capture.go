@@ -80,7 +80,7 @@ func captureTargets(targets []string, run captureRunner) (map[string]string, err
 		distinct = append(distinct, t)
 	}
 
-	marker := fmt.Sprintf("@@lztmux-wall-%d-%d@@", os.Getpid(), captureSeq.Add(1))
+	marker := fmt.Sprintf("@@og-wall-%d-%d@@", os.Getpid(), captureSeq.Add(1))
 	args := make([]string, 0, len(distinct)*9)
 	for _, t := range distinct {
 		if len(args) > 0 {

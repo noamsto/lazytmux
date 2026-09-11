@@ -37,6 +37,6 @@ HEIGHT=85%
 POPUP_CLIENT=()
 [[ -n $CLIENT ]] && POPUP_CLIENT=(-c "$CLIENT")
 POPUP_ENV=()
-[[ -n $CURRENT ]] && POPUP_ENV=(-e "LZTMUX_PICKER_CURRENT_SESSION=$CURRENT")
+[[ -n $CURRENT ]] && POPUP_ENV=(-e "OG_PICKER_CURRENT_SESSION=$CURRENT")
 tmux display-popup "${POPUP_CLIENT[@]}" "${POPUP_ENV[@]}" -E -w 90% -h "$HEIGHT" -b rounded -T " Sessions " \
 	-S "fg=$BORDER_FG" "@picker_generate@ --tui"

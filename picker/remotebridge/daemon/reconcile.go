@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/noamsto/lazytmux/picker/remotebridge/controlmode"
-	"github.com/noamsto/lazytmux/picker/remotebridge/wire"
+	"github.com/noamsto/tmux-og/picker/remotebridge/controlmode"
+	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
 )
 
 // maxReconcilePasses bounds reconcileLayout's trailing-reread loop (below).

@@ -6,7 +6,7 @@
 
 setup() {
 	TMUX_BIN="${TMUX_BIN:?set TMUX_BIN to the built wrapper}"
-	SOCKET="lztmux-tick-floor-${BATS_TEST_NUMBER}-$$"
+	SOCKET="og-tick-floor-${BATS_TEST_NUMBER}-$$"
 	TEST_HOME="$BATS_TEST_TMPDIR/home"
 	mkdir -p "$TEST_HOME"
 	export HOME="$TEST_HOME"
@@ -18,8 +18,9 @@ setup() {
 	# reach functions that delete files under these dirs, whose defaults are
 	# the developer's real /tmp trees.
 	export CLAUDE_STATUS_DIR="$BATS_TEST_TMPDIR/claude-status"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/lazytmux-pr"
-	export LAZYTMUX_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/lazytmux-agent-usage"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/og-pr"
+	export OG_AGENT_USAGE_DIR="$BATS_TEST_TMPDIR/og-agent-usage"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/og-enrich-lock"
 	mkdir -p "$CLAUDE_STATUS_DIR/panes"
 
 	t new-session -d -s s -x 80 -y 24 -c "$PWD"
@@ -80,7 +81,7 @@ pane_pipe_armed() { [ "$(t display-message -p -t "$1" '#{pane_pipe}')" = 1 ]; }
 	# listing form that reports the subscription itself.
 	run t show-hooks -g -B
 	[ "$status" -eq 0 ]
-	for name in @lztmux-pr-tick @lztmux-backfill-tick @lztmux-usage-tick @lztmux-sweep-tick; do
+	for name in @og-pr-tick @og-backfill-tick @og-usage-tick @og-sweep-tick; do
 		[[ $output == *"$name::"* ]]
 	done
 }
@@ -90,8 +91,8 @@ pane_pipe_armed() { [ "$(t display-message -p -t "$1" '#{pane_pipe}')" = 1 ]; }
 	# is the root cause itself: a status-format-driven poller has never run
 	# under this condition. Both scripts stamp unconditionally in --tick /
 	# --backfill mode, so the stamp alone is a sound recovery witness.
-	wait_for 20 file_exists "$LAZYTMUX_ENRICH_CACHE_DIR/.last-tick"
-	wait_for 20 file_exists "$LAZYTMUX_ENRICH_CACHE_DIR/.last-backfill-tick"
+	wait_for 20 file_exists "$OG_ENRICH_CACHE_DIR/.last-tick"
+	wait_for 20 file_exists "$OG_ENRICH_CACHE_DIR/.last-backfill-tick"
 }
 
 @test "pr and backfill tick stamps appear with only a control-mode client attached" {
@@ -99,8 +100,8 @@ pane_pipe_armed() { [ "$(t display-message -p -t "$1" '#{pane_pipe}')" = 1 ]; }
 	# report): a control client renders no status line, so the old
 	# status-format[0] #() jobs never ran for it either.
 	coproc CTL { "$TMUX_BIN" -L "$SOCKET" -C attach-session -t s; }
-	wait_for 20 file_exists "$LAZYTMUX_ENRICH_CACHE_DIR/.last-tick"
-	wait_for 20 file_exists "$LAZYTMUX_ENRICH_CACHE_DIR/.last-backfill-tick"
+	wait_for 20 file_exists "$OG_ENRICH_CACHE_DIR/.last-tick"
+	wait_for 20 file_exists "$OG_ENRICH_CACHE_DIR/.last-backfill-tick"
 	# Cleanup lives in teardown (CTL_PID): a wait_for timeout above aborts
 	# the test here under errexit and must not skip it.
 }
@@ -143,7 +144,7 @@ pane_pipe_armed() { [ "$(t display-message -p -t "$1" '#{pane_pipe}')" = 1 ]; }
 	EOF
 
 	# Plain tmux (mkTmux), not the wrapped TMUX_BIN: this is a hand-written,
-	# lazytmux-free fixture -- the point is to pin bare tmux's own behaviour,
+	# tmux-og-free fixture -- the point is to pin bare tmux's own behaviour,
 	# not anything this repo's config does.
 	TMUX_TMPDIR="$scratch_tmpdir" tmux -S "$SCRATCH_SOCK" -f "$conf" new-session -d -s m -x 80 -y 24
 

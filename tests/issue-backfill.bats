@@ -23,8 +23,8 @@ setup() {
 	FAKEBIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STATE" "$FAKEBIN"
 	export FAKE_TMUX_STATE="$STATE"
-	export LAZYTMUX_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
-	export LAZYTMUX_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
+	export OG_ENRICH_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
+	export OG_ENRICH_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
 
 	# Fake tmux: list-windows -a -F <fmt> cats a fixture file the test writes
 	# ($STATE/windowlist) verbatim — it doesn't interpret the format string,
@@ -253,7 +253,7 @@ windowlist_line() {
 
 	run bash "$STAMP" --backfill
 	[ "$status" -eq 0 ]
-	[ -f "$LAZYTMUX_ENRICH_CACHE_DIR/.last-backfill-tick" ]
+	[ -f "$OG_ENRICH_CACHE_DIR/.last-backfill-tick" ]
 
 	for _ in $(seq 1 40); do
 		[ -f "$STATE/opt_w7_@issue_title" ] && break

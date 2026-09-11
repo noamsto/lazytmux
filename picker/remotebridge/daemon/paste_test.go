@@ -103,7 +103,7 @@ type pasteFixture struct {
 
 func newPasteFixture() *pasteFixture {
 	f := &pasteFixture{
-		uploadOut: "/tmp/lazytmux-paste-abc123/img.png",
+		uploadOut: "/tmp/og-paste-abc123/img.png",
 		sent:      make(chan string, 8),
 		notified:  make(chan string, 8),
 		refuseAt:  -1,
@@ -125,16 +125,20 @@ func newPasteFixture() *pasteFixture {
 	return f
 }
 
-func (f *pasteFixture) sendCtl(s string) bool {
-	f.mu.Lock()
-	idx := len(f.sentAll)
-	f.sentAll = append(f.sentAll, s)
-	refuse := f.refuseAt >= 0 && idx >= f.refuseAt
-	f.mu.Unlock()
-	if refuse {
-		return false
+// Variadic to match Config.SendCtl, though the paste path only ever sends one
+// command per call — the batching form exists for the relay publish (D7).
+func (f *pasteFixture) sendCtl(cmds ...string) bool {
+	for _, s := range cmds {
+		f.mu.Lock()
+		idx := len(f.sentAll)
+		f.sentAll = append(f.sentAll, s)
+		refuse := f.refuseAt >= 0 && idx >= f.refuseAt
+		f.mu.Unlock()
+		if refuse {
+			return false
+		}
+		f.sent <- s
 	}
-	f.sent <- s
 	return true
 }
 
