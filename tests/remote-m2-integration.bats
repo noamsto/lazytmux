@@ -1852,7 +1852,7 @@ $pane 1" ]; then
 	$SRC set -w -t rem:1 @issue_provider linear
 	$SRC set -w -t rem:1 @issue_id ENG-460
 	$SRC set -w -t rem:1 @issue_url 'https://linear.app/factify/issue/ENG-460'
-	$SRC set -w -t rem:1 @pr_url 'https://github.com/noamsto/tmux-og/pull/460'
+	$SRC set -w -t rem:1 @pr_url 'https://github.com/noamsto/lazytmux/pull/460'
 	$SRC set -w -t rem:1 @pr_draft 1
 	$SRC set -w -t rem:1 @branch feat/460-card
 	$SRC set -w -t rem:1 @worktree /home/rem/wt/460
@@ -1912,7 +1912,7 @@ $pane 1" ]; then
 	[ "$issue_provider" = "linear" ]
 	[ "$issue_id" = "ENG-460" ]
 	[ "$issue_url" = "https://linear.app/factify/issue/ENG-460" ]
-	[ "$pr_url" = "https://github.com/noamsto/tmux-og/pull/460" ]
+	[ "$pr_url" = "https://github.com/noamsto/lazytmux/pull/460" ]
 	[ "$pr_draft" = "1" ]
 	[ "$branch" = "feat/460-card" ]
 	[ "$dir" = "/home/rem/wt/460" ]
