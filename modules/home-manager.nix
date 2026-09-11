@@ -110,17 +110,6 @@
         fi
       '';
 
-  # Persist (tmux-remux) tmux.conf snippet. Empty string when disabled —
-  # appended verbatim to the generated tmux.conf via extraConfText.
-  tmuxStateConf =
-    if tmuxStateBin == null
-    then ""
-    else ''
-
-      # === tmux-remux (Phase 2a, opt-in via programs.lazytmux.persist) ===
-      run-shell "${tmuxRemuxWireScript} #{q:version}"
-    '';
-
   tmuxConfig = import ../config/tmux.conf.nix {
     inherit pkgs lib;
     tmuxPkg = cfg.tmuxPackage;
@@ -141,12 +130,13 @@
       then emulatorCfg.term
       else null;
     inherit (cfg) sixelTerminals;
-    extraConfText = tmuxStateConf + cfg.extraConfig;
+    extraConfText = cfg.extraConfig;
+    persistWireScript = tmuxRemuxWireScript;
     enrichEnable = cfg.enrich.enable;
     enrichProviders = cfg.enrich.providers;
     enrichPrRefreshSeconds = cfg.enrich.prRefreshSeconds;
     enrichPrCheckRefreshSeconds = cfg.enrich.prCheckRefreshSeconds;
-    enrichIcons = builtins.mapAttrs (_: v: builtins.replaceStrings ["#"] ["##"] v) cfg.enrich.icons;
+    enrichIcons = cfg.enrich.icons;
     splashEnable = cfg.splash.enable;
     splashTips = cfg.splash.tips;
     splashTimeout = cfg.splash.timeout;
@@ -1515,7 +1505,7 @@ in {
           # Weekly GC sweeps orphaned scrollback files (panes whose snapshot row
           # was already pruned). Cheap to run; safe to skip on missed firings.
           # Periodic snapshot saves now come from tmux-remux's own tmux 3.8
-          # monitor hook (see tmuxStateConf above), not a timer unit.
+          # monitor hook (see tmuxRemuxWireScript above), not a timer unit.
           lazytmux-remux-gc = lib.mkIf persistEnabled {
             Unit.Description = "tmux-remux garbage collection";
             Service = {
