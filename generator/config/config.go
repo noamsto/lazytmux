@@ -4,6 +4,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -128,6 +130,36 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// Defaults returns what applyDefaults would produce for an empty config.toml —
+// the enum fallbacks a non-Nix caller (e.g. og init) can offer without reading
+// or validating an actual file.
+func Defaults() (*Config, error) {
+	var c Config
+	md, err := toml.Decode("", &c)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	c.applyDefaults(&md)
+	return &c, nil
+}
+
+// DefaultPath returns where a non-Nix config.toml should live:
+// $XDG_CONFIG_HOME/tmux-og/config.toml, or ~/.config/tmux-og/config.toml when
+// XDG_CONFIG_HOME is unset. Deliberately not os.UserConfigDir(), which returns
+// a macOS-specific path on darwin — see scripts/lib-log.sh and
+// scripts/lib-claude.sh for the same Linux-convention fallback spelled out.
+func DefaultPath() (string, error) {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("config: %w", err)
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "tmux-og", "config.toml"), nil
 }
 
 func (c *Config) applyDefaults(md *toml.MetaData) {
