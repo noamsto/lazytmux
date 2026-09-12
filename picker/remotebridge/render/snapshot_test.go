@@ -27,3 +27,12 @@ func TestSeedPlainNoAlt(t *testing.T) {
 		t.Error("plain seed must not set alt/app-cursor modes")
 	}
 }
+
+func TestSeedResetsAttrsBeforeErase(t *testing.T) {
+	for _, alt := range []bool{false, true} {
+		out := string(Seed([]byte("x"), 0, 0, alt, false))
+		if !strings.HasPrefix(out, "\x1b[m") {
+			t.Errorf("alt=%v: erase must follow an SGR reset, or it fills with the live stream's background: %q", alt, out)
+		}
+	}
+}
