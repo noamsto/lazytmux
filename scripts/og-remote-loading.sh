@@ -21,8 +21,8 @@ esc=$'\033'
 reset="${esc}[0m"
 
 # ansi_fg turns a #rrggbb theme value into a truecolor SGR, REPLY-style. A
-# value tmux never set (or a named color) yields no escape, which renders in
-# the terminal's own foreground rather than a wrong one.
+# value tmux never set, or a named color, yields no escape at all rather than
+# a wrong one.
 ansi_fg() {
 	local hex="${1#\#}"
 	if [[ ! $hex =~ ^[0-9a-fA-F]{6}$ ]]; then
@@ -32,9 +32,9 @@ ansi_fg() {
 	printf -v REPLY '%s[38;2;%d;%d;%dm' "$esc" "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
 }
 
-# One tmux call for geometry and palette. Read once: the screen lives for the
-# length of a bridge setup, and a resize inside that window costs a
-# briefly-off-centre spinner, not a wrong mirror.
+# One tmux call for geometry and palette, read once: the screen lives only for
+# the length of a bridge setup, so a resize inside it costs a briefly
+# off-centre spinner.
 cols=80 rows=24 accent="" dim="" fg=""
 pane_target=()
 [[ -n ${TMUX_PANE:-} ]] && pane_target=(-t "$TMUX_PANE")
@@ -52,8 +52,8 @@ fg="$REPLY"
 title="$host"
 [[ -n $sess ]] && title+=" : $sess"
 
-# centered prints text at the given row, centred on the pane, clearing whatever
-# the previous frame left on that line first.
+# centered clears the whole row before drawing, so a caption never leaves the
+# tail of a longer one behind it.
 centered() {
 	local row="$1" width="$2" body="$3"
 	local pad=$(((cols - width) / 2))

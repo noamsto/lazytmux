@@ -21,10 +21,10 @@ func phasePath(cfg Config) string {
 	return cfg.SockPath + phaseSuffix
 }
 
-// setPhase replaces the loading pane's caption. Best-effort by construction:
-// the pane it feeds is cosmetic and usually already gone by the time a later
-// phase is written, so a failed write is never worth failing setup over.
-// Newlines are collapsed — the reader takes one line.
+// setPhase replaces the loading pane's caption. Best-effort: the pane it feeds
+// is cosmetic and usually already gone by the time a later phase is written, so
+// a failed write is never worth failing setup over. Newlines are collapsed —
+// the reader takes one line.
 func setPhase(cfg Config, format string, args ...any) {
 	path := phasePath(cfg)
 	if path == "" {
