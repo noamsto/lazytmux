@@ -7,6 +7,10 @@ import (
 
 func Seed(captured []byte, cursorX, cursorY int, altScreen, appCursorKeys bool) []byte {
 	var b bytes.Buffer
+	// Both the alt-screen switch and ED erase with the CURRENT background, and
+	// the live stream this seed interrupts leaves one set, so without this reset
+	// the erase floods the whole pane with that colour.
+	b.WriteString("\x1b[m")
 	if altScreen {
 		b.WriteString("\x1b[?1049h")
 	}
