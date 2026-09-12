@@ -10,6 +10,7 @@
   codex = "🤖";
   "cursor-agent" = "🧊";
   agent = "🧊"; # cursor-agent binary name
+  pi = "🥧";
   opencode = "🧩";
   amp = "⚡";
   nh = "❄";

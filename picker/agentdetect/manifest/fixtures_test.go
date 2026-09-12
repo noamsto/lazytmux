@@ -39,6 +39,8 @@ func TestFixtures(t *testing.T) {
 		{"cursor_idle.txt", "cursor-agent", "idle"},
 		{"cursor_permission.txt", "cursor-agent", "waiting"},
 		{"cursor_reject_feedback.txt", "cursor-agent", "waiting"},
+		{"pi_working.txt", "pi", "processing"},
+		{"pi_idle.txt", "pi", "idle"},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {

@@ -20,7 +20,7 @@ source @lib_log@
 CACHE_DIR="${OG_AGENT_USAGE_DIR:-/tmp/og-agent-usage}"
 REFRESH_SECONDS="@refresh_seconds@"
 # Space-separated pane-command basenames from the agentdetect manifests
-# (claude codex cursor-agent) — same source as the update-icons sweep.
+# (claude codex cursor-agent pi) — same source as the update-icons sweep.
 AGENT_COMMANDS="@AGENT_COMMANDS@"
 
 # agent_running: true while some pane's foreground command is a coding agent.

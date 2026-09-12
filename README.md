@@ -84,8 +84,8 @@ cachix use lazytmux
 |---------|-------------|
 | **Catppuccin theme** | Consistent Mocha/Latte colors across status bar and pane borders, following your light/dark theme |
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
-| **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, OpenCode, etc.) |
-| **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, and OpenCode |
+| **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, Pi, OpenCode, etc.) |
+| **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, Pi, and OpenCode |
 | **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
@@ -329,7 +329,9 @@ still set those options fail loudly via `mkRemovedOptionModule`.
 
 The status bar and pickers show the AI agent state for each pane, window, and session
 in real time. Claude Code, Codex, Cursor, and OpenCode are supported via `claude-status-update`
-(bundled in the wrapper's PATH), which writes state files the status bar reads every second.
+(bundled in the wrapper's PATH), which writes state files the status bar reads every second. Pi
+is detected by the screen scraper (`agent-detect`), which watches a Pi pane's TUI and derives
+`processing` / `idle` from its border spinner and footer.
 
 ### Status Indicators
 

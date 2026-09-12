@@ -1,0 +1,14 @@
+ pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Say hello
+
+ You
+  Say hello
+
+────────────────────────────────────────────
+── ⠋ Working ─────────────────────────────────────────────────────────────
+
+/tmp
+0.0%/1.0M (auto)                                (mock) mock-model
