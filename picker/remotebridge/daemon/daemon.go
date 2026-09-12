@@ -582,6 +582,7 @@ func Run(cfg Config) error {
 	}
 	c.bind(router)
 	hold.set(c)
+	setPhase(cfg, "attached to %s", cfg.RemoteHost)
 
 	// The first thing the remote might act on: give this control client a size,
 	// so a window created on the remote is born at the local client's size
@@ -741,6 +742,7 @@ func Run(cfg Config) error {
 	)
 	teardown := func() {
 		close(stopWatch)
+		clearPhase(cfg)
 		unregisterResizeHook(cfg)
 		os.Remove(nudgePath)
 		if agents != nil {
@@ -800,7 +802,12 @@ func Run(cfg Config) error {
 
 	// Mirror each remote window into its own local window. The first reuses the
 	// launcher's initial window; the rest are appended.
+	//
+	// Only the first caption is ever seen: setupWindow's respawn-pane replaces
+	// the loading pane with that window's renderer. The rest are written anyway
+	// so a bridge whose first window stalls says which one.
 	for i, rw := range remoteWins {
+		setPhase(cfg, "mirroring window %d/%d", i+1, len(remoteWins))
 		var (
 			localWin string
 			err      error

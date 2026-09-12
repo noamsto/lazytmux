@@ -386,10 +386,16 @@ ctl="@bridge_ctl@"
 daemon="@bridge_daemon@"
 renderer="@bridge_renderer@"
 reflow="@reflow@"
+loading="@loading@"
 [[ $ctl == @* ]] && ctl="$(command -v og-remote-bridge-ctl)"
 [[ $daemon == @* ]] && daemon="$(command -v og-remote-bridge-daemon)"
 [[ $renderer == @* ]] && renderer="$(command -v og-remote-bridge-renderer)"
 [[ $reflow == @* ]] && reflow="$(command -v tmux-reflow-windows)"
+[[ $loading == @* ]] && loading="$(command -v og-remote-loading || true)"
+
+# The caption the loading pane renders. Written here for the stretch before
+# the daemon exists, by the daemon after that, removed by its teardown.
+phase_file="${sock}.phase"
 
 # Dedup: a live pid alone is not enough. A config reload can leave a daemon
 # that speaks an older ctl protocol behind, so prove its compatibility before
@@ -420,7 +426,7 @@ fi
 # Stale cleanup: a prior daemon was killed (SIGTERM/SIGKILL) without running
 # teardown, leaving socket + pidfile behind. Remove both so the new daemon can
 # bind cleanly; the session below is also replaced.
-rm -f "$sock" "${sock}.pid"
+rm -f "$sock" "${sock}.pid" "$phase_file"
 
 # The <host>-<sess> session is an ephemeral mirror (the remote is the source of
 # truth). Discard a pre-existing bridge — a stale bridge from a prior run, or a
@@ -430,9 +436,18 @@ tmux kill-session -t "=$local_sess" 2>/dev/null || true
 
 # Create the local session with a single initial window; the daemon reuses it
 # for the first remote window and creates the rest.
+#
+# It runs the loading pane rather than a shell: switch-client below lands here
+# seconds before the daemon has painted the first mirror. The daemon's
+# respawn-pane for that window is what replaces it, so there is nothing extra
+# to reap; a build with no loading binary on PATH falls back to the shell.
+printf 'connecting to %s\n' "$host" >"$phase_file"
 new_session_args=(new-session -d -s "$local_sess" -n "$sess")
 if [[ -n $initial_width ]]; then
 	new_session_args+=(-x "$initial_width" -y "$initial_height")
+fi
+if [[ -n $loading ]]; then
+	new_session_args+=(-- "$loading" "$host" "$sess" "$phase_file")
 fi
 tmux "${new_session_args[@]}"
 
