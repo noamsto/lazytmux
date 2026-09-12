@@ -312,6 +312,7 @@
     "cursor-relaunch-stamp"
     "cursor-relaunch-hooks-install"
     "og-remote-open"
+    "og-remote-loading"
     "og-remote-picker"
     "og-remote-detach"
     "og-remote-auth"
@@ -425,13 +426,14 @@
   mkRemoteScript = name:
     pkgs.writeShellScriptBin name (
       builtins.replaceStrings
-      ["@lib_remote@" "@bridge_ctl@" "@bridge_daemon@" "@bridge_renderer@" "@reflow@"]
+      ["@lib_remote@" "@bridge_ctl@" "@bridge_daemon@" "@bridge_renderer@" "@reflow@" "@loading@"]
       [
         "${lib-remote}"
         picker-bridge-ctl-bin
         picker-bridge-daemon-bin
         picker-bridge-renderer-bin
         "${script.tmux-reflow-windows}/bin/tmux-reflow-windows"
+        "${script.og-remote-loading}/bin/og-remote-loading"
       ]
       (builtins.readFile ../scripts/${name}.sh)
     );
@@ -705,6 +707,7 @@
     "tmux-window-nav"
     "tmux-worktree-match"
     "og-log-event"
+    "og-remote-loading"
   ];
 
   # Forced by the assert on the returned attrset below, never on `og` itself:

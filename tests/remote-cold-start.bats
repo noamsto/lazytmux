@@ -230,6 +230,27 @@ teardown() {
 	grep -q 'new-session -d -s tp-g6-workstation -n workstation -x 200 -y 50' "$TMUX_LOG"
 }
 
+@test "the mirror session's first window runs the loading pane, not a shell" {
+	printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/og-remote-loading"
+	chmod +x "$FAKEBIN/og-remote-loading"
+	local sock="$TMUX_TMPDIR/og-daemon-tp-g6-workstation.sock"
+
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	grep -q -- "new-session -d -s tp-g6-workstation -n workstation -- $FAKEBIN/og-remote-loading tp-g6 workstation $sock.phase" "$TMUX_LOG"
+	# The caption the pane shows for the stretch before the daemon exists.
+	grep -q 'connecting to tp-g6' "$sock.phase"
+}
+
+@test "no loading binary resolves: the initial window falls back to a shell" {
+	run bash "$LAUNCHER" tp-g6
+	[ "$status" -eq 0 ]
+
+	run grep -c -- 'new-session .*--' "$TMUX_LOG"
+	[ "$status" -ne 0 ]
+}
+
 @test "new dir: the remote session is created at the invoking client's content size" {
 	# Without -x/-y the remote gives it default-size (80x24) and anything the
 	# shell autostarts sees 80 columns until the daemon's converge lands.
