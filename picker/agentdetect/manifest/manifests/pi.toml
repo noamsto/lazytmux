@@ -1,0 +1,27 @@
+id = "pi"
+match_commands = ["pi"]
+
+[[rules]]
+# pi embeds its streaming indicator into the default editor's bottom border:
+# "── ⠋ Working ────…" (a braille spinner frame + the "Working" label flanked
+# by the border glyph; pi CHANGELOG #8799). The label and the spinner vanish
+# the instant the composer goes idle, so this is the single marker that cleanly
+# separates working from idle. Anchored on the braille frame so the word
+# "Working" in transcript text — which carries no braille prefix — cannot
+# false-positive.
+state = "processing"
+priority = 100
+region = "whole"
+regex = '[\x{2800}-\x{28FF}] +Working\b'
+
+[[rules]]
+# Idle is the fallback: pi's footer always renders the current model as
+# "(provider) model-id" on its bottom line, working or idle, so this
+# lower-priority rule only wins once the processing rule above stops matching.
+# Confined to the last two non-empty lines (the /cwd line and the
+# tokens/context/model line) so transcript text that quotes a model id can't
+# false-positive from higher up the screen.
+state = "idle"
+priority = 10
+region = "last_lines:2"
+regex = '\([\w-]+\) [\w.-]+'
