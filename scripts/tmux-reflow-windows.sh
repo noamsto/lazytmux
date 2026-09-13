@@ -21,11 +21,13 @@ source @lib_reflow@
 # --debounce (coalesce a resize burst, see below).
 FORCE=0
 DEBOUNCE=0
+AWAIT_LOCK=0
 pos=()
 for a in "$@"; do
 	case "$a" in
 	--force) FORCE=1 ;;
 	--debounce) DEBOUNCE=1 ;;
+	--await-lock) AWAIT_LOCK=1 ;;
 	*) pos+=("$a") ;;
 	esac
 done
@@ -89,21 +91,40 @@ if ((! FORCE)) && [[ $cache_key == "$prev_key" ]]; then
 	exit 0
 fi
 
-# Serialize compute+write across concurrent reflows (issue #150). A dispatcher
-# fan-out fires a burst of reflows — sync window hooks racing backgrounded
-# --force reflows from the enrich/icon scripts — with no ordering guarantee, so
-# a reflow that read partial state could finish last and clobber the correct
-# layout (then freeze it, since the win_count:WIDTH cache key can't see the
-# stale content). Reads happen below, inside the lock, so whoever runs last sees
-# the freshest window state and its render wins. acquire_lock is non-blocking
-# (flock is Linux-only); the burst-prone hooks run backgrounded (-b), so retry
-# briefly instead of racing. On pathological contention, proceed unlocked rather
-# than wedge — a later reflow still settles it.
+# Serialize compute+write across concurrent reflows; every read below happens
+# inside the lock, so whoever renders last renders the freshest state. Some
+# hooks run this synchronously, so the foreground waits ~2s at most — by the
+# clock, not a retry count: each failed acquire spawns processes, and macOS
+# forks stretched 40 retries past 5s. Never write unlocked: the batched option
+# writes and the separate status-format sets would tear against another
+# invocation's. When the budget runs out, a detached waiter owes the render and
+# waits past the stale window, so a dead holder's lock is stolen; --force so a
+# coincidentally matching key can't skip the render it exists to do.
 reflow_lock="${TMPDIR:-/tmp}/og-reflow.lock.${SESSION//\//_}"
-for ((i = 0; i < 40; i++)); do
-	acquire_lock "$reflow_lock" && break
+locked=0
+lock_deadline=$((${EPOCHREALTIME/[^0-9]/} + 2000000))
+while :; do
+	acquire_lock "$reflow_lock" && {
+		locked=1
+		break
+	}
+	((${EPOCHREALTIME/[^0-9]/} < lock_deadline)) || break
 	sleep 0.05
 done
+if ((! locked && AWAIT_LOCK)); then
+	deadline=$((SECONDS + OG_LOCK_STALE_SECONDS + 5))
+	while ((SECONDS < deadline)); do
+		acquire_lock "$reflow_lock" && {
+			locked=1
+			break
+		}
+		sleep 0.5
+	done
+fi
+if ((! locked)); then
+	((AWAIT_LOCK)) || detach "$0" --await-lock --force "$SESSION" "$WIDTH"
+	exit 0
+fi
 
 PREFIX_WIDTH=5 # " ├─ " or " ╰─ "
 
@@ -237,6 +258,11 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 done < <(tmux list-windows -t "$SESSION" -F "$FMT")
 
 [[ $total -eq 0 ]] && exit 0
+
+# Stamp the key for this invocation's render (the post-lock count), not the
+# pre-lock snapshot: otherwise a later reflow at the stale count cache-hits on
+# content drawn for a different window set.
+applied_key="${total}:${WIDTH}:${HEIGHT}"
 
 # Fixed icon-column width for the slot math below. The icon *content*
 # (@window_icon_padded) is owned solely by tmux-update-icons — don't write it
@@ -441,7 +467,7 @@ tmux_cmds+=("set -t '$SESSION' @window_split '$split1'")
 tmux_cmds+=("set -t '$SESSION' @window_split2 '$split2'")
 tmux_cmds+=("set -t '$SESSION' @window_split3 '$split3'")
 tmux_cmds+=("set -t '$SESSION' @window_per '$window_per'")
-tmux_cmds+=("set -t '$SESSION' @reflow_key '$cache_key'")
+tmux_cmds+=("set -t '$SESSION' @reflow_key '$applied_key'")
 tmux_cmds+=("set -t '$SESSION' @labels_mode '${labels_mode}'")
 
 tmux_cmds+=("set -t '$SESSION' status $((current_line + 2))")
@@ -460,7 +486,7 @@ fi
 
 # Execute batched simple commands + early redraw so layout appears immediately
 if log_enabled; then
-	log_event reflow event recompute forced "$FORCE" wins "${cache_key%%:*}" \
+	log_event reflow event recompute forced "$FORCE" wins "$total" \
 		width "$WIDTH" height "$HEIGHT" split1 "$split1" split2 "$split2" \
 		split3 "$split3" lines "$((current_line + 2))" colws "${colws[*]}" \
 		labels_mode "$labels_mode" sess "$SESSION"
