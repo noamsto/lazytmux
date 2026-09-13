@@ -161,8 +161,7 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
-  # lib-log's only placeholder: an absolute GNU stat, so file_size/file_mtime
-  # never depend on which `stat` (GNU or BSD) comes first on the user's PATH.
+  # lib-log's only placeholder: coreutils' stat (see scripts/lib-log.sh).
   lib-log = pkgs.writeShellScript "lib-log" (
     builtins.replaceStrings ["@stat@"] ["${pkgs.coreutils}/bin/stat"] (builtins.readFile ../scripts/lib-log.sh)
   );

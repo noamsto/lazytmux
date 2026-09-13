@@ -17,12 +17,10 @@ log_enabled() { [[ -f $OG_DEBUG_SENTINEL ]]; }
 # file_size / file_mtime FILE -> bytes / mtime-epoch on stdout (0 if absent).
 # Home is lib-log because every stat-using script already sources it.
 #
-# Always GNU `stat -c`, via coreutils' absolute path substituted by Nix. A bare
-# `stat` resolves by PATH order: on macOS a Nix GNU stat ahead of /usr/bin turns
-# BSD `stat -f %m` into filesystem-info output that still exits 0, so the
-# `|| echo 0` fallback never fires and callers' arithmetic dies under `set -u`.
-# An unsubstituted placeholder (raw script under bats) uses PATH's `stat`; the
-# checks put coreutils there.
+# GNU `stat -c` by absolute path (Nix-substituted): a bare `stat` is whichever
+# of GNU or BSD comes first on PATH, and their flags collide (`-f` is format on
+# BSD, filesystem mode on GNU). Unsubstituted under bats, PATH's `stat` is used;
+# the checks make that GNU.
 OG_STAT="@stat@"
 if [[ $OG_STAT == @* ]]; then
 	OG_STAT=stat
