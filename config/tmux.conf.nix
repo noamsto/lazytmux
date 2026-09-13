@@ -152,8 +152,8 @@
     raw = builtins.readFile ../scripts/${name}.sh;
     patched =
       builtins.replaceStrings
-      ["@ICON_MAP@" "@FALLBACK_ICON@" "@assume_dead_after@"]
-      [iconMapBash fallbackIcon (toString claudeStatusAssumeDeadAfter)]
+      ["@ICON_MAP@" "@FALLBACK_ICON@" "@assume_dead_after@" "@stat@"]
+      [iconMapBash fallbackIcon (toString claudeStatusAssumeDeadAfter) "${pkgs.coreutils}/bin/stat"]
       raw;
   in
     pkgs.writeShellScript name patched;
@@ -161,16 +161,10 @@
   lib-icons = mkLib "lib-icons";
   lib-claude = mkLib "lib-claude";
 
-  # lib-log's only placeholder: which `stat` dialect file_size/file_mtime speak.
-  # Resolved here so those two never pay a doomed probe fork per call.
+  # lib-log's only placeholder: an absolute GNU stat, so file_size/file_mtime
+  # never depend on which `stat` (GNU or BSD) comes first on the user's PATH.
   lib-log = pkgs.writeShellScript "lib-log" (
-    builtins.replaceStrings ["@stat_bsd@"] [
-      (
-        if pkgs.stdenv.hostPlatform.isDarwin
-        then "1"
-        else "0"
-      )
-    ] (builtins.readFile ../scripts/lib-log.sh)
+    builtins.replaceStrings ["@stat@"] ["${pkgs.coreutils}/bin/stat"] (builtins.readFile ../scripts/lib-log.sh)
   );
 
   # lib-reflow has no build-time placeholders of its own either.

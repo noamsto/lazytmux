@@ -92,6 +92,11 @@ CLAUDE_LIVE_SWEEP_FRESH=15
 # start_time is the only signal: anything written before this server booted is
 # stale. A marker file holding the current start_time gates the directory scan
 # to once per server, so the per-tick status poller that calls this stays cheap.
+# GNU stat pinned by Nix, same rationale as lib-log.sh's OG_STAT.
+OG_STAT="@stat@"
+if [[ $OG_STAT == @* ]]; then
+	OG_STAT=stat
+fi
 claude_prune_stale_state() {
 	local server_start=$1
 	[[ -z $server_start ]] && return 0
@@ -102,8 +107,7 @@ claude_prune_stale_state() {
 		[[ -d $dir ]] || continue
 		for f in "$dir"/*; do
 			[[ -f $f ]] || continue
-			# GNU stat -c first, BSD/macOS stat -f fallback (mirrors lib-log.sh file_mtime).
-			mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+			mt=$("$OG_STAT" -c %Y "$f" 2>/dev/null || echo 0)
 			((mt < server_start)) && rm -f "$f"
 		done
 	done

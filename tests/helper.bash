@@ -41,8 +41,8 @@ setup_lib_claude() {
 }
 
 setup_lib_log() {
-	# Sourced raw: @stat_bsd@ stays unsubstituted, which lib-log handles by
-	# probing `stat` once at source time. No other placeholders.
+	# Sourced raw: @stat@ stays unsubstituted, which lib-log resolves to PATH's
+	# (GNU coreutils) `stat`. No other placeholders.
 	# shellcheck source=/dev/null
 	source scripts/lib-log.sh
 }
