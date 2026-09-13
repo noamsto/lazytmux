@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1129,6 +1130,11 @@ func appendIssueIDs(icons string, dw int, ids []string, cDim, reset string) (str
 // Icon helpers
 // ---------------------------------------------------------------------------
 
+// wrappedProcRe strips the makeWrapper shape nix-built binaries report as
+// pane_current_command (e.g. ".claude-wrapped") down to the plain name, the
+// same normalization scripts/lib-icons.sh and statusline's wrappedRe apply.
+var wrappedProcRe = regexp.MustCompile(`^\.(.*)-wrapped$`)
+
 func buildProcIcons(procs []string, maxCount int) (string, int) {
 	var sb strings.Builder
 	dw := 0
@@ -1136,6 +1142,9 @@ func buildProcIcons(procs []string, maxCount int) (string, int) {
 	for _, proc := range procs {
 		if count >= maxCount {
 			break
+		}
+		if m := wrappedProcRe.FindStringSubmatch(proc); m != nil {
+			proc = m[1]
 		}
 		icon, ok := iconMap[proc]
 		if !ok {
