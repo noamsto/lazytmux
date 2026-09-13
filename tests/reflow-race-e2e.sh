@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end reproduction for #614: a burst of window closes must leave the
-# status line exactly as a from-scratch reflow would draw it.
+# End-to-end reflow race check: a burst of window closes must leave the status
+# line exactly as a from-scratch reflow would draw it.
 #
 # Manual, Linux only (needs util-linux script(1) for a real attached client);
 # not part of `nix flake check`. Run after `nix build .#default`:

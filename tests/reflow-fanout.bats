@@ -137,7 +137,7 @@ run_update_icons() {
 	[ "$(tmux show -v @reflow_key)" = "3:200:0" ]
 }
 
-@test "#614: a window count change during a held lock stamps the count it rendered, not its pre-lock snapshot" {
+@test "a window count change during a held lock stamps the count it rendered, not its pre-lock snapshot (#614)" {
 	tmux new-window -d
 	tmux new-window -d
 	local ids
@@ -168,7 +168,7 @@ run_update_icons() {
 	[ "$key" = "1:200:0" ]
 }
 
-@test "#614: a lock held past the foreground budget never writes unlocked, and a detached waiter renders once it frees" {
+@test "a lock held past the foreground budget never writes unlocked, and a detached waiter renders once it frees (#614)" {
 	# The foreground gives up after ~2s without writing (writing unlocked would
 	# tear), but the render is still owed: a detached waiter picks it up.
 	local lock="$TDIR/og-reflow.lock.S"
@@ -188,7 +188,7 @@ run_update_icons() {
 	[ "$key" = "1:200:0" ]
 }
 
-@test "#614: a dead holder's lock is stolen by the detached waiter" {
+@test "a dead holder's lock is stolen by the detached waiter (#614)" {
 	# A SIGKILLed holder never releases its lock dir; the waiter outlasts the
 	# stale window and steals it. Staleness is whole-second, so keep the window
 	# well past the ~2s foreground budget or the foreground steals it itself.
