@@ -861,9 +861,8 @@ in {
         embeds the d2 compiler in-process and shells out to `resvg`, so it needs
         `aeye` and `resvg` on PATH (the same PATH-reach reason as popupTools).
         It then auto-opens the carousel with a bare `tmux-claude-images
-        --ensure-open`, whose failure it swallows: the tmux wrapper's PATH does
-        not survive fish rebuilding PATH from the login profile, so without the
-        profile copy the carousel never opens on its own on a NixOS host.
+        --ensure-open`, which needs the profile copy: a pane's shell may
+        rebuild PATH from the login profile and drop the tmux wrapper's.
         Only installed when the agent-carousel flake input is wired in
         (carousel-toggle != null).
 
