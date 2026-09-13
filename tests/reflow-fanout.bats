@@ -174,7 +174,8 @@ run_update_icons() {
 	local lock="$TDIR/og-reflow.lock.S"
 	mkdir "$lock"
 	tmux set -q @reflow_key "sentinel"
-	timeout 5 bash "$REFLOW" S 200 --force >/dev/null 2>&1
+	# The timeout only catches a hang; startup on a slow runner is not the budget.
+	timeout 15 bash "$REFLOW" S 200 --force >/dev/null 2>&1
 	local rstatus=$?
 	[ "$rstatus" -eq 0 ]
 	[ "$(tmux show -v @reflow_key)" = "sentinel" ]
@@ -190,18 +191,19 @@ run_update_icons() {
 
 @test "a dead holder's lock is stolen by the detached waiter (#614)" {
 	# A SIGKILLed holder never releases its lock dir; the waiter outlasts the
-	# stale window and steals it. Staleness is whole-second, so keep the window
-	# well past the ~2s foreground budget or the foreground steals it itself.
-	export OG_LOCK_STALE_SECONDS=5
+	# stale window and steals it. Staleness is whole-second and a slow runner's
+	# startup adds to the ~2s foreground budget, so keep the window well clear
+	# of both or the foreground steals it itself.
+	export OG_LOCK_STALE_SECONDS=10
 	local lock="$TDIR/og-reflow.lock.S"
 	mkdir "$lock"
 	tmux set -q @reflow_key "sentinel"
-	timeout 5 bash "$REFLOW" S 200 --force >/dev/null 2>&1
+	timeout 15 bash "$REFLOW" S 200 --force >/dev/null 2>&1
 	local rstatus=$?
 	[ "$rstatus" -eq 0 ]
 	[ "$(tmux show -v @reflow_key)" = "sentinel" ]
 	local key=""
-	for _ in $(seq 1 120); do
+	for _ in $(seq 1 250); do
 		key=$(tmux show -v @reflow_key)
 		[ "$key" = "1:200:0" ] && break
 		sleep 0.1

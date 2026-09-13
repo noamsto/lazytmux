@@ -104,7 +104,10 @@ In `scripts/tmux-reflow-windows.sh` only:
    `cache_key` remains only for the pre-lock fast-path compare. The `recompute`
    log event reports `$total`.
 2. **D2: never write unlocked, and never drop the owed render.**
-   - **The foreground stays bounded.** It keeps HEAD's 40 × 50ms budget.
+   - **The foreground stays bounded.** It waits at most 2s, timed by the clock (`EPOCHREALTIME`) rather than HEAD's
+     40 × 50ms retry count. Every failed acquire spawns processes (`mkdir`,
+     `date`, `stat`, `sleep`), and on macOS CI those forks stretched 40 retries
+     past 5s.
      Several callers run the script synchronously and block tmux's command
      queue while they do: `session-window-changed`, `after-new-session` and
      `client-session-changed` (`config/tmux.conf.reference.nix:767,773,774`),
@@ -294,14 +297,14 @@ pre-fix runs had poisoned.
    It fails against `HEAD`'s script.
 2. **D2 regression tests** in the same file.
    - **Foreground budget.** With the lock held and `@reflow_key=sentinel`,
-     `timeout 5 tmux-reflow-windows S 200 --force` exits 0 and leaves
+     `timeout 15 tmux-reflow-windows S 200 --force` exits 0 and leaves
      `sentinel`. After the lock is released, `@reflow_key` becomes `1:200:0`
      within 5s.
-   - **Dead holder.** With `OG_LOCK_STALE_SECONDS=5` and a lock dir that is
+   - **Dead holder.** With `OG_LOCK_STALE_SECONDS=10` and a lock dir that is
      never released, the foreground run exits 0 and leaves `sentinel`, and
-     `@reflow_key` becomes `1:200:0` within 12s. The window is 5s rather than
-     3s because staleness is whole-second: at 3, the foreground could steal
-     the lock itself within its own budget.
+     `@reflow_key` becomes `1:200:0` within 25s. The window is 10s because staleness is whole-second and a
+     slow runner's startup adds to the 2s foreground budget: at 5, macOS CI's
+     foreground stole the lock itself.
 
    Both fail against `HEAD`, which writes unlocked, and against the round-0
    skip, which never renders.

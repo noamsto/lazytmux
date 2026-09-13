@@ -93,19 +93,22 @@ fi
 
 # Serialize compute+write across concurrent reflows; every read below happens
 # inside the lock, so whoever renders last renders the freshest state. Some
-# hooks run this synchronously, so the foreground waits ~2s at most. Never
-# write unlocked: the batched option writes and the separate status-format sets
-# would tear against another invocation's. When the budget runs out, a detached
-# waiter owes the render and waits past the stale window, so a dead holder's
-# lock is stolen; --force so a coincidentally matching key can't skip the
-# render it exists to do.
+# hooks run this synchronously, so the foreground waits ~2s at most — by the
+# clock, not a retry count: each failed acquire spawns processes, and macOS
+# forks stretched 40 retries past 5s. Never write unlocked: the batched option
+# writes and the separate status-format sets would tear against another
+# invocation's. When the budget runs out, a detached waiter owes the render and
+# waits past the stale window, so a dead holder's lock is stolen; --force so a
+# coincidentally matching key can't skip the render it exists to do.
 reflow_lock="${TMPDIR:-/tmp}/og-reflow.lock.${SESSION//\//_}"
 locked=0
-for ((i = 0; i < 40; i++)); do
+lock_deadline=$((${EPOCHREALTIME/[^0-9]/} + 2000000))
+while :; do
 	acquire_lock "$reflow_lock" && {
 		locked=1
 		break
 	}
+	((${EPOCHREALTIME/[^0-9]/} < lock_deadline)) || break
 	sleep 0.05
 done
 if ((! locked && AWAIT_LOCK)); then
