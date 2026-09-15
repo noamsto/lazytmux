@@ -52,7 +52,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `claude-status` | `#()` in status-format[0] | Reads `/tmp/claude-status/panes/*` files, aggregates per-pane/window/session with priority (error > waiting > denied > compacting > interrupted > processing > done > idle). Handles staleness fade and interrupt reclassification (both in `read_pane_state`). |
 | `claude-status-update` | Claude Code hooks (external) | Writes state files to `/tmp/claude-status/panes/<pane_id>`; `issue add|done|clear <ID>` maintains self-reported issue ids in `/tmp/claude-status/issues/<pane_id>`; `task set <text>|clear` maintains a freeform "what Claude is doing" phrase in `/tmp/claude-status/tasks/<pane_id>` (auto-captured from the latest prompt by the CC plugin's `UserPromptSubmit` hook); `name set <title>|clear` maintains a window title in `/tmp/claude-status/names/<pane_id>` (the `UserPromptSubmit` hook seeds it from the first prompt on an unnamed fallback window, then nudges the pane's Claude once to upgrade the seed — the seed flips the gate so the nudge fires only once). Separate files — state hooks fire around the very call that stamps, sharing a file would lose updates. Called by the CC plugin's hooks / skill. Every write also mirrors into the pane options `@claude_status` (`<state> <epoch> <unseen>`), `@claude_task`, `@claude_issues` via `bridge_stamp` (folded into the refresh call it already made) — the only way this state reaches a remote-bridge host. `task`/`name` additionally stamp the *window* options `@window_task`/`@window_ai_name` via `window_stamp`, from the window's active pane only and skipped when unchanged: `tmux-update-icons` is their sole other writer and it is a 1s `#()` poller, so on a host whose only clients are bridges it has never run and every mirror window rendered the repo basename (#589). It forces a reflow, since the label is what reflow builds from them. |
 | `tmux-session-picker` | `prefix + s` | Launches the Go bubbletea picker (`tmux-picker-generate --tui`) in a popup: sessions sorted by activity (`sortSessionsForDisplay`, plain), and — only once a filter query is typed — the currently attached session sunk below any same-display-name peer on another host (`sinkCurrentMatchBelowPeer`: fuzzy score alone always favors the bare name over its host-prefixed mirror, so the current session wins a rank nobody wants; an empty query stays the plain activity order a user reads positions off, so the sink is the filtered list's alone. Current-ness is sourced via `--current #{qs:session_name}` on the bind, carried to the popup as `OG_PICKER_CURRENT_SESSION`, #551) (mirrors tagged with their `@bridge_host` in the Host column, which costs no width when there are none; `sessionDisplayName` trims the `${host}-` prefix `og-remote-open` baked into the name, for display only — the target and search text keep it, and the session is never renamed because window mode and everything outside the picker read the bare name), then the Remote section (a row per `@remote_bridge_hosts` host, its unbridged sessions as `├─`/`╰─` children), then top-30 zoxide dir suggestions (Enter on a suggestion creates a session there and switches). Remote rows are exempt from the claude/scratch toggles — neither may take the section away. `hostColorFunc` hashes each host to one `@thm_*` tint (peach/teal/pink/yellow/sky — never mauve, red or blue, which local sessions, errors and the path icon own) and paints its Host cell, its mirror sessions' name, and its Remote-section row and children the same colour, so a mirror up top is visibly the same host as its block below. `^o` on a Remote row spawns a floating pane running `og-remote-picker <host>` — the remote's own picker — and quits the popup; the hint renders only on a row `remotePickHost` resolves, which in `prefix + w`/`prefix + W` is a mirror row via its `@bridge_host` (#498). Working from *inside* a mirror window is no longer refused: spec D7's gate existed because a float there broke layout reconcile, which #535 fixed. A host blocked on a Tailscale ACL "check" (`tailscale set --ssh` with an `"action": "check"` rule) renders `(tailscale check — run: ssh <host>)` and Enter refuses to act — not ssh auth, so `og-remote-auth`'s `ssh-copy-id`/`ControlMaster` remedy can't clear it and re-arms on the ACL's `checkPeriod` regardless; the fix is running `ssh <host>` yourself. `^o` still advertises "browse" and dials `og-remote-picker` on this row too, same as on a host-key-changed row — it will hang exactly as the probe did, a pre-existing gap this state doesn't close (#486). |
-| `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session (default) or, via `ctrl+g`, by claude priority state — same order as `claude_priority_state` (error > waiting > denied > compacting > processing > done > idle), stateless windows in one trailing group, session name folded into the identity column. Resets to session grouping on every popup launch. Window rows show the enrich identity (`@window_label_id`/`@window_label_rest_long`) and a PR badge (`@window_pr_plain`, tinted by `@pr_check_state`/`@pr_mergeable`); aligned columns, searchable by issue id / PR number. `^x` on a mirror window row sends the ctl `kill-window` verb rather than a local `kill-window` — the daemon reconciles only toward the remote, so a local kill strands a registry entry whose `localWin` is gone (#393); the footer hint reads `kill remote` on such a row, since `^x` is unconfirmed. |
+| `tmux-window-picker` | `prefix + w` | Same TUI in window mode (`--tui --windows`), grouped by session (default) or, via `ctrl+g`, by claude priority state — same order as `claude_priority_state` (error > waiting > denied > compacting > processing > done > idle), stateless windows in one trailing group, session name folded into the identity column. Resets to session grouping on every popup launch. Window rows show the enrich identity (`@window_label_id`/`@window_label_rest_long`) and a PR badge (`@window_pr_plain`, tinted by `@pr_check_state`/`@pr_mergeable`; its `#<n>` half takes `@pr_review`'s tint and a `@pr_auto_merge` underline instead); aligned columns, searchable by issue id / PR number. `^x` on a mirror window row sends the ctl `kill-window` verb rather than a local `kill-window` — the daemon reconciles only toward the remote, so a local kill strands a registry entry whose `localWin` is gone (#393); the footer hint reads `kill remote` on such a row, since `^x` is unconfirmed. |
 | `tmux-window-wall` | `prefix + W` | Same TUI in wall mode (`--tui --windows --wall`): a tiled grid of live window previews, one batched `capture-pane` per tick. Fixed popup geometry — ignores `@picker_layout`. |
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
@@ -61,7 +61,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `tmux-worktree-match` | worktrunk `post-switch` hook (navigation) | Resolves which window shows a worktree. One `list-panes -a`; ranks candidates by the `@worktree` tag **corroborated by a pane's cwd** (tag+active pane > tag+background pane > untagged window whose active pane sits there), so a tag that outlived the `cd` that earned it can't win (#199). Unsets a tag it proves false. Prints `<session>\t<window>\t<window_id>`, empty on no match. |
 | `tmux-issue-stamp` | worktrunk `post-switch` hook (one-shot, backgrounded); its `--backfill` retry sweep runs from the `@og-backfill-tick` monitor hook (every 5s) | Detects the Linear/GitHub issue for the new window's branch via provider priority; writes `@issue_provider`/`@issue_id`/`@issue_title`/`@issue_url`, then kicks an immediate PR fetch. `--backfill` rescans every window for a partial stamp (id set, title or url missing) and retries it, so a window stuck that way is self-healing instead of stranded (#600). |
 | `tmux-issue-stamp-linear` / `-github` | called by the dispatcher | Provider impls: branch regex (+ `linear`/`gh` CLI) → `id\ntitle\nurl`. First provider with a non-empty id wins. |
-| `tmux-pr-enrich` | `@og-pr-tick` monitor hook (every 5s, `--tick`); `prefix + i` `r` (`--force`) | Background PR poller. Every gh call runs inside a checkout of the branch's repo (`--dir` / window `@worktree`/`@git_root`) — the poller's own cwd is the tmux server's, not a repo. Full pass groups windows by repo: fast PR-identity batches run every `prRefreshSeconds`, while check-rollup batches run every `prCheckRefreshSeconds`; per-branch fallback only handles heads with no open PR (cached at `/tmp/og-pr/`, 60s TTL, 1h for merged/closed, lock-guarded via the portable `acquire_lock`). Writes `@pr_number`/`@pr_title`/`@pr_state`/`@pr_check_state`/`@pr_url`/`@pr_draft`. Single-target mode exits immediately on a `@bridge_win` window — a mirror's branch belongs to the launcher's repo, not the remote content — so a bridged `[r]` is routed to the remote's own copy by the `enrich-refresh` ctl verb instead (#598). |
+| `tmux-pr-enrich` | `@og-pr-tick` monitor hook (every 5s, `--tick`); `prefix + i` `r` (`--force`) | Background PR poller. Every gh call runs inside a checkout of the branch's repo (`--dir` / window `@worktree`/`@git_root`) — the poller's own cwd is the tmux server's, not a repo. Full pass groups windows by repo: fast PR-identity batches run every `prRefreshSeconds`, while check-rollup batches run every `prCheckRefreshSeconds`; per-branch fallback only handles heads with no open PR (cached at `/tmp/og-pr/`, 60s TTL, 1h for merged/closed, lock-guarded via the portable `acquire_lock`). Writes `@pr_number`/`@pr_title`/`@pr_state`/`@pr_check_state`/`@pr_url`/`@pr_draft`/`@pr_review`/`@pr_auto_merge`/`@pr_check_progress`. A repo whose last applied rollup was pending keeps a `<sha1>.checks-pending` marker and re-polls checks every 30s through a `--tick-run-pending` checks-only pass that skips the identity batch. Single-target mode exits immediately on a `@bridge_win` window — a mirror's branch belongs to the launcher's repo, not the remote content — so a bridged `[r]` is routed to the remote's own copy by the `enrich-refresh` ctl verb instead (#598). |
 | `tmux-agent-usage` | `@og-usage-tick` monitor hook (every 5s, `--tick`) | Background usage-limit poller. A pass runs only while an agent pane exists (pane-command scan against the agentdetect manifest commands) and refreshes `/tmp/og-agent-usage/<agent>.json` per authed CLI, lock-guarded via `acquire_lock`. Rendered top-right by `tmux-statusline` (Go) — same live gate, so the segment vanishes when the last agent exits. |
 | `tmux-agent-usage-claude` / `-codex` / `-cursor` | called by the dispatcher | Provider impls: curl the vendor usage endpoint with the CLI's own stored token (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.config/cursor/auth.json` — no extra API keys) → normalized `{windows:[{label,pct,reset_at}], monthly:{label,pct,reset_at}}`. Failed fetches keep the previous cache. Cursor chains four DashboardService calls (GetMe → GetHardLimit → GetCurrentPeriodUsage → GetAggregatedUsageEvents) to compute monthly spend-limit utilization. |
 | `tmux-claude-images` | `prefix + I` | Toggle the image carousel for the invoking Claude session. In tmux: split pane keyed by `$TMUX_PANE` (bound to `prefix + I`). Outside tmux in kitty (remote control on): `kitty @ launch` window keyed by `$CLAUDE_CODE_SESSION_ID`, tagged `user_var claude_img_src`. Renderer + manifest shared across modes. |
@@ -76,7 +76,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 
 - **`lib-icons.sh`** — `ICON_MAP` associative array, `build_proc_icons`, `measure_display_width`, `strip_tmux_colors`, `pad_to_width`. Sourced by update-icons, reflow, session-picker, window-picker.
 - **`lib-claude.sh`** — `CLAUDE_PANES_DIR`, spinner frames, `read_pane_state` (with staleness), `claude_state_icon`, `setup_claude_colors`, `claude_colored_icon`, `claude_priority_state`. Sourced by update-icons, session-picker, window-picker, claude-status.
-- **`lib-enrich.sh`** — `branch_to_linear_key`, `branch_to_gh_issue_number`, `sanitize_title`, `truncate_ellipsis`, `branch_sha1`, `collapse_check_rollup`, `provider_priority_list`. Sourced by `tmux-issue-stamp*` + `tmux-pr-enrich`. Pure logic is unit-tested in `tests/enrich.bats` (run via `nix flake check`).
+- **`lib-enrich.sh`** — `branch_to_linear_key`, `branch_to_gh_issue_number`, `sanitize_title`, `truncate_ellipsis`, `branch_sha1`, `collapse_check_rollup`, `provider_priority_list`, `pr_pie_glyph`, `split_pr_badge`. Sourced by `tmux-issue-stamp*` + `tmux-pr-enrich`. Pure logic is unit-tested in `tests/enrich.bats` (run via `nix flake check`).
 
 Functions use the `REPLY` variable pattern (set `REPLY` instead of echoing) to avoid subshell forks in hot paths.
 
@@ -245,9 +245,11 @@ ships the remote window's own label state across instead.
 - **Every render site reads `@bridge_*` directly** rather than reflow's stamped
   copies — the three (reflow's grid, `picker/main.go`, `picker/statusline`) stay
   symmetric and independent, and reflow only runs for a session with a client.
-  The colour/state values (`@bridge_crew_color`, `@bridge_pr_*`) are read *live*
-  at render time through a `#{?#{@bridge_win},…}` conditional, so they are never
-  in reflow's `read -r` list.
+  The colour/state values (`@bridge_crew_color`, `@bridge_pr_number`,
+  `@bridge_pr_state`, `@bridge_pr_check_state`, `@bridge_pr_mergeable`,
+  `@bridge_pr_review`, `@bridge_pr_auto_merge`) are read *live* at render time
+  through a `#{?#{@bridge_win},…}` conditional (`bopt` in
+  `tmux-reflow-windows`), so they are never in reflow's `read -r` list.
 - **Subscribed, not polled**, like `agentstatus.go` — a window *option* change
   emits no control-stream traffic **of its own**, which is why this shipper and
   its neighbour both used to poll and why `mainLoopTickInterval` was cut to a
@@ -296,7 +298,8 @@ ships the remote window's own label state across instead.
   fields (`@bridge_issue_title`, `@bridge_pr_title`, and the two label segments)
   **truncate** at their cap — a shortened title is still a title. Identity
   fields (`@bridge_issue_provider`, `_issue_id`, `_issue_url`, `_pr_url`,
-  `_pr_draft`, `_branch`, `_dir`) **drop whole** via `cleanLabelValueExact`,
+  `_pr_draft`, `_pr_review`, `_pr_auto_merge`, `_pr_check_progress`, `_branch`,
+  `_dir`) **drop whole** via `cleanLabelValueExact`,
   because a truncated URL opens the wrong page, a truncated branch refreshes the
   wrong branch, and a truncated path names a directory that is not the one on
   screen. That cleaner also rejects any value `stripWindowName` *altered*, not
@@ -397,7 +400,10 @@ line. Enabled by default via `programs.tmux-og.enrich.enable`.
   identity polling. `prCheckRefreshSeconds` (default 300, clamped 10-300)
   separately gates the more expensive CI-rollup query; `r` refreshes both for
   the current window immediately. PR state is cached at `/tmp/og-pr/`
-  (60s TTL).
+  (60s TTL). A repo whose last applied rollup was still pending re-polls
+  checks alone every 30s (capped at `prCheckRefreshSeconds`) via the
+  `--tick-run-pending` pass, so a running check suite doesn't sit stale for a
+  whole `prCheckRefreshSeconds` window.
 - **Icons:** override the 9 glyphs (linear/github/pending/success/failure/
   merged/closed/conflict/draft) via `enrich.icons`; defaults are nerd-font
   glyphs. The `#` escape: Nix replaces `#` with `##` in icon values for tmux
@@ -409,7 +415,22 @@ line. Enabled by default via `programs.tmux-og.enrich.enable`.
   state — the draft glyph *prepends* the check-state glyph and leaves the color
   precedence alone, because a draft PR still runs CI. Terminal states carry no
   marker (gh clears `isDraft` on merge; a closed PR already reads as dead). The
-  rule lives twice: `build_window_label` (shell) and `enrichstate.Draft` (Go).
+  rule lives three times: `build_window_label` (shell), `enrichstate.Draft`
+  (Go, the enrich card), and the picker's `colorPRBadge`.
+- **Review and auto-merge:** `@pr_review` (`approved`/`changes_requested`/
+  `review_required`/empty, from gh `reviewDecision`) and `@pr_auto_merge`
+  (`1`/empty, from gh `autoMergeRequest`) tint and decorate the badge's `#<n>`
+  half independently of the glyph half's check-state color: green for
+  approved, red for changes requested, dim overlay for review required,
+  underlined on top of any of those when auto-merge is queued. Open PRs only;
+  with no review decision the `#<n>` keeps the glyph half's tint.
+- **Progress:** while a rollup is pending, `collapse_check_rollup` also sets
+  `REPLY_PROGRESS` to `<finished>/<total>`; `pr_pie_glyph` turns that into an
+  `nf-md-circle_slice_1`…`8` glyph at index `finished * 7 / total`, replacing
+  the plain pending glyph so a check-state badge shows how far the rollup has
+  gotten. The eight slices live twice — `ENRICH_PIE_GLYPHS` (shell) and
+  `enrichstate.PieSlices` (Go) must stay byte-identical — and are not part of
+  `enrich.icons`: they're not user-configurable.
 - **Display test:** `./tests/test-display.sh` after `nix build .#default`
   (manual; not in `nix flake check`).
 
