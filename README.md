@@ -2,25 +2,21 @@
 
 # tmux-og
 
-**Opinionated tmux configuration with Claude Code & OpenCode integration.**
+*tmux, the original gangster — still the OG multiplexer, now batteries-included.*
+
+**A batteries-included tmux distribution: live status for Claude Code, Codex, Cursor, Pi and OpenCode, remote sessions mirrored as native windows, issue/PR enrichment, persistence, and fast pickers.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
 
 `nix run github:noamsto/tmux-og` drops you into a ready-to-use tmux environment.
 
 [![Nix Flake](https://img.shields.io/badge/nix-flake-blue?logo=nixos)](https://nixos.org)
-[![tmux 3.6](https://img.shields.io/badge/tmux-3.6a-green)](https://github.com/tmux/tmux)
+[![tmux next-3.8](https://img.shields.io/badge/tmux-next--3.8-green)](https://github.com/tmux/tmux)
 [![Catppuccin Mocha](https://img.shields.io/badge/theme-catppuccin%20mocha-mauve?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMiIgZmlsbD0iI2NiYTZmNyIvPjwvc3ZnPg==)](https://github.com/catppuccin/tmux)
 
 </div>
 
 ---
-
-<div align="center">
-
-https://github.com/user-attachments/assets/8c6381fc-1eb8-4942-bc5b-521ad7fbf464
-
-</div>
 
 ## Quick Start
 
@@ -86,7 +82,9 @@ cachix use lazytmux
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, Pi, OpenCode, etc.) |
 | **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, Pi, and OpenCode |
-| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
+| **Agent usage limits** | Claude, Codex and Cursor rate-limit utilization in the status line while an agent is running |
+| **Remote tmux bridge** | Open a session on another host as native local windows over SSH, with agent status, labels, zoom, floats, image paste and auto-reconnect carried across |
+| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, issue/PR badges, and a live window wall (`prefix + W`) |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
 | **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
@@ -99,7 +97,7 @@ cachix use lazytmux
 ## Requirements
 
 - **Nerd Font terminal** — any terminal with a Nerd Font renders window icons correctly (Kitty, Alacritty, WezTerm, etc.)
-- Nothing else — the Nix package bundles tmux 3.6a; your own `~/.tmux.conf` and system tmux are not used
+- Nothing else — the Nix package bundles tmux (upstream, pinned at next-3.8); your own `~/.tmux.conf` and system tmux are not used
 
 ---
 
