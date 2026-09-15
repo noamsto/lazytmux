@@ -194,8 +194,15 @@
 
   # Inside a mirror window #{pane_current_path} expands on the renderer pane —
   # the daemon's cwd, not the remote worktree on screen — so the bridged branch
-  # hands the tool to the ctl `tool` verb, which resolves the cwd on the remote.
-  bridgedFloatTool = key: tool: float: prefix: suffix: "bind-key ${key} if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} tool #{q:@bridge_pane} ${tool}\" } { ${floatNewPaneGuard float prefix suffix} }";
+  # hands the tool to the ctl `tool` verb.
+  #
+  # @bridge_dir rides along because the remote cannot resolve the cwd either: a
+  # -c format expands against the client's current pane, not the -t target, so
+  # the remote leg would open the tool in whichever window the remote is on
+  # (#643). It is #{qs:}, not #{q:} — the value is a path, and run-shell hands it
+  # to a shell that would otherwise split it on a space. An unset option quotes
+  # as an empty argument, which the verb reads as "no cwd".
+  bridgedFloatTool = key: tool: float: prefix: suffix: "bind-key ${key} if-shell -F '${bridgeGate}' { run-shell \"${bridgeCtl} tool #{q:@bridge_pane} ${tool} #{qs:@bridge_dir}\" } { ${floatNewPaneGuard float prefix suffix} }";
 
   # prdash PR dashboard (prefix+p), scoped to the pane's repo. `enter` opens a git
   # worktree: prdash execs `wt switch` itself as it exits, so the tmux window

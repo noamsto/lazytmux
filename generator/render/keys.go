@@ -70,8 +70,15 @@ func floatBind(key string, f floatShape, prefix, suffix string) string {
 // bridgedFloatTool hands the tool to the ctl `tool` verb in a mirror window:
 // #{pane_current_path} there expands on the renderer pane, which is the
 // daemon's cwd rather than the remote worktree on screen.
+//
+// @bridge_dir rides along because the remote cannot resolve the cwd either: a
+// -c format expands against the client's current pane, not the -t target, so
+// the remote leg would open the tool in whichever window the remote is on
+// (#643). It is #{qs:}, not #{q:} — the value is a path, and run-shell hands it
+// to a shell that would otherwise split it on a space. An unset option quotes
+// as an empty argument, which the verb reads as "no cwd".
 func bridgedFloatTool(p *paths.Paths, key, tool string, f floatShape, prefix, suffix string) string {
-	return fmt.Sprintf("bind-key %s if-shell -F '%s' { run-shell \"%s tool #{q:@bridge_pane} %s\" } { %s }",
+	return fmt.Sprintf("bind-key %s if-shell -F '%s' { run-shell \"%s tool #{q:@bridge_pane} %s #{qs:@bridge_dir}\" } { %s }",
 		key, bridgeGate, bridgeCtl(p), tool, floatNewPaneGuard(f, prefix, suffix))
 }
 
