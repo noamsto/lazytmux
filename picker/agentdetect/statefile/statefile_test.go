@@ -191,10 +191,10 @@ func TestUpdateWritesOnFlagChangeAlone(t *testing.T) {
 	}
 }
 
-// TestUpdateStampsPaneOption is the acceptance case for the tmux mirror: a
-// real state change stamps @agent_screen on the watched pane, distinct from
-// @claude_status, so the remote-bridge daemon can carry it across without
-// confusing it for hook-driven state.
+// TestUpdateStampsPaneOption verifies a real state change stamps
+// @agent_screen on the watched pane, distinct from @claude_status, so the
+// remote-bridge daemon can carry it across without confusing it for
+// hook-driven state.
 func TestUpdateStampsPaneOption(t *testing.T) {
 	dir := t.TempDir()
 	w, calls := newTestWriter(dir, "7")
