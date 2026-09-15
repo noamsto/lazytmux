@@ -958,9 +958,7 @@ wait_bridge_disconnected() {
 # A sixel crossing the bridge is either dropped (no client sixel capability to
 # paint it, the default) or relayed bare, gated by Relay.Sixel() — a value
 # computed once from the daemon's own --termfeatures flag (R6) and published
-# to the remote SESSION as OG_RELAY_GRAPHICS — and beside it under the legacy
-# LZTMUX_RELAY_GRAPHICS the pinned aeye input still reads (R5) — so a program
-# there can tell whether handing the terminal a sixel directly will actually
+# to the remote SESSION as OG_RELAY_GRAPHICS (R5) — so a program there can tell whether handing the terminal a sixel directly will actually
 # reach it.
 #
 # capture-pane cannot see any of this: tmux's own DCS parser eats a sixel, so
@@ -1019,22 +1017,9 @@ expected_sixel_bytes() {
 	printf '~~~\033\134' >>"$1"
 }
 
-# relay_env_both echoes the remote session's copy of the canonical relay
-# variable, and fails if the legacy spelling beside it carries a different
-# value. Both are asserted because the daemon publishes both (the legacy name is
-# what the pinned aeye input reads), so pinning either alone lets the other go
-# stale unnoticed. The prefixes are stripped rather than the values extracted,
-# so a variable that is absent entirely cannot read as agreeing with one that
-# is set.
-relay_env_both() {
-	local new legacy
-	new="$($SRC show-environment -t rem OG_RELAY_GRAPHICS 2>/dev/null || true)"
-	legacy="$($SRC show-environment -t rem LZTMUX_RELAY_GRAPHICS 2>/dev/null || true)"
-	if [ "${new#OG_RELAY_GRAPHICS}" != "${legacy#LZTMUX_RELAY_GRAPHICS}" ]; then
-		printf 'relay env spellings disagree: [%s] vs [%s]\n' "$new" "$legacy" >&2
-		return 1
-	fi
-	printf '%s\n' "$new"
+# relay_env echoes the remote session's copy of the relay variable.
+relay_env() {
+	$SRC show-environment -t rem OG_RELAY_GRAPHICS 2>/dev/null || true
 }
 
 # (a) — relay off, the RED-first assertion (spec R8): an oversized sixel must
@@ -1073,7 +1058,7 @@ relay_env_both() {
 	# daemon.go's comment on the send(RelayEnvCmd(...)) call) — so the remote
 	# session's copy is SET, not unset, and reads back empty rather than
 	# absent.
-	relay_env="$(relay_env_both)"
+	relay_env="$(relay_env)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true
@@ -1113,7 +1098,7 @@ relay_env_both() {
 		sleep 0.15
 	done
 
-	relay_env="$(relay_env_both)"
+	relay_env="$(relay_env)"
 
 	exp="$BATS_TEST_TMPDIR/gxon.expected"
 	expected_sixel_bytes "$exp"
@@ -1171,7 +1156,7 @@ relay_env_both() {
 		sleep 0.15
 	done
 	[ "$seen1" = yes ]
-	relay_env="$(relay_env_both)"
+	relay_env="$(relay_env)"
 	[ "$relay_env" = "OG_RELAY_GRAPHICS=" ]
 	run ! grep -F -- $'\033Pq' "$f1"
 
@@ -1205,7 +1190,7 @@ relay_env_both() {
 	[ "$($DST list-clients -t host-sess 2>/dev/null | grep -c '^')" -eq 1 ]
 
 	for _ in $(seq 1 40); do
-		relay_env="$(relay_env_both || true)"
+		relay_env="$(relay_env || true)"
 		[ "$relay_env" = "OG_RELAY_GRAPHICS=sixel" ] && break
 		sleep 0.15
 	done
@@ -2463,7 +2448,7 @@ transport_child() {
 	# R5's second half: repair() re-asserts the capability unconditionally on
 	# every reconnect, since the outage is the one stretch in which a change
 	# had no live connection to publish on.
-	relay_env="$(relay_env_both)"
+	relay_env="$(relay_env)"
 
 	kill "$daemon_pid" 2>/dev/null || true
 	wait "$daemon_pid" 2>/dev/null || true

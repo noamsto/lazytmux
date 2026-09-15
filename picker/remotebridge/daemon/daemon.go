@@ -338,7 +338,7 @@ func watchLocalClient(area func() (int, int), nudged func() (time.Time, bool), a
 				view.SetDesired(id.Term)
 				prev := view.Relay.Load()
 				view.Relay.Store(id.Relay)
-				if id.Relay.Sixel() != prev.Sixel() && !send(RelayEnvCmd(remoteSession, id.Relay.String())...) {
+				if id.Relay.Sixel() != prev.Sixel() && !send(RelayEnvCmd(remoteSession, id.Relay.String())) {
 					view.Relay.Store(prev)
 				}
 			}
@@ -640,7 +640,7 @@ func Run(cfg Config) error {
 	// "sixel" in this same session's table, and skipping the write when this
 	// one has nothing to say would leave that stale value standing and make
 	// the remote emit graphics this proxy only drops.
-	sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String())...)
+	sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
 
 	os.Remove(cfg.SockPath)
 	listener, err := net.Listen("unix", cfg.SockPath)
@@ -788,7 +788,7 @@ func Run(cfg Config) error {
 		// SIGKILL or a lost race is corrected by the next bridge's
 		// unconditional RelayEnvCmd write above; a direct attach in that gap
 		// can still read the stale value.
-		sendCtl(RelayEnvUnsetCmd(cfg.RemoteSession)...)
+		sendCtl(RelayEnvUnsetCmd(cfg.RemoteSession))
 		// Whichever connection is current, which after a reconnect is no longer
 		// the one cfg.Ctl named.
 		hold.close()
@@ -1161,7 +1161,7 @@ func Run(cfg Config) error {
 		// — watchLocalClient's own immediate publish had no live connection to
 		// send it on. Re-sent unconditionally, same as the one-shot at Run()'s
 		// own startup and for the same reason: a stale value must not stand.
-		sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String())...)
+		sendCtl(RelayEnvCmd(cfg.RemoteSession, cfg.View.Relay.Load().String()))
 		return true
 	}
 
