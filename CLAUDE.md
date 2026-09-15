@@ -227,8 +227,23 @@ bridged window as agent-free. The bridge ships the remote's state instead:
   second.
 - Teardown deletes what it wrote — `claude_prune_stale_state` collects by
   server-start mtime and would keep it until a tmux restart.
-- Not carried: `interrupted` (derived on the remote from a transcript tail this
-  side can't read) and screen-scraper states (same status-client problem).
+- **Screen-scraped agents (pi, codex, cursor) cross the bridge too** (#635),
+  on a second pane option: `agent-detect`'s `statefile.Writer` mirrors its
+  verdict into `@agent_screen` (`"<state> <epoch> [name=count ...]"`) the same
+  way `claude-status-update` mirrors into `@claude_status` — a NEW option
+  rather than overloading `@claude_status`, so the laptop side keeps its
+  hook-vs-screen precedence (`read_pane_state`, `collectAgentPanesFrom`) once
+  both sources are on one host. `agentStatusFormat` carries `@agent_screen`
+  alongside `@claude_status`, and the shipper writes it to
+  `screen/<local_pane_id>` under the same clock skew, unchanged-row
+  suppression, and teardown deletion the `panes/` file gets — independently,
+  since a screen-only pane never gets a `panes/`/`tasks/`/`issues/` file and a
+  Claude pane's hook state must not gate a screen verdict or vice versa. The
+  #603 sweep hook is what makes this reachable at all: it arms `agent-detect`
+  on a host whose only clients are bridges, which is why the note this
+  replaces once called screen-scraper state uncarriable.
+- Not carried: `interrupted` (derived on the remote from a transcript tail
+  this side can't read).
 
 ### Remote Window Labels
 
@@ -856,7 +871,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 | Feature | Remote needs |
 |---------|--------------|
 | Bridge graphics (`prefix + I` across a mirror) | `tmux-claude-images`, `resvg` |
-| Remote agent status | tmux-og's `claude-status-update` (it stamps the pane options the daemon polls) |
+| Remote agent status | tmux-og's `claude-status-update` (`@claude_status`) for Claude, and `agent-detect` (`@agent_screen`, #635) for pi/codex/cursor — both stamp the pane options the daemon subscribes to |
 | Remote window labels | tmux-og's own `tmux-reflow-windows` (what stamps `@window_label_*`) and, for a codename, whatever fan-out harness stamps `@crew_name`/`@crew_color`. The one requirement with no capability probe: an older remote stamps nothing and the mirror silently falls back to the remote window name. |
 | Cold start (`prefix + s` on a serverless host) | `tmux-startup.service` / the launchd agent, plus lingering |
 | Remote-side picker (`prefix + s` `^o`) | `og-remote-picker` (`remote.exposePickOnPath`, default true) |
@@ -939,7 +954,7 @@ isn't on PATH.
 - **Placeholders** (`@ICON_MAP@`, `@FALLBACK_ICON@`, etc.) in scripts are replaced at Nix build time. Don't use these patterns in non-placeholder contexts.
 - **Process icon mapping** lives in `config/process-icons.nix` — a plain Nix attrset of `"process-name" = "icon"`.
 - **Claude status state files** at `/tmp/claude-status/panes/<pane_id>` use simple `key=value` format (state, timestamp, session, optional unseen, optional transcript). The `transcript` path is the hook's `transcript_path` (forwarded by the CC plugin's `status.sh`); it powers interrupt detection.
-- **Screen-scraped state files** at `/tmp/claude-status/screen/<pane_id>` are written by `agent-detect` (`picker/agentdetect/`) for non-Claude agents, via `statefile.Writer`. `pipe-pane` keeps feeding a pane's output to the same watcher process for the pane's whole life, independent of what's currently running in it, so once an agent exits back to a shell the watcher keeps sampling and manifest matching keeps returning `""` (no rule matches shell output). `Writer.Update` treats that empty verdict as "agent gone", not "nothing to report": it delegates to `Writer.Clear`, which unlinks the file and resets its last-written state so a later real state always writes rather than silently no-opping against stale bookkeeping. Idempotent — clearing twice, or a file already gone, is not an error.
+- **Screen-scraped state files** at `/tmp/claude-status/screen/<pane_id>` are written by `agent-detect` (`picker/agentdetect/`) for non-Claude agents, via `statefile.Writer`. `pipe-pane` keeps feeding a pane's output to the same watcher process for the pane's whole life, independent of what's currently running in it, so once an agent exits back to a shell the watcher keeps sampling and manifest matching keeps returning `""` (no rule matches shell output). `Writer.Update` treats that empty verdict as "agent gone", not "nothing to report": it delegates to `Writer.Clear`, which unlinks the file and resets its last-written state so a later real state always writes rather than silently no-opping against stale bookkeeping. Idempotent — clearing twice, or a file already gone, is not an error. Every `Update`/`Clear` also mirrors into the pane option `@agent_screen` (best effort, like `bridge_stamp`) — the only way this state reaches a remote-bridge host; see "Remote Agent Status" (#635).
 - **Background-shell badge** (`bg=N` in a screen state file): a *flag*, not a state. `manifest.Match` returns `(state, flags, bool)`, where flags come from `[[flags]]` rules whose regex holds one capture group carrying a count — evaluated independently of the winning rule, since a background shell outlives the turn that started it and the pane may be idle, processing, or waiting while holding one. `Writer.Update` therefore dedupes on state **and** flags: a shell finishing moves no state, and deduping on the state alone would pin the first count forever. Consumers read the count off the *screen* file whichever source wins the state (`read_pane_state`'s `REPLY_BG`, `collectAgentPanesFrom`'s `bg`) — a hook-fresh pane can still hold shells, and only the scraper sees them. Deliberately absent from `claude_priority_state`/`agentPriority`, and never faded (an old background shell is more interesting, not less) — same additive shape as `@pr_draft` on a PR badge. Only `claude.toml` populates it: Cursor's `N task` counts *foreground* tool calls, which `processing` already implies, and Codex awaits a capture. It is not in the per-window icon column, which is sized exactly at `MAX_ICONS * 3 + 2`; it renders in the status-line aggregate and the picker rows.
 - **Interrupt detection**: no Claude Code hook fires on an Esc-interrupt, so an abandoned turn would otherwise sit at `processing` forever. `read_pane_state` reclassifies a `processing` pane to `interrupted` (a derived state, never written to disk) once it has been quiet past `CLAUDE_INTERRUPT_CHECK_AGE` **and** the transcript tail holds `[Request interrupted by user…]`. The next prompt's `processing --force` write clears it. The tail verdict is cached at `/tmp/claude-status/interrupt/<pane_id>` and reused while the stamp is newer than the transcript (`[[ -nt ]]`), so the 1s pollers don't fork `tail` per halted pane per tick.
 - **Dead-agent floor** (`claudeStatus.assumeDeadAfter`, default 0 = off): no hook fires when an agent exits back to a shell, so its last state would live until the tmux server restarts. `tmux-update-icons`' sweep stamps `/tmp/claude-status/live/<pane_id>` (one line, epoch seconds) for every pane whose foreground command is an agent, then `live/.sweep` once the pass completes — strictly last, so a fresh `.sweep` *implies* every agent pane of that pass was stamped, which is what removes any need for a grace window after a resume. `read_pane_state` then withdraws (returns 1 — derived, like `interrupted`; nothing on disk changes) a `processing`/`compacting`/`done` state that is past its own `CLAUDE_STALE_*` threshold on a pane whose stamp has stopped advancing. Positive evidence only: a *missing* stamp never withdraws, a stale `.sweep` deactivates the whole mechanism, `waiting`/`error`/`denied` are never touched, and thresholds below 15s are clamped up to it. `.sweep` is a dotfile so `claude_prune_stale_state`'s glob skips it deliberately. The veto lives in `read_pane_state`, so only its shell consumers honour it (`tmux-update-icons` icons, `claude-status`, `tmux-kill-pane-guard`) — `picker/statusline` and the pickers read `panes/` directly and still render the withdrawn state.
