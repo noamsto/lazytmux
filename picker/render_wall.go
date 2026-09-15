@@ -131,12 +131,10 @@ func (m tuiModel) renderTile(item listItem, selected, focused bool, outerW, oute
 	edge := border + "│" + reset
 
 	rows := make([]string, 0, outerH)
-	// Every row is wrapped through fitVisibleWidth to outerW itself, not just to
-	// innerW: innerW-derived content (tileLabel's ellipsis floor in particular)
-	// can exceed innerW when outerW is small, and below wallTileFrame the two
-	// fixed-width edge glyphs alone already exceed outerW. This is the only thing
-	// enforcing the "exactly outerW cells" contract for a caller that doesn't
-	// floor outerW/outerH itself.
+	// Wrapped to outerW, not just innerW: tileLabel's ellipsis floor can exceed
+	// innerW at small sizes, and below wallTileFrame the two edge glyphs alone
+	// already exceed outerW — this is what keeps every row at exactly outerW
+	// regardless of what the caller passes.
 	rows = append(rows, fitVisibleWidth(border+"┌"+m.tileLabel(item, innerW)+"┐"+reset, outerW))
 	for _, line := range m.tileBody(item, innerW, innerH) {
 		// fitVisibleWidth's own trailing reset closes the pane's colors; the
