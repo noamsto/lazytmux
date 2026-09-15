@@ -57,7 +57,7 @@ The same hook set also runs standalone as `nix build .#lint` (see "Build and Tes
 | `tmux-branch-display` | `#()` in status-format[0] | Shows git branch name from `@branch` or fallback to `git branch --show-current`. |
 | `tmux-dir-display` | `#()` in status-format[0] | Shows pane path relative to git root (e.g., `./src`). |
 | `tmux-float-refit` | `window-resized` hook | Reasserts each floating pane's `@float_geom` (the creation percentages) against the window's new size — tmux resolves `new-pane`'s `-x/-y/-X/-Y` into absolute cells once and `layout_resize` skips floating cells, so a float otherwise outlives the client size it was made for, with no clamping either (#371). The no-clamping half is filed upstream as tmux/tmux#5581 with a patch; if that lands, only the "stays small on a larger client" half is still ours. Skips floats with no stamp (a mouse Ctrl-drag float is the user's geometry, not ours). |
-| `tmux-set-pane-border` | `run-shell` at config load | Interpolates `@thm_*` color variables into `pane-border-format` (needed because nested `#{@thm_*}` inside `#[]` don't expand at render time). |
+| `tmux-apply-theme-colors` | `run-shell` at config load | Interpolates `@thm_*` color variables into `pane-border-format` (needed because nested `#{@thm_*}` inside `#[]` don't expand at render time). The same format carries the bridged dispatcher decorations — `@bridge_crew_role`/`@bridge_crew_state`, else the window's `@bridge_crew_name` — after the `@pane_label` branch and before the multi-pane `●` default. |
 | `tmux-worktree-match` | worktrunk `post-switch` hook (navigation) | Resolves which window shows a worktree. One `list-panes -a`; ranks candidates by the `@worktree` tag **corroborated by a pane's cwd** (tag+active pane > tag+background pane > untagged window whose active pane sits there), so a tag that outlived the `cd` that earned it can't win (#199). Unsets a tag it proves false. Prints `<session>\t<window>\t<window_id>`, empty on no match. |
 | `tmux-issue-stamp` | worktrunk `post-switch` hook (one-shot, backgrounded); its `--backfill` retry sweep runs from the `@og-backfill-tick` monitor hook (every 5s) | Detects the Linear/GitHub issue for the new window's branch via provider priority; writes `@issue_provider`/`@issue_id`/`@issue_title`/`@issue_url`, then kicks an immediate PR fetch. `--backfill` rescans every window for a partial stamp (id set, title or url missing) and retries it, so a window stuck that way is self-healing instead of stranded (#600). |
 | `tmux-issue-stamp-linear` / `-github` | called by the dispatcher | Provider impls: branch regex (+ `linear`/`gh` CLI) → `id\ntitle\nurl`. First provider with a non-empty id wins. |
@@ -227,6 +227,24 @@ bridged window as agent-free. The bridge ships the remote's state instead:
   second.
 - Teardown deletes what it wrote — `claude_prune_stale_state` collects by
   server-start mtime and would keep it until a tmux restart.
+- **The dispatcher's pane decorations ride the same row** (#640).
+  `decorate_pane` stamps `@crew_role`/`@crew_state`/`@crew_role_color` per pane
+  and a `pane-border-format` that reads them, but a border is *chrome*: the
+  LOCAL server draws it, from local options, so a mirrored role grid rendered
+  every pane identically and there was no way to tell the reviewer from the
+  plan-critic. The trio crosses as `@bridge_crew_*` and the global
+  `pane-border-format`/`pane-border-style` read those — never the real
+  `@crew_*` names, which are the dispatcher's own. They are stamped **before**
+  the agent-less return: a parked role pane reports no agent state and still has
+  to draw its border. Colour falls back through `@bridge_crew_color` (the
+  window's agent tint, already carried for the label) to the theme, which is the
+  remote's own precedence.
+- **These are the first carried values a LOCAL format renders**, so they are the
+  first that may not merely garble: `cleanLabelValue`'s contract stops at
+  `#[…]`, leaving `#{…}` and `#(…)` intact, and `#(cmd)` on a border would run
+  cmd here. `crewWordRe`/`crewColorRe` exclude `#` outright rather than relying
+  on an escape pass a later consumer could forget — see that warning on
+  `cleanLabelValue`.
 - Not carried: `interrupted` (derived on the remote from a transcript tail this
   side can't read) and screen-scraper states (same status-client problem).
 
@@ -857,7 +875,7 @@ they are all satisfied the same way — a remote rebuilt from this revision, who
 |---------|--------------|
 | Bridge graphics (`prefix + I` across a mirror) | `tmux-claude-images`, `resvg` |
 | Remote agent status | tmux-og's `claude-status-update` (it stamps the pane options the daemon polls) |
-| Remote window labels | tmux-og's own `tmux-reflow-windows` (what stamps `@window_label_*`) and, for a codename, whatever fan-out harness stamps `@crew_name`/`@crew_color`. The one requirement with no capability probe: an older remote stamps nothing and the mirror silently falls back to the remote window name. |
+| Remote window labels | tmux-og's own `tmux-reflow-windows` (what stamps `@window_label_*`) and, for a codename, whatever fan-out harness stamps `@crew_name`/`@crew_color` — plus its per-pane `@crew_role`/`@crew_state`/`@crew_role_color` for the role-grid borders. The one requirement with no capability probe: an older remote stamps nothing and the mirror silently falls back to the remote window name. |
 | Cold start (`prefix + s` on a serverless host) | `tmux-startup.service` / the launchd agent, plus lingering |
 | Remote-side picker (`prefix + s` `^o`) | `og-remote-picker` (`remote.exposePickOnPath`, default true) |
 | Tool binds across a mirror (`prefix + p`/`g`/`y`) | whichever of `prdash`, `lazygit`, `yazi` you press — the bind sends a bare name, never this host's store path. A missing one opens a short-lived message pane instead of the tool. The remote leg opens a **float**, which the mirror renders as a local float, so the remote's tmux must know `new-pane -A`. |
