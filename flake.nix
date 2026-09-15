@@ -1153,19 +1153,6 @@
               USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
               SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
               SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
-              # The four legacy names, cleared but never set: a rename reloads
-              # the config without restarting the server, so without these four
-              # the old monitors keep firing every 5s at a store path the next
-              # GC removes. Emitted last, so every clear still precedes every
-              # setter (the clear_max < setter_min check below).
-              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
@@ -1181,10 +1168,6 @@
 
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
                        USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
-                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
-                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
-                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
-                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY \
                        PR_SETTER BACKFILL_SETTER USAGE_SETTER SWEEP_SETTER GUARD_JOIN; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
@@ -1223,11 +1206,7 @@
 
               clear_max=-1
               for v in "$PR_CLEAR_B" "$PR_CLEAR_OPT" "$BACKFILL_CLEAR_B" "$BACKFILL_CLEAR_OPT" \
-                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT" \
-                       "$PR_CLEAR_B_LEGACY" "$PR_CLEAR_OPT_LEGACY" \
-                       "$BACKFILL_CLEAR_B_LEGACY" "$BACKFILL_CLEAR_OPT_LEGACY" \
-                       "$USAGE_CLEAR_B_LEGACY" "$USAGE_CLEAR_OPT_LEGACY" \
-                       "$SWEEP_CLEAR_B_LEGACY" "$SWEEP_CLEAR_OPT_LEGACY"; do
+                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT"; do
                 prefix="''${line%%"$v"*}"
                 [ "$prefix" != "$line" ] || { echo "clear not found in guard line: $v" >&2; exit 1; }
                 [ "''${#prefix}" -gt "$clear_max" ] && clear_max="''${#prefix}"
@@ -1316,33 +1295,18 @@
               USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
               SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
               SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
-              # The four legacy names, cleared but never set -- the migration
-              # cleanup described in the enabled check above.
-              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
               SWEEP_SETTER = sweepSetter;
             } ''
-              # All sixteen clears survive a disabled feature -- eight names
-              # (four live, four legacy) times the -B and option forms. They're
-              # keyed off the fixed hookNames list, never the enable flags,
-              # which is what makes disabling a feature actually drop its stale
-              # monitor on reload instead of leaving argv's previous generation
-              # armed.
+              # All eight clears survive a disabled feature -- four names times
+              # the -B and option forms. They're keyed off the fixed hookNames
+              # list, never the enable flags, which is what makes disabling a
+              # feature actually drop its stale monitor on reload instead of
+              # leaving argv's previous generation armed.
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
-                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
-                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
-                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
-                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
-                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY; do
+                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
                   echo "disabled conf is missing a clear ($v): $pat" >&2
