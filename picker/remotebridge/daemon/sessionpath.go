@@ -13,11 +13,9 @@ import (
 // later field, while a space in a session path is both legal and harmless there.
 var sessionPathRe = regexp.MustCompile(`^/[^|]*$`)
 
-// readSessionPath fetches the remote session's own #{session_path}. The local
-// mirror session's session_path is whatever cwd og-remote-open ran from — it
-// creates the session with no -c, since the remote directory need not exist
-// here — so the picker would otherwise show the launcher's directory for a
-// mirror. An unusable reply is "", which the picker renders as no path at all.
+// readSessionPath fetches the remote session's own #{session_path}; the local
+// mirror's is og-remote-open's cwd, since the remote directory need not exist
+// here to pass as -c. An unusable reply is "".
 func readSessionPath(rt roundTrip, sess string) string {
 	l, ok := one(rt, fmt.Sprintf("display-message -p -t %s -F '#{session_path}'", tmuxQuote(sess)))
 	if !ok || l.Kind == controlmode.Error {
