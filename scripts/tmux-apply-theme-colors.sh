@@ -51,9 +51,12 @@ thm_surface_1=$(tmux show -gv @thm_surface_1 2>/dev/null | tr -d '"')
 
 # --- Pane borders ---
 # Nested #{@thm_*} inside #[] don't expand at render time, so we interpolate here.
-# @pane_label (floating utility panes) → mauve titled border; else multi-pane ● / plain.
+# @pane_label (floating utility panes) → mauve titled border; then the bridged
+# dispatcher decorations (#640) — a role pane's own role/state, else the mirror
+# window's crew codename; else multi-pane ● / plain. Neither bridge branch sets
+# an fg: the crew colour reaches them through pane-border-style, as on the remote.
 tmux setw -g pane-border-format \
-	"#{?@pane_label,#{?pane_active,#[fg=${thm_mauve}]━━ #{@pane_label} ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━ #{@pane_label} ━━},#{?#{&&:#{pane_active},#{&&:#{>:#{window_panes},1},#{==:#{window_zoomed_flag},0}}},#[fg=${thm_mauve}]━━ #[fg=${thm_green}]●#[fg=${thm_mauve}] ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━━━━}}"
+	"#{?@pane_label,#{?pane_active,#[fg=${thm_mauve}]━━ #{@pane_label} ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━ #{@pane_label} ━━},#{?@bridge_crew_role,━━ #[bold]#{@bridge_crew_role}#[nobold] #{@bridge_crew_state} ━━,#{?@bridge_crew_name,━━ #[bold]#{@bridge_crew_name}#[nobold] ━━,#{?#{&&:#{pane_active},#{&&:#{>:#{window_panes},1},#{==:#{window_zoomed_flag},0}}},#[fg=${thm_mauve}]━━ #[fg=${thm_green}]●#[fg=${thm_mauve}] ━━,#[bg=${thm_bg},fg=${thm_overlay_1}]━━━━━}}}}"
 
 # --- tmux-fingers hints (requires colourN format, not hex) ---
 tmux set -g @fingers-hint-style "fg=colour$(hex_to_256 "$thm_crust"),bg=colour$(hex_to_256 "$thm_mauve"),bold"

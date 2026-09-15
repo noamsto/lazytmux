@@ -11,16 +11,19 @@ import (
 
 func TestParseAgentStatus(t *testing.T) {
 	body := strings.Join([]string{
-		"%1|claude|processing 1700000000 ||",                      // trailing empty fields trimmed away
-		"%2|nvim|||",                                              // mirrored pane, no agent
-		"%3|claude|waiting 1700000042 1||ENG-7|fix | y",           // unseen, issues, task holding a '|'
+		"%1|claude|processing 1700000000 |",                       // trailing empty fields trimmed away
+		"%2|nvim|||||||",                                          // mirrored pane, no agent
+		"%3|claude|waiting 1700000042 1||ENG-7||||fix | y",        // unseen, issues, task holding a '|'
 		"%4|fish|garbage||",                                       // unparsable stamp reads as no agent
-		"%5|pi|processing 1700000200 |idle 1700000050 bg=2|ENG-7", // screen-scraped state alongside a hook stamp
+		"%5|claude||||plan-critic|working|colour111|grill it",     // a decorated role pane
+		"%6|claude||||#(id)|WORKING|#[fg=red]|",                   // markup and an uppercase state drop
+		"%7|claude||||plan-critic-with-a-very-long-name||red|",    // over its cap, so dropped whole
+		"%8|pi|processing 1700000200 |idle 1700000050 bg=2|ENG-7", // screen-scraped state alongside a hook stamp
 	}, "\n")
 
 	got := parseAgentStatus(body)
-	if len(got) != 5 {
-		t.Fatalf("got %d rows, want 5 (every mirrored pane): %+v", len(got), got)
+	if len(got) != 8 {
+		t.Fatalf("got %d rows, want 8 (every mirrored pane): %+v", len(got), got)
 	}
 	if got[0].pane != "%1" || got[0].proc != "claude" || got[0].state != "processing" || got[0].ts != 1700000000 || got[0].unseen {
 		t.Errorf("row 0 = %+v", got[0])
@@ -35,9 +38,66 @@ func TestParseAgentStatus(t *testing.T) {
 	if got[3].proc != "fish" || got[3].state != "" {
 		t.Errorf("unparsable stamp = %+v, want no state", got[3])
 	}
-	s := got[4]
-	if s.pane != "%5" || s.state != "processing" || s.screenState != "idle" || s.screenTS != 1700000050 || s.screenFlags != "bg=2" || s.issues != "ENG-7" {
-		t.Errorf("row 4 (screen-scraped) = %+v", s)
+	if r := got[4]; r.crewRole != "plan-critic" || r.crewState != "working" || r.crewColor != "colour111" || r.task != "grill it" {
+		t.Errorf("decorated role pane = %+v", r)
+	}
+	// The border format these three reach is RENDERED by the local tmux, so a
+	// value carrying '#(...)' would run that command on this host.
+	if r := got[5]; r.crewRole != "" || r.crewState != "" || r.crewColor != "" {
+		t.Errorf("unshaped crew values must drop, got %+v", r)
+	}
+	if r := got[6]; r.crewRole != "" || r.crewColor != "red" {
+		t.Errorf("an over-cap role drops whole and takes nothing else with it: %+v", r)
+	}
+	s := got[7]
+	if s.pane != "%8" || s.state != "processing" || s.screenState != "idle" || s.screenTS != 1700000050 || s.screenFlags != "bg=2" || s.issues != "ENG-7" {
+		t.Errorf("row 7 (screen-scraped) = %+v", s)
+	}
+}
+
+// A role pane the dispatcher decorated carries its badge across as @bridge_*,
+// which is what the local pane-border-format draws from — the local pane runs a
+// renderer and knows neither its role nor its state.
+func TestAgentShipperStampsCrewDecorations(t *testing.T) {
+	a := &agentShipper{dir: t.TempDir(), sess: "lab-mono", written: map[string]paneStatus{}}
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+
+	// No agent state: a parked role pane still has to draw its border.
+	rows := []paneStatus{{pane: "%1", proc: "claude", crewRole: "reviewer", crewState: "idle", crewColor: "colour114"}}
+	a.apply(cfg, rows)
+	want := []string{
+		"set-option", "-p", "-t", "%7", "@bridge_crew_role", "reviewer", ";",
+		"set-option", "-p", "-t", "%7", "@bridge_crew_state", "idle", ";",
+		"set-option", "-p", "-t", "%7", "@bridge_crew_role_color", "colour114",
+	}
+	if len(calls) != 2 || !reflect.DeepEqual(calls[1], want) {
+		t.Fatalf("crew stamp = %v, want one sequence %v", calls, want)
+	}
+
+	a.apply(cfg, rows)
+	if len(calls) != 2 {
+		t.Errorf("unchanged decorations re-stamped: %v", calls)
+	}
+
+	// Only the field that moved is re-sent.
+	rows[0].crewState = "working"
+	a.apply(cfg, rows)
+	want = []string{"set-option", "-p", "-t", "%7", "@bridge_crew_state", "working"}
+	if len(calls) != 3 || !reflect.DeepEqual(calls[2], want) {
+		t.Errorf("state change = %v, want %v", calls[2:], want)
+	}
+
+	// The remote drops the decoration: the option is unset, not left stale.
+	rows[0].crewRole, rows[0].crewState, rows[0].crewColor = "", "", ""
+	a.apply(cfg, rows)
+	want = []string{
+		"set-option", "-p", "-t", "%7", "-u", "@bridge_crew_role", ";",
+		"set-option", "-p", "-t", "%7", "-u", "@bridge_crew_state", ";",
+		"set-option", "-p", "-t", "%7", "-u", "@bridge_crew_role_color",
+	}
+	if len(calls) != 4 || !reflect.DeepEqual(calls[3], want) {
+		t.Errorf("undecorate = %v, want %v", calls[3:], want)
 	}
 }
 

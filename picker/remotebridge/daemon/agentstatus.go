@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,18 +23,41 @@ const agentStatusPollInterval = time.Second
 // the state, where a stamp is reported as it is made. See pollFloor.
 const agentStatusBackstopInterval = 30 * time.Second
 
-// agentStatusFormat reads each remote pane's foreground command plus whatever
-// claude-status-update stamped on it, and whatever agent-detect's
+// agentStatusFormat reads each remote pane's foreground command, whatever
+// claude-status-update stamped on it, whatever agent-detect's
 // statefile.Writer stamped for a screen-scraped agent (pi, codex, cursor —
-// #635). @claude_status is "<state> <epoch> <unseen>"; @agent_screen is
-// "<state> <epoch> [name=count ...]", a separate option so the two sources
-// stay distinguishable once they cross the bridge. Both are drawn from fixed,
-// non-free-form vocabularies, so they sit ahead of the free-form fields —
-// the task goes last so a '|' inside it lands in the final field instead of
-// shifting the row.
+// #635), and the dispatcher's per-pane role badge. @claude_status is
+// "<state> <epoch> <unseen>"; @agent_screen is "<state> <epoch> [name=count
+// ...]", a separate option so the two sources stay distinguishable once they
+// cross the bridge. Both are drawn from fixed, non-free-form vocabularies, as
+// is the crew trio — agent-writable, per GRID_PROTOCOL, and pipe-stripped on
+// the REMOTE the way windowLabelFormat's free-form fields are — so they all
+// sit ahead of the free-form task, which goes last so a '|' inside it lands
+// in the final field instead of shifting the row.
 // Unquoted: it is both a -F argument and a subscription format, and only the
 // call site knows which quoting each needs.
-const agentStatusFormat = "#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@agent_screen}|#{@claude_issues}|#{@claude_task}"
+const agentStatusFormat = "#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@agent_screen}|#{@claude_issues}|" +
+	"#{s/[|]/ /:@crew_role}|#{s/[|]/ /:@crew_state}|#{s/[|]/ /:@crew_role_color}|#{@claude_task}"
+
+// agentStatusFields is agentStatusFormat's field count, shared with the test
+// fixture so the parser and the fixture cannot drift apart.
+const agentStatusFields = 9
+
+const (
+	crewRoleMaxRunes  = 24
+	crewStateMaxRunes = 16
+	// crewColorRe's own bare-word alternative is unbounded; every tmux colour
+	// name fits here, as do "colour255" and a hex triplet.
+	crewColorMaxRunes = 16
+)
+
+// crewWordRe shapes both the role and its state. Stricter than it looks: these
+// are the first carried values interpolated into a format the LOCAL tmux
+// RENDERS, and cleanLabelValue's contract stops at '#[...]' markup — '#{...}'
+// and '#(...)' survive it, so a role of "#(cmd)" on a border would run cmd
+// here. The character class settles that outright, rather than an escape pass a
+// later consumer could forget to apply.
+var crewWordRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // paneStatus is one remote pane's foreground command and, when an agent runs
 // there, the state either the hook writer or the screen scraper stamped.
@@ -45,6 +69,10 @@ type paneStatus struct {
 	unseen bool
 	issues string
 	task   string
+	// The dispatcher's pane decorations, "" on any pane it never decorated.
+	crewRole  string
+	crewState string
+	crewColor string
 
 	// screenState/screenTS/screenFlags mirror agent-detect's screen/<pane_id>
 	// file for a non-Claude agent (#635). screenFlags holds the raw
@@ -63,24 +91,30 @@ func parseAgentStatus(body string) []paneStatus {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimRight(line, "\r")
 		// Trailing empty fields may or may not survive the trip, so read them
-		// positionally rather than demanding all six.
-		fields := strings.SplitN(line, "|", 6)
+		// positionally rather than demanding the full width.
+		fields := strings.SplitN(line, "|", agentStatusFields)
+		at := func(i int) string {
+			if i < len(fields) {
+				return fields[i]
+			}
+			return ""
+		}
 		if len(fields) < 2 || fields[0] == "" {
 			continue
 		}
-		row := paneStatus{pane: fields[0], proc: fields[1]}
-		if len(fields) > 2 {
-			row.readStatus(fields[2])
+		row := paneStatus{
+			pane:   fields[0],
+			proc:   fields[1],
+			issues: at(4),
+			// Identity fields, dropped whole rather than truncated: a cut role
+			// names a different role and a cut colour is not a colour.
+			crewRole:  matching(cleanLabelValueExact(at(5), crewRoleMaxRunes), crewWordRe),
+			crewState: matching(cleanLabelValueExact(at(6), crewStateMaxRunes), crewWordRe),
+			crewColor: matching(cleanLabelValueExact(at(7), crewColorMaxRunes), crewColorRe),
+			task:      at(8),
 		}
-		if len(fields) > 3 {
-			row.readScreen(fields[3])
-		}
-		if len(fields) > 4 {
-			row.issues = fields[4]
-		}
-		if len(fields) > 5 {
-			row.task = fields[5]
-		}
+		row.readStatus(at(2))
+		row.readScreen(at(3))
 		out = append(out, row)
 	}
 	return out
@@ -241,9 +275,15 @@ func (a *agentShipper) stamp(cfg Config, rows []paneStatus) (map[string]bool, bo
 
 		// @bridge_proc is the mirror pane's real command: the local one runs a
 		// renderer, which would give every mirrored window the fallback icon.
+		// Its own call, not folded into the crew sequence below: it is the one
+		// carried pane value nothing validates, and tmux fails a whole ';'
+		// sequence on one argv it reads as a flag.
 		if !seen || prev.proc != r.proc {
 			cfg.LocalTmux("set-option", "-p", "-t", localPane, "@bridge_proc", r.proc)
 		}
+		// Before the agent-less return below: a role pane the dispatcher
+		// decorated still draws a border when no agent ever reported on it.
+		stampCrew(cfg, localPane, r, prev, seen)
 		if r.state == "" {
 			// The pane is mirrored but has no hook-driven agent — nothing to
 			// render but the icon, and a leftover file would keep one lit.
@@ -277,6 +317,49 @@ func (a *agentShipper) stamp(cfg Config, rows []paneStatus) (map[string]bool, bo
 		}
 	}
 	return live, true
+}
+
+// bridgeCrewOptions maps each carried crew value to the daemon-owned @bridge_*
+// option it is stamped into. The daemon never writes @crew_*: those are the
+// dispatcher's own names, and a mirror that carried them would have a local
+// tmux-og reading a remote pane's role as its own.
+var bridgeCrewOptions = []struct {
+	opt string
+	get func(paneStatus) string
+}{
+	{"@bridge_crew_role", func(r paneStatus) string { return r.crewRole }},
+	{"@bridge_crew_state", func(r paneStatus) string { return r.crewState }},
+	{"@bridge_crew_role_color", func(r paneStatus) string { return r.crewColor }},
+}
+
+// stampCrew writes the crew values that moved onto one mirror pane, as a single
+// argv command sequence so a decorated pane costs one fork rather than three.
+func stampCrew(cfg Config, localPane string, r, prev paneStatus, seen bool) {
+	var argv []string
+	for _, o := range bridgeCrewOptions {
+		v := o.get(r)
+		if seen && o.get(prev) == v {
+			continue
+		}
+		// A pane first seen carrying nothing has no option to clear, and every
+		// undecorated mirror pane is one of those. bridgeLabelOptions diverges
+		// here: its first-pass burst of `-u` is what forces the first reflow.
+		if !seen && v == "" {
+			continue
+		}
+		if len(argv) > 0 {
+			argv = append(argv, ";")
+		}
+		if v == "" {
+			argv = append(argv, "set-option", "-p", "-t", localPane, "-u", o.opt)
+			continue
+		}
+		argv = append(argv, "set-option", "-p", "-t", localPane, o.opt, v)
+	}
+	if len(argv) == 0 {
+		return
+	}
+	cfg.LocalTmux(argv...)
 }
 
 // clear drops every file this bridge wrote. The shell-side prune collects by
