@@ -6,7 +6,7 @@
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
 
-`nix run github:noamsto/lazytmux` drops you into a ready-to-use tmux environment.
+`nix run github:noamsto/tmux-og` drops you into a ready-to-use tmux environment.
 
 [![Nix Flake](https://img.shields.io/badge/nix-flake-blue?logo=nixos)](https://nixos.org)
 [![tmux 3.6](https://img.shields.io/badge/tmux-3.6a-green)](https://github.com/tmux/tmux)
@@ -26,10 +26,10 @@ https://github.com/user-attachments/assets/8c6381fc-1eb8-4942-bc5b-521ad7fbf464
 
 ```bash
 # Run directly (no install)
-nix run github:noamsto/lazytmux
+nix run github:noamsto/tmux-og
 
 # If a tmux server is already running with your old config, kill it first:
-tmux kill-server && nix run github:noamsto/lazytmux
+tmux kill-server && nix run github:noamsto/tmux-og
 ```
 
 > **First run:** Nix needs to fetch and evaluate nixpkgs on first use, which can
@@ -40,7 +40,7 @@ tmux kill-server && nix run github:noamsto/lazytmux
 
 ```bash
 # Install to your Nix profile
-nix profile install github:noamsto/lazytmux
+nix profile install github:noamsto/tmux-og
 ```
 
 This installs a `tmux` wrapper that automatically loads the configuration. Your existing
@@ -60,7 +60,7 @@ for now they're reachable through the Nix-built `og` wrapper.
 
 Prebuilt artifacts are pushed to a [Cachix](https://cachix.org) cache, so you can pull the
 closure instead of building it locally. The flake declares the substituter via `nixConfig`,
-so `nix run`/`nix profile install github:noamsto/lazytmux` uses it automatically once you
+so `nix run`/`nix profile install github:noamsto/tmux-og` uses it automatically once you
 accept the prompt (or run as a trusted user).
 
 To add it globally instead, put this in your Nix config:
@@ -474,7 +474,7 @@ claude --plugin-dir "${inputs.tmux-og}/claude-plugin"
 Marketplace:
 
 ```bash
-claude plugin marketplace add noamsto/lazytmux
+claude plugin marketplace add noamsto/tmux-og
 claude plugin install tmux-og@tmux-og
 ```
 
