@@ -108,27 +108,14 @@ func agentUsageArgs(cfg *config.Config) string {
 
 // tickHookNames is the CLEAR list, not the set list — the four setters below
 // carry their names inline, so the two lists are deliberately different lengths.
-// This one also carries the four legacy @lztmux-*-tick names: a rename reloads
-// the config but does not restart the tmux server, and hooks_monitor_add keys on
-// the name, so without their clears four orphaned monitors keep firing every
-// five seconds at garbage-collected store paths for the life of the server. A
-// clear removes a monitor and never keeps one working, so this is migration
-// cleanup, not an alias.
 //
-// Emission order is load-bearing — new names first, legacy last, so every clear
-// still precedes the first setter, which tick-floor-conf-assertions measures.
-//
-// Removal condition: drop the four legacy entries once every host's tmux server
-// has restarted past the flip.
+// Emission order is load-bearing — every clear precedes the first setter,
+// which tick-floor-conf-assertions measures.
 var tickHookNames = []string{
 	"@og-pr-tick",
 	"@og-backfill-tick",
 	"@og-usage-tick",
 	"@og-sweep-tick",
-	"@lztmux-pr-tick",
-	"@lztmux-backfill-tick",
-	"@lztmux-usage-tick",
-	"@lztmux-sweep-tick",
 }
 
 // tickHookIfShell arms the monitor-hook floor for the status-tick side effects

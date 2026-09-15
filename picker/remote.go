@@ -194,14 +194,19 @@ func isRemoteSelf(local, remote remoteIdentity) bool {
 	return local.MachineID == remote.MachineID && local.User == remote.User
 }
 
-func remoteSelfCachePath(host string) string {
-	safe := strings.Map(func(r rune) rune {
+// hostFileName maps an ssh host alias onto a single safe path segment.
+// Distinct hosts can collide, so a reader that cares must verify the host.
+func hostFileName(host string) string {
+	return strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
 			return r
 		}
 		return '_'
 	}, host)
-	return filepath.Join(remoteSelfCacheDir, safe)
+}
+
+func remoteSelfCachePath(host string) string {
+	return filepath.Join(remoteSelfCacheDir, hostFileName(host))
 }
 
 func markCachedRemoteSelfAlias(host string) {
@@ -261,6 +266,112 @@ func dropCachedSelfAliases(hosts []string) []string {
 		}
 	}
 	return out
+}
+
+// remoteCacheStaleAfter is how old a cached session list may get before its
+// rows render dimmed with their age.
+const remoteCacheStaleAfter = 5 * time.Minute
+
+// remoteSessionCache is one host's last answered probe. Sessions is the raw
+// list, before bridge suppression, so a mirror detached since still shows.
+type remoteSessionCache struct {
+	Host     string   `json:"host"`
+	SavedAt  int64    `json:"saved_at"` // unix millis, formatSnapshotAge's unit
+	Sessions []string `json:"sessions"`
+}
+
+// remoteSessionCacheDir is $XDG_CACHE_HOME/tmux-og/remote, or "" when no
+// absolute base resolves.
+func remoteSessionCacheDir() string {
+	base := os.Getenv("XDG_CACHE_HOME")
+	if !filepath.IsAbs(base) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(base, "tmux-og", "remote")
+}
+
+// ownerOnlyDir rejects a cache dir another user could have planted or can
+// write into: the rows it holds become Enter targets.
+func ownerOnlyDir(dir string) bool {
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return false
+	}
+	return info.Mode().Perm()&0o077 == 0
+}
+
+func writeRemoteSessionCache(host string, sessions []string, now time.Time) {
+	dir := remoteSessionCacheDir()
+	if dir == "" || os.MkdirAll(dir, 0o700) != nil || !ownerOnlyDir(dir) {
+		return
+	}
+	data, err := json.Marshal(remoteSessionCache{Host: host, SavedAt: now.UnixMilli(), Sessions: sessions})
+	if err != nil {
+		return
+	}
+	f, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr != nil || cerr != nil {
+		_ = os.Remove(f.Name())
+		return
+	}
+	// Rename, so a picker reading concurrently never sees a torn file.
+	if os.Rename(f.Name(), filepath.Join(dir, hostFileName(host)+".json")) != nil {
+		_ = os.Remove(f.Name())
+	}
+}
+
+func readRemoteSessionCache(host string) (remoteSessionCache, bool) {
+	dir := remoteSessionCacheDir()
+	if dir == "" || !ownerOnlyDir(dir) {
+		return remoteSessionCache{}, false
+	}
+	path := filepath.Join(dir, hostFileName(host)+".json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return remoteSessionCache{}, false
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != uint32(os.Getuid()) {
+		return remoteSessionCache{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return remoteSessionCache{}, false
+	}
+	var c remoteSessionCache
+	if json.Unmarshal(data, &c) != nil || c.Host != host {
+		return remoteSessionCache{}, false
+	}
+	return c, true
+}
+
+func remoteCacheStale(c remoteSessionCache, now time.Time) bool {
+	return now.Sub(time.UnixMilli(c.SavedAt)) > remoteCacheStaleAfter
+}
+
+// firstPaintBridges indexes the mirror sessions already in the list under the
+// legacy <host>-<sess> key: enough to keep a cached row from duplicating an
+// open mirror without forking tmux for @bridge_session before first paint.
+// The probe's result, built from the authoritative pair key, replaces it.
+func firstPaintBridges(items []listItem) map[string]bool {
+	bridges := make(map[string]bool)
+	for _, it := range items {
+		if it.bridgeHost != "" {
+			bridges[bridgeSessionLegacyKey(it.session)] = true
+		}
+	}
+	return bridges
 }
 
 // localBridgeSession is the local mirror name for a remote host+session pair.
@@ -846,19 +957,71 @@ const remotePendingNote = "…"
 // @remote_bridge_hosts alone — no ssh, so it belongs on the first-paint
 // path. Each host gets exactly the row collectRemoteItems would give it,
 // with remotePendingNote standing in for whatever annotation the probe will
-// resolve. remoteMsg (collectRemoteItems's result) replaces this slice
-// wholesale once every host's probe returns.
-func pendingRemoteItems(tmuxOpts map[string]string) []listItem {
+// resolve, and the host's cached sessions (#631) under it so a query can
+// match them before any probe answers. remoteMsg (collectRemoteItems's
+// result) replaces this slice wholesale once every host's probe returns.
+func pendingRemoteItems(tmuxOpts map[string]string, bridges map[string]bool) []listItem {
 	hosts := dropCachedSelfAliases(parseRemoteHosts(envOrMap("REMOTE_BRIDGE_HOSTS", tmuxOpts, "@remote_bridge_hosts", "")))
 	if len(hosts) == 0 {
 		return nil
 	}
+	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
+	hostColor := hostColorFunc(tmuxOpts)
+	now := time.Now()
 	items := make([]listItem, 0, len(hosts)+1)
 	items = append(items, remoteHeaderItem(tmuxOpts))
 	for _, h := range hosts {
 		items = append(items, remoteHostRowItem(tmuxOpts, h, remotePendingNote))
+		if c, ok := readRemoteSessionCache(h); ok {
+			items = append(items, cachedRemoteSessionRows(c, bridges, remoteCacheStale(c, now), now, hostColor(h), cDim)...)
+		}
 	}
 	return items
+}
+
+// remoteSessionRowItem renders one session row under host. note is a dim
+// suffix; dim greys the session name too, for a row no probe just confirmed.
+func remoteSessionRowItem(host, sess, note, cHost, cDim string, dim bool) listItem {
+	reset := "\033[0m"
+	plain := sess
+	if note != "" {
+		plain += "  " + note
+	}
+	label := sess
+	switch {
+	case dim:
+		label = cDim + plain + reset
+	case note != "":
+		label = sess + cDim + "  " + note + reset
+	}
+	return listItem{
+		isRemoteRow: true,
+		target:      "remote:" + host + ":" + sess,
+		remoteHost:  host,
+		remoteSess:  sess,
+		display:     cHost + remoteTreeMid + reset + " " + label,
+		displayEnd:  cHost + remoteTreeEnd + reset + " " + label,
+		plain:       remoteTreeMid + " " + plain,
+		plainEnd:    remoteTreeEnd + " " + plain,
+		searchText:  host + "/" + sess + " " + host + " " + sess,
+	}
+}
+
+// cachedRemoteSessionRows renders a cache's unbridged sessions; stale rows are
+// dimmed and carry the cache's age.
+func cachedRemoteSessionRows(c remoteSessionCache, bridges map[string]bool, stale bool, now time.Time, cHost, cDim string) []listItem {
+	note := ""
+	if stale {
+		note = "(cached " + formatSnapshotAge(c.SavedAt, now) + ")"
+	}
+	var rows []listItem
+	for _, sess := range c.Sessions {
+		if sess == "" || bridgeSessionPresent(bridges, c.Host, sess) {
+			continue
+		}
+		rows = append(rows, remoteSessionRowItem(c.Host, sess, note, cHost, cDim, stale))
+	}
+	return rows
 }
 
 // collectRemoteItems builds the "Remote" suggestion rows (header + hosts /
@@ -880,7 +1043,6 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 
 	cDim := ansiFg(envOrMap("THM_SUBTEXT_0", tmuxOpts, "@thm_subtext_0", "#a6adc8"))
 	hostColor := hostColorFunc(tmuxOpts)
-	reset := "\033[0m"
 
 	type hostResult struct {
 		host            string
@@ -890,7 +1052,9 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 		manifestSavedAt int64
 		drop            bool
 		tailscaleURL    string
+		cached          []listItem
 	}
+	now := time.Now()
 	results := make([]hostResult, len(hosts))
 	var wg sync.WaitGroup
 	for i, h := range hosts {
@@ -913,7 +1077,19 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 				return result, nil
 			})
 			res := hostResult{host: h, sess: sess, state: state}
-			if state == remoteProbeTailscaleCheck {
+			switch state {
+			case remoteProbeOK:
+				writeRemoteSessionCache(h, result.Sessions, now)
+			case remoteProbeNoServer:
+				writeRemoteSessionCache(h, nil, now)
+			case remoteProbeUnreachable:
+				// A host that can't answer keeps its last answer, always stale.
+				// The auth/host-key/tailscale states get none: those rows must
+				// stay the only thing Enter can reach for that host.
+				if c, ok := readRemoteSessionCache(h); ok {
+					res.cached = cachedRemoteSessionRows(c, bridges, true, now, hostColor(h), cDim)
+				}
+			case remoteProbeTailscaleCheck:
 				res.tailscaleURL = tailscaleCheckURL(err)
 			}
 			if state == remoteProbeNoServer {
@@ -978,33 +1154,14 @@ func collectRemoteItems(tmuxOpts map[string]string, bridges map[string]bool, pro
 		items = append(items, hostRow)
 		cH := hostColor(r.host)
 		for _, sess := range r.sess {
-			items = append(items, listItem{
-				isRemoteRow: true,
-				target:      "remote:" + r.host + ":" + sess,
-				remoteHost:  r.host,
-				remoteSess:  sess,
-				display:     cH + remoteTreeMid + reset + " " + sess,
-				displayEnd:  cH + remoteTreeEnd + reset + " " + sess,
-				plain:       remoteTreeMid + " " + sess,
-				plainEnd:    remoteTreeEnd + " " + sess,
-				searchText:  r.host + "/" + sess + " " + r.host + " " + sess,
-			})
+			items = append(items, remoteSessionRowItem(r.host, sess, "", cH, cDim, false))
 		}
 		for _, s := range r.restorable {
-			suffix := "  (restore — saved " + formatSnapshotAge(r.manifestSavedAt, time.Now()) + ")"
-			items = append(items, listItem{
-				isRemoteRow:   true,
-				target:        "remote:" + r.host + ":" + s.Name,
-				remoteHost:    r.host,
-				remoteSess:    s.Name,
-				remoteRestore: true,
-				display:       cH + remoteTreeMid + reset + " " + s.Name + cDim + suffix + reset,
-				displayEnd:    cH + remoteTreeEnd + reset + " " + s.Name + cDim + suffix + reset,
-				plain:         remoteTreeMid + " " + s.Name + suffix,
-				plainEnd:      remoteTreeEnd + " " + s.Name + suffix,
-				searchText:    r.host + "/" + s.Name + " " + r.host + " " + s.Name,
-			})
+			row := remoteSessionRowItem(r.host, s.Name, "(restore — saved "+formatSnapshotAge(r.manifestSavedAt, now)+")", cH, cDim, false)
+			row.remoteRestore = true
+			items = append(items, row)
 		}
+		items = append(items, r.cached...)
 	}
 	if !hasHosts {
 		return nil

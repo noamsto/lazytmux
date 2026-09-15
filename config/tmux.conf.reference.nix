@@ -674,17 +674,13 @@
         # floor cannot make a new agent pane wait longer to be armed than today.
         tick = name: "${name}::#{e|/|:#{T:@og_tick},5}";
         # The CLEAR list, not the set list, and its order is load-bearing. Mirror
-        # of tickHookNames in generator/render/status.go, which carries the why:
-        # the legacy entries, the ordering constraint, and the removal condition.
+        # of tickHookNames in generator/render/status.go, which carries the
+        # ordering constraint.
         hookNames = [
           "@og-pr-tick"
           "@og-backfill-tick"
           "@og-usage-tick"
           "@og-sweep-tick"
-          "@lztmux-pr-tick"
-          "@lztmux-backfill-tick"
-          "@lztmux-usage-tick"
-          "@lztmux-sweep-tick"
         ];
         # `-g` leaves the monitor's session NULL (cmd-set-option.c), which keeps
         # the hook alive for the server's whole life instead of dying with the

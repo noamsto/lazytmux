@@ -2,34 +2,32 @@
 
 # tmux-og
 
-**Opinionated tmux configuration with Claude Code & OpenCode integration.**
+*tmux, the original gangster — still the OG multiplexer, now batteries-included.*
+
+**A batteries-included tmux distribution: live status for Claude Code, Codex, Cursor, Pi and OpenCode, remote sessions mirrored as native windows, issue/PR enrichment, persistence, and fast pickers.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
 
-`nix run github:noamsto/lazytmux` drops you into a ready-to-use tmux environment.
+`nix run github:noamsto/tmux-og` drops you into a ready-to-use tmux environment.
 
 [![Nix Flake](https://img.shields.io/badge/nix-flake-blue?logo=nixos)](https://nixos.org)
-[![tmux 3.6](https://img.shields.io/badge/tmux-3.6a-green)](https://github.com/tmux/tmux)
+[![tmux next-3.8](https://img.shields.io/badge/tmux-next--3.8-green)](https://github.com/tmux/tmux)
 [![Catppuccin Mocha](https://img.shields.io/badge/theme-catppuccin%20mocha-mauve?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMiIgZmlsbD0iI2NiYTZmNyIvPjwvc3ZnPg==)](https://github.com/catppuccin/tmux)
 
 </div>
 
 ---
 
-<div align="center">
-
-https://github.com/user-attachments/assets/8c6381fc-1eb8-4942-bc5b-521ad7fbf464
-
-</div>
+![tmux-og: agent status in the status bar, window switching and the session picker](docs/media/hero.gif)
 
 ## Quick Start
 
 ```bash
 # Run directly (no install)
-nix run github:noamsto/lazytmux
+nix run github:noamsto/tmux-og
 
 # If a tmux server is already running with your old config, kill it first:
-tmux kill-server && nix run github:noamsto/lazytmux
+tmux kill-server && nix run github:noamsto/tmux-og
 ```
 
 > **First run:** Nix needs to fetch and evaluate nixpkgs on first use, which can
@@ -40,7 +38,7 @@ tmux kill-server && nix run github:noamsto/lazytmux
 
 ```bash
 # Install to your Nix profile
-nix profile install github:noamsto/lazytmux
+nix profile install github:noamsto/tmux-og
 ```
 
 This installs a `tmux` wrapper that automatically loads the configuration. Your existing
@@ -60,7 +58,7 @@ for now they're reachable through the Nix-built `og` wrapper.
 
 Prebuilt artifacts are pushed to a [Cachix](https://cachix.org) cache, so you can pull the
 closure instead of building it locally. The flake declares the substituter via `nixConfig`,
-so `nix run`/`nix profile install github:noamsto/lazytmux` uses it automatically once you
+so `nix run`/`nix profile install github:noamsto/tmux-og` uses it automatically once you
 accept the prompt (or run as a trusted user).
 
 To add it globally instead, put this in your Nix config:
@@ -86,7 +84,9 @@ cachix use lazytmux
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, Pi, OpenCode, etc.) |
 | **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, Pi, and OpenCode |
-| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
+| **Agent usage limits** | Claude, Codex and Cursor rate-limit utilization in the status line while an agent is running |
+| **Remote tmux bridge** | Open a session on another host as native local windows over SSH, with agent status, labels, zoom, floats, image paste and auto-reconnect carried across |
+| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, issue/PR badges, and a live window wall (`prefix + W`) |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
 | **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
@@ -96,10 +96,31 @@ cachix use lazytmux
 | **Image carousel** | View a Claude session's images/diagrams in a split (`prefix + I`) |
 | **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |
 
+## Screenshots
+
+Rendered from `docs/media/tapes/` with [vhs](https://github.com/charmbracelet/vhs);
+`nix run .#demo` from the repo root regenerates them.
+
+**Multi-line status bar** — the window list reflows as the terminal narrows.
+
+![Status bar reflowing onto more lines as the terminal narrows](docs/media/reflow.gif)
+
+**AI agent status** — processing, waiting on a permission, and done, per window.
+
+![Agent status across windows: processing, waiting and done](docs/media/agents.gif)
+
+**Pickers** — session picker (`prefix + s`), then window picker (`prefix + w`).
+
+![Session picker, then window picker](docs/media/pickers.gif)
+
+**Window wall** — live previews of every window (`prefix + W`).
+
+![Window wall](docs/media/wall.gif)
+
 ## Requirements
 
 - **Nerd Font terminal** — any terminal with a Nerd Font renders window icons correctly (Kitty, Alacritty, WezTerm, etc.)
-- Nothing else — the Nix package bundles tmux 3.6a; your own `~/.tmux.conf` and system tmux are not used
+- Nothing else — the Nix package bundles tmux (upstream, pinned at next-3.8); your own `~/.tmux.conf` and system tmux are not used
 
 ---
 
@@ -474,7 +495,7 @@ claude --plugin-dir "${inputs.tmux-og}/claude-plugin"
 Marketplace:
 
 ```bash
-claude plugin marketplace add noamsto/lazytmux
+claude plugin marketplace add noamsto/tmux-og
 claude plugin install tmux-og@tmux-og
 ```
 

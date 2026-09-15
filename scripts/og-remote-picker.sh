@@ -26,8 +26,11 @@ zoxide_bin="@zoxide@/bin"
 # prefix — leaving a macOS host with no `timeout` at all. Appended, not
 # prefixed, so a host's own coreutils still wins.
 coreutils_bin="@coreutils@/bin"
+# GNU stat pinned, same rationale as lib-log.sh's OG_STAT.
+stat_bin=stat
 if [[ $coreutils_bin != @* ]]; then
 	PATH="$PATH:$coreutils_bin"
+	stat_bin="$coreutils_bin/stat"
 fi
 
 # BatchMode on the interactive leg too: the bridge already requires
@@ -159,7 +162,7 @@ remote_serve() {
 	# fresh dir under the default umask would come out 755 and fail our own assert
 	# below, and an existing one of ours would keep whatever mode it had.
 	[[ -O $emit_dir ]] && chmod 700 "$emit_dir"
-	mode="$(stat -c '%a' "$emit_dir" 2>/dev/null || stat -f '%Lp' "$emit_dir")"
+	mode="$("$stat_bin" -c '%a' "$emit_dir")"
 	if [[ ! -O $emit_dir || $mode != 700 ]]; then
 		echo "og-remote-picker: $emit_dir is not a private directory of ours" >&2
 		exit 4

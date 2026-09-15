@@ -69,8 +69,8 @@ func TestDecodeBridgeName(t *testing.T) {
 
 func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1|",
-		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1|",
+		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1||",
+		"%2|tp-g6-money|0|/home/noams/src|1900000200|tp-g6|fish|1||/home/noams/src",
 	}
 	items := buildSessionItems(nil, snap, nil, "dark", false, "")
 	hdr := items[0]
@@ -117,8 +117,8 @@ func TestSessionHeaderLabelsAndAlignment(t *testing.T) {
 // when non-empty (#513).
 func TestSessionsBridgeProcOverride(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|mirror-sess|0|/home/noams/git/tmux-og|1900000300|tp-g6|fish|1|claude",
-		"%2|local-sess|0|/home/noams/src|1900000200||bash|2|",
+		"%1|mirror-sess|0|/home/noams/git/tmux-og|1900000300|tp-g6|fish|1|claude|/srv/remote/repo",
+		"%2|local-sess|0|/home/noams/src|1900000200||bash|2||/ignored",
 	}
 	sessions := snap.sessions()
 	byName := map[string]sessionData{}
@@ -131,6 +131,9 @@ func TestSessionsBridgeProcOverride(t *testing.T) {
 	}
 	if len(mirror.procs) != 1 || mirror.procs[0] != "claude" {
 		t.Errorf("mirror-sess procs = %v, want [claude] (bridge_proc must override the renderer's fish)", mirror.procs)
+	}
+	if mirror.path != "/srv/remote/repo" {
+		t.Errorf("mirror-sess path = %q, want the remote's @bridge_session_path, not the launcher's cwd", mirror.path)
 	}
 	local, ok := byName["local-sess"]
 	if !ok {
@@ -205,8 +208,8 @@ func TestSortSessionsForDisplay(t *testing.T) {
 // the flag sinkCurrentMatchBelowPeer reads once a query is typed.
 func TestBuildSessionItemsMarksCurrent(t *testing.T) {
 	snap := panesSnapshot{
-		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1|",
-		"%2|g6-tmux-og|0|/home/noams/src|1900000100|g6|fish|2|",
+		"%1|tmux-og|0|/home/noams/git/tmux-og|1900000300||fish|1||",
+		"%2|g6-tmux-og|0|/home/noams/src|1900000100|g6|fish|2||/home/noams/src",
 	}
 	items := buildSessionItems(nil, snap, nil, "dark", false, "tmux-og")
 	// items[0] is the column-header row.
@@ -407,7 +410,7 @@ func TestEmptyRemoteHostsOptionYieldsNoSection(t *testing.T) {
 	if got := parseRemoteHosts(unquoteTmuxOptValue(`''`)); got != nil {
 		t.Errorf("got %q, want no hosts", got)
 	}
-	if got := pendingRemoteItems(map[string]string{"@remote_bridge_hosts": unquoteTmuxOptValue(`''`)}); got != nil {
+	if got := pendingRemoteItems(map[string]string{"@remote_bridge_hosts": unquoteTmuxOptValue(`''`)}, nil); got != nil {
 		t.Errorf("got %d rows, want no Remote section", len(got))
 	}
 }

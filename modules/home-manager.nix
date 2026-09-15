@@ -854,14 +854,17 @@ in {
 
     carouselDiagramTools = lib.mkOption {
       type = lib.types.listOf lib.types.package;
-      default = [carousel-aeye pkgs.resvg];
-      defaultText = lib.literalMD "the aeye binary + `pkgs.resvg` when the agent-carousel flake input is wired in";
+      default = [carousel-aeye carousel-toggle pkgs.resvg];
+      defaultText = lib.literalMD "the aeye binary + `tmux-claude-images` + `pkgs.resvg` when the agent-carousel flake input is wired in";
       description = ''
         Renderers installed via home.packages so the agent-carousel diagram
         hook (a PostToolUse hook) can turn the `.d2` files an agent writes into
         PNG images for the carousel. The hook calls `aeye render-diagram`, which
         embeds the d2 compiler in-process and shells out to `resvg`, so it needs
         `aeye` and `resvg` on PATH (the same PATH-reach reason as popupTools).
+        It then auto-opens the carousel with a bare `tmux-claude-images
+        --ensure-open`, which needs the profile copy: a pane's shell may
+        rebuild PATH from the login profile and drop the tmux wrapper's.
         Only installed when the agent-carousel flake input is wired in
         (carousel-toggle != null).
 

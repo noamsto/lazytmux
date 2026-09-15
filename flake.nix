@@ -1154,19 +1154,6 @@
               USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
               SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
               SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
-              # The four legacy names, cleared but never set: a rename reloads
-              # the config without restarting the server, so without these four
-              # the old monitors keep firing every 5s at a store path the next
-              # GC removes. Emitted last, so every clear still precedes every
-              # setter (the clear_max < setter_min check below).
-              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
@@ -1182,10 +1169,6 @@
 
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
                        USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
-                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
-                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
-                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
-                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY \
                        PR_SETTER BACKFILL_SETTER USAGE_SETTER SWEEP_SETTER GUARD_JOIN; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
@@ -1224,11 +1207,7 @@
 
               clear_max=-1
               for v in "$PR_CLEAR_B" "$PR_CLEAR_OPT" "$BACKFILL_CLEAR_B" "$BACKFILL_CLEAR_OPT" \
-                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT" \
-                       "$PR_CLEAR_B_LEGACY" "$PR_CLEAR_OPT_LEGACY" \
-                       "$BACKFILL_CLEAR_B_LEGACY" "$BACKFILL_CLEAR_OPT_LEGACY" \
-                       "$USAGE_CLEAR_B_LEGACY" "$USAGE_CLEAR_OPT_LEGACY" \
-                       "$SWEEP_CLEAR_B_LEGACY" "$SWEEP_CLEAR_OPT_LEGACY"; do
+                       "$USAGE_CLEAR_B" "$USAGE_CLEAR_OPT" "$SWEEP_CLEAR_B" "$SWEEP_CLEAR_OPT"; do
                 prefix="''${line%%"$v"*}"
                 [ "$prefix" != "$line" ] || { echo "clear not found in guard line: $v" >&2; exit 1; }
                 [ "''${#prefix}" -gt "$clear_max" ] && clear_max="''${#prefix}"
@@ -1317,33 +1296,18 @@
               USAGE_CLEAR_OPT = "set -gu '@og-usage-tick'";
               SWEEP_CLEAR_B = "set-hook -g -u -B '@og-sweep-tick'";
               SWEEP_CLEAR_OPT = "set -gu '@og-sweep-tick'";
-              # The four legacy names, cleared but never set -- the migration
-              # cleanup described in the enabled check above.
-              PR_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-pr-tick'";
-              PR_CLEAR_OPT_LEGACY = "set -gu '@lztmux-pr-tick'";
-              BACKFILL_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-backfill-tick'";
-              BACKFILL_CLEAR_OPT_LEGACY = "set -gu '@lztmux-backfill-tick'";
-              USAGE_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-usage-tick'";
-              USAGE_CLEAR_OPT_LEGACY = "set -gu '@lztmux-usage-tick'";
-              SWEEP_CLEAR_B_LEGACY = "set-hook -g -u -B '@lztmux-sweep-tick'";
-              SWEEP_CLEAR_OPT_LEGACY = "set -gu '@lztmux-sweep-tick'";
               PR_SETTER = prSetter;
               BACKFILL_SETTER = backfillSetter;
               USAGE_SETTER = usageSetter;
               SWEEP_SETTER = sweepSetter;
             } ''
-              # All sixteen clears survive a disabled feature -- eight names
-              # (four live, four legacy) times the -B and option forms. They're
-              # keyed off the fixed hookNames list, never the enable flags,
-              # which is what makes disabling a feature actually drop its stale
-              # monitor on reload instead of leaving argv's previous generation
-              # armed.
+              # All eight clears survive a disabled feature -- four names times
+              # the -B and option forms. They're keyed off the fixed hookNames
+              # list, never the enable flags, which is what makes disabling a
+              # feature actually drop its stale monitor on reload instead of
+              # leaving argv's previous generation armed.
               for v in PR_CLEAR_B PR_CLEAR_OPT BACKFILL_CLEAR_B BACKFILL_CLEAR_OPT \
-                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT \
-                       PR_CLEAR_B_LEGACY PR_CLEAR_OPT_LEGACY \
-                       BACKFILL_CLEAR_B_LEGACY BACKFILL_CLEAR_OPT_LEGACY \
-                       USAGE_CLEAR_B_LEGACY USAGE_CLEAR_OPT_LEGACY \
-                       SWEEP_CLEAR_B_LEGACY SWEEP_CLEAR_OPT_LEGACY; do
+                       USAGE_CLEAR_B USAGE_CLEAR_OPT SWEEP_CLEAR_B SWEEP_CLEAR_OPT; do
                 pat="''${!v}"
                 grep -qF "$pat" "$CONF" || {
                   echo "disabled conf is missing a clear ($v): $pat" >&2
@@ -1977,6 +1941,47 @@
           # Renders tmux.conf from a serialized config + resolved paths. Its own
           # Go module, so nothing under picker/ moves.
           og-generate = pkgs.callPackage ./generator {};
+        };
+
+        # `nix run .#demo` re-renders the README GIFs (docs/media/tapes/*.tape).
+        # vhs 0.11.0, not the pinned 0.12.0: 0.12.0 prints "Creating <out>.gif"
+        # and exits without writing any file, the same tape renders on 0.11.0.
+        apps.demo = let
+          vhs = pkgs.vhs.overrideAttrs (old: rec {
+            version = "0.11.0";
+            src = pkgs.fetchFromGitHub {
+              owner = "charmbracelet";
+              repo = "vhs";
+              rev = "v${version}";
+              hash = "sha256-VOiI+ddiax04QtCcDr6ze53kd/HHGbfQE3j/32iq4Ro=";
+            };
+            vendorHash = "sha256-cgKLYUATtn4hMdIOXZe9JWYNUOrX3S6BDfvS+rIWDfM=";
+            ldflags = map (f:
+              if lib.hasPrefix "-X=main.Version=" f
+              then "-X=main.Version=${version}"
+              else f)
+            old.ldflags;
+          });
+        in {
+          type = "app";
+          meta.description = "Render the README GIFs against a throwaway tmux-og server";
+          program = lib.getExe (pkgs.writeShellApplication {
+            name = "og-demo";
+            # No inherited PATH: a `gh` or `linear` on it would let the enrich
+            # pollers overwrite the seeded @issue_*/@pr_* options.
+            inheritPath = false;
+            # bashInteractive: vhs resolves its `Set Shell bash` on PATH. The
+            # text tools: the server inherits this PATH, and the config's
+            # if-shell version probes pipe through grep.
+            runtimeInputs = [vhs pkgs.bashInteractive pkgs.git pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.gawk pkgs.findutils pkgs.procps pkgs.ncurses pkgs.zoxide];
+            runtimeEnv = {
+              OG_DEMO_TMUX = lib.getExe tmuxConfig.tmux-wrapped;
+              OG_DEMO_TMUX_RAW = lib.getExe (mkTmux pkgs);
+              OG_DEMO_SHELL = lib.getExe pkgs.bashInteractive;
+              FONTCONFIG_FILE = pkgs.makeFontsConf {fontDirectories = [pkgs.nerd-fonts.jetbrains-mono];};
+            };
+            text = builtins.readFile ./docs/media/demo.sh;
+          });
         };
       };
 

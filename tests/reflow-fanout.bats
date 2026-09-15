@@ -66,7 +66,11 @@ setup() {
 		-e "s|@lib_log@|$PWD/scripts/lib-log.sh|g" \
 		-e "s|@lib_reflow@|$PWD/scripts/lib-reflow.sh|g" \
 		-e 's|@MAX_ICONS@|5|g' \
+		-e "1s|.*|#!$BASH|" \
 		scripts/tmux-reflow-windows.sh >"$REFLOW"
+	# Executable, with a sandbox-resolvable shebang: a lock-starved reflow
+	# re-execs itself ($0) as a detached waiter.
+	chmod +x "$REFLOW"
 
 	tmux -f /dev/null new-session -d -s S -x 200 -y 50
 	tmux set -g base-index 0
@@ -131,6 +135,80 @@ run_update_icons() {
 	wait "$rpid"
 	# now it acquired, recomputed against fresh state, and stamped the real key
 	[ "$(tmux show -v @reflow_key)" = "3:200:0" ]
+}
+
+@test "a window count change during a held lock stamps the count it rendered, not its pre-lock snapshot (#614)" {
+	tmux new-window -d
+	tmux new-window -d
+	local ids
+	ids=$(tmux list-windows -t S -F '#{window_id}' | tail -n +2)
+	local lock="$TDIR/og-reflow.lock.S"
+	mkdir "$lock"
+	tmux set -q @reflow_key "sentinel"
+
+	bash "$REFLOW" S 200 --force >/dev/null 2>&1 &
+	local rpid=$!
+
+	# Close windows while it waits on the lock, after it read win_count=3.
+	# On a very slow runner this can pass without racing, never fail wrongly.
+	sleep 1
+	local id
+	for id in $ids; do tmux kill-window -t "$id"; done
+
+	rmdir "$lock"
+	wait "$rpid"
+	# Stamps the count it rendered (1), not its pre-lock snapshot (3). Poll: a
+	# runner slow enough to overrun the foreground budget hands off to the waiter.
+	local key=""
+	for _ in $(seq 1 50); do
+		key=$(tmux show -v @reflow_key)
+		[ "$key" = "1:200:0" ] && break
+		sleep 0.1
+	done
+	[ "$key" = "1:200:0" ]
+}
+
+@test "a lock held past the foreground budget never writes unlocked, and a detached waiter renders once it frees (#614)" {
+	# The foreground gives up after ~2s without writing (writing unlocked would
+	# tear), but the render is still owed: a detached waiter picks it up.
+	local lock="$TDIR/og-reflow.lock.S"
+	mkdir "$lock"
+	tmux set -q @reflow_key "sentinel"
+	# The timeout only catches a hang; startup on a slow runner is not the budget.
+	timeout 15 bash "$REFLOW" S 200 --force >/dev/null 2>&1
+	local rstatus=$?
+	[ "$rstatus" -eq 0 ]
+	[ "$(tmux show -v @reflow_key)" = "sentinel" ]
+	rmdir "$lock"
+	local key=""
+	for _ in $(seq 1 50); do
+		key=$(tmux show -v @reflow_key)
+		[ "$key" = "1:200:0" ] && break
+		sleep 0.1
+	done
+	[ "$key" = "1:200:0" ]
+}
+
+@test "a dead holder's lock is stolen by the detached waiter (#614)" {
+	# A SIGKILLed holder never releases its lock dir; the waiter outlasts the
+	# stale window and steals it. Staleness is whole-second and a slow runner's
+	# startup adds to the ~2s foreground budget, so keep the window well clear
+	# of both or the foreground steals it itself.
+	export OG_LOCK_STALE_SECONDS=10
+	local lock="$TDIR/og-reflow.lock.S"
+	mkdir "$lock"
+	tmux set -q @reflow_key "sentinel"
+	timeout 15 bash "$REFLOW" S 200 --force >/dev/null 2>&1
+	local rstatus=$?
+	[ "$rstatus" -eq 0 ]
+	[ "$(tmux show -v @reflow_key)" = "sentinel" ]
+	local key=""
+	for _ in $(seq 1 250); do
+		key=$(tmux show -v @reflow_key)
+		[ "$key" = "1:200:0" ] && break
+		sleep 0.1
+	done
+	[ "$key" = "1:200:0" ]
 }
 
 @test "empty or non-numeric WIDTH exits without poisoning @reflow_key" {
