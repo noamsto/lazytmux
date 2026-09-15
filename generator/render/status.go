@@ -68,6 +68,8 @@ var bridgeOptNames = []string{
 	"pr_state",
 	"pr_check_state",
 	"pr_mergeable",
+	"pr_review",
+	"pr_auto_merge",
 }
 
 // bridgeOpts is built per option name, not per site: each appears more than once

@@ -127,13 +127,13 @@ has_zoom=0
 # contain '|'). Only these four are pulled here: the five @bridge_* colour/state
 # values are read live by the format fragments below, so naming them would only
 # add unused variables.
-FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_crew_name}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
+FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@pr_check_progress}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_crew_name}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
 declare -A win_short win_short_dw win_long_dw
 declare -A win_id win_id_dw win_rest_short win_rest_long win_pr win_pr_dw
 declare -A win_crew win_crew_dw win_crew_disp win_zoom_dw
 pr_colw=0   # widest PR segment → shared PR column width (0 when no window has a PR)
 crew_colw=0 # widest codename → shared agent-badge column (0 when no window is tagged)
-while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge prdraft ibranch crew wai bridge bid brest bpr bcrew wname bname wtask; do
+while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate prcheck prmerge prdraft prprog ibranch crew wai bridge bid brest bpr bcrew wname bname wtask; do
 	indices+=("$idx")
 	# The zoom marker (" 󰁌", 2 cells) is emitted inline by LABEL_Z on zoomed
 	# windows; carve it from that window's label budget so its grid slot stays
@@ -175,10 +175,10 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 		# instead — the stamp stays on the window and reappears on cd back.
 		if [[ -n $iid && $ibranch != "$branch" ]]; then
 			iprov="" iid="" ititle=""
-			prnum="" prstate="" prcheck="" prmerge="" prdraft=""
+			prnum="" prstate="" prcheck="" prmerge="" prdraft="" prprog=""
 		fi
 
-		build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
+		build_window_label short "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft" "$prprog"
 		win_id[$idx]="$REPLY_ID"
 		win_rest_short[$idx]="$REPLY_REST"
 		# shellcheck disable=SC2153 # REPLY_PR set by build_window_label (sourced lib)
@@ -186,7 +186,7 @@ while IFS='|' read -r idx branch pane_path zoomed iprov iid ititle prnum prstate
 
 		# Long mode only changes the remainder (title / full branch); the id and
 		# PR segments are mode-independent.
-		build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft"
+		build_window_label long "$iprov" "$iid" "$ititle" "$prnum" "$prstate" "$prcheck" "$branch" "$pane_path" "$prmerge" "$wtask" "$wai" "$prdraft" "$prprog"
 		win_rest_long[$idx]="$REPLY_REST"
 	fi
 
@@ -319,7 +319,7 @@ read -ra colws <<<"$REPLY_COLWS"
 # window's column exactly. The PR segment is padded to its own shared column.
 # Single-line mode renders full names via the global format off @window_label_id
 # / @window_label_rest_*, so it leaves everything here unpadded.
-declare -A win_disp win_pr_disp win_id_disp
+declare -A win_disp win_pr_glyph win_pr_num win_pr_pad win_id_disp
 for pos in "${!indices[@]}"; do
 	idx=${indices[$pos]}
 	if [[ $labels_mode == long ]]; then
@@ -328,11 +328,15 @@ for pos in "${!indices[@]}"; do
 		cur_rest="${win_rest_short[$idx]}"
 	fi
 
+	split_pr_badge "${win_pr[$idx]}"
+	win_pr_glyph[$idx]="$REPLY_GLYPH"
+	win_pr_num[$idx]="$REPLY_NUM"
+	win_pr_pad[$idx]=""
+
 	if ((! needs_multiline)); then
 		win_id_disp[$idx]="${win_id[$idx]}"
 		win_crew_disp[$idx]="${win_crew[$idx]}"
 		win_disp[$idx]="$cur_rest"
-		win_pr_disp[$idx]="${win_pr[$idx]}"
 		continue
 	fi
 
@@ -377,8 +381,8 @@ for pos in "${!indices[@]}"; do
 	pad_to_width "$cur_rest" "$REPLY_DW" "$rest_avail"
 	win_disp[$idx]="$REPLY"
 
-	pad_to_width "${win_pr[$idx]}" "${win_pr_dw[$idx]}" "$pr_colw"
-	win_pr_disp[$idx]="$REPLY"
+	printf -v pad '%*s' "$((pr_colw - win_pr_dw[$idx]))" ''
+	win_pr_pad[$idx]="$pad"
 done
 
 # Split points: break after every REPLY_PER windows. per is already set by
@@ -416,7 +420,7 @@ fi
 declare -a tmux_cmds=()
 
 # Per-window vars use tmux's argv command-sequence form — one tmux exec per
-# window, the 9 sets joined by literal ';' arguments — instead of one exec per
+# window, the 11 sets joined by literal ';' arguments — instead of one exec per
 # set (9N execs before). Not `tmux source -`: source re-parses a text stream, so
 # free-form issue titles with quotes/';'/'#' would break it. In argv form each
 # value is its own execve argument and is never reparsed, so titles pass verbatim.
@@ -432,7 +436,9 @@ for idx in "${indices[@]}"; do
 		set -w -t "$target" @window_label_rest_long "${win_rest_long[$idx]}" ';' \
 		set -w -t "$target" @window_label_disp "${win_disp[$idx]}" ';' \
 		set -w -t "$target" @window_pr_plain "${win_pr[$idx]}" ';' \
-		set -w -t "$target" @window_pr_disp "${win_pr_disp[$idx]}" ';' \
+		set -w -t "$target" @window_pr_glyph "${win_pr_glyph[$idx]}" ';' \
+		set -w -t "$target" @window_pr_num "${win_pr_num[$idx]}" ';' \
+		set -w -t "$target" @window_pr_pad "${win_pr_pad[$idx]}" ';' \
 		set -w -t "$target" @window_crew_disp "${win_crew_disp[$idx]}"
 done
 
@@ -478,7 +484,7 @@ fi
 # conditional are deliberately NOT '#,'-escaped: format_expand resolves it before
 # format_draw parses '#[…]', and its argument splitter tracks '#{'/'}' nesting.
 declare -A bopt
-for o in crew_color pr_number pr_state pr_check_state pr_mergeable; do
+for o in crew_color pr_number pr_state pr_check_state pr_mergeable pr_review pr_auto_merge; do
 	bopt[$o]="#{?#{@bridge_win},#{@bridge_${o}},#{@${o}}}"
 done
 SEP=" #[fg=#{@thm_subtext_0}#,nobold]│ "
@@ -504,10 +510,13 @@ ICONFG="#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],}"
 # checked first (merged=mauve, closed=overlay0), so a leftover pending/failed
 # rollup can't tint them peach/red; then conflicting/failing=red, pending=peach,
 # success/open=green. closed = a dead/superseded PR, dimmed so it can't read as
-# a live one. No PR → no color directive, and @window_pr_disp is just column
-# padding. Rendered last in the slot, so its state color only runs into the
-# separator, which sets its own color.
+# a live one. No PR → no color directive. Rendered on the glyph half
+# (@window_pr_glyph) only — PRNUM below tints the #<n> half separately, and
+# @window_pr_pad is just column padding with no color of its own.
 PRCOLOR="#{?#{&&:${bopt[pr_number]},#{!=:${bopt[pr_number]},none}},#{?#{==:${bopt[pr_state]},merged},#[fg=#{@thm_mauve}],#{?#{==:${bopt[pr_state]},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:${bopt[pr_check_state]},failure},#{==:${bopt[pr_mergeable]},conflicting}},#[fg=#{@thm_red}],#{?#{==:${bopt[pr_check_state]},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}}},}"
+# The #<n> half: tinted by review decision and underlined for a queued
+# auto-merge, open PRs only. With no decision it keeps PRCOLOR's tint.
+PRNUM="#{?#{==:${bopt[pr_state]},open},#{?#{==:${bopt[pr_review]},approved},#[fg=#{@thm_green}],#{?#{==:${bopt[pr_review]},changes_requested},#[fg=#{@thm_red}],#{?#{==:${bopt[pr_review]},review_required},#[fg=#{@thm_overlay_0}],}}}#{?${bopt[pr_auto_merge]},#[underscore],},}"
 # "Last active" column for halted Claude windows (@window_claude_ago, kept fresh
 # by tmux-update-icons). Right-aligned and padded to AGO_W's fixed width so the
 # value (and an empty value, for active/non-claude windows) always occupies the
@@ -520,7 +529,7 @@ AGO=" #[fg=#{@thm_overlay_1}]#{p-3:@window_claude_ago}"
 # windows carry an empty @window_crew_disp and render a gapless full-width label.
 CREW=""
 ((crew_colw > 0)) && CREW="#{?${bopt[crew_color]},#[fg=${bopt[crew_color]}#,bg=#{@thm_bg}],}#{@window_crew_disp}${BASE}"
-ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${CREW}${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_disp}${AGO}#[norange]"
+ENTRY="#[range=window|#{window_index}]#[nobold]${BASE}${IDX}: ${CREW}${LABEL_Z}${ICONFG} ${ICON}${PRCOLOR}#{@window_pr_glyph}${PRNUM}#{@window_pr_num}#[nounderscore]#{@window_pr_pad}${AGO}#[norange]"
 
 # Multi-line branches stay on direct `tmux set` calls: FMT0 contains embedded
 # single quotes (e.g. '#{session_name}') that break outer-single-quoted
