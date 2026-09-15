@@ -469,7 +469,7 @@ func TestRemoteListSessionsCmdFishSafe(t *testing.T) {
 
 func TestPendingRemoteItems(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
-	items := pendingRemoteItems(opts)
+	items := pendingRemoteItems(opts, nil)
 	if len(items) != 3 {
 		t.Fatalf("expected header + 2 host rows, got %d: %+v", len(items), items)
 	}
@@ -497,7 +497,7 @@ func TestPendingRemoteItems(t *testing.T) {
 }
 
 func TestPendingRemoteItemsNoHosts(t *testing.T) {
-	if items := pendingRemoteItems(nil); items != nil {
+	if items := pendingRemoteItems(nil, nil); items != nil {
 		t.Fatalf("no hosts => nil, got %v", items)
 	}
 }
@@ -537,7 +537,7 @@ func TestBridgePIDFromFile(t *testing.T) {
 
 func TestRemoteItemsRowCountStableAcrossProbe(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
-	pending := pendingRemoteItems(opts)
+	pending := pendingRemoteItems(opts, nil)
 
 	probe := func(host string) (remoteProbeResult, error) {
 		if host == "dead" {
@@ -916,7 +916,7 @@ func TestPendingRemoteItemsSkipsCachedSelfAlias(t *testing.T) {
 	markCachedRemoteSelfAlias("localhost")
 	opts := map[string]string{"@remote_bridge_hosts": "localhost lab"}
 
-	items := pendingRemoteItems(opts)
+	items := pendingRemoteItems(opts, nil)
 	if len(items) != 2 {
 		t.Fatalf("expected header + lab only, got %d: %+v", len(items), items)
 	}
