@@ -2,6 +2,8 @@
 
 # tmux-og
 
+*tmux, the original gangster — still the OG multiplexer, now batteries-included.*
+
 **Opinionated tmux configuration with Claude Code & OpenCode integration.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
