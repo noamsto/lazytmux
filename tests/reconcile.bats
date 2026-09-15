@@ -179,7 +179,7 @@ wait_for() {
 	[ ! -f "$STATE/opt_@branch" ]
 }
 
-@test "re-tag that changes @worktree unsets all eight @pr_* options" {
+@test "re-tag that changes @worktree unsets all eleven @pr_* options" {
 	printf '%s' "/old/worktree" >"$STATE/opt_@worktree"
 	printf '%s' "old-branch" >"$STATE/opt_@branch"
 	for opt in @pr_number @pr_title @pr_state @pr_check_state @pr_url @pr_mergeable @pr_draft @pr_branch @pr_review @pr_auto_merge @pr_check_progress; do

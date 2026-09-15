@@ -124,7 +124,7 @@ has_zoom=0
 # @bridge_win/window_name sit after it: bridge_win is "1" or empty, and a
 # window_name containing '|' is no worse off here than at the very end.
 # The four @bridge_* label fields between them are daemon-sanitized (never
-# contain '|'). Only these four are pulled here: the five @bridge_* colour/state
+# contain '|'). Only these four are pulled here: the seven @bridge_* colour/state
 # values are read live by the format fragments below, so naming them would only
 # add unused variables.
 FMT='#{window_index}|#{@branch}|#{pane_current_path}|#{window_zoomed_flag}|#{@issue_provider}|#{@issue_id}|#{@issue_title}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@pr_check_progress}|#{@issue_branch}|#{@crew_name}|#{@window_ai_name}|#{@bridge_win}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_crew_name}|#{window_name}|#{@window_bridge_name}|#{@window_task}'
