@@ -1,6 +1,6 @@
 # tmux-og — Claude Code plugin
 
-The Claude Code side of [tmux-og](https://github.com/noamsto/lazytmux): lifecycle
+The Claude Code side of [tmux-og](https://github.com/noamsto/tmux-og): lifecycle
 hooks that drive the tmux status bar, plus three skills. This README is written
 for an **agent setting the plugin up on its own** — the steps are copy-pasteable
 and each command is non-interactive.
@@ -36,14 +36,12 @@ Pick the path that matches the environment.
 ### A. Marketplace (most setups)
 
 ```bash
-claude plugin marketplace add noamsto/lazytmux
+claude plugin marketplace add noamsto/tmux-og
 claude plugin install tmux-og@tmux-og
 ```
 
 `tmux-og@tmux-og` is `<plugin>@<marketplace>` — both are named `tmux-og`
-(`.claude-plugin/marketplace.json`). The repo you add the marketplace from is
-still `noamsto/lazytmux`: the repo itself hasn't been renamed, only the
-marketplace and plugin it publishes.
+(`.claude-plugin/marketplace.json`).
 
 ### B. Local plugin dir (development, or pinned via Nix)
 
@@ -59,7 +57,7 @@ claude --plugin-dir "${inputs.tmux-og}/claude-plugin"
 Or against a checkout:
 
 ```bash
-claude --plugin-dir /path/to/lazytmux/claude-plugin
+claude --plugin-dir /path/to/tmux-og/claude-plugin
 ```
 
 ### C. Skills only (plugin already wired another way)
@@ -116,7 +114,7 @@ plugin installed.
 
 ```bash
 # Install + verify, start to finish
-claude plugin marketplace add noamsto/lazytmux
+claude plugin marketplace add noamsto/tmux-og
 claude plugin install tmux-og@tmux-og
 claude plugin list --enabled
 # (inside a tmux-og tmux pane, after one tool call:)
