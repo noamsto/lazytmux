@@ -580,12 +580,8 @@ option.
   `sixel` for no terminal by default, so `programs.tmux-og.sixelTerminals`
   (a list of TERM strings, each getting a `*` suffix) is what emits `set -as
   terminal-features '<term>*:sixel'`.
-- **The capability is published to the remote** as `OG_RELAY_GRAPHICS` (and,
-  for now, the legacy `LZTMUX_RELAY_GRAPHICS` name alongside it — the only
-  reader in the world is the pinned `aeye` input, which still calls
-  `os.Getenv("LZTMUX_RELAY_GRAPHICS")`, so dropping it would silently break
-  sixel relay until `aeye` is bumped to read the new name)
-  (`sixel` or empty) in the bridged remote **session**'s environment via
+- **The capability is published to the remote** as `OG_RELAY_GRAPHICS`
+  (`sixel` or empty; its only reader is the `aeye` input's carousel) in the bridged remote **session**'s environment via
   control-mode `set-environment` — the same cell that gates the local drop,
   now **re-resolved continuously as the viewing client set changes** (#574)
   rather than computed once at launch, so the remote can never emit what

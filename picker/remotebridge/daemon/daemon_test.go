@@ -734,13 +734,12 @@ func runWatchLocalClientView(t *testing.T, seedRelay graphics.Relay, seedTerm st
 
 // TestWatchLocalClientPublishesOnCapabilityChange is R5: a resolve whose
 // capability differs from what is currently stored publishes exactly one
-// RelayEnvCmd carrying the new value, and the new capability is stored. One
-// publish is two commands since D7 — the batch carries both spellings.
+// RelayEnvCmd carrying the new value, and the new capability is stored.
 func TestWatchLocalClientPublishesOnCapabilityChange(t *testing.T) {
 	sent, view := runWatchLocalClientView(t, graphics.Relay{}, "foot",
 		ViewIdentity{Term: "foot", Relay: graphics.RelayFromTermFeatures("sixel")}, true)
 
-	want := RelayEnvCmd("sess", "sixel")
+	want := []string{RelayEnvCmd("sess", "sixel")}
 	if !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %v, want %v", sent, want)
 	}
