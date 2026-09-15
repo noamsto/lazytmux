@@ -882,6 +882,107 @@ func TestRenderWallHintsShowFocusedTarget(t *testing.T) {
 	}
 }
 
+// A focused tile takes over the whole body instead of keeping its grid-cell
+// size, so its capture is readable rather than cropped to a shared cell.
+func TestRenderWallFocusedFillsBody(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+
+	out := m.renderWall()
+	lines := strings.Split(out, "\n")
+	if len(lines) != m.bodyHeight() {
+		t.Fatalf("focused wall has %d rows, want bodyHeight %d", len(lines), m.bodyHeight())
+	}
+	for i, line := range lines {
+		if got := visibleWidth(line); got != m.width {
+			t.Errorf("row %d is %d cells, want %d: %q", i, got, m.width, line)
+		}
+	}
+
+	// A single tile has exactly one top border and one bottom border, unlike
+	// the grid which repeats "┌" once per column on its top row.
+	if got := strings.Count(out, "┌"); got != 1 {
+		t.Errorf("focused wall has %d top-left corners, want exactly 1 (a single tile, not a grid)", got)
+	}
+	if got := strings.Count(out, "└"); got != 1 {
+		t.Errorf("focused wall has %d bottom-left corners, want exactly 1", got)
+	}
+
+	m.focused = false
+	grid := m.renderWall()
+	if grid == out {
+		t.Error("unfocused render should differ from the focused single-tile render")
+	}
+	if got := strings.Count(grid, "┌"); got <= 1 {
+		t.Errorf("unfocused wall has %d top-left corners, want more than 1 (a grid)", got)
+	}
+}
+
+// esc unfocusing must not move the wall's page or selection — the grid
+// reappears exactly where the user left it.
+func TestEscUnfocusReturnsToSamePageAndSelection(t *testing.T) {
+	m := wallFixture()
+	m.wallPage = 1
+	m.cursor = 5 // s:5, on page 1 of the 2x2 fixture (page 0 holds s:1..s:4)
+	m.focused = true
+
+	got, _ := m.handleKey(wallKey("esc"))
+	gm := got.(tuiModel)
+	if gm.focused {
+		t.Error("esc should unfocus")
+	}
+	if gm.wallPage != 1 {
+		t.Errorf("wallPage = %d, want unchanged at 1", gm.wallPage)
+	}
+	if gm.cursor != 5 {
+		t.Errorf("cursor = %d, want unchanged at 5", gm.cursor)
+	}
+
+	grid := gm.renderWall()
+	if got := strings.Count(grid, "┌"); got <= 1 {
+		t.Errorf("wall after unfocus has %d top-left corners, want more than 1 (a grid)", got)
+	}
+}
+
+// A terminal shrinking while a tile is focused must not panic and must
+// re-render at the new size.
+func TestRenderWallFocusedResize(t *testing.T) {
+	m := wallFixture()
+	m.focused = true
+	m.width, m.height = 60, 20
+
+	out := m.renderWall()
+	lines := strings.Split(out, "\n")
+	if len(lines) != m.bodyHeight() {
+		t.Fatalf("resized focused wall has %d rows, want bodyHeight %d", len(lines), m.bodyHeight())
+	}
+	for i, line := range lines {
+		if got := visibleWidth(line); got != m.width {
+			t.Errorf("row %d is %d cells, want %d: %q", i, got, m.width, line)
+		}
+	}
+}
+
+// renderTile must not panic on an outer size too small to hold a border on
+// both axes — the max(...,0) guard on innerW/innerH.
+func TestRenderTileTinyOuterSizeDoesNotPanic(t *testing.T) {
+	m := wallFixture()
+	item := m.visible[m.tileItems()[0]]
+
+	const outerH = 3
+	for _, outerW := range []int{0, 1, 2, 3, 5} {
+		tile := m.renderTile(item, true, true, outerW, outerH)
+		if len(tile) != outerH {
+			t.Fatalf("outerW %d: tile has %d rows, want outerH %d", outerW, len(tile), outerH)
+		}
+		for i, row := range tile {
+			if got := visibleWidth(row); got != outerW {
+				t.Errorf("outerW %d row %d is %d cells, want %d: %q", outerW, i, got, outerW, row)
+			}
+		}
+	}
+}
+
 // wallFixture is a 2x2 wall over 6 tileable rows, with the three untileable row
 // kinds mixed in.
 func wallFixture() tuiModel {

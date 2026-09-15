@@ -66,6 +66,15 @@ func shareEvenly(total, n int) []int {
 }
 
 func (m tuiModel) renderWall() string {
+	// A focused tile (tab) takes over the whole body instead of keeping its
+	// grid-cell size, so its capture is readable rather than cropped to the
+	// size a shared grid cell affords.
+	if m.focused {
+		if item, ok := m.currentItem(); ok {
+			return strings.Join(m.renderTile(item, true, true, m.width, m.bodyHeight()), "\n")
+		}
+	}
+
 	tiles := m.tileItems()
 	colWidths, rowHeights := wallTileSizes(m.width, m.bodyHeight(), len(tiles))
 	if colWidths == nil {
@@ -110,7 +119,7 @@ func (m tuiModel) renderWall() string {
 // focused implies selected (only the cursor's tile can be focused) and gets
 // its own border color, distinct from plain selection.
 func (m tuiModel) renderTile(item listItem, selected, focused bool, outerW, outerH int) []string {
-	innerW, innerH := outerW-wallTileFrame, outerH-wallTileFrame
+	innerW, innerH := max(outerW-wallTileFrame, 0), max(outerH-wallTileFrame, 0)
 	border := ansiFg(m.thmColorHex("@thm_surface_1", "#45475a", "#9ca0b0"))
 	switch {
 	case focused:
@@ -122,13 +131,19 @@ func (m tuiModel) renderTile(item listItem, selected, focused bool, outerW, oute
 	edge := border + "│" + reset
 
 	rows := make([]string, 0, outerH)
-	rows = append(rows, border+"┌"+m.tileLabel(item, innerW)+"┐"+reset)
+	// Every row is wrapped through fitVisibleWidth to outerW itself, not just to
+	// innerW: innerW-derived content (tileLabel's ellipsis floor in particular)
+	// can exceed innerW when outerW is small, and below wallTileFrame the two
+	// fixed-width edge glyphs alone already exceed outerW. This is the only thing
+	// enforcing the "exactly outerW cells" contract for a caller that doesn't
+	// floor outerW/outerH itself.
+	rows = append(rows, fitVisibleWidth(border+"┌"+m.tileLabel(item, innerW)+"┐"+reset, outerW))
 	for _, line := range m.tileBody(item, innerW, innerH) {
 		// fitVisibleWidth's own trailing reset closes the pane's colors; the
 		// border color has to be re-asserted after it for the right-edge glyph.
-		rows = append(rows, edge+fitVisibleWidth(line, innerW)+edge)
+		rows = append(rows, fitVisibleWidth(edge+fitVisibleWidth(line, innerW)+edge, outerW))
 	}
-	rows = append(rows, border+"└"+strings.Repeat("─", innerW)+"┘"+reset)
+	rows = append(rows, fitVisibleWidth(border+"└"+strings.Repeat("─", innerW)+"┘"+reset, outerW))
 	return rows
 }
 
