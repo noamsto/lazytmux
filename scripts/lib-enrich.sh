@@ -25,6 +25,10 @@ ENRICH_ICON_CLOSED="@enrich_icon_closed@"
 ENRICH_ICON_CONFLICT="@enrich_icon_conflict@"
 ENRICH_ICON_DRAFT="@enrich_icon_draft@"
 
+# The pending glyph's progress variant, filled by share of checks finished. Not a
+# user icon key: nf-md-circle_slice_1…8, the same frames as CLAUDE_SPINNER_FRAMES.
+ENRICH_PIE_GLYPHS=("󰪞" "󰪟" "󰪠" "󰪡" "󰪢" "󰪣" "󰪤" "󰪥")
+
 # branch_to_linear_key BRANCH
 # Extracts a Linear issue key (TEAM-123) from a branch name.
 # Requires letters before the dash (pure-numeric prefixes are GitHub issues).
@@ -102,22 +106,53 @@ branch_sha1() {
 #   else any IN_PROGRESS/QUEUED/PENDING/EXPECTED, or an unfinished CheckRun
 #     (empty conclusion) → pending;
 #   else success.
-# Sets REPLY to one of: failure | pending | success | none.
+# Sets REPLY to one of: failure | pending | success | none, and REPLY_PROGRESS
+# to "<finished>/<total>" when REPLY is pending ("" otherwise). One jq fork.
 collapse_check_rollup() {
-	local json="$1"
-	REPLY="$(jq -r '
-		if (. | length) == 0 then "none"
+	local state="" progress=""
+	{
+		IFS= read -r state
+		IFS= read -r progress
+	} < <(jq -r '
+		def pending:
+			((.status // "") | ascii_upcase | (. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING"))
+			or ((.state // "") | ascii_upcase | (. == "EXPECTED" or . == "PENDING"))
+			or (.__typename == "CheckRun" and ((.conclusion // "") == ""));
+		(if length == 0 then "none"
 		elif any(.[]; (.conclusion // .state // "") | ascii_upcase
 			| . == "FAILURE" or . == "ERROR" or . == "CANCELLED"
 			or . == "TIMED_OUT" or . == "ACTION_REQUIRED" or . == "STALE") then "failure"
-		elif any(.[];
-			((.status // "") | ascii_upcase | (. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING"))
-			or ((.state // "") | ascii_upcase | (. == "EXPECTED" or . == "PENDING"))
-			or (.__typename == "CheckRun" and ((.conclusion // "") == ""))) then "pending"
+		elif any(.[]; pending) then "pending"
 		else "success"
-		end
-	' <<<"$json" 2>/dev/null)" || REPLY="none"
-	if [[ -z $REPLY ]]; then REPLY="none"; fi
+		end),
+		"\([.[] | select(pending | not)] | length)/\(length)"
+	' <<<"$1" 2>/dev/null) || true
+	REPLY="${state:-none}"
+	REPLY_PROGRESS=""
+	if [[ $REPLY == pending ]]; then REPLY_PROGRESS="$progress"; fi
+}
+
+# pr_pie_glyph PROGRESS
+# "<finished>/<total>" → the ENRICH_PIE_GLYPHS slice filled to the share
+# finished. Sets REPLY, or "" when PROGRESS is not a usable count.
+pr_pie_glyph() {
+	REPLY=""
+	[[ $1 =~ ^([0-9]+)/([0-9]+)$ ]] || return 0
+	local finished=${BASH_REMATCH[1]} total=${BASH_REMATCH[2]}
+	((total > 0 && finished <= total)) || return 0
+	REPLY="${ENRICH_PIE_GLYPHS[finished * 7 / total]}"
+}
+
+# split_pr_badge BADGE
+# Splits a REPLY_PR badge (" <glyph> #<n>") at its number so a renderer can style
+# the halves apart. Sets REPLY_GLYPH (" <glyph> ", trailing space included) and
+# REPLY_NUM ("#<n>"); both "" for an empty BADGE.
+split_pr_badge() {
+	REPLY_GLYPH=""
+	REPLY_NUM=""
+	[[ -n $1 ]] || return 0
+	REPLY_GLYPH="${1%#*}"
+	REPLY_NUM="#${1##*#}"
 }
 
 # pr_cache_decision FORCE CACHE_EXISTS CACHE_CONTENT AGE TTL TTL_NONE [TTL_TERMINAL]
@@ -194,7 +229,7 @@ parse_explicit_issue_id() {
 
 # build_window_label MODE PROVIDER ISSUE_ID ISSUE_TITLE PR_NUMBER PR_STATE \
 #                    PR_CHECK_STATE BRANCH PANE_PATH [PR_MERGEABLE] [TASK] \
-#                    [AI_NAME] [PR_DRAFT]
+#                    [AI_NAME] [PR_DRAFT] [PR_PROGRESS]
 # MODE is "short" or "long". Composes the text-only window label (no color, no
 # process/claude icons — the status template adds those). The issue id is taken
 # from a stamped @issue_id or, if absent, derived from the branch (provider
@@ -218,7 +253,7 @@ parse_explicit_issue_id() {
 build_window_label() {
 	local mode="$1" provider="$2" issue_id="$3" issue_title="$4"
 	local pr_number="$5" pr_state="$6" pr_check="$7" branch="$8" pane_path="$9"
-	local pr_mergeable="${10:-}" task="${11:-}" ai_name="${12:-}" pr_draft="${13:-}"
+	local pr_mergeable="${10:-}" task="${11:-}" ai_name="${12:-}" pr_draft="${13:-}" pr_progress="${14:-}"
 	local provider_icon pr_glyph=""
 	REPLY=""
 	REPLY_ID=""
@@ -281,7 +316,10 @@ build_window_label() {
 		else
 			case "$pr_check" in
 			failure) pr_glyph="$ENRICH_ICON_FAILURE" ;;
-			pending) pr_glyph="$ENRICH_ICON_PENDING" ;;
+			pending)
+				pr_pie_glyph "$pr_progress"
+				pr_glyph="${REPLY:-$ENRICH_ICON_PENDING}"
+				;;
 			*) pr_glyph="$ENRICH_ICON_SUCCESS" ;;
 			esac
 		fi

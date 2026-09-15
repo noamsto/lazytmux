@@ -86,6 +86,8 @@ type windowData struct {
 	prState     string // @pr_state
 	prCheck     string // @pr_check_state
 	prMergeable string // @pr_mergeable
+	prReview    string // @pr_review — approved|changes_requested|review_required|""
+	prAutoMerge string // @pr_auto_merge — "1" or ""
 	crewName    string // @crew_name  — agent codename (fan-out harness) or ""
 	crewColor   string // @crew_color — tmux colour code paired with the codename
 }
@@ -289,6 +291,8 @@ type winInfo struct {
 	prState     string
 	prCheck     string
 	prMergeable string
+	prReview    string
+	prAutoMerge string
 	crewName    string
 	crewColor   string
 	seen        map[string]bool
@@ -311,7 +315,7 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 	}
 	for _, line := range lines {
 		parts := strings.Split(line, "|")
-		if len(parts) != 30 {
+		if len(parts) != 34 {
 			continue
 		}
 		sess := parts[0]
@@ -338,6 +342,8 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 			prState := field(parts, 11)
 			prCheck := field(parts, 12)
 			prMergeable := field(parts, 13)
+			prReview := field(parts, 30)
+			prAutoMerge := field(parts, 31)
 			crewName := field(parts, 14)
 			crewColor := field(parts, 15)
 			bridgeName := decodeBridgeName(field(parts, 16))
@@ -355,6 +361,8 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 				prState = field(parts, 25)
 				prCheck = field(parts, 26)
 				prMergeable = field(parts, 27)
+				prReview = field(parts, 32)
+				prAutoMerge = field(parts, 33)
 				branch = ""
 				// A remote window with no detected issue has no bridge id:
 				// fall back to the bridge rest raw, not decodeBridgeName — it
@@ -373,6 +381,8 @@ func parseWindowPaneRows(lines []string) ([]winKey, map[winKey]*winInfo) {
 				prState:     prState,
 				prCheck:     prCheck,
 				prMergeable: prMergeable,
+				prReview:    prReview,
+				prAutoMerge: prAutoMerge,
 				crewName:    crewName,
 				crewColor:   crewColor,
 				bridgeName:  bridgeName,
@@ -396,7 +406,7 @@ func collectWindows() []windowData {
 	// Fetch both @branch and pane path basename. The window_name contains
 	// icons/colors from automatic-rename-format so we reconstruct a clean name.
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}|#{@bridge_host}|#{@bridge_proc}").Output()
+		"#{session_name}|#{window_index}|#{b:pane_current_path}|#{window_zoomed_flag}|#{pane_current_command}|#{window_active}|#{@branch}|#{pane_current_path}|#{@window_label_id}|#{@window_label_rest_long}|#{@window_pr_plain}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@crew_name}|#{@crew_color}|#{@window_bridge_name}|#{@bridge_pane}|#{@bridge_sock}|#{@bridge_win}|#{@bridge_crew_name}|#{@bridge_crew_color}|#{@bridge_label_id}|#{@bridge_label_rest_long}|#{@bridge_pr_plain}|#{@bridge_pr_state}|#{@bridge_pr_check_state}|#{@bridge_pr_mergeable}|#{@bridge_host}|#{@bridge_proc}|#{@pr_review}|#{@pr_auto_merge}|#{@bridge_pr_review}|#{@bridge_pr_auto_merge}").Output()
 	if err != nil {
 		return nil
 	}
@@ -446,6 +456,8 @@ func collectWindows() []windowData {
 			prState:     wi.prState,
 			prCheck:     wi.prCheck,
 			prMergeable: wi.prMergeable,
+			prReview:    wi.prReview,
+			prAutoMerge: wi.prAutoMerge,
 			crewName:    wi.crewName,
 			crewColor:   wi.crewColor,
 		})
@@ -1236,17 +1248,17 @@ func branchEchoesName(branch, name string) bool {
 	return branch == name || strings.ReplaceAll(branch, "/", "-") == name
 }
 
-// prColors holds the four PR badge tints, mirroring the status bar's check-state
-// coloring.
-type prColors struct{ success, failure, pending, merged, closed, reset string }
+// prColors holds the PR badge tints, mirroring the status bar's coloring.
+type prColors struct{ success, failure, pending, merged, closed, required, underline, reset string }
 
-// colorPRBadge tints a plain PR badge (" <glyph> #<n>" from @window_pr_plain) by
-// check state, mirroring build_window_label's glyph choice: merged/closed PRs →
-// terminal (so a leftover pending/failed rollup can't mask them — closed is a
-// dead/superseded PR, dimmed so it can't read as live), a conflicting merge or
-// failing checks → failure, pending → pending, else success. Returns "" when
-// there is no PR.
-func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
+// colorPRBadge tints a plain PR badge (" <glyph> #<n>" from @window_pr_plain),
+// mirroring the status bar. The glyph half takes the state tint: merged/closed
+// PRs → terminal (so a leftover pending/failed rollup can't mask them — closed
+// is a dead/superseded PR, dimmed so it can't read as live), a conflicting merge
+// or failing checks → failure, pending → pending, else success. The #<n> half of
+// an open PR takes its review tint and an auto-merge underline instead. Returns
+// "" when there is no PR.
+func colorPRBadge(prPlain, state, check, mergeable, review, autoMerge string, c prColors) string {
 	badge := strings.TrimSpace(prPlain)
 	if badge == "" {
 		return ""
@@ -1264,7 +1276,26 @@ func colorPRBadge(prPlain, state, check, mergeable string, c prColors) string {
 	default:
 		col = c.success
 	}
-	return col + badge + c.reset
+	// A mirror's badge is remote-derived and sanitized, not guaranteed shaped.
+	i := strings.LastIndex(badge, "#")
+	if i < 0 {
+		return col + badge + c.reset
+	}
+	numCol, underline := col, ""
+	if state == "open" {
+		switch review {
+		case "approved":
+			numCol = c.success
+		case "changes_requested":
+			numCol = c.failure
+		case "review_required":
+			numCol = c.required
+		}
+		if autoMerge == "1" {
+			underline = c.underline
+		}
+	}
+	return col + badge[:i] + c.reset + numCol + underline + badge[i:] + c.reset
 }
 
 // ---------------------------------------------------------------------------
