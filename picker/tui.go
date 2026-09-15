@@ -2151,7 +2151,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), reset: reset}
+	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), required: ansiFg(thmOverlay0), underline: "\033[4m", reset: reset}
 
 	sessActivity := collectSessionActivity()
 	var groups []windowGroup
@@ -2227,7 +2227,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 			idSearch = name
 		}
 
-		prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
+		prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, w.prReview, w.prAutoMerge, prCols)
 		prPlain := strings.TrimSpace(w.prPlain)
 		prDW := iconCellWidth(prPlain)
 

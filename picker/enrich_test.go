@@ -105,44 +105,29 @@ func TestBranchEchoesName(t *testing.T) {
 }
 
 func TestColorPRBadge(t *testing.T) {
-	c := prColors{success: "<s>", failure: "<f>", pending: "<p>", merged: "<m>", closed: "<c>", reset: "<r>"}
+	c := prColors{success: "<s>", failure: "<f>", pending: "<p>", merged: "<m>", closed: "<c>", required: "<q>", underline: "<u>", reset: "<r>"}
 	cases := []struct {
-		name       string
-		prPlain    string
-		state      string
-		check      string
-		mergeable  string
-		wantEmpty  bool
-		wantPrefix string
+		name, prPlain, state, check, mergeable, review, autoMerge string
+		want                                                      string
 	}{
-		{"no pr", "", "open", "success", "mergeable", true, ""},
-		{"conflict wins over success", "  #1", "open", "success", "conflicting", false, "<f>"},
-		{"failing checks", "  #2", "open", "failure", "mergeable", false, "<f>"},
-		{"pending checks", "  #3", "open", "pending", "mergeable", false, "<p>"},
-		{"merged", "  #4", "merged", "success", "mergeable", false, "<m>"},
-		{"merged wins over leftover pending", "  #6", "merged", "pending", "unknown", false, "<m>"},
-		{"merged wins over leftover failure", "  #7", "merged", "failure", "unknown", false, "<m>"},
-		{"closed", "  #8", "closed", "success", "mergeable", false, "<c>"},
-		{"closed wins over leftover failure", "  #9", "closed", "failure", "unknown", false, "<c>"},
-		{"clean success", "  #5", "open", "success", "mergeable", false, "<s>"},
+		{"no pr", "", "open", "success", "mergeable", "", "", ""},
+		{"conflict wins over success", " G #1", "open", "success", "conflicting", "", "", "<f>G <r><f>#1<r>"},
+		{"failing checks", " G #2", "open", "failure", "mergeable", "", "", "<f>G <r><f>#2<r>"},
+		{"pending checks", " G #3", "open", "pending", "mergeable", "", "", "<p>G <r><p>#3<r>"},
+		{"merged", " G #4", "merged", "success", "mergeable", "approved", "1", "<m>G <r><m>#4<r>"},
+		{"merged wins over leftover failure", " G #7", "merged", "failure", "unknown", "", "", "<m>G <r><m>#7<r>"},
+		{"closed", " G #8", "closed", "success", "mergeable", "", "", "<c>G <r><c>#8<r>"},
+		{"clean success", " G #5", "open", "success", "mergeable", "", "", "<s>G <r><s>#5<r>"},
+		{"approved tints the number", " G #9", "open", "pending", "mergeable", "approved", "", "<p>G <r><s>#9<r>"},
+		{"changes requested", " G #10", "open", "success", "mergeable", "changes_requested", "", "<s>G <r><f>#10<r>"},
+		{"review required", " G #11", "open", "success", "mergeable", "review_required", "", "<s>G <r><q>#11<r>"},
+		{"auto-merge underlines", " G #12", "open", "success", "mergeable", "approved", "1", "<s>G <r><s><u>#12<r>"},
+		{"draft prefix stays in the glyph half", " D G #13", "open", "success", "mergeable", "", "", "<s>D G <r><s>#13<r>"},
+		{"no # keeps one colour", " weird", "open", "success", "mergeable", "approved", "", "<s>weird<r>"},
 	}
 	for _, c2 := range cases {
-		got := colorPRBadge(c2.prPlain, c2.state, c2.check, c2.mergeable, c)
-		if c2.wantEmpty {
-			if got != "" {
-				t.Errorf("%s: want empty, got %q", c2.name, got)
-			}
-			continue
-		}
-		if !strings.HasPrefix(got, c2.wantPrefix) {
-			t.Errorf("%s: got %q, want prefix %q", c2.name, got, c2.wantPrefix)
-		}
-		if !strings.HasSuffix(got, c.reset) {
-			t.Errorf("%s: got %q, want reset suffix", c2.name, got)
-		}
-		// The plain badge text (minus leading space) must survive coloring.
-		if !strings.Contains(got, strings.TrimSpace(c2.prPlain)) {
-			t.Errorf("%s: badge text dropped: %q", c2.name, got)
+		if got := colorPRBadge(c2.prPlain, c2.state, c2.check, c2.mergeable, c2.review, c2.autoMerge, c); got != c2.want {
+			t.Errorf("%s: got %q, want %q", c2.name, got, c2.want)
 		}
 	}
 }
