@@ -60,10 +60,6 @@ func TestTickHookIfShellJoinAndEscaping(t *testing.T) {
 		`set-hook -g -u -B '@og-backfill-tick' \; set -gu '@og-backfill-tick' \; ` +
 		`set-hook -g -u -B '@og-usage-tick' \; set -gu '@og-usage-tick' \; ` +
 		`set-hook -g -u -B '@og-sweep-tick' \; set -gu '@og-sweep-tick' \; ` +
-		`set-hook -g -u -B '@lztmux-pr-tick' \; set -gu '@lztmux-pr-tick' \; ` +
-		`set-hook -g -u -B '@lztmux-backfill-tick' \; set -gu '@lztmux-backfill-tick' \; ` +
-		`set-hook -g -u -B '@lztmux-usage-tick' \; set -gu '@lztmux-usage-tick' \; ` +
-		`set-hook -g -u -B '@lztmux-sweep-tick' \; set -gu '@lztmux-sweep-tick' \; ` +
 		`set-hook -g -B '@og-pr-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/pr/bin/tmux-pr-enrich --tick\"' \; ` +
 		`set-hook -g -B '@og-backfill-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/is/bin/tmux-issue-stamp --backfill\"' \; ` +
 		`set-hook -g -B '@og-usage-tick::#{e|/|:#{T:@og_tick},5}' 'run-shell -b \"/store/au/bin/tmux-agent-usage --tick\"' \; ` +
