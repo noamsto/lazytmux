@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/noamsto/tmux-og/picker/enrichstate"
 )
 
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
@@ -254,5 +256,26 @@ func TestShouldStampIssue(t *testing.T) {
 		if got := shouldStampIssue(tc.c, tc.w, tc.dir); got != tc.want {
 			t.Errorf("%s: shouldStampIssue = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestCardPendingPieAndProgress(t *testing.T) {
+	m := model{cfg: testCfg(), width: 60, height: 18, win: winState{
+		prNumber: "103", prState: "open", prCheck: "pending", prProgress: "3/8", branch: "b"}}
+	out := render(m)
+	if !strings.Contains(out, enrichstate.PieSlices[2]+" #103") {
+		t.Errorf("expected pie badge %q\n%s", enrichstate.PieSlices[2]+" #103", out)
+	}
+	if !strings.Contains(out, "3/8 checks") {
+		t.Errorf("expected progress text\n%s", out)
+	}
+}
+
+func TestCardPendingWithoutProgressKeepsGlyph(t *testing.T) {
+	m := model{cfg: testCfg(), width: 60, height: 18, win: winState{
+		prNumber: "103", prState: "open", prCheck: "pending", branch: "b"}}
+	out := render(m)
+	if !strings.Contains(out, "P #103") || strings.Contains(out, "checks") {
+		t.Errorf("expected plain pending badge and no progress text\n%s", out)
 	}
 }

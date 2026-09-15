@@ -5,14 +5,20 @@
 // rule in N renderers" regressions.
 package enrichstate
 
+import (
+	"strconv"
+	"strings"
+)
+
 type ColorRole int
 
 const (
-	ColorSuccess ColorRole = iota // green
-	ColorPending                  // peach
-	ColorFailure                  // red (failing check OR conflicting)
-	ColorMerged                   // mauve
-	ColorClosed                   // dim overlay (dead/superseded)
+	ColorSuccess        ColorRole = iota // green
+	ColorPending                         // peach
+	ColorFailure                         // red (failing check OR conflicting)
+	ColorMerged                          // mauve
+	ColorClosed                          // dim overlay (dead/superseded)
+	ColorReviewRequired                  // dim overlay (review still owed)
 )
 
 type GlyphRole int
@@ -67,4 +73,45 @@ func Classify(state, check, mergeable string) (ColorRole, GlyphRole) {
 // Classify; terminal states carry no marker. Mirrors build_window_label's rule.
 func Draft(state, draft string) bool {
 	return draft == "1" && state != "merged" && state != "closed"
+}
+
+// ReviewColor is the tint for the badge's #<n> half. ok is false when the number
+// keeps Classify's color: no review decision, or a PR that is no longer open.
+func ReviewColor(state, review string) (ColorRole, bool) {
+	if state != "open" {
+		return 0, false
+	}
+	switch review {
+	case "approved":
+		return ColorSuccess, true
+	case "changes_requested":
+		return ColorFailure, true
+	case "review_required":
+		return ColorReviewRequired, true
+	}
+	return 0, false
+}
+
+// AutoMerge reports whether the badge's #<n> half is underlined.
+func AutoMerge(state, autoMerge string) bool {
+	return state == "open" && autoMerge == "1"
+}
+
+// PieSlices are nf-md-circle_slice_1…8, the same frames as the Claude spinner;
+// the shell's ENRICH_PIE_GLYPHS must stay byte-identical.
+var PieSlices = [8]string{"󰪞", "󰪟", "󰪠", "󰪡", "󰪢", "󰪣", "󰪤", "󰪥"}
+
+// Pie returns the slice filled to the share of checks finished, from a
+// "<finished>/<total>" progress value, or "" when progress is not usable.
+func Pie(progress string) string {
+	f, t, ok := strings.Cut(progress, "/")
+	if !ok {
+		return ""
+	}
+	fin, err1 := strconv.Atoi(f)
+	tot, err2 := strconv.Atoi(t)
+	if err1 != nil || err2 != nil || tot <= 0 || fin < 0 || fin > tot {
+		return ""
+	}
+	return PieSlices[fin*7/tot]
 }

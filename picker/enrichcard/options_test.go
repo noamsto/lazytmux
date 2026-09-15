@@ -102,3 +102,15 @@ func TestParseWindowOptionsEmptyClears(t *testing.T) {
 		t.Errorf("branch = %q, want empty", o.local.branch)
 	}
 }
+
+func TestParseWindowOptionsReviewAndProgress(t *testing.T) {
+	var o winOpts
+	parseWindowOptions("@pr_review approved\n@pr_auto_merge 1\n@pr_check_progress 3/8\n"+
+		"@bridge_pr_review changes_requested\n@bridge_pr_auto_merge 1\n@bridge_pr_check_progress 1/2\n", &o)
+	if o.local.prReview != "approved" || o.local.prAutoMerge != "1" || o.local.prProgress != "3/8" {
+		t.Errorf("local = %+v", o.local)
+	}
+	if o.bridge.prReview != "changes_requested" || o.bridge.prAutoMerge != "1" || o.bridge.prProgress != "1/2" {
+		t.Errorf("bridge = %+v", o.bridge)
+	}
+}

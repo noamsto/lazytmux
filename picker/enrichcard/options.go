@@ -11,7 +11,7 @@ type winState struct {
 	issueProvider, issueID, issueTitle, issueURL            string
 	issueExplicitID                                         string
 	prNumber, prTitle, prState, prCheck, prURL, prMergeable string
-	prDraft                                                 string
+	prDraft, prReview, prAutoMerge, prProgress              string
 	branch, worktree, gitRoot                               string
 	task, claudeAgo, paneIcon                               string
 }
@@ -74,6 +74,12 @@ func parseWindowOptions(out string, o *winOpts) {
 			o.local.prMergeable = val
 		case "@pr_draft":
 			o.local.prDraft = val
+		case "@pr_review":
+			o.local.prReview = val
+		case "@pr_auto_merge":
+			o.local.prAutoMerge = val
+		case "@pr_check_progress":
+			o.local.prProgress = val
 		case "@branch":
 			o.local.branch = val
 		case "@worktree":
@@ -110,6 +116,12 @@ func parseWindowOptions(out string, o *winOpts) {
 			o.bridge.prMergeable = val
 		case "@bridge_pr_draft":
 			o.bridge.prDraft = val
+		case "@bridge_pr_review":
+			o.bridge.prReview = val
+		case "@bridge_pr_auto_merge":
+			o.bridge.prAutoMerge = val
+		case "@bridge_pr_check_progress":
+			o.bridge.prProgress = val
 		case "@bridge_branch":
 			o.bridge.branch = val
 		case "@bridge_dir":
@@ -137,8 +149,8 @@ func detectBaseBranch(dir string) string {
 
 // unquote strips a matched surrounding quote pair. tmux show-options quotes
 // values needing it with double quotes (e.g. spaces) and renders an empty value
-// as ''. Both styles must be stripped, else a cleared option like `@branch ''`
-// parses as the literal "''" and defeats the empty-value fallbacks/guards.
+// as ”. Both styles must be stripped, else a cleared option like `@branch ”`
+// parses as the literal "”" and defeats the empty-value fallbacks/guards.
 func unquote(s string) string {
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
 		return s[1 : len(s)-1]
