@@ -129,3 +129,45 @@ gh_calls() {
 	grep -q -- '@pr_check_state pending' "$TMUX_LOG"
 	grep -q -- '@pr_check_progress 1/2' "$TMUX_LOG"
 }
+
+PENDING_CHECK_JSON='[{"headRefName":"feat/has-pr","statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}]}]'
+
+# markers — the pending markers currently in the cache dir, one per line.
+markers() {
+	compgen -G "$OG_ENRICH_CACHE_DIR/*.checks-pending" || true
+}
+
+@test "pending: a pending rollup leaves a repo marker, a settled one clears it" {
+	GH_CHECK_JSON="$PENDING_CHECK_JSON" run bash "$PR_ENRICH_SCRIPT" --tick-run
+	[ "$status" -eq 0 ]
+	[ "$(markers | wc -l)" -eq 1 ]
+	# Backdate past PENDING_CHECK_SECONDS so the next pass is due for this repo.
+	touch -t 200001010000 "$(markers)"
+	run bash "$PR_ENRICH_SCRIPT" --tick-run
+	[ "$status" -eq 0 ]
+	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 2 ]
+	[ -z "$(markers)" ]
+}
+
+@test "pending: a fresh marker does not re-poll checks yet" {
+	GH_CHECK_JSON="$PENDING_CHECK_JSON" run bash "$PR_ENRICH_SCRIPT" --tick-run
+	GH_CHECK_JSON="$PENDING_CHECK_JSON" run bash "$PR_ENRICH_SCRIPT" --tick-run
+	[ "$status" -eq 0 ]
+	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 1 ]
+}
+
+@test "pending: a checks-only pass skips the identity batch" {
+	GH_CHECK_JSON="$PENDING_CHECK_JSON" run bash "$PR_ENRICH_SCRIPT" --tick-run
+	touch -t 200001010000 "$(markers)"
+	GH_CHECK_JSON="$PENDING_CHECK_JSON" run bash "$PR_ENRICH_SCRIPT" --tick-run-pending
+	[ "$status" -eq 0 ]
+	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName')" -eq 1 ]
+	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 2 ]
+	grep -q -- '@pr_check_state pending' "$TMUX_LOG"
+}
+
+@test "pending: a checks-only pass with nothing due calls gh not at all" {
+	run bash "$PR_ENRICH_SCRIPT" --tick-run-pending
+	[ "$status" -eq 0 ]
+	[ ! -s "$GH_LOG" ]
+}

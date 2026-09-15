@@ -32,6 +32,11 @@ TTL_NONE=15
 # eventually; --force (prefix+i r) checks immediately.
 TTL_TERMINAL=3600
 
+# A repo whose checks were last seen pending re-polls them on this shorter clock,
+# so the badge's progress pie moves while CI runs. Capped by the settled cadence.
+PENDING_CHECK_SECONDS=30
+((PENDING_CHECK_SECONDS > CHECK_REFRESH_SECONDS)) && PENDING_CHECK_SECONDS=$CHECK_REFRESH_SECONDS
+
 # Notification seam. A value still starting with '@' means the placeholder was
 # never substituted (raw script under bats, or notifications disabled at build
 # time) — the single "off" mechanism. Assignment only; no fork, so the --tick
@@ -47,6 +52,7 @@ while (($#)); do
 	case "$1" in
 	--tick) mode="tick" ;;
 	--tick-run) mode="tickrun" ;;
+	--tick-run-pending) mode="tickrunpending" ;;
 	--target)
 		target="$2"
 		shift
@@ -191,6 +197,14 @@ branch_cache_key() {
 	branch_sha1 "${repo}|$2"
 }
 
+# pending_marker REPO_ID — sets REPLY to the repo's pending-checks marker. Its
+# presence means the repo's last applied rollup had a pending PR; its mtime is
+# when that repo's checks were last refreshed.
+pending_marker() {
+	branch_sha1 "$1"
+	REPLY="$ENRICH_CACHE_DIR/$REPLY.checks-pending"
+}
+
 # fetch_branch_pr DIR BRANCH [KEY]  → echoes cache JSON path, refreshing via
 # gh if stale. DIR is a checkout of the branch's repo; KEY is the precomputed
 # cache key (derived from DIR+BRANCH when absent, saving a git fork for
@@ -273,6 +287,7 @@ fetch_pr_cached() {
 
 # apply_cache_to_target TARGET CACHE_PATH BRANCH
 apply_cache_to_target() {
+	APPLIED_CHECK=""
 	local tgt="$1" cache="$2" br="$3"
 	# No cache file = this branch was never successfully fetched: keep the
 	# last-known options instead of wiping to "none" (offline / rate-limit
@@ -313,6 +328,7 @@ apply_cache_to_target() {
 	fi
 	collapse_check_rollup "$rollup"
 	local check="$REPLY" progress="$REPLY_PROGRESS"
+	APPLIED_CHECK="$check"
 	sanitize_title "$title"
 	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br" "$draft" "$review" "$auto_merge" "$progress"
 }
@@ -348,75 +364,90 @@ refresh_repo_checks() {
 	done
 }
 
-# enrich_repo_group DIR REPO_ID BRANCHES WINDOWS — one repo's slice of the
-# full pass. REPO_ID is the repo's git common dir (already resolved by
-# run_full_pass; reused for cache keys so no git forks happen here). BRANCHES
-# is newline-separated; WINDOWS is newline-separated "target|branch" lines.
-# One gh call indexes the repo's open PRs by head branch (headRefName; each
-# value is a single-element array matching the per-branch cache format), so the
-# common case — each worktree has an open PR — costs a single API round-trip per
-# repo. A successful batch is authoritative for open PRs: heads missing from it
-# have none, which is a terminal answer (fetch_terminal_pr).
+# enrich_repo_group DIR REPO_ID BRANCHES WINDOWS REFRESH_CHECKS REFRESH_IDENTITY
+# One repo's slice of the full pass. REPO_ID is the repo's git common dir
+# (already resolved by run_full_pass; reused for cache keys so no git forks
+# happen here). BRANCHES is newline-separated; WINDOWS is newline-separated
+# "target|branch" lines. One gh call indexes the repo's open PRs by head branch
+# (headRefName; each value is a single-element array matching the per-branch
+# cache format), so the common case — each worktree has an open PR — costs a
+# single API round-trip per repo. A successful batch is authoritative for open
+# PRs: heads missing from it have none, which is a terminal answer
+# (fetch_terminal_pr). REFRESH_IDENTITY=0 is a checks-only pass: identity is
+# served from its cache files as they stand.
 enrich_repo_group() {
-	local d="$1" repo_id="$2" refresh_checks="$5"
+	local d="$1" repo_id="$2" refresh_checks="$5" refresh_identity="$6"
 	local branches=() wlines=()
 	mapfile -t branches <<<"$3"
 	mapfile -t wlines <<<"$4"
 
-	declare -A open_pr
-	local all_json head obj batch_ok=0
-	if command -v gh >/dev/null 2>&1 &&
-		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
-			--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName 2>/dev/null)" &&
-		[[ -n $all_json ]]; then
-		batch_ok=1
-		while IFS=$'\t' read -r head obj; do
-			[[ -n $head ]] && open_pr[$head]="$obj"
-		done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
-	fi
-
 	local br ck cache
-	for br in "${branches[@]}"; do
-		[[ -z $br ]] && continue
-		branch_sha1 "$repo_id|$br"
-		ck="$REPLY"
-		cache="$ENRICH_CACHE_DIR/$ck.json"
-		if [[ -n ${open_pr[$br]+x} ]]; then
-			printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
-		elif ((batch_ok)); then
-			# No open PR for this head, on the batch's authority: only merged,
-			# closed or none is left, and the next batch catches a PR opened later.
-			cache="$(fetch_terminal_pr "$d" "$br" "$ck")"
-		else
-			# The batch itself failed (no gh, offline, rate-limited): nothing has
-			# been ruled out, so run the full lookup — it serves the cache on
-			# failure rather than wiping to "none".
-			cache="$(fetch_branch_pr "$d" "$br" "$ck")"
+	if ((refresh_identity)); then
+		declare -A open_pr
+		local all_json head obj batch_ok=0
+		if command -v gh >/dev/null 2>&1 &&
+			all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
+				--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName 2>/dev/null)" &&
+			[[ -n $all_json ]]; then
+			batch_ok=1
+			while IFS=$'\t' read -r head obj; do
+				[[ -n $head ]] && open_pr[$head]="$obj"
+			done < <(jq -r '.[] | "\(.headRefName)\t\([.])"' <<<"$all_json")
 		fi
-	done
+
+		for br in "${branches[@]}"; do
+			[[ -z $br ]] && continue
+			branch_sha1 "$repo_id|$br"
+			ck="$REPLY"
+			cache="$ENRICH_CACHE_DIR/$ck.json"
+			if [[ -n ${open_pr[$br]+x} ]]; then
+				printf '%s' "${open_pr[$br]}" >"$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+			elif ((batch_ok)); then
+				# No open PR for this head, on the batch's authority: only merged,
+				# closed or none is left, and the next batch catches a PR opened later.
+				cache="$(fetch_terminal_pr "$d" "$br" "$ck")"
+			else
+				# The batch itself failed (no gh, offline, rate-limited): nothing has
+				# been ruled out, so run the full lookup — it serves the cache on
+				# failure rather than wiping to "none".
+				cache="$(fetch_branch_pr "$d" "$br" "$ck")"
+			fi
+		done
+	fi
 	if ((refresh_checks)); then
 		refresh_repo_checks "$d" "$repo_id" "$3"
 	fi
 
-	local line tgt b2
+	local line tgt b2 any_pending=0
 	for br in "${branches[@]}"; do
 		[[ -z $br ]] && continue
 		branch_sha1 "$repo_id|$br"
 		cache="$ENRICH_CACHE_DIR/$REPLY.json"
 		for line in "${wlines[@]}"; do
 			IFS="|" read -r tgt b2 <<<"$line"
-			[[ $b2 == "$br" ]] && apply_cache_to_target "$tgt" "$cache" "$br"
+			[[ $b2 == "$br" ]] || continue
+			apply_cache_to_target "$tgt" "$cache" "$br"
+			[[ $APPLIED_CHECK == pending ]] && any_pending=1
 		done
 	done
+
+	pending_marker "$repo_id"
+	if ((! any_pending)); then
+		rm -f "$REPLY"
+	elif ((refresh_checks)) || [[ ! -f $REPLY ]]; then
+		touch "$REPLY"
+	fi
 }
 
-# run_full_pass — enrich every window that carries a @branch. Windows are
-# grouped by repo (git common dir, derived from @worktree/@git_root); each
-# group runs concurrently as one enrich_repo_group. Multi-repo setups pay one
-# round-trip per repo, all in flight at once.
+# run_full_pass [PENDING_ONLY] — enrich every window that carries a @branch.
+# Windows are grouped by repo (git common dir, derived from @worktree/@git_root);
+# each group runs concurrently as one enrich_repo_group. Multi-repo setups pay
+# one round-trip per repo, all in flight at once. PENDING_ONLY=1 is the
+# checks-only pass: it runs just the repos whose pending marker is due.
 run_full_pass() {
+	local pending_only="${1:-0}"
 	local refresh_checks=0 check_tick="$ENRICH_CACHE_DIR/.last-check-tick"
-	if [[ ! -f $check_tick ]] || ((EPOCHSECONDS - $(file_mtime "$check_tick") >= CHECK_REFRESH_SECONDS)); then
+	if ((! pending_only)) && { [[ ! -f $check_tick ]] || ((EPOCHSECONDS - $(file_mtime "$check_tick") >= CHECK_REFRESH_SECONDS)); }; then
 		refresh_checks=1
 		touch "$check_tick"
 	fi
@@ -456,9 +487,16 @@ run_full_pass() {
 	done
 	((total)) || return
 
-	local k
+	local k due
 	for k in "${!grp_branches[@]}"; do
-		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" "$refresh_checks" &
+		pending_marker "$k"
+		due=0
+		if [[ -f $REPLY ]] && ((EPOCHSECONDS - $(file_mtime "$REPLY") >= PENDING_CHECK_SECONDS)); then
+			due=1
+		fi
+		((pending_only && ! due)) && continue
+		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" \
+			"$((refresh_checks || due))" "$((! pending_only))" &
 	done
 	wait
 }
@@ -478,6 +516,13 @@ if [[ $mode == "tickrun" ]]; then
 	exit 0
 fi
 
+# --- tickrunpending: a checks-only pass for repos with pending checks ---
+if [[ $mode == "tickrunpending" ]]; then
+	mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
+	run_full_pass 1
+	exit 0
+fi
+
 # --- single-target mode (from dispatcher / force refresh) ---
 if [[ -n $target && -n $branch ]]; then
 	# Remote-bridge mirror window (#167 @bridge_win opt-out): no PR to poll for
@@ -493,7 +538,17 @@ fi
 last_tick="$ENRICH_CACHE_DIR/.last-tick"
 if ((force == 0)) && [[ -f $last_tick ]]; then
 	tick_age=$((EPOCHSECONDS - $(file_mtime "$last_tick")))
-	((tick_age < REFRESH_SECONDS)) && exit 0
+	if ((tick_age < REFRESH_SECONDS)); then
+		# compgen is a builtin, so a tick with nothing pending still forks nothing.
+		compgen -G "$ENRICH_CACHE_DIR/*.checks-pending" >/dev/null || exit 0
+		pending_tick="$ENRICH_CACHE_DIR/.last-pending-tick"
+		if [[ -f $pending_tick ]] && ((EPOCHSECONDS - $(file_mtime "$pending_tick") < PENDING_CHECK_SECONDS)); then
+			exit 0
+		fi
+		touch "$pending_tick"
+		detach "${BASH_SOURCE[0]}" --tick-run-pending
+		exit 0
+	fi
 fi
 # Mark the tick fresh BEFORE daemonizing: best-effort — if the detached pass
 # crashes we wait one cycle; --force / the prefix+i r keybind force a retry.
