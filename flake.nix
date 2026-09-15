@@ -1941,6 +1941,47 @@
           # Go module, so nothing under picker/ moves.
           og-generate = pkgs.callPackage ./generator {};
         };
+
+        # `nix run .#demo` re-renders the README GIFs (docs/media/tapes/*.tape).
+        # vhs 0.11.0, not the pinned 0.12.0: 0.12.0 prints "Creating <out>.gif"
+        # and exits without writing any file, the same tape renders on 0.11.0.
+        apps.demo = let
+          vhs = pkgs.vhs.overrideAttrs (old: rec {
+            version = "0.11.0";
+            src = pkgs.fetchFromGitHub {
+              owner = "charmbracelet";
+              repo = "vhs";
+              rev = "v${version}";
+              hash = "sha256-VOiI+ddiax04QtCcDr6ze53kd/HHGbfQE3j/32iq4Ro=";
+            };
+            vendorHash = "sha256-cgKLYUATtn4hMdIOXZe9JWYNUOrX3S6BDfvS+rIWDfM=";
+            ldflags = map (f:
+              if lib.hasPrefix "-X=main.Version=" f
+              then "-X=main.Version=${version}"
+              else f)
+            old.ldflags;
+          });
+        in {
+          type = "app";
+          meta.description = "Render the README GIFs against a throwaway tmux-og server";
+          program = lib.getExe (pkgs.writeShellApplication {
+            name = "og-demo";
+            # No inherited PATH: a `gh` or `linear` on it would let the enrich
+            # pollers overwrite the seeded @issue_*/@pr_* options.
+            inheritPath = false;
+            # bashInteractive: vhs resolves its `Set Shell bash` on PATH. The
+            # text tools: the server inherits this PATH, and the config's
+            # if-shell version probes pipe through grep.
+            runtimeInputs = [vhs pkgs.bashInteractive pkgs.git pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.gawk pkgs.findutils pkgs.procps pkgs.ncurses pkgs.zoxide];
+            runtimeEnv = {
+              OG_DEMO_TMUX = lib.getExe tmuxConfig.tmux-wrapped;
+              OG_DEMO_TMUX_RAW = lib.getExe (mkTmux pkgs);
+              OG_DEMO_SHELL = lib.getExe pkgs.bashInteractive;
+              FONTCONFIG_FILE = pkgs.makeFontsConf {fontDirectories = [pkgs.nerd-fonts.jetbrains-mono];};
+            };
+            text = builtins.readFile ./docs/media/demo.sh;
+          });
+        };
       };
 
       flake = {

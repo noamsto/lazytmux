@@ -18,6 +18,8 @@ Provides a fully configured tmux binary via a Nix flake — no dotfile managemen
 
 ---
 
+![tmux-og: agent status in the status bar, window switching and the session picker](docs/media/hero.gif)
+
 ## Quick Start
 
 ```bash
@@ -93,6 +95,27 @@ cachix use lazytmux
 | **Welcome splash** | Animated braille-cat welcome buffer with a keybind cheatsheet, once per server |
 | **Image carousel** | View a Claude session's images/diagrams in a split (`prefix + I`) |
 | **Mouse + vi mode** | Mouse support, vi copy mode, pane dimming for inactive panes |
+
+## Screenshots
+
+Rendered from `docs/media/tapes/` with [vhs](https://github.com/charmbracelet/vhs);
+`nix run .#demo` from the repo root regenerates them.
+
+**Multi-line status bar** — the window list reflows as the terminal narrows.
+
+![Status bar reflowing onto more lines as the terminal narrows](docs/media/reflow.gif)
+
+**AI agent status** — processing, waiting on a permission, and done, per window.
+
+![Agent status across windows: processing, waiting and done](docs/media/agents.gif)
+
+**Pickers** — session picker (`prefix + s`), then window picker (`prefix + w`).
+
+![Session picker, then window picker](docs/media/pickers.gif)
+
+**Window wall** — live previews of every window (`prefix + W`).
+
+![Window wall](docs/media/wall.gif)
 
 ## Requirements
 
