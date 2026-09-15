@@ -71,15 +71,15 @@ width_of() { sed -n 's/.*-w \([0-9]*%\).*/\1/p' "$ARGS_LOG"; }
 @test "window wall: ignores list layout, opens fixed geometry" {
 	launcher="$(mk_launcher tmux-window-wall.sh)"
 	FAKE_LAYOUT=list bash "$launcher"
-	[ "$(width_of)" = "95%" ]
-	[ "$(height_of)" = "90%" ]
+	[ "$(width_of)" = "100%" ]
+	[ "$(height_of)" = "100%" ]
 }
 
 @test "window wall: ignores preview layout, opens fixed geometry" {
 	launcher="$(mk_launcher tmux-window-wall.sh)"
 	FAKE_LAYOUT=preview bash "$launcher"
-	[ "$(width_of)" = "95%" ]
-	[ "$(height_of)" = "90%" ]
+	[ "$(width_of)" = "100%" ]
+	[ "$(height_of)" = "100%" ]
 }
 
 @test "session picker: --client foo pins the popup's client" {
