@@ -36,6 +36,16 @@ TTL_TERMINAL=3600
 # so the badge's progress pie moves while CI runs. Capped by the settled cadence.
 PENDING_CHECK_SECONDS=30
 ((PENDING_CHECK_SECONDS > CHECK_REFRESH_SECONDS)) && PENDING_CHECK_SECONDS=$CHECK_REFRESH_SECONDS
+# Checks can sit pending for hours (a required status stuck at EXPECTED, a
+# deployment awaiting approval). This long after a repo was first seen pending,
+# it drops back to the settled cadence rather than spend the shared GraphQL
+# budget 120 times an hour.
+PENDING_MAX_SECONDS=600
+# The gate stamps .last-pending-tick when it dispatches and the pass stamps the
+# marker a few forks later, so on the next 5s-aligned dispatch the marker can be
+# a second short of PENDING_CHECK_SECONDS. One hook period of slack keeps that
+# dispatch from being a no-op that pushes the re-poll out to 60s.
+PENDING_DUE_SLACK=5
 
 # Notification seam. A value still starting with '@' means the placeholder was
 # never substituted (raw script under bats, or notifications disabled at build
@@ -116,7 +126,9 @@ done
 
 # notify_pr_change TARGET PREV NUMBER TITLE STATE CHECK
 # One notification per genuinely new PR/CI event. PREV is write_pr_options'
-# pre-write snapshot, number|state|check|mergeable|draft. Only two things fire:
+# pre-write snapshot, number|state|check|mergeable|draft|review|auto_merge|progress;
+# only fields 2-3 are read, and the parser's trailing `_` absorbs the rest. Only
+# two things fire:
 # a @pr_state flip TO merged, and a @pr_check_state flip TO failure or success.
 # `pending`, `closed`, `conflicting` and draft flips never do.
 #
@@ -199,10 +211,23 @@ branch_cache_key() {
 
 # pending_marker REPO_ID — sets REPLY to the repo's pending-checks marker. Its
 # presence means the repo's last applied rollup had a pending PR; its mtime is
-# when that repo's checks were last refreshed.
+# when that repo's last checks refresh started; its content is the epoch the
+# repo was first seen pending.
 pending_marker() {
 	branch_sha1 "$1"
 	REPLY="$ENRICH_CACHE_DIR/$REPLY.checks-pending"
+}
+
+# arm_pending_marker REPO_ID — create the repo's pending marker if it has none.
+# First-seen is written only here, so later touches move the mtime and never the
+# content. Dropping .last-pending-tick undoes a pass's push-ahead (set when every
+# marker was past PENDING_MAX_SECONDS), so the new repo's fast cadence starts on
+# the next tick. Leaves REPLY as the marker path.
+arm_pending_marker() {
+	pending_marker "$1"
+	[[ -f $REPLY ]] && return
+	printf '%s\n' "$EPOCHSECONDS" >"$REPLY"
+	rm -f "$ENRICH_CACHE_DIR/.last-pending-tick"
 }
 
 # fetch_branch_pr DIR BRANCH [KEY]  → echoes cache JSON path, refreshing via
@@ -286,6 +311,8 @@ fetch_pr_cached() {
 }
 
 # apply_cache_to_target TARGET CACHE_PATH BRANCH
+# Also sets the global APPLIED_CHECK to the collapsed check state it wrote, or ""
+# when nothing was applied; enrich_repo_group and single-target mode read it.
 apply_cache_to_target() {
 	APPLIED_CHECK=""
 	local tgt="$1" cache="$2" br="$3"
@@ -299,6 +326,9 @@ apply_cache_to_target() {
 		write_pr_options "$tgt" "none" "" "" "" "" "" "$br"
 		return
 	fi
+	# One jq pass emits every identity field on its own line (line-by-line `read`
+	# preserves empty fields — a tab/space delimiter would collapse them). PR titles are
+	# single-line, so newline-delimiting is safe.
 	local number title url state mergeable draft review auto_merge
 	{
 		IFS= read -r number
@@ -431,11 +461,13 @@ enrich_repo_group() {
 		done
 	done
 
-	pending_marker "$repo_id"
-	if ((! any_pending)); then
+	# An existing marker's refresh stamp was already set by run_full_pass, before
+	# this group launched.
+	if ((any_pending)); then
+		arm_pending_marker "$repo_id"
+	else
+		pending_marker "$repo_id"
 		rm -f "$REPLY"
-	elif ((refresh_checks)) || [[ ! -f $REPLY ]]; then
-		touch "$REPLY"
 	fi
 }
 
@@ -459,7 +491,7 @@ run_full_pass() {
 	# skipped: gh could only run in the server's cwd (the original wrong-repo
 	# bug), so they keep their last-known options instead.
 	declare -A seen grp_dir grp_branches grp_windows
-	local total=0 line tgt wt gr br bw d key sk
+	local total=0 truncated=0 line tgt wt gr br bw d key sk
 	for line in "${windows[@]}"; do
 		IFS="|" read -r tgt wt gr br bw <<<"$line"
 		[[ -z $br ]] && continue
@@ -479,26 +511,59 @@ run_full_pass() {
 		grp_windows[$key]+="$tgt|$br"$'\n'
 		sk="$key|$br"
 		[[ -n ${seen[$sk]:-} ]] && continue
-		((total >= 30)) && continue
+		if ((total >= 30)); then
+			truncated=1
+			continue
+		fi
 		seen[$sk]=1
 		grp_dir[$key]="$d"
 		grp_branches[$key]+="$br"$'\n'
 		((++total))
 	done
-	((total)) || return
-
-	local k due
+	declare -A marker live
+	local k m
 	for k in "${!grp_branches[@]}"; do
 		pending_marker "$k"
+		marker[$k]="$REPLY"
+		live[$REPLY]=1
+	done
+	# Only enrich_repo_group clears a marker, and a repo whose last window closed
+	# (or whose worktree was removed) never reaches it again — its marker would
+	# keep the gate dispatching passes forever. A capped pass may have skipped a
+	# live repo, so it removes nothing.
+	if ((! truncated)); then
+		for m in "$ENRICH_CACHE_DIR"/*.checks-pending; do
+			[[ -f $m && -z ${live[$m]:-} ]] && rm -f "$m"
+		done
+	fi
+	((total)) || return
+
+	local due fast=0 first
+	for k in "${!grp_branches[@]}"; do
+		m="${marker[$k]}"
 		due=0
-		if [[ -f $REPLY ]] && ((EPOCHSECONDS - $(file_mtime "$REPLY") >= PENDING_CHECK_SECONDS)); then
-			due=1
+		if [[ -f $m ]]; then
+			read -r first <"$m"
+			[[ $first =~ ^[0-9]+$ ]] || first=0
+			if ((EPOCHSECONDS - first < PENDING_MAX_SECONDS)); then
+				fast=1
+				((EPOCHSECONDS - $(file_mtime "$m") >= PENDING_CHECK_SECONDS - PENDING_DUE_SLACK)) && due=1
+			fi
 		fi
 		((pending_only && ! due)) && continue
+		# Stamp the refresh's start, not its end: the gate measures from its own
+		# dispatch, and a concurrent pass must not see this repo as still due.
+		[[ -f $m ]] && ((refresh_checks || due)) && touch "$m"
 		enrich_repo_group "${grp_dir[$k]}" "$k" "${grp_branches[$k]}" "${grp_windows[$k]}" \
 			"$((refresh_checks || due))" "$((! pending_only))" &
 	done
 	wait
+	# Every marker is past PENDING_MAX_SECONDS: push .last-pending-tick a settled
+	# refresh ahead so the gate stops launching passes that find nothing due.
+	# arm_pending_marker drops it the moment a new repo goes pending.
+	if ((pending_only && ! fast)); then
+		touch -t "$(printf '%(%Y%m%d%H%M.%S)T' $((EPOCHSECONDS + CHECK_REFRESH_SECONDS)))" "$ENRICH_CACHE_DIR/.last-pending-tick"
+	fi
 }
 
 # --- mock mode: write the provided values directly, no gh ---
@@ -531,6 +596,12 @@ if [[ -n $target && -n $branch ]]; then
 	mkdir -p "$ENRICH_CACHE_DIR" 2>/dev/null
 	cache="$(fetch_branch_pr "$dir" "$branch")"
 	apply_cache_to_target "$target" "$cache" "$branch"
+	# prefix + i r on a pending PR arms the fast cadence now, not at the next
+	# full pass. Repo id derived exactly as run_full_pass derives it.
+	if [[ $APPLIED_CHECK == pending && -n $dir ]]; then
+		repo="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+		[[ -n $repo ]] && arm_pending_marker "$repo"
+	fi
 	exit 0
 fi
 
