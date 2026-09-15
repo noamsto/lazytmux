@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/noamsto/tmux-og/picker/remotebridge/wire"
@@ -129,7 +130,12 @@ type ctlRequest struct {
 // remote command from this table and never forwards raw command text, even
 // though the socket is 0600 same-user.
 type verb struct {
-	args    int // trailing arguments after the pane id
+	args int // trailing arguments after the pane id
+	// optArgs is how many FURTHER trailing arguments the verb tolerates. Only
+	// the tool verb has any: its cwd rides along when the bind can supply one
+	// and is absent from an older local config, and a verb that refused the
+	// shorter form would break a mirror mid-upgrade.
+	optArgs int
 	windows bool
 	layout  bool
 	// moves is true when the verb implicitly changes the remote's current pane.
@@ -283,8 +289,13 @@ var verbs = map[string]verb{
 	// remote leg: it now opens a float on the remote too, at the same shape
 	// (remoteToolFloat) the local bind uses, so the mirror can reconcile it
 	// into a local float the same way it reconciles any other remote float.
-	// The cwd still has to be the remote tmux's own expansion: the mirror
-	// pane's cwd is the daemon's, not the worktree on screen.
+	// The cwd comes from the mirror window's @bridge_dir, passed by the bind:
+	// tmux expands a -c format against the CLIENT'S CURRENT pane, not against
+	// -t (measured on next-3.8 — new-pane and split-window alike), so asking
+	// the remote to expand #{pane_current_path} opens the tool in whichever
+	// window the remote happens to be on rather than the one pressed in
+	// (#643). A remote window carrying neither @worktree nor @git_root sends
+	// nothing and keeps that expansion, which is no worse than it ever was.
 	//
 	// A bare command name, never the local ${tool}/bin/tool store path, which
 	// exists on this host only. A remote missing the tool degrades to a
@@ -296,7 +307,7 @@ var verbs = map[string]verb{
 	// Never stamps @float_geom on the remote pane: that option is read by the
 	// remote's own tmux-float-refit, which would then fight the mirror for
 	// authority over this float's geometry on the remote's next resize.
-	"tool": {args: 1, layout: true, moves: true, build: func(pane, _, _ string, a []string) ([]string, error) {
+	"tool": {args: 1, optArgs: 1, layout: true, moves: true, build: func(pane, _, _ string, a []string) ([]string, error) {
 		if !remoteTools[a[0]] {
 			return nil, fmt.Errorf("tool: unknown tool %q", a[0])
 		}
@@ -304,9 +315,15 @@ var verbs = map[string]verb{
 		if !ok {
 			flags = remoteFloatFull
 		}
+		cwd := "'#{pane_current_path}'"
+		if len(a) > 1 {
+			if dir, ok := remoteToolCwd(a[1]); ok {
+				cwd = tmuxQuote(dir)
+			}
+		}
 		script := toolResolveScript(a[0])
-		cmd := fmt.Sprintf("new-pane -t %s -c '#{pane_current_path}' %s %s",
-			pane, flags, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
+		cmd := fmt.Sprintf("new-pane -t %s -c %s %s %s",
+			pane, cwd, flags, tmuxQuote("exec /bin/sh -c "+tmuxQuote(script)))
 		return []string{cmd}, nil
 	}},
 	// A mirror's pane content is bytes the remote's programs coloured from the
@@ -368,6 +385,32 @@ func themeProbeCmd(sess string) string {
 	job := "#(/bin/sh -c " + tmuxQuote(script) + ")"
 	return fmt.Sprintf("display-message -p -t %s %s", tmuxQuote(sess), tmuxQuote(job))
 }
+
+// remoteToolCwd accepts the directory the tool bind read off the mirror
+// window's @bridge_dir, or reports false to leave the cwd alone.
+//
+// The value is remote-derived and arrives over the ctl socket, and new-pane
+// format-expands its -c argument — so a '#' is not a character in a path here,
+// it is the start of a format, and '#(...)' would be a command the remote runs.
+// A control byte would end the command line the daemon writes to the control
+// stream and start another. Both drop the value whole rather than being
+// scrubbed out of it: a repaired path names a directory that is not the one on
+// screen, which is the class of wrong cleanLabelValueExact already refuses.
+func remoteToolCwd(dir string) (string, bool) {
+	if !strings.HasPrefix(dir, "/") || len(dir) > maxRemoteToolCwd {
+		return "", false
+	}
+	for _, r := range dir {
+		if r == '#' || r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return dir, true
+}
+
+// maxRemoteToolCwd is PATH_MAX: a longer value is not a path this remote could
+// have been sitting in.
+const maxRemoteToolCwd = 4096
 
 // toolResolveScript is the POSIX body run under exec /bin/sh -c: split-window
 // runs its command through the remote's default shell (fish on the normal host),
@@ -547,7 +590,7 @@ func (c *ctlState) parseCtl(argv []string, sess string) (ctlRequest, error) {
 	if !ok {
 		return ctlRequest{}, fmt.Errorf("unknown verb %q", name)
 	}
-	if len(args) != v.args {
+	if len(args) < v.args || len(args) > v.args+v.optArgs {
 		return ctlRequest{}, fmt.Errorf("%s wants %d argument(s), got %d", name, v.args, len(args))
 	}
 	cmds, err := v.build(pane, win, sess, args)

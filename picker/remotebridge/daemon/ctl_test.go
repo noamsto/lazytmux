@@ -748,8 +748,9 @@ func TestToolVerbBuildsRemoteFloatInRemoteCwd(t *testing.T) {
 			}
 		})
 	}
-	// The cwd must stay a format for the remote to expand, and the tool must be
-	// resolved off the remote PATH rather than a local store path.
+	// With no cwd argument the format stays, as the only thing left to fall back
+	// on; the tool must be resolved off the remote PATH rather than a local
+	// store path either way.
 	cmds, err := v.build("%5", "@2", "sess", []string{"prdash"})
 	if err != nil {
 		t.Fatal(err)
@@ -818,6 +819,73 @@ func TestToolResolveScriptSurvivesFormatExpansion(t *testing.T) {
 		if strings.Contains(script, bad) {
 			t.Errorf("script contains tmux format %q, which run-shell would expand: %q", bad, script)
 		}
+	}
+}
+
+// The cwd the bind reads off @bridge_dir is what makes the float open in the
+// window it was pressed in: tmux expands a -c format against the client's
+// current pane rather than the -t target, so the remote leg cannot resolve it
+// (#643). A value that could be read as something other than a path drops back
+// to that format instead of reaching the remote command line.
+func TestToolVerbUsesSuppliedCwd(t *testing.T) {
+	v := verbs["tool"]
+
+	kept := []string{
+		"/home/noams/git/toddl",
+		"/home/noams/Data/git/.worktrees/git/lazytmux/feat-640-mirror-crew-pane-borders",
+		"/home/noams/two words", // run-shell splits, #{qs:} does not — the verb must take it whole
+		"/home/noams/it's-here", // tmuxQuote owns the escaping
+		"/home/noams/a;b,c:d",   // literal inside the quotes
+		"/" + strings.Repeat("d", maxRemoteToolCwd-1),
+	}
+	for _, dir := range kept {
+		cmds, err := v.build("%5", "@2", "sess", []string{"prdash", dir})
+		if err != nil {
+			t.Fatalf("dir %q: %v", dir, err)
+		}
+		want := "new-pane -t %5 -c " + tmuxQuote(dir) + " "
+		if !strings.HasPrefix(cmds[0], want) {
+			t.Fatalf("dir %q\n got %q\nwant prefix %q", dir, cmds[0], want)
+		}
+	}
+
+	dropped := []string{
+		"",                           // an unset @bridge_dir quotes as an empty argument
+		"relative/path",              // never a cwd the remote was sitting in
+		"~/git/toddl",                // the shell would have expanded this, tmux will not
+		"/home/noams/a#b",            // new-pane format-expands -c
+		"/home/noams/#(id)",          // ... so this would be a command the remote runs
+		"/home/noams/a\nkill-server", // would end the daemon's command line and start another
+		"/home/noams/a\x7fb",
+		"/" + strings.Repeat("d", maxRemoteToolCwd),
+	}
+	for _, dir := range dropped {
+		cmds, err := v.build("%5", "@2", "sess", []string{"prdash", dir})
+		if err != nil {
+			t.Fatalf("dir %q: %v", dir, err)
+		}
+		if !strings.Contains(cmds[0], "-c '#{pane_current_path}'") {
+			t.Fatalf("dir %q was not dropped back to the format: %q", dir, cmds[0])
+		}
+		if strings.Contains(cmds[0], dir) && dir != "" {
+			t.Fatalf("dir %q reached the command line: %q", dir, cmds[0])
+		}
+	}
+}
+
+// The cwd is optional on the wire: a mirror whose local config predates #643
+// sends the two-argument form, and refusing it would break the tool binds for
+// as long as that server lives.
+func TestToolVerbCwdIsOptionalOnTheWire(t *testing.T) {
+	c := newCtlStateWith("@1", "%2")
+	base := []string{wire.CtlProtocolVersion, "tool", "%2", "prdash"}
+	for _, argv := range [][]string{base, append(base, "/home/noams/git/toddl")} {
+		if _, err := c.parseCtl(argv, "sess"); err != nil {
+			t.Fatalf("argv %v rejected: %v", argv, err)
+		}
+	}
+	if _, err := c.parseCtl(append(base, "/a", "/b"), "sess"); err == nil {
+		t.Fatal("a third argument was accepted")
 	}
 }
 

@@ -1917,7 +1917,7 @@
             } ''
               for k in p g y; do
                 grep -qE "bind-key $k if-shell -F .*@bridge_win" "$CONF"
-                grep -qE "bind-key $k if-shell -F .*bridge-ctl .*tool #\{q:@bridge_pane\}" "$CONF"
+                grep -qE "bind-key $k if-shell -F .*bridge-ctl .*tool #\{q:@bridge_pane\} [a-z]+ #\{qs:@bridge_dir\}" "$CONF"
               done
               grep -qE "new-pane -c '#\{pane_current_path\}'.*prdash" "$CONF"
               for label in prdash lazygit yazi; do
