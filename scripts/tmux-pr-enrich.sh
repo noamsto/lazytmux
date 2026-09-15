@@ -312,7 +312,7 @@ fetch_pr_cached() {
 
 # apply_cache_to_target TARGET CACHE_PATH BRANCH
 # Also sets the global APPLIED_CHECK to the collapsed check state it wrote, or ""
-# when nothing was applied; enrich_repo_group and single-target mode read it.
+# when nothing was applied.
 apply_cache_to_target() {
 	APPLIED_CHECK=""
 	local tgt="$1" cache="$2" br="$3"
