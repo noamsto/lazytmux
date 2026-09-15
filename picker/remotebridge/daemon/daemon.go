@@ -627,6 +627,11 @@ func Run(cfg Config) error {
 	if available, checked := themeToggleAvailable(rt, cfg.RemoteSession); checked && !available {
 		notifyThemeMissing(cfg)
 	}
+	// Once per bridge, like the probe above: tmux sets session_path at creation
+	// and nothing a mirror follows changes it afterwards.
+	if p := readSessionPath(rt, cfg.RemoteSession); p != "" {
+		cfg.LocalTmux("set-option", "-t", cfg.LocalSess, "@bridge_session_path", p)
+	}
 
 	// Published here for the first attach; repair() (below) re-sends the same
 	// read on every later one, since a capability change during an outage has
