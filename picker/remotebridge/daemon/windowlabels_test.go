@@ -19,11 +19,12 @@ func TestParseWindowLabels(t *testing.T) {
 	// One full row, spelled out to document the wire shape.
 	full := "@1|nova|#89b4fa|123|open|success|mergeable| PR #123|" +
 		"github|460|https://github.com/o/r/issues/460|https://github.com/o/r/pull/123|1|" +
-		"feat/460-card|/home/noams/wt/card|Card reads bridge state|Ship the card|GH #460| ship it"
+		"feat/460-card|/home/noams/wt/card|Card reads bridge state|Ship the card|" +
+		"approved|1|3/8|GH #460| ship it"
 	// The remote's #{s/[|]/ /:…} has already run over positions 8-16, so a title
 	// that held a '|' arrives carrying a space and shifts nothing. Only the
 	// trailing @window_label_rest_long is unwrapped, where a '|' lands in itself.
-	piped := "@2|orbit|#[fg=red]|none|OPEN|success|unknown|||||||||a  piped title||| a #[fg=red]title | with a pipe"
+	piped := "@2|orbit|#[fg=red]|none|OPEN|success|unknown|||||||||a  piped title|||||| a #[fg=red]title | with a pipe"
 	if n := strings.Count(full, "|") + 1; n != windowLabelFields {
 		t.Fatalf("full fixture has %d fields, want %d", n, windowLabelFields)
 	}
@@ -57,6 +58,7 @@ func TestParseWindowLabels(t *testing.T) {
 		prURL:    "https://github.com/o/r/pull/123",
 		prDraft:  "1", branch: "feat/460-card", dir: "/home/noams/wt/card",
 		issueTitle: "Card reads bridge state", prTitle: "Ship the card",
+		prReview: "approved", prAutoMerge: "1", prProgress: "3/8",
 		labelID: "GH #460", labelRest: " ship it",
 	}
 	if got[0] != want0 {
@@ -197,12 +199,12 @@ func TestWindowLabelValidation(t *testing.T) {
 	// The titles and the label segments are display text, so they strip markup
 	// and truncate where the identity fields above drop whole. Dropping a title
 	// for holding markup would regress what already ships.
-	for _, f := range []int{15, 16, 17, 18} {
+	for _, f := range []int{15, 16, 20, 21} {
 		if got := rowField(t, oneRow(t, f, "a #[fg=red]title"), f); got != "a title" {
 			t.Errorf("field %d: markup value = %q, want it stripped and kept", f, got)
 		}
 	}
-	for _, f := range []int{15, 16, 17, 18} {
+	for _, f := range []int{15, 16, 20, 21} {
 		got := []rune(rowField(t, oneRow(t, f, strings.Repeat("x", 300)), f))
 		if len(got) != labelTextMaxRunes {
 			t.Errorf("field %d capped to %d runes, want %d", f, len(got), labelTextMaxRunes)
@@ -212,7 +214,7 @@ func TestWindowLabelValidation(t *testing.T) {
 	// LocalTmux execs without a shell, so tmux's own args_parse would read this
 	// as a flag. The titles have no validator to fall back on, so this drop and
 	// the ';' one below are their only guard.
-	for _, f := range []int{15, 16, 18} {
+	for _, f := range []int{15, 16, 20, 21} {
 		if got := rowField(t, oneRow(t, f, "-n oops"), f); got != "" {
 			t.Errorf("field %d: flag-shaped value = %q, want it dropped", f, got)
 		}
@@ -221,12 +223,12 @@ func TestWindowLabelValidation(t *testing.T) {
 	// A lone ';' is the separator apply joins its per-window sequence with:
 	// tmux fails the whole batch on it and drops every later option in the
 	// sequence. One *inside* a value is not a separator and is kept.
-	for _, f := range []int{1, 7, 15, 16, 17, 18} {
+	for _, f := range []int{1, 7, 15, 16, 20, 21} {
 		if got := rowField(t, oneRow(t, f, ";"), f); got != "" {
 			t.Errorf("field %d: lone ';' = %q, want it dropped", f, got)
 		}
 	}
-	if got := oneRow(t, 18, " a;b").labelRest; got != " a;b" {
+	if got := oneRow(t, 21, " a;b").labelRest; got != " a;b" {
 		t.Errorf("labelRest(%q) = %q, want it kept", " a;b", got)
 	}
 }
@@ -270,8 +272,14 @@ func rowField(t *testing.T, r labelRow, i int) string {
 	case 16:
 		return r.prTitle
 	case 17:
-		return r.labelID
+		return r.prReview
 	case 18:
+		return r.prAutoMerge
+	case 19:
+		return r.prProgress
+	case 20:
+		return r.labelID
+	case 21:
 		return r.labelRest
 	}
 	t.Fatalf("rowField: index %d is not mapped to a labelRow field", i)
@@ -397,5 +405,31 @@ func TestLabelShipperRestampsRebuiltMirror(t *testing.T) {
 	}
 	if !strings.Contains(got, "set-option -w -t @102 @bridge_crew_name nova") {
 		t.Errorf("replacement window not stamped: %q", got)
+	}
+}
+
+func TestWindowLabelReviewAutoMergeProgress(t *testing.T) {
+	reviews := []struct{ in, want string }{
+		{"approved", "approved"}, {"changes_requested", "changes_requested"},
+		{"review_required", "review_required"}, {"APPROVED", ""}, {"maybe", ""}, {"", ""},
+	}
+	for _, c := range reviews {
+		if got := oneRow(t, 17, c.in).prReview; got != c.want {
+			t.Errorf("prReview(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	autos := []struct{ in, want string }{{"1", "1"}, {"true", ""}, {"", ""}}
+	for _, c := range autos {
+		if got := oneRow(t, 18, c.in).prAutoMerge; got != c.want {
+			t.Errorf("prAutoMerge(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	progress := []struct{ in, want string }{
+		{"3/8", "3/8"}, {"0/1", "0/1"}, {"3/", ""}, {"a/b", ""}, {"3 / 8", ""}, {"-3/8", ""},
+	}
+	for _, c := range progress {
+		if got := oneRow(t, 19, c.in).prProgress; got != c.want {
+			t.Errorf("prProgress(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
