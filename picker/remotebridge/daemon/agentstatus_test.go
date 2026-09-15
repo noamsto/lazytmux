@@ -11,18 +11,19 @@ import (
 
 func TestParseAgentStatus(t *testing.T) {
 	body := strings.Join([]string{
-		"%1|claude|processing 1700000000 |",                   // trailing empty fields trimmed away
-		"%2|nvim||||||",                                       // mirrored pane, no agent
-		"%3|claude|waiting 1700000042 1|ENG-7||||fix | y",     // unseen, issues, task holding a '|'
-		"%4|fish|garbage||||",                                 // unparsable stamp reads as no agent
-		"%5|claude|||plan-critic|working|colour111|grill it",  // a decorated role pane
-		"%6|claude|||#(id)|WORKING|#[fg=red]|",                // markup and an uppercase state drop
-		"%7|claude|||plan-critic-with-a-very-long-name||red|", // over its cap, so dropped whole
+		"%1|claude|processing 1700000000 |",                       // trailing empty fields trimmed away
+		"%2|nvim|||||||",                                          // mirrored pane, no agent
+		"%3|claude|waiting 1700000042 1||ENG-7||||fix | y",        // unseen, issues, task holding a '|'
+		"%4|fish|garbage||",                                       // unparsable stamp reads as no agent
+		"%5|claude||||plan-critic|working|colour111|grill it",     // a decorated role pane
+		"%6|claude||||#(id)|WORKING|#[fg=red]|",                   // markup and an uppercase state drop
+		"%7|claude||||plan-critic-with-a-very-long-name||red|",    // over its cap, so dropped whole
+		"%8|pi|processing 1700000200 |idle 1700000050 bg=2|ENG-7", // screen-scraped state alongside a hook stamp
 	}, "\n")
 
 	got := parseAgentStatus(body)
-	if len(got) != 7 {
-		t.Fatalf("got %d rows, want 7 (every mirrored pane): %+v", len(got), got)
+	if len(got) != 8 {
+		t.Fatalf("got %d rows, want 8 (every mirrored pane): %+v", len(got), got)
 	}
 	if got[0].pane != "%1" || got[0].proc != "claude" || got[0].state != "processing" || got[0].ts != 1700000000 || got[0].unseen {
 		t.Errorf("row 0 = %+v", got[0])
@@ -47,6 +48,10 @@ func TestParseAgentStatus(t *testing.T) {
 	}
 	if r := got[6]; r.crewRole != "" || r.crewColor != "red" {
 		t.Errorf("an over-cap role drops whole and takes nothing else with it: %+v", r)
+	}
+	s := got[7]
+	if s.pane != "%8" || s.state != "processing" || s.screenState != "idle" || s.screenTS != 1700000050 || s.screenFlags != "bg=2" || s.issues != "ENG-7" {
+		t.Errorf("row 7 (screen-scraped) = %+v", s)
 	}
 }
 
@@ -193,6 +198,88 @@ func TestAgentShipperDropsFilesWhenAgentLeavesPane(t *testing.T) {
 	last := calls[len(calls)-1]
 	if last[5] != "fish" {
 		t.Errorf("last stamp = %v, want the pane's new command", last)
+	}
+}
+
+// A screen-scraped agent (pi, codex, cursor — #635) has no hook, so its state
+// rides @agent_screen alone. It must land in screen/<id>, independent of
+// panes/, tasks/, issues/ — none of which a screen-only pane ever gets.
+func TestAgentShipperWritesScreenFile(t *testing.T) {
+	dir := t.TempDir()
+	a := &agentShipper{dir: dir, sess: "lab-mono", skew: 10, written: map[string]paneStatus{}}
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+
+	a.apply(cfg, []paneStatus{
+		{pane: "%1", proc: "pi", screenState: "processing", screenTS: 1700000000, screenFlags: "bg=2"},
+	})
+
+	body, err := os.ReadFile(filepath.Join(dir, "screen", "7"))
+	if err != nil {
+		t.Fatalf("screen file: %v", err)
+	}
+	want := "state=processing\ntimestamp=1700000010\nbg=2\n"
+	if string(body) != want {
+		t.Errorf("screen file =\n%q\nwant\n%q", body, want)
+	}
+	for _, sub := range []string{"panes", "tasks", "issues"} {
+		if _, err := os.Stat(filepath.Join(dir, sub, "7")); !os.IsNotExist(err) {
+			t.Errorf("a screen-only pane must not get a %s file", sub)
+		}
+	}
+
+	// The screen-scraper's verdict clears (agent exited back to a shell):
+	// the file goes, independently of the hook-driven panes/ file it never had.
+	a.apply(cfg, []paneStatus{{pane: "%1", proc: "fish"}})
+	if _, err := os.Stat(filepath.Join(dir, "screen", "7")); !os.IsNotExist(err) {
+		t.Error("screen file outlived the scraper's cleared verdict")
+	}
+}
+
+// An unchanged screen row must not be rewritten, the same rule panes/ already
+// gets — and it must be independent of the hook state, since a Claude pane
+// stamps only @claude_status and a screen-only pane stamps only
+// @agent_screen.
+func TestAgentShipperLeavesUnchangedScreenRowAlone(t *testing.T) {
+	dir := t.TempDir()
+	a := &agentShipper{dir: dir, sess: "lab-mono", written: map[string]paneStatus{}}
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+	row := paneStatus{pane: "%1", proc: "pi", screenState: "idle", screenTS: 1700000000}
+	a.apply(cfg, []paneStatus{row})
+
+	path := filepath.Join(dir, "screen", "7")
+	seen := "state=idle\ntimestamp=1700000000\n"
+	if got, err := os.ReadFile(path); err != nil || string(got) != seen {
+		t.Fatalf("seed write = %q (%v), want %q", got, err, seen)
+	}
+	if err := os.WriteFile(path, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a.apply(cfg, []paneStatus{row})
+	if got, _ := os.ReadFile(path); string(got) != "tampered" {
+		t.Errorf("unchanged screen row was rewritten:\n%q", got)
+	}
+
+	row.screenTS = 1700000100
+	a.apply(cfg, []paneStatus{row})
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "timestamp=1700000100") {
+		t.Errorf("new remote screen state should overwrite: %q", got)
+	}
+}
+
+// Teardown (a dying bridge) must drop the screen file exactly as it drops
+// panes/tasks/issues.
+func TestAgentShipperClearDropsScreenFile(t *testing.T) {
+	dir := t.TempDir()
+	a := &agentShipper{dir: dir, sess: "lab-mono", written: map[string]paneStatus{}}
+	var calls [][]string
+	cfg := mirrorCfg(&calls)
+	a.apply(cfg, []paneStatus{{pane: "%1", proc: "pi", screenState: "processing", screenTS: 1700000000}})
+
+	a.clear()
+	if _, err := os.Stat(filepath.Join(dir, "screen", "7")); !os.IsNotExist(err) {
+		t.Error("clear left the screen file behind")
 	}
 }
 

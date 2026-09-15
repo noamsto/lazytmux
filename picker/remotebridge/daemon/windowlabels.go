@@ -43,11 +43,12 @@ const mainLoopTickInterval = 5 * time.Second
 const windowLabelFormat = "#{window_id}|#{@crew_name}|#{@crew_color}|#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@window_pr_plain}|" +
 	"#{s/[|]/ /:@issue_provider}|#{s/[|]/ /:@issue_id}|#{s/[|]/ /:@issue_url}|#{s/[|]/ /:@pr_url}|#{s/[|]/ /:@pr_draft}|" +
 	"#{s/[|]/ /:@branch}|#{s/[|]/ /:#{?@worktree,#{@worktree},#{@git_root}}}|#{s/[|]/ /:@issue_title}|#{s/[|]/ /:@pr_title}|" +
+	"#{s/[|]/ /:@pr_review}|#{s/[|]/ /:@pr_auto_merge}|#{s/[|]/ /:@pr_check_progress}|" +
 	"#{@window_label_id}|#{@window_label_rest_long}"
 
 // windowLabelFields is windowLabelFormat's field count, shared with the test
 // fixture so the parser and the fixture cannot drift apart.
-const windowLabelFields = 19
+const windowLabelFields = 22
 
 // labelRow is one remote window's carried label state, already sanitized and
 // validated. Comparable, so the unchanged-row check is a struct compare.
@@ -69,6 +70,9 @@ type labelRow struct {
 	dir           string // the remote's worktree || git_root, already resolved
 	issueTitle    string
 	prTitle       string
+	prReview      string
+	prAutoMerge   string
+	prProgress    string
 	labelID       string
 	labelRest     string
 }
@@ -101,6 +105,9 @@ var bridgeLabelOptions = []struct {
 	{"@bridge_dir", func(r labelRow) string { return r.dir }},
 	{"@bridge_issue_title", func(r labelRow) string { return r.issueTitle }},
 	{"@bridge_pr_title", func(r labelRow) string { return r.prTitle }},
+	{"@bridge_pr_review", func(r labelRow) string { return r.prReview }},
+	{"@bridge_pr_auto_merge", func(r labelRow) string { return r.prAutoMerge }},
+	{"@bridge_pr_check_progress", func(r labelRow) string { return r.prProgress }},
 	{"@bridge_label_id", func(r labelRow) string { return r.labelID }},
 	{"@bridge_label_rest_long", func(r labelRow) string { return r.labelRest }},
 }
@@ -119,6 +126,9 @@ const (
 	prDraftMaxRunes  = 1
 	branchMaxRunes   = 255
 	dirMaxRunes      = 4096
+
+	reviewMaxRunes   = 17 // len("changes_requested")
+	progressMaxRunes = 16
 )
 
 var (
@@ -139,6 +149,9 @@ var (
 	// and an absent dir line is correct-but-incomplete where a shifted row is
 	// neither. Whitespace is what keeps both safe, so it stays excluded.
 	dirRe = regexp.MustCompile(`^/\S*$`)
+
+	reviewRe   = regexp.MustCompile(`^(approved|changes_requested|review_required)$`)
+	progressRe = regexp.MustCompile(`^[0-9]+/[0-9]+$`)
 )
 
 // parseWindowLabels turns a windowLabelFormat reply body into one sanitized row
@@ -182,8 +195,11 @@ func parseWindowLabels(body string) []labelRow {
 			dir:           matching(cleanLabelValueExact(at(14), dirMaxRunes), dirRe),
 			issueTitle:    cleanLabelValue(at(15), labelTextMaxRunes),
 			prTitle:       cleanLabelValue(at(16), labelTextMaxRunes),
-			labelID:       cleanLabelValue(at(17), labelTextMaxRunes),
-			labelRest:     cleanLabelValue(at(18), labelTextMaxRunes),
+			prReview:      matching(cleanLabelValueExact(at(17), reviewMaxRunes), reviewRe),
+			prAutoMerge:   matching(cleanLabelValueExact(at(18), prDraftMaxRunes), prDraftRe),
+			prProgress:    matching(cleanLabelValueExact(at(19), progressMaxRunes), progressRe),
+			labelID:       cleanLabelValue(at(20), labelTextMaxRunes),
+			labelRest:     cleanLabelValue(at(21), labelTextMaxRunes),
 		})
 	}
 	return out
@@ -339,7 +355,7 @@ func (s *labelShipper) flush(cfg Config, reg *registry, rt roundTrip, gen uint64
 // apply stamps the rows whose values moved, and reports whether any did.
 //
 // A bare mirror's FIRST pass counts as changed: seen is false, so the row
-// compare cannot fire and the window gets eighteen `-u` for a row carrying
+// compare cannot fire and the window gets twenty-one `-u` for a row carrying
 // nothing, forcing one reflow at daemon start.
 func (s *labelShipper) apply(cfg Config, reg *registry, rows []labelRow) (changed bool) {
 	for _, r := range rows {

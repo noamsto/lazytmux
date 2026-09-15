@@ -249,3 +249,33 @@ func TestRenderHeaderItemPassesThroughNonSectionHeaders(t *testing.T) {
 		t.Errorf("got %q, want the column header's own display untouched", got)
 	}
 }
+
+// In wall mode letters navigate the grid rather than type, so the empty-query
+// placeholder must say "/ to filter..." instead of the list's "type to
+// filter..." — unless the filter prompt is already open, where it types like
+// everywhere else.
+func TestRenderSearchPlaceholder(t *testing.T) {
+	cases := []struct {
+		name     string
+		mode     pickerMode
+		querying bool
+		want     string
+		notWant  string
+	}{
+		{"list mode", modeList, false, "type to filter...", ""},
+		{"wall mode, not querying", modeWall, false, "/ to filter...", "type to filter..."},
+		{"wall mode, querying", modeWall, true, "type to filter...", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := tuiModel{width: 60, mode: c.mode, querying: c.querying}
+			search := stripANSI(m.renderSearch())
+			if !strings.Contains(search, c.want) {
+				t.Errorf("search = %q, want %q", search, c.want)
+			}
+			if c.notWant != "" && strings.Contains(search, c.notWant) {
+				t.Errorf("search = %q, must not contain %q", search, c.notWant)
+			}
+		})
+	}
+}

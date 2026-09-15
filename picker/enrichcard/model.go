@@ -62,6 +62,8 @@ func (m model) colorFor(r enrichstate.ColorRole) string {
 		return m.cfg.red
 	case enrichstate.ColorPending:
 		return m.cfg.peach
+	case enrichstate.ColorReviewRequired:
+		return m.cfg.overlay0
 	default:
 		return m.cfg.green
 	}
@@ -130,10 +132,26 @@ func (m model) prBlock() string {
 	}
 	cr, gr := enrichstate.Classify(w.prState, w.prCheck, w.prMergeable)
 	glyph := m.glyphFor(gr)
+	progress := ""
+	if gr == enrichstate.GlyphPending {
+		if pie := enrichstate.Pie(w.prProgress); pie != "" {
+			glyph, progress = pie, w.prProgress
+		}
+	}
 	if enrichstate.Draft(w.prState, w.prDraft) {
 		glyph = c.icDraft + " " + glyph
 	}
-	badge := m.sty(m.colorFor(cr)).Render(glyph + " #" + w.prNumber)
+	numStyle := m.sty(m.colorFor(cr))
+	if rc, ok := enrichstate.ReviewColor(w.prState, w.prReview); ok {
+		numStyle = m.sty(m.colorFor(rc))
+	}
+	if enrichstate.AutoMerge(w.prState, w.prAutoMerge) {
+		numStyle = numStyle.Underline(true)
+	}
+	badge := m.sty(m.colorFor(cr)).Render(glyph+" ") + numStyle.Render("#"+w.prNumber)
+	if progress != "" {
+		badge += m.sty(c.overlay0).Render("  " + progress + " checks")
+	}
 	title := m.sty(c.fg).Render(truncate(w.prTitle, m.titleWidth()))
 	return lipgloss.JoinVertical(lipgloss.Left, badge, title)
 }

@@ -13,6 +13,12 @@ import (
 	"github.com/noamsto/tmux-og/picker/agentdetect/statefile"
 )
 
+// newTestWriter is statefile.New with a no-op TmuxRunner, so these tests
+// never fork a real tmux.
+func newTestWriter(dir, paneID string) *statefile.Writer {
+	return statefile.NewWithTmuxRunner(dir, paneID, func(...string) error { return nil })
+}
+
 func TestPaneInfoReportsOK(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -247,7 +253,7 @@ func TestEmitIfOwnerSkipsWhenSuperseded(t *testing.T) {
 	// The new watcher reports its own current state, as it does at startup.
 	newScr := screen.New(80, 24)
 	newScr.Feed([]byte("NEW-SCREEN"))
-	emit(newScr, m, statefile.New(stateDir, paneID))
+	emit(newScr, m, newTestWriter(stateDir, paneID))
 
 	before, err := os.ReadFile(stateDir + "/" + paneID)
 	if err != nil {
@@ -258,7 +264,7 @@ func TestEmitIfOwnerSkipsWhenSuperseded(t *testing.T) {
 	// different screen. It must not write, since it is no longer the owner.
 	oldScr := screen.New(80, 24)
 	oldScr.Feed([]byte("OLD-SCREEN"))
-	emitIfOwner(regDir, paneID, 100, oldScr, m, statefile.New(stateDir, paneID))
+	emitIfOwner(regDir, paneID, 100, oldScr, m, newTestWriter(stateDir, paneID))
 
 	after, err := os.ReadFile(stateDir + "/" + paneID)
 	if err != nil {
@@ -286,7 +292,7 @@ func TestEmitIfOwnerEmitsWhenStillOwner(t *testing.T) {
 
 	scr := screen.New(80, 24)
 	scr.Feed([]byte("SCREEN"))
-	emitIfOwner(regDir, paneID, 100, scr, m, statefile.New(stateDir, paneID))
+	emitIfOwner(regDir, paneID, 100, scr, m, newTestWriter(stateDir, paneID))
 
 	content, err := os.ReadFile(stateDir + "/" + paneID)
 	if err != nil {

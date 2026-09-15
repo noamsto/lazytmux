@@ -232,12 +232,13 @@ func newPickerModel(windowMode, agentOnly, wall bool, opts map[string]string, th
 		emitPath:     emitPath,
 	}
 	if !windowMode && emitPath == "" {
-		// Host rows are static config — render them now so the Remote section
-		// exists from the first paint. remoteCmd's probe (kicked from Init)
-		// fills in each row's annotation in place via remoteMsg (#312). Emit
-		// mode builds none: it runs on a host we are not attached to, so a
-		// Remote section there would bridge from the wrong side.
-		m.remoteItems = pendingRemoteItems(opts)
+		// Host rows are static config and their sessions come from the on-disk
+		// cache — render them now so the Remote section exists, and is
+		// searchable, from the first paint. remoteCmd's probe (kicked from Init)
+		// replaces them in place via remoteMsg (#312, #631). Emit mode builds
+		// none: it runs on a host we are not attached to, so a Remote section
+		// there would bridge from the wrong side.
+		m.remoteItems = pendingRemoteItems(opts, firstPaintBridges(items))
 	}
 	m = m.recombine().withFilter()
 	m.cursor = m.firstSelectable(0)
@@ -1953,11 +1954,17 @@ func buildSessionItems(tmuxOpts map[string]string, snap panesSnapshot, agentPane
 			iSess, r.name, pad, hostCell(r.sess.bridgeHost, ""),
 			stripANSI(icons), resPlain, iDir, shortPath,
 		)
+		// A mirror is searchable by its host, like the Remote rows, even when
+		// its name doesn't carry the <host>- prefix.
+		search := r.sess.name
+		if h := r.sess.bridgeHost; h != "" && !strings.HasPrefix(search, h+"-") {
+			search += " " + h
+		}
 		items = append(items, listItem{
 			target:         r.sess.name,
 			display:        display,
 			plain:          plain,
-			searchText:     r.sess.name,
+			searchText:     search,
 			session:        r.sess.name,
 			bridgeHost:     r.sess.bridgeHost,
 			current:        r.sess.current,
@@ -2151,7 +2158,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 	cFaint := ansiFg(thmOverlay1)
 	reset := "\033[0m"
 	dim := "\033[2m"
-	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), reset: reset}
+	prCols := prColors{success: cGreen, failure: ansiFg(thmRed), pending: ansiFg(thmPeach), merged: cMauve, closed: ansiFg(thmOverlay0), required: ansiFg(thmOverlay0), underline: "\033[4m", reset: reset}
 
 	sessActivity := collectSessionActivity()
 	var groups []windowGroup
@@ -2227,7 +2234,7 @@ func renderWindowItems(windows []windowData, tmuxOpts map[string]string, agentPa
 			idSearch = name
 		}
 
-		prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, prCols)
+		prBadge := colorPRBadge(w.prPlain, w.prState, w.prCheck, w.prMergeable, w.prReview, w.prAutoMerge, prCols)
 		prPlain := strings.TrimSpace(w.prPlain)
 		prDW := iconCellWidth(prPlain)
 

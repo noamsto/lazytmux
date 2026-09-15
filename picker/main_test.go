@@ -245,7 +245,7 @@ func TestUnquoteTmuxOptValue(t *testing.T) {
 // windowPaneRow builds one list-panes -a row in parseWindowPaneRows' field
 // order (see collectWindows' -F string), for tests below.
 func windowPaneRow(fields ...string) string {
-	const n = 30
+	const n = 34
 	row := make([]string, n)
 	copy(row, fields)
 	return strings.Join(row, "|")
@@ -410,7 +410,7 @@ func TestEmptyRemoteHostsOptionYieldsNoSection(t *testing.T) {
 	if got := parseRemoteHosts(unquoteTmuxOptValue(`''`)); got != nil {
 		t.Errorf("got %q, want no hosts", got)
 	}
-	if got := pendingRemoteItems(map[string]string{"@remote_bridge_hosts": unquoteTmuxOptValue(`''`)}); got != nil {
+	if got := pendingRemoteItems(map[string]string{"@remote_bridge_hosts": unquoteTmuxOptValue(`''`)}, nil); got != nil {
 		t.Errorf("got %d rows, want no Remote section", len(got))
 	}
 }

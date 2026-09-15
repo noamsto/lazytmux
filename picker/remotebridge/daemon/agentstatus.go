@@ -24,19 +24,24 @@ const agentStatusPollInterval = time.Second
 const agentStatusBackstopInterval = 30 * time.Second
 
 // agentStatusFormat reads each remote pane's foreground command, whatever
-// claude-status-update stamped on it, and the dispatcher's per-pane role badge.
-// @claude_status is "<state> <epoch> <unseen>"; the free-form task goes last so
-// a '|' inside it lands in the final field instead of shifting the row, and the
-// crew trio — agent-writable, per GRID_PROTOCOL — loses its pipes on the REMOTE
-// the way windowLabelFormat's free-form fields do.
+// claude-status-update stamped on it, whatever agent-detect's
+// statefile.Writer stamped for a screen-scraped agent (pi, codex, cursor —
+// #635), and the dispatcher's per-pane role badge. @claude_status is
+// "<state> <epoch> <unseen>"; @agent_screen is "<state> <epoch> [name=count
+// ...]", a separate option so the two sources stay distinguishable once they
+// cross the bridge. Both are drawn from fixed, non-free-form vocabularies, as
+// is the crew trio — agent-writable, per GRID_PROTOCOL, and pipe-stripped on
+// the REMOTE the way windowLabelFormat's free-form fields are — so they all
+// sit ahead of the free-form task, which goes last so a '|' inside it lands
+// in the final field instead of shifting the row.
 // Unquoted: it is both a -F argument and a subscription format, and only the
 // call site knows which quoting each needs.
-const agentStatusFormat = "#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@claude_issues}|" +
+const agentStatusFormat = "#{pane_id}|#{pane_current_command}|#{@claude_status}|#{@agent_screen}|#{@claude_issues}|" +
 	"#{s/[|]/ /:@crew_role}|#{s/[|]/ /:@crew_state}|#{s/[|]/ /:@crew_role_color}|#{@claude_task}"
 
 // agentStatusFields is agentStatusFormat's field count, shared with the test
 // fixture so the parser and the fixture cannot drift apart.
-const agentStatusFields = 8
+const agentStatusFields = 9
 
 const (
 	crewRoleMaxRunes  = 24
@@ -55,11 +60,11 @@ const (
 var crewWordRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // paneStatus is one remote pane's foreground command and, when an agent runs
-// there, the state the hook writer stamped.
+// there, the state either the hook writer or the screen scraper stamped.
 type paneStatus struct {
 	pane   string // remote pane id, with %
 	proc   string // remote foreground command; the local pane only ever runs a renderer
-	state  string // "" when no agent reported
+	state  string // "" when no hook-driven agent reported
 	ts     int64  // epoch on the REMOTE's clock
 	unseen bool
 	issues string
@@ -68,6 +73,14 @@ type paneStatus struct {
 	crewRole  string
 	crewState string
 	crewColor string
+
+	// screenState/screenTS/screenFlags mirror agent-detect's screen/<pane_id>
+	// file for a non-Claude agent (#635). screenFlags holds the raw
+	// "name=count" tokens verbatim (not a map) so paneStatus stays comparable
+	// with == for stamp's unchanged-row check.
+	screenState string
+	screenTS    int64
+	screenFlags string
 }
 
 // parseAgentStatus turns an agentStatusFormat reply body into one row per
@@ -92,15 +105,16 @@ func parseAgentStatus(body string) []paneStatus {
 		row := paneStatus{
 			pane:   fields[0],
 			proc:   fields[1],
-			issues: at(3),
+			issues: at(4),
 			// Identity fields, dropped whole rather than truncated: a cut role
 			// names a different role and a cut colour is not a colour.
-			crewRole:  matching(cleanLabelValueExact(at(4), crewRoleMaxRunes), crewWordRe),
-			crewState: matching(cleanLabelValueExact(at(5), crewStateMaxRunes), crewWordRe),
-			crewColor: matching(cleanLabelValueExact(at(6), crewColorMaxRunes), crewColorRe),
-			task:      at(7),
+			crewRole:  matching(cleanLabelValueExact(at(5), crewRoleMaxRunes), crewWordRe),
+			crewState: matching(cleanLabelValueExact(at(6), crewStateMaxRunes), crewWordRe),
+			crewColor: matching(cleanLabelValueExact(at(7), crewColorMaxRunes), crewColorRe),
+			task:      at(8),
 		}
 		row.readStatus(at(2))
+		row.readScreen(at(3))
 		out = append(out, row)
 	}
 	return out
@@ -119,6 +133,24 @@ func (r *paneStatus) readStatus(v string) {
 	}
 	r.state, r.ts = st[0], ts
 	r.unseen = len(st) > 2 && st[2] == "1"
+}
+
+// readScreen parses the "<state> <epoch> [name=count ...]" form
+// statefile.stampValue writes to @agent_screen, leaving screenState empty
+// when the pane carries no usable stamp. The flag tokens are kept verbatim
+// (already sorted by the writer) rather than parsed into a map, so paneStatus
+// stays a comparable struct.
+func (r *paneStatus) readScreen(v string) {
+	st := strings.Fields(v)
+	if len(st) < 2 {
+		return
+	}
+	ts, err := strconv.ParseInt(st[1], 10, 64)
+	if err != nil {
+		return
+	}
+	r.screenState, r.screenTS = st[0], ts
+	r.screenFlags = strings.Join(st[2:], " ")
 }
 
 // agentShipper writes the remote's agent state into the local claude-status
@@ -253,22 +285,36 @@ func (a *agentShipper) stamp(cfg Config, rows []paneStatus) (map[string]bool, bo
 		// decorated still draws a border when no agent ever reported on it.
 		stampCrew(cfg, localPane, r, prev, seen)
 		if r.state == "" {
-			// The pane is mirrored but has no agent — nothing to render but the
-			// icon, and a leftover file would keep one lit.
+			// The pane is mirrored but has no hook-driven agent — nothing to
+			// render but the icon, and a leftover file would keep one lit.
 			a.removeFiles(id)
-			continue
+		} else {
+			body := fmt.Sprintf("state=%s\ntimestamp=%d\nsession=%s\n", r.state, r.ts+a.skew, a.sess)
+			if r.unseen {
+				body += "unseen=1\n"
+			}
+			// No transcript= line: it names a path on the remote's disk, and the
+			// interrupt detector that reads it would tail a local file that either
+			// doesn't exist or belongs to someone else's session.
+			writeStatusFile(filepath.Join(a.dir, "panes", id), body)
+			writeStatusFile(filepath.Join(a.dir, "tasks", id), lineOrEmpty(r.task))
+			writeStatusFile(filepath.Join(a.dir, "issues", id), lineOrEmpty(r.issues))
 		}
 
-		body := fmt.Sprintf("state=%s\ntimestamp=%d\nsession=%s\n", r.state, r.ts+a.skew, a.sess)
-		if r.unseen {
-			body += "unseen=1\n"
+		// screen/ is independent of panes/ — a non-Claude agent (pi, codex,
+		// cursor) has a screen-scraped state but no hook, so the two must not
+		// gate each other's file.
+		if r.screenState == "" {
+			a.removeScreenFile(id)
+		} else {
+			body := fmt.Sprintf("state=%s\ntimestamp=%d\n", r.screenState, r.screenTS+a.skew)
+			if r.screenFlags != "" {
+				// screenFlags is the writer's space-joined "name=count"
+				// tokens; the on-disk form is the same tokens, one per line.
+				body += strings.ReplaceAll(r.screenFlags, " ", "\n") + "\n"
+			}
+			writeStatusFile(filepath.Join(a.dir, "screen", id), body)
 		}
-		// No transcript= line: it names a path on the remote's disk, and the
-		// interrupt detector that reads it would tail a local file that either
-		// doesn't exist or belongs to someone else's session.
-		writeStatusFile(filepath.Join(a.dir, "panes", id), body)
-		writeStatusFile(filepath.Join(a.dir, "tasks", id), lineOrEmpty(r.task))
-		writeStatusFile(filepath.Join(a.dir, "issues", id), lineOrEmpty(r.issues))
 	}
 	return live, true
 }
@@ -326,6 +372,7 @@ func (a *agentShipper) clear() {
 
 func (a *agentShipper) forget(id string) {
 	a.removeFiles(id)
+	a.removeScreenFile(id)
 	delete(a.written, id)
 }
 
@@ -333,6 +380,10 @@ func (a *agentShipper) removeFiles(id string) {
 	for _, sub := range []string{"panes", "tasks", "issues"} {
 		os.Remove(filepath.Join(a.dir, sub, id))
 	}
+}
+
+func (a *agentShipper) removeScreenFile(id string) {
+	os.Remove(filepath.Join(a.dir, "screen", id))
 }
 
 func lineOrEmpty(s string) string {

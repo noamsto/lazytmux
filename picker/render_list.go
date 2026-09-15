@@ -118,10 +118,16 @@ func (m tuiModel) renderSearch() string {
 
 	icon := blue.Render("  ")
 	var queryStr string
-	if m.query == "" {
-		queryStr = dim.Render("type to filter...") + " "
-	} else {
+	switch {
+	case m.query != "":
 		queryStr = m.query + "█"
+	case m.mode == modeWall && !m.querying:
+		// In wall mode letters navigate the grid, not type — filtering only
+		// starts by pressing /, so "type to filter..." would contradict the
+		// wall's own hint line (renderWallHints).
+		queryStr = dim.Render("/ to filter...") + " "
+	default:
+		queryStr = dim.Render("type to filter...") + " "
 	}
 
 	return lipgloss.NewStyle().

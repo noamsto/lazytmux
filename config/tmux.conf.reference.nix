@@ -642,13 +642,16 @@
     # badge from the tagged window's label so untagged windows stay gapless (see
     # its @window_crew_disp).
     # Tab anatomy: idx + bold identity prefix (@window_label_id) + remainder +
-    # icons, then the PR segment last, colored by check state on every tab
-    # (closed=overlay0, failing=red, pending=peach, merged=mauve,
-    # success/open=green; closed wins over a stale check). Rendered
-    # last so its state color only runs into the separator, which sets its own
-    # color. tmux-reflow-windows mirrors this layout for the multi-line
-    # variants with column-padded segments.
-    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?${bridgeOpt "crew_name"},#{?${bridgeOpt "crew_color"},#[fg=${bridgeOpt "crew_color"}#,bg=#{@thm_bg}],}${bridgeOpt "crew_name"} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:${bridgeOpt "pr_number"},#{!=:${bridgeOpt "pr_number"},none}},#{?#{==:${bridgeOpt "pr_state"},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:${bridgeOpt "pr_check_state"},failure},#{==:${bridgeOpt "pr_mergeable"},conflicting}},#[fg=#{@thm_red}],#{?#{==:${bridgeOpt "pr_check_state"},pending},#[fg=#{@thm_peach}],#{?#{==:${bridgeOpt "pr_state"},merged},#[fg=#{@thm_mauve}],#[fg=#{@thm_green}]}}}},}#{@window_pr_plain}#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
+    # icons, then the PR segment last, split into a glyph half and a #<n> half.
+    # The glyph is colored by check state, in order: merged=mauve, closed=overlay0,
+    # failing/conflicting=red, pending=peach, success/open=green (closed wins over
+    # a stale check). The #<n> half (open PRs only) is retinted by review decision
+    # (approved=green, changes_requested=red, review_required=overlay0, no decision
+    # keeps the glyph's tint) and underlined when auto-merge is queued. Rendered
+    # last so its color only runs into the separator, which sets its own color.
+    # tmux-reflow-windows mirrors this layout for the multi-line variants with
+    # column-padded segments.
+    set -g status-format[1] "#[align=left,bg=#{@thm_bg}]#[fg=#{@thm_overlay_1}] ╰─ #{W:#[range=window|#{window_index}]#[nobold]#{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]}#{window_index}: #{?${bridgeOpt "crew_name"},#{?${bridgeOpt "crew_color"},#[fg=${bridgeOpt "crew_color"}#,bg=#{@thm_bg}],}${bridgeOpt "crew_name"} #{?window_active,#[fg=#{@thm_mauve}#,bg=#{@thm_bg}#,bold],#[fg=#{@thm_subtext_0}#,bg=#{@thm_bg}]},}#[bold]#{@window_label_id}#{?window_active,,#[nobold]}#{?#{==:#{@labels_mode},long},#{@window_label_rest_long},#{@window_label_rest_short}}#{?window_active,#[fg=#{@thm_fg}#,bg=#{@thm_bg}#,nobold],} #{@window_icon_display}#{?window_zoomed_flag, 󰁌,}#{?#{&&:${bridgeOpt "pr_number"},#{!=:${bridgeOpt "pr_number"},none}},#{?#{==:${bridgeOpt "pr_state"},merged},#[fg=#{@thm_mauve}],#{?#{==:${bridgeOpt "pr_state"},closed},#[fg=#{@thm_overlay_0}],#{?#{||:#{==:${bridgeOpt "pr_check_state"},failure},#{==:${bridgeOpt "pr_mergeable"},conflicting}},#[fg=#{@thm_red}],#{?#{==:${bridgeOpt "pr_check_state"},pending},#[fg=#{@thm_peach}],#[fg=#{@thm_green}]}}}},}#{@window_pr_glyph}#{?#{==:${bridgeOpt "pr_state"},open},#{?#{==:${bridgeOpt "pr_review"},approved},#[fg=#{@thm_green}],#{?#{==:${bridgeOpt "pr_review"},changes_requested},#[fg=#{@thm_red}],#{?#{==:${bridgeOpt "pr_review"},review_required},#[fg=#{@thm_overlay_0}],}}}#{?${bridgeOpt "pr_auto_merge"},#[underscore],},}#{@window_pr_num}#[nounderscore]#{?#{@window_claude_ago}, #[fg=#{@thm_overlay_1}]#{@window_claude_ago},}#[bg=#{@thm_bg}]#[norange]#{?next_window_index, #[fg=#{@thm_subtext_0}#,nobold]│ ,}}"
     set -g status-format[2] ""
     set -g status-format[3] ""
     set -g status-format[4] ""

@@ -849,7 +849,7 @@ func TestRemoteMsgPreservesCursor(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab dead"}
 	m := tuiModel{
 		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
-		remoteItems:  pendingRemoteItems(opts),
+		remoteItems:  pendingRemoteItems(opts, nil),
 	}
 	m = m.recombine().withFilter()
 
@@ -935,7 +935,7 @@ func TestRemoteMsgPreservesQuery(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	m := tuiModel{
 		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
-		remoteItems:  pendingRemoteItems(opts),
+		remoteItems:  pendingRemoteItems(opts, nil),
 		query:        "laz",
 	}
 	m = m.recombine().withFilter()
@@ -960,7 +960,7 @@ func TestRemoteMsgChildRowsRespectActiveQuery(t *testing.T) {
 	opts := map[string]string{"@remote_bridge_hosts": "lab"}
 	m := tuiModel{
 		sessionItems: []listItem{{target: "tmux-og", searchText: "tmux-og"}},
-		remoteItems:  pendingRemoteItems(opts),
+		remoteItems:  pendingRemoteItems(opts, nil),
 		query:        "tmux-og",
 	}
 	m = m.recombine().withFilter()
@@ -990,8 +990,8 @@ func TestPendingRemoteItemsSurviveModeToggles(t *testing.T) {
 		name string
 		m    tuiModel
 	}{
-		{"agent only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), agentOnly: true}},
-		{"scratch only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts), scratchOnly: true}},
+		{"agent only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts, nil), agentOnly: true}},
+		{"scratch only", tuiModel{sessionItems: []listItem{{target: "s", searchText: "s"}}, remoteItems: pendingRemoteItems(opts, nil), scratchOnly: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := c.m.recombine().withFilter().visible
