@@ -137,10 +137,11 @@ type panesSnapshot []string
 // and pane_current_command may contain |). @bridge_host is mid-format; pane_pid
 // is the trailing field and is never empty on a live pane. @bridge_proc is
 // appended last: a mirror pane's own pane_current_command is the bridge
-// renderer, not the remote's real command (#513).
+// renderer, not the remote's real command (#513). @bridge_session_path follows
+// it for the same reason: a mirror's own session_path is the launcher's cwd.
 func collectPanesSnapshot() panesSnapshot {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F",
-		"#{pane_id}|#{session_name}|#{window_index}|#{session_path}|#{session_last_attached}|#{@bridge_host}|#{pane_current_command}|#{pane_pid}|#{@bridge_proc}").Output()
+		"#{pane_id}|#{session_name}|#{window_index}|#{session_path}|#{session_last_attached}|#{@bridge_host}|#{pane_current_command}|#{pane_pid}|#{@bridge_proc}|#{@bridge_session_path}").Output()
 	if err != nil {
 		return nil
 	}
@@ -166,7 +167,7 @@ func (snap panesSnapshot) sessions() []sessionData {
 
 	for _, line := range snap {
 		parts := strings.Split(line, "|")
-		if len(parts) != 9 {
+		if len(parts) != 10 {
 			continue
 		}
 		name, path, actStr, proc := parts[1], parts[3], parts[4], parts[6]
@@ -174,6 +175,11 @@ func (snap panesSnapshot) sessions() []sessionData {
 		// remote pane is really running.
 		if bp := parts[8]; bp != "" {
 			proc = bp
+		}
+		// A mirror's session_path names a local directory unrelated to the
+		// remote session, so an absent stamp renders no path rather than that one.
+		if parts[5] != "" {
+			path = parts[9]
 		}
 		// Expand %h (tmux may store literal %h for home dir)
 		if home := os.Getenv("HOME"); home != "" {
@@ -869,7 +875,7 @@ func (snap panesSnapshot) paneMap() map[string]paneMapping {
 	m := make(map[string]paneMapping)
 	for _, line := range snap {
 		parts := strings.Split(line, "|")
-		if len(parts) != 8 {
+		if len(parts) != 10 {
 			continue
 		}
 		paneID := strings.TrimPrefix(parts[0], "%")
