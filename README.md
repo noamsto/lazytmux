@@ -4,7 +4,7 @@
 
 *tmux, the original gangster — still the OG multiplexer, now batteries-included.*
 
-**Opinionated tmux configuration with Claude Code & OpenCode integration.**
+**A batteries-included tmux distribution: live status for Claude Code, Codex, Cursor, Pi and OpenCode, remote sessions mirrored as native windows, issue/PR enrichment, persistence, and fast pickers.**
 
 Provides a fully configured tmux binary via a Nix flake — no dotfile management required.
 
@@ -88,7 +88,9 @@ cachix use lazytmux
 | **Multi-line status bar** | Windows auto-reflow across multiple lines when the terminal is narrow |
 | **Nerd font window icons** | Per-process icons (fish, nvim, nix, Claude Code, Pi, OpenCode, etc.) |
 | **AI agent status** | Real-time spinner/icon in status bar for Claude Code, Codex, Cursor, Pi, and OpenCode |
-| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, and issue/PR badges |
+| **Agent usage limits** | Claude, Codex and Cursor rate-limit utilization in the status line while an agent is running |
+| **Remote tmux bridge** | Open a session on another host as native local windows over SSH, with agent status, labels, zoom, floats, image paste and auto-reconnect carried across |
+| **Bubbletea pickers** | Go session/window pickers with AI status per entry, zoxide suggestions, remote-bridge hosts, issue/PR badges, and a live window wall (`prefix + W`) |
 | **Issue / PR enrichment** | Per-worktree Linear/GitHub issue identity and PR check-state in the status line (`prefix + i`) |
 | **Git branch display** | Current branch shown in the top status line |
 | **Smart pane navigation** | Seamless `Ctrl-h/j/k/l` between vim splits and tmux panes (zoom-aware) |
@@ -101,7 +103,7 @@ cachix use lazytmux
 ## Requirements
 
 - **Nerd Font terminal** — any terminal with a Nerd Font renders window icons correctly (Kitty, Alacritty, WezTerm, etc.)
-- Nothing else — the Nix package bundles tmux 3.6a; your own `~/.tmux.conf` and system tmux are not used
+- Nothing else — the Nix package bundles tmux (upstream, pinned at next-3.8); your own `~/.tmux.conf` and system tmux are not used
 
 ---
 
