@@ -522,3 +522,65 @@ setup() {
 	pr_cache_decision 0 1 '[{"number":42,"state":"OPEN","title":"say \"state\":\"MERGED\" loudly"}]' 61 60 15 3600
 	[ "$REPLY" = "fetch" ]
 }
+
+@test "collapse_check_rollup: pending sets REPLY_PROGRESS to finished/total" {
+	collapse_check_rollup '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},{"__typename":"StatusContext","state":"PENDING"}]'
+	[ "$REPLY" = "pending" ]
+	[ "$REPLY_PROGRESS" = "1/3" ]
+}
+
+@test "collapse_check_rollup: settled states carry no progress" {
+	collapse_check_rollup "$(cat tests/fixtures/rollup-success.json)"
+	[ -z "$REPLY_PROGRESS" ]
+	collapse_check_rollup "$(cat tests/fixtures/rollup-failure.json)"
+	[ -z "$REPLY_PROGRESS" ]
+}
+
+@test "collapse_check_rollup: malformed JSON → none, no progress" {
+	collapse_check_rollup 'not json'
+	[ "$REPLY" = "none" ]
+	[ -z "$REPLY_PROGRESS" ]
+}
+
+@test "pr_pie_glyph: slice tracks the share finished" {
+	pr_pie_glyph 0/8
+	[ "$REPLY" = "${ENRICH_PIE_GLYPHS[0]}" ]
+	pr_pie_glyph 3/8
+	[ "$REPLY" = "${ENRICH_PIE_GLYPHS[2]}" ]
+	pr_pie_glyph 7/8
+	[ "$REPLY" = "${ENRICH_PIE_GLYPHS[6]}" ]
+	pr_pie_glyph 1/3
+	[ "$REPLY" = "${ENRICH_PIE_GLYPHS[2]}" ]
+}
+
+@test "pr_pie_glyph: unusable progress is empty" {
+	local p
+	for p in "" 3 0/0 9/8 a/b; do
+		pr_pie_glyph "$p"
+		[ -z "$REPLY" ]
+	done
+}
+
+@test "build_window_label: pending PR with progress uses the pie slice" {
+	build_window_label short linear ENG-1 "t" 9 open pending br /x mergeable "" "" "" 3/8
+	[ "$REPLY_PR" = " ${ENRICH_PIE_GLYPHS[2]} #9" ]
+}
+
+@test "build_window_label: pending PR without progress keeps the pending glyph" {
+	build_window_label short linear ENG-1 "t" 9 open pending br /x mergeable "" "" "" ""
+	[ "$REPLY_PR" = " P #9" ]
+}
+
+@test "build_window_label: draft marker sits ahead of the pie" {
+	build_window_label short linear ENG-1 "t" 9 open pending br /x mergeable "" "" 1 5/8
+	[ "$REPLY_PR" = " D ${ENRICH_PIE_GLYPHS[4]} #9" ]
+}
+
+@test "split_pr_badge: glyph half keeps its trailing space, number half starts at #" {
+	split_pr_badge " D S #247"
+	[ "$REPLY_GLYPH" = " D S " ]
+	[ "$REPLY_NUM" = "#247" ]
+	split_pr_badge ""
+	[ -z "$REPLY_GLYPH" ]
+	[ -z "$REPLY_NUM" ]
+}
