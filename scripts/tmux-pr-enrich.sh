@@ -6,7 +6,7 @@
 #                           TTL); D is a checkout dir giving gh its repo context
 #   --mock-* ...            write mock @pr_* options directly (no gh), for tests
 # Always exits 0. Writes @pr_number @pr_title @pr_state @pr_check_state @pr_url
-# @pr_mergeable @pr_draft @pr_branch.
+# @pr_mergeable @pr_draft @pr_branch @pr_review @pr_auto_merge @pr_check_progress.
 #
 # gh resolves the repo from its cwd, and this poller's own cwd is the tmux
 # server's (usually not a repo at all) — so every gh call must run inside a
@@ -42,6 +42,7 @@ NOTIFY_BIN="${OG_NOTIFY_BIN:-@notify@}"
 mode="tick"
 target="" branch="" dir="" force=0
 mock_number="" mock_state="" mock_check="" mock_title="" mock_url="" mock_mergeable="" mock_draft=""
+mock_review="" mock_auto_merge="" mock_progress=""
 while (($#)); do
 	case "$1" in
 	--tick) mode="tick" ;;
@@ -86,6 +87,18 @@ while (($#)); do
 		;;
 	--mock-draft)
 		mock_draft="$2"
+		shift
+		;;
+	--mock-review)
+		mock_review="$2"
+		shift
+		;;
+	--mock-auto-merge)
+		mock_auto_merge="$2"
+		shift
+		;;
+	--mock-check-progress)
+		mock_progress="$2"
 		shift
 		;;
 	*) ;;
@@ -138,13 +151,13 @@ notify_pr_change() {
 	return 0
 }
 
-# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH [DRAFT]
+# write_pr_options TARGET NUMBER TITLE STATE CHECK URL MERGEABLE BRANCH [DRAFT] \
+#                  [REVIEW] [AUTO_MERGE] [PROGRESS]
 write_pr_options() {
-	# Only the glyph-driving options (@pr_number/@pr_state/@pr_check_state/
-	# @pr_mergeable/@pr_draft) are captured before writing so we can skip the
-	# (cache-bypassing) reflow when unchanged.
+	# Only the badge-driving options are captured before writing so we can skip
+	# the (cache-bypassing) reflow when unchanged.
 	local prev
-	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}')
+	prev=$(tmux display-message -t "$1" -p '#{@pr_number}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|#{@pr_draft}|#{@pr_review}|#{@pr_auto_merge}|#{@pr_check_progress}')
 	tmux set-option -t "$1" -w @pr_number "$2"
 	tmux set-option -t "$1" -w @pr_title "$3"
 	tmux set-option -t "$1" -w @pr_state "$4"
@@ -153,12 +166,17 @@ write_pr_options() {
 	tmux set-option -t "$1" -w @pr_mergeable "${7:-}"
 	# "1"/empty — an additive badge marker, not a state of its own.
 	tmux set-option -t "$1" -w @pr_draft "${9:-}"
+	# Style the badge's #<n> half: approved|changes_requested|review_required, and "1"/empty.
+	tmux set-option -t "$1" -w @pr_review "${10:-}"
+	tmux set-option -t "$1" -w @pr_auto_merge "${11:-}"
+	# "<finished>/<total>" while checks are pending — picks the pie slice.
+	tmux set-option -t "$1" -w @pr_check_progress "${12:-}"
 	# Tags the branch this PR data describes so displays can hide it once the
 	# pane cd's to a different branch (no wt switch re-stamps @pr_*). Mirrors
 	# @issue_branch.
 	tmux set-option -t "$1" -w @pr_branch "${8:-}"
-	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}" draft "${9:-}"
-	if [[ $prev != "$2|$4|$5|${7:-}|${9:-}" ]]; then
+	log_enabled && log_event enrich event pr target "$1" number "$2" state "$4" check "$5" mergeable "${7:-}" draft "${9:-}" review "${10:-}" auto_merge "${11:-}" progress "${12:-}"
+	if [[ $prev != "$2|$4|$5|${7:-}|${9:-}|${10:-}|${11:-}|${12:-}" ]]; then
 		@reflow@ "$(tmux display-message -t "$1" -p '#{session_name}')" --force >/dev/null 2>&1 &
 	fi
 	notify_pr_change "$1" "$prev" "$2" "$3" "$4" "$5"
@@ -233,7 +251,7 @@ fetch_pr_cached() {
 	(
 		acquire_lock "$lock" || exit 0
 		if [[ -n $d ]]; then cd "$d" 2>/dev/null || exit 0; fi
-		local json="" fields="number,title,url,state,mergeable,isDraft"
+		local json="" fields="number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest"
 		((force)) && fields+=",statusCheckRollup"
 		if [[ $states == open+all ]]; then
 			json="$(gh pr list --head "$b" --state open --limit 1 \
@@ -266,15 +284,14 @@ apply_cache_to_target() {
 		write_pr_options "$tgt" "none" "" "" "" "" "" "$br"
 		return
 	fi
-	# One jq pass emits every identity field on its own line (line-by-line `read`
-	# preserves empty fields — a tab/space delimiter would collapse them). PR titles are
-	# single-line, so newline-delimiting is safe.
-	local number title url state mergeable draft
+	local number title url state mergeable draft review auto_merge
 	{
 		IFS= read -r number
 		IFS= read -r state
 		IFS= read -r mergeable
 		IFS= read -r draft
+		IFS= read -r review
+		IFS= read -r auto_merge
 		IFS= read -r url
 		IFS= read -r title
 	} < <(jq -r '
@@ -282,6 +299,8 @@ apply_cache_to_target() {
 		(.[0].state // "" | ascii_downcase),
 		(.[0].mergeable // "" | ascii_downcase),
 		(if .[0].isDraft then "1" else "" end),
+		(.[0].reviewDecision // "" | ascii_downcase),
+		(if .[0].autoMergeRequest then "1" else "" end),
 		(.[0].url // ""),
 		(.[0].title // "")
 	' <<<"$json")
@@ -293,9 +312,9 @@ apply_cache_to_target() {
 		rollup="$(jq -c '.[0].statusCheckRollup // []' <<<"$json")"
 	fi
 	collapse_check_rollup "$rollup"
-	local check="$REPLY"
+	local check="$REPLY" progress="$REPLY_PROGRESS"
 	sanitize_title "$title"
-	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br" "$draft"
+	write_pr_options "$tgt" "$number" "$REPLY" "$state" "$check" "$url" "$mergeable" "$br" "$draft" "$review" "$auto_merge" "$progress"
 }
 
 # refresh_repo_checks DIR REPO_ID BRANCHES — refresh a repo's open-PR rollups.
@@ -348,7 +367,7 @@ enrich_repo_group() {
 	local all_json head obj batch_ok=0
 	if command -v gh >/dev/null 2>&1 &&
 		all_json="$(cd "$d" 2>/dev/null && gh pr list --state open --limit 100 \
-			--json number,title,url,state,mergeable,isDraft,headRefName 2>/dev/null)" &&
+			--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName 2>/dev/null)" &&
 		[[ -n $all_json ]]; then
 		batch_ok=1
 		while IFS=$'\t' read -r head obj; do
@@ -448,7 +467,7 @@ run_full_pass() {
 if [[ $mode == "mock" ]]; then
 	[[ -z $target ]] && exit 0
 	sanitize_title "$mock_title"
-	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable" "$branch" "$mock_draft"
+	write_pr_options "$target" "$mock_number" "$REPLY" "$mock_state" "$mock_check" "$mock_url" "$mock_mergeable" "$branch" "$mock_draft" "$mock_review" "$mock_auto_merge" "$mock_progress"
 	exit 0
 fi
 

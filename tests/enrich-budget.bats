@@ -58,7 +58,7 @@ setup() {
 	# One window per branch, same repo: one has an open PR, one has none.
 	export FAKE_WINDOWS='$1:@1|'"$REPO"'||feat/has-pr|
 $1:@2|'"$REPO"'||feat/no-pr|'
-	export GH_BATCH_JSON='[{"number":7,"title":"t","url":"u","state":"OPEN","statusCheckRollup":[],"mergeable":"MERGEABLE","isDraft":false,"headRefName":"feat/has-pr"}]'
+	export GH_BATCH_JSON='[{"number":7,"title":"t","url":"u","state":"OPEN","statusCheckRollup":[],"mergeable":"MERGEABLE","isDraft":false,"reviewDecision":"APPROVED","autoMergeRequest":{"enabledAt":"2026-09-15T00:00:00Z"},"headRefName":"feat/has-pr"}]'
 	export GH_CHECK_JSON='[{"headRefName":"feat/has-pr","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}]'
 
 	make_pr_enrich
@@ -73,7 +73,7 @@ gh_calls() {
 	run bash "$PR_ENRICH_SCRIPT" --tick-run
 	[ "$status" -eq 0 ]
 	[ "$(gh_calls '--head feat/has-pr')" -eq 0 ]
-	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,headRefName')" -eq 1 ]
+	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName')" -eq 1 ]
 	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 1 ]
 	grep -q -- '@pr_check_state success' "$TMUX_LOG"
 }
@@ -93,7 +93,7 @@ gh_calls() {
 	# Identity stays fresh on every pass, but check state remains cached until
 	# the independent, slower cadence expires. The terminal answer for feat/no-pr
 	# is also cached for TTL_TERMINAL.
-	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,headRefName')" -eq 2 ]
+	[ "$(gh_calls '--json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,headRefName')" -eq 2 ]
 	[ "$(gh_calls '--json headRefName,statusCheckRollup')" -eq 1 ]
 	[ "$(gh_calls '--head feat/no-pr')" -eq 1 ]
 }
@@ -101,7 +101,7 @@ gh_calls() {
 @test "force refresh fetches the current branch's check rollup immediately" {
 	run bash "$PR_ENRICH_SCRIPT" --target '$1:@1' --branch feat/has-pr --dir "$REPO" --force
 	[ "$status" -eq 0 ]
-	[ "$(gh_calls '--head feat/has-pr --state open --limit 1 --json number,title,url,state,mergeable,isDraft,statusCheckRollup')" -eq 1 ]
+	[ "$(gh_calls '--head feat/has-pr --state open --limit 1 --json number,title,url,state,mergeable,isDraft,reviewDecision,autoMergeRequest,statusCheckRollup')" -eq 1 ]
 }
 
 @test "pass: a failed batch falls back to the full open-then-all lookup" {
@@ -112,4 +112,20 @@ gh_calls() {
 	[ "$(gh_calls '--head feat/has-pr --state open --limit 1')" -eq 1 ]
 	[ "$(gh_calls '--head feat/has-pr --state all --limit 1')" -eq 1 ]
 	[ "$(gh_calls '--head feat/no-pr --state open --limit 1')" -eq 1 ]
+}
+
+@test "pass: review decision and auto-merge are stamped from the identity batch" {
+	run bash "$PR_ENRICH_SCRIPT" --tick-run
+	[ "$status" -eq 0 ]
+	grep -q -- '@pr_review approved' "$TMUX_LOG"
+	grep -q -- '@pr_auto_merge 1' "$TMUX_LOG"
+	grep -q -- '@pr_check_progress $' "$TMUX_LOG"
+}
+
+@test "pass: a pending rollup stamps finished/total progress" {
+	GH_CHECK_JSON='[{"headRefName":"feat/has-pr","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}]}]' \
+		run bash "$PR_ENRICH_SCRIPT" --tick-run
+	[ "$status" -eq 0 ]
+	grep -q -- '@pr_check_state pending' "$TMUX_LOG"
+	grep -q -- '@pr_check_progress 1/2' "$TMUX_LOG"
 }
